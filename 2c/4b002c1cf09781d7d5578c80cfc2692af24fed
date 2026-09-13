@@ -1,0 +1,27 @@
+web/public/fonts-preview.html
+  s_220da8e953793c::t_e568a71f117d16 10,98-110
+  s_220da8e953793c::t_dd77ffa7e1ee5b 1-9,11-58,60-97,111-118
+  s_220da8e953793c::t_c69d2552cfcfe5 59
+web/public/tokens.css
+  s_220da8e953793c::t_e568a71f117d16 13-15,117-119
+web/public/index.html
+  s_220da8e953793c::t_e568a71f117d16 10
+web/public/app.css
+  s_220da8e953793c::t_e568a71f117d16 11,43,76,121,198,271
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "2c4b002c1cf09781d7d5578c80cfc2692af24fed",
+  "prompts": {},
+  "sessions": {
+    "s_220da8e953793c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2ba82f1f-e55e-4150-b238-4ff1b96ce382",
+        "model": "claude-fable-5"
+      },
+      "human_author": "areeb.bhaila <areeb.bhaila@gmail.com>"
+    }
+  }
+}
