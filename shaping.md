@@ -305,7 +305,7 @@ Synthesized from this review's findings. Each derives from a specific finding ab
   - Surfaced by: Architecture D2 + D11
   - Files: core/graph.ts, graphs/*.ts
   - Verify: the four Orbital graphs port and type-check; a bad edge condition fails compile
-- [ ] **T4 (P2, human: ~1h / CC: ~10min)** — prompts — PromptId codegen
+- [x] **T4 (P2, human: ~1h / CC: ~10min)** — prompts — PromptId codegen ✅ 2026-09-13: closed union of 18 ids; unknown ids are compile errors; --check mode for CI
   - Surfaced by: Code quality D6
   - Files: prompts/codegen.ts
   - Verify: unknown id and inline prompt text are compile errors; add/rename/delete regenerates

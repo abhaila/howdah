@@ -23,9 +23,10 @@
  */
 import { validateGraph, formatViolations, type GraphShape, type Violation } from "./validate";
 import type { Scope } from "./context";
+import type { PromptId } from "./prompt-ids";
 
-/** Becomes the generated PromptId union at T4; string keeps T3 self-contained. */
-export type PromptRef = string;
+/** The generated union from prompts/codegen.ts — an unknown id is a compile error. */
+export type PromptRef = PromptId;
 
 export type Harness = "claude" | "codex" | "opencode";
 

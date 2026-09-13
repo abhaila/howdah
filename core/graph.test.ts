@@ -17,7 +17,7 @@ describe("structural checks", () => {
       entry: "a",
       inputs: ["goal"],
       nodes: {
-        a: { kind: "agent", prompt: "p", reads: ["goal"], writes: { out: { scope: "sticky" } } },
+        a: { kind: "agent", prompt: "discover", reads: ["goal"], writes: { out: { scope: "sticky" } } },
         done: { kind: "terminal", outcome: "success" },
       },
       edges: [
@@ -33,7 +33,7 @@ describe("structural checks", () => {
       name: "dead-end",
       entry: "a",
       inputs: ["goal"],
-      nodes: { a: { kind: "agent", prompt: "p", reads: ["goal"] } },
+      nodes: { a: { kind: "agent", prompt: "discover", reads: ["goal"] } },
       edges: [],
     });
     expect(g.validate().structural.join("\n")).toContain("dead end");
@@ -45,7 +45,7 @@ describe("structural checks", () => {
       entry: "a",
       inputs: ["goal"],
       nodes: {
-        a: { kind: "agent", prompt: "p", reads: ["goal"], writes: { verdict: { scope: "cleared" } } },
+        a: { kind: "agent", prompt: "discover", reads: ["goal"], writes: { verdict: { scope: "cleared" } } },
         b: { kind: "terminal", outcome: "success" },
       },
       edges: [
@@ -66,7 +66,7 @@ describe("structural checks", () => {
       entry: "a",
       inputs: ["goal"],
       nodes: {
-        a: { kind: "agent", prompt: "p", reads: ["goal"] },
+        a: { kind: "agent", prompt: "discover", reads: ["goal"] },
         b: { kind: "terminal", outcome: "success" },
         c: { kind: "terminal", outcome: "failed" },
       },
@@ -84,8 +84,8 @@ describe("structural checks", () => {
       entry: "a",
       inputs: ["goal"],
       nodes: {
-        a: { kind: "agent", prompt: "p", reads: ["goal"], writes: { out: { scope: "sticky" } } },
-        b: { kind: "agent", prompt: "p", reads: ["goal"], writes: { out: { scope: "cleared" } } },
+        a: { kind: "agent", prompt: "discover", reads: ["goal"], writes: { out: { scope: "sticky" } } },
+        b: { kind: "agent", prompt: "discover", reads: ["goal"], writes: { out: { scope: "cleared" } } },
         done: { kind: "terminal", outcome: "success" },
       },
       edges: [
@@ -102,7 +102,7 @@ describe("structural checks", () => {
       entry: "a",
       inputs: ["goal"],
       nodes: {
-        a: { kind: "agent", prompt: "p", reads: ["goal"] }, // writes nothing
+        a: { kind: "agent", prompt: "discover", reads: ["goal"] }, // writes nothing
         b: { kind: "terminal", outcome: "success" },
         c: { kind: "terminal", outcome: "failed" },
       },
