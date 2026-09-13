@@ -309,35 +309,35 @@ Synthesized from this review's findings. Each derives from a specific finding ab
   - Surfaced by: Code quality D6
   - Files: prompts/codegen.ts
   - Verify: unknown id and inline prompt text are compile errors; add/rename/delete regenerates
-- [ ] **T5 (P1, human: ~1d / CC: ~1h)** — prompts — Store + proposals with base_version and template-read validation
+- [x] **T5 (P1, human: ~1d / CC: ~1h)** — prompts — Store + proposals with base_version and template-read validation ✅ 2026-09-13: prompts/store.ts + proposals.ts, D7 stale-base + OV-3 template-read guards, 13 tests
   - Surfaced by: Code quality D7 + OV-3
   - Files: prompts/store.ts, prompts/proposal.ts
   - Verify: stale accept refused; a revision introducing an undeclared template variable is rejected at accept
-- [ ] **T6 (P1, human: ~2d / CC: ~2h)** — log — Chunked durable event log: PromptRendered{context_read}, PromptOutcome + attribution, turn-finalized
+- [x] **T6 (P1, human: ~2d / CC: ~2h)** — log — Chunked durable event log: PromptRendered{context_read}, PromptOutcome + attribution, turn-finalized ✅ 2026-09-13: log/: fsync-per-append chunks, view-time coalescing, outcome joins on rendered_hash, SIGKILL test
   - Surfaced by: D4, D10, OV-8
   - Files: log/events.ts, log/write.ts, log/coalesce.ts
   - Verify: kill mid-turn preserves chunks; coalesced view identical to Orbital-style message; outcome joins on rendered_hash
-- [ ] **T7 (P1, human: ~3d / CC: ~3h)** — adapter — Three SDK adapters over the Agent Deck seam + capability matrix + CRITICAL chunk tests
+- [x] **T7 (P1, human: ~3d / CC: ~3h)** — adapter — Three SDK adapters over the Agent Deck seam + capability matrix + CRITICAL chunk tests ✅ 2026-09-13: adapter/: claude+codex+opencode mappers, byte-oriented chunk-safe parser, replay+fuzz tests, capability matrix
   - Surfaced by: A4.1 + OV-7 + carried Agent Deck finding
   - Files: adapter/{claude,codex,opencode}.ts, adapter/capabilities.ts, test/fixtures/*.jsonl
   - Verify: fixture replay at varied byte offsets yields identical events; fuzz target never crashes or hangs; matrix documents unsupported behaviour per SDK
-- [ ] **T8 (P1, human: ~3d / CC: ~3h)** — engine — Assembly: routing, max_visits, exactly-once side effects, run pinning, resume-by-replay
+- [x] **T8 (P1, human: ~3d / CC: ~3h)** — engine — Assembly: routing, max_visits, exactly-once side effects, run pinning, resume-by-replay ✅ 2026-09-13: engine/run.ts: routing, maxVisits, claim/done exactly-once + probe-on-resume, prompt pinning, resume-by-replay
   - Surfaced by: A4.2/A4.3 + OV-1/OV-2 + R7
   - Files: engine/*.ts
   - Verify: kill during a side-effecting node → resume probes, does not duplicate the PR; parked run keeps its pinned prompt versions
-- [ ] **T9 (P2, human: ~1d / CC: ~1h)** — engine — Reconciler: git-always/forge-on-readers, intended-vs-observed
+- [x] **T9 (P2, human: ~1d / CC: ~1h)** — engine — Reconciler: git-always/forge-on-readers, intended-vs-observed ✅ 2026-09-13: engine/reconcile.ts: git-always/forge-on-readers, intended-vs-observed, unreachable != no-PR, real-git tests
   - Surfaced by: Performance D9 + OV-5
   - Files: engine/reconcile.ts
   - Verify: branch renamed mid-run test passes; forge outage is not read as "no PR"
-- [ ] **T10 (P2, human: ~1d / CC: ~1h)** — watchdog — OS + Slack attention, heartbeat watchdog, durable pending records
+- [x] **T10 (P2, human: ~1d / CC: ~1h)** — watchdog — OS + Slack attention, heartbeat watchdog, durable pending records ✅ 2026-09-13: engine/attention.ts + watchdog/check.ts (launchd plist): durable-first records, kill -9 still rings
   - Surfaced by: A7 + OV-10
   - Files: engine/attention.ts, watchdog/check.ts (launchd interval)
   - Verify: kill -9 the harness with attention pending → notification still arrives
-- [ ] **T11 (P1, human: ~1-2wk / CC: ~2-3d)** — web — 🟡 Local shadcn web app: run list, run view (timeline element + coalesced thread + tap-in tool detail + needs-you action card with reply), prompt/proposal diff view
+- [x] **T11 (P1, human: ~1-2wk / CC: ~2-3d)** — web — 🟡 Local shadcn web app: run list, run view (timeline element + coalesced thread + tap-in tool detail + needs-you action card with reply), prompt/proposal diff view ✅ 2026-09-13: web/: Bun server (API+SSE+reply round-trip) + React app, Howdah tokens dark+light, 10 tests
   - Surfaced by: Design review D5 (D13 reversed on mockup evidence)
   - Files: web/ (Bun server, React, shadcn), cli/main.ts (thin scripting verbs only)
   - Verify: every R3 sub-requirement answerable in the web view against a real run log; reply round-trips from the needs-you card
-- [ ] **T12 (P2, human: ~1d / CC: ~1h)** — graphs — Document + research graphs on Plain folders
+- [x] **T12 (P2, human: ~1d / CC: ~1h)** — graphs — Document + research graphs on Plain folders ✅ 2026-09-13: graphs/write-doc.ts + research.ts + 8 prompts, no-repo engine run proven
   - Surfaced by: A8 / R5
   - Files: graphs/write-doc.ts, graphs/research.ts
   - Verify: a run completes with no git repo present, terminating on agent verdict
@@ -497,7 +497,7 @@ amber-on-dark. 44px targets.
   docs, gstack project slug. Forced by the harness.io collision.
 - **T14 (P2, new):** Identity assets — vectorize the one-line elephant mark (static + trunk-raise
   favicon frames, amber-eye pixel), attention chime, Space Grotesk + JetBrains Mono packaging,
-  token file.
+  token file. ✅ 2026-09-13: web/public/ — logo.svg, favicon + 2 raise frames, tokens.css, chime.wav.
 - T6 gains: allowance/rate-limit events captured per harness (claude `rate_limit_event`,
   codex `account/rateLimits/updated` — both already observed in spike-findings.md).
 - T10 gains: notification text carries wait duration + deep link; viewer supervised
