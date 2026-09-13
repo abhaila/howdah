@@ -1,0 +1,35 @@
+core/validate.test.ts
+  s_220da8e953793c::t_cbade5328a2b66 1-125
+core/validate.ts
+  s_220da8e953793c::t_b8439b612d54f2 1-128
+core/context.test.ts
+  s_220da8e953793c::t_02610333b601c3 1-3,5-150
+  s_220da8e953793c::t_48d4f8ab8cc61c 4
+core/context.ts
+  s_220da8e953793c::t_a06440cdab4f63 1-67,69-185
+  s_220da8e953793c::t_48d4f8ab8cc61c 68
+reviser/revise.ts
+  s_220da8e953793c::t_48d4f8ab8cc61c 39,41,115
+tsconfig.json
+  s_220da8e953793c::t_fc8647d3c59057 1-9,11-13
+  s_220da8e953793c::t_fb4c867e8e2d50 10
+package.json
+  s_220da8e953793c::t_fb4c867e8e2d50 8-11
+  s_220da8e953793c::t_fc8647d3c59057 1-7,12-13
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "21664ca2bcc0c184580facd05323253c5fb43114",
+  "prompts": {},
+  "sessions": {
+    "s_220da8e953793c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2ba82f1f-e55e-4150-b238-4ff1b96ce382",
+        "model": "claude-fable-5"
+      },
+      "human_author": "areeb.bhaila <areeb.bhaila@gmail.com>"
+    }
+  }
+}
