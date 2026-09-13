@@ -86,6 +86,8 @@ function parseRunArgs(argv: string[]) {
 
 export async function runCommand(argv: string[]): Promise<string> {
   const { graphName, inputs, workspace, dir, id, overrides } = parseRunArgs(argv);
+  // HOWDAH_MODEL is a run-level default so the RECORD shows what actually ran
+  if (!overrides.model && process.env.HOWDAH_MODEL) overrides.model = process.env.HOWDAH_MODEL;
   const graph = graphName ? GRAPHS[graphName] : undefined;
   if (!graph) throw new Error(`unknown graph "${graphName}" — have: ${Object.keys(GRAPHS).join(", ")}`);
 
@@ -239,8 +241,13 @@ if (import.meta.main) {
     else if (verb === "up") await upCommand({ once: rest.includes("--once") });
     else if (verb === "doctor") process.exit((await doctorCommand()) ? 0 : 1);
     else if (verb === "graphs") console.log(JSON.stringify(graphCatalog(), null, 2));
+    else if (verb === "new-graph") {
+      const { newGraph } = await import("./new-graph");
+      const kind = (rest[rest.indexOf("--kind") + 1] ?? "custom") as import("./new-graph").GraphKind;
+      console.log(`scaffolded ${await newGraph(rest[0] ?? "", kind)}`);
+    }
     else {
-      console.error("usage: howdah run|resume|reply|runs|graphs|up|doctor");
+      console.error("usage: howdah run|resume|reply|runs|graphs|new-graph|up|doctor");
       process.exit(1);
     }
   } catch (err) {

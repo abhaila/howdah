@@ -50,8 +50,7 @@ export interface LiveExecutorDeps {
 
 /** the real registry: agent nodes dispatch on their declared harness (default claude) */
 export function liveExecutors(deps: LiveExecutorDeps): EngineOpts["executors"] {
-  // HOWDAH_MODEL sets the default model until per-node config lands (T17)
-  const claude = claudeExecutor({ attentionDir: deps.attentionDir, viewerBase: deps.viewerBase, notifiers: deps.notifiers, binary: deps.claudeBinary, model: process.env.HOWDAH_MODEL });
+  const claude = claudeExecutor({ attentionDir: deps.attentionDir, viewerBase: deps.viewerBase, notifiers: deps.notifiers, binary: deps.claudeBinary });
   const codex = codexExecutor({ attentionDir: deps.attentionDir, viewerBase: deps.viewerBase, notifiers: deps.notifiers, binary: deps.codexBinary });
   return {
     wait: waitExecutor,

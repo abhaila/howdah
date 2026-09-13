@@ -18,6 +18,7 @@ export type PromptId =
   | "implementation.local_review"
   | "implementation.plan"
   | "implementation.plan_review"
+  | "quick-task.work"
   | "report.compile"
   | "research.investigate"
   | "research.plan"
@@ -46,6 +47,7 @@ export const PROMPT_IDS = [
   "implementation.local_review",
   "implementation.plan",
   "implementation.plan_review",
+  "quick-task.work",
   "report.compile",
   "research.investigate",
   "research.plan",

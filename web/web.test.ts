@@ -203,3 +203,17 @@ describe("settings + open-ide (T19)", () => {
     server2.stop(true);
   });
 });
+
+describe("graph shape API (T20)", () => {
+  test("GET /api/graphs/:name serializes nodes + edge labels for the DAG", async () => {
+    const base3 = mkdtempSync(join(tmpdir(), "howdah-t20-"));
+    mkdirSync(join(base3, "runs"), { recursive: true });
+    const s3 = createHowdahServer({ runsDir: join(base3, "runs"), attentionDir: join(base3, "attention"), port: 0 });
+    const shape = (await (await fetch(`http://localhost:${s3.port}/api/graphs/write-doc`)).json()) as any;
+    expect(shape.entry).toBe("doc.outline");
+    expect(shape.nodes.find((n: any) => n.id === "doc.draft")).toMatchObject({ kind: "agent", prompt: "doc.draft" });
+    expect(shape.edges.some((e: any) => e.label === "review_verdict == 'reject'")).toBe(true);
+    expect((await fetch(`http://localhost:${s3.port}/api/graphs/nope`)).status).toBe(404);
+    s3.stop(true);
+  });
+});

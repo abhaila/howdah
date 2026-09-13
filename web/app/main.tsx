@@ -7,6 +7,7 @@ import { createRoot } from "react-dom/client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { RunDetail, RunSummary, RunStatus } from "../derive";
 import type { CoalescedTurn } from "../../log/coalesce";
+import { GraphDag, useGraphShape } from "./graph-dag";
 
 // ---- shared bits ---------------------------------------------------------------
 
@@ -137,6 +138,16 @@ function Turn({ turn, render }: { turn: CoalescedTurn; render?: RunDetail["rende
   );
 }
 
+function RunGraph({ graph, timeline }: { graph: string; timeline: RunDetail["timeline"] }) {
+  const shape = useGraphShape(graph);
+  if (!shape) return <div className="empty">loading graph…</div>;
+  const visits: Record<string, number> = {};
+  for (const t of timeline) visits[t.node] = Math.max(visits[t.node] ?? 0, t.visit);
+  const running = timeline.findLast((t) => t.status === "running");
+  const current = running?.node ?? timeline.at(-1)?.node;
+  return <div style={{ paddingTop: 16 }}><GraphDag shape={shape} current={current} visits={visits} /></div>;
+}
+
 function OpenIdeButton({ runId, detail }: { runId: string; detail: RunDetail & { cwd_exists?: boolean; editor_configured?: boolean } }) {
   // design rules: hidden for Plain runs without a folder; disabled+tooltip for cleaned
   // worktrees; unconfigured routes to Settings
@@ -191,6 +202,7 @@ function AskCard({ runId, ask, onResolved }: { runId: string; ask: NonNullable<R
 
 function RunView({ id }: { id: string }) {
   const [detail, setDetail] = useState<(RunDetail & { cwd_exists?: boolean; editor_configured?: boolean }) | null>(null);
+  const [tab, setTab] = useState<"thread" | "graph">("thread");
   const now = useNow();
   const reload = useCallback(() => fetch(`/api/runs/${id}`).then((r) => r.json()).then(setDetail).catch(() => {}), [id]);
   useEffect(() => { reload(); }, [reload]);
@@ -222,6 +234,10 @@ function RunView({ id }: { id: string }) {
           <h1>{summary.goal || id}</h1>
           <StatusBadge status={summary.status} />
           <span className="meta">{summary.graph}</span>
+          <span className="tabs">
+            <button className={`tab ${tab === "thread" ? "active" : ""}`} onClick={() => setTab("thread")}>Thread</button>
+            <button className={`tab ${tab === "graph" ? "active" : ""}`} onClick={() => setTab("graph")}>Graph</button>
+          </span>
           <OpenIdeButton runId={id} detail={detail} />
         </div>
         {summary.status === "needs-input" && summary.waiting_since && (
@@ -230,11 +246,17 @@ function RunView({ id }: { id: string }) {
             <span className="timer">{fmtWait(summary.waiting_since, now)}</span>
           </div>
         )}
-        {resolvedTurns.map((t) => (
-          <Turn key={`${t.node}@${t.visit}#${t.turn}`} turn={t} render={renderByTurnKey.get(`${t.node}@${t.visit}`)} />
-        ))}
-        {ask && <AskCard runId={id} ask={ask} onResolved={reload} />}
-        {!ask && summary.status === "done" && <div className="operator-row">run complete</div>}
+        {tab === "graph" ? (
+          <RunGraph graph={summary.graph} timeline={detail.timeline} />
+        ) : (
+          <>
+            {resolvedTurns.map((t) => (
+              <Turn key={`${t.node}@${t.visit}#${t.turn}`} turn={t} render={renderByTurnKey.get(`${t.node}@${t.visit}`)} />
+            ))}
+            {ask && <AskCard runId={id} ask={ask} onResolved={reload} />}
+            {!ask && summary.status === "done" && <div className="operator-row">run complete</div>}
+          </>
+        )}
       </div>
 
       <div className="rail">
@@ -392,6 +414,37 @@ function StartRun() {
 }
 
 
+
+// ---- graphs screen (T20) ---------------------------------------------------------
+
+function GraphsList() {
+  const [graphs, setGraphs] = useState<Array<{ name: string; description: string; kind: string }>>([]);
+  const [selected, setSelected] = useState<string | null>(null);
+  useEffect(() => { fetch("/api/graphs").then((r) => r.json()).then(setGraphs).catch(() => {}); }, []);
+  const shape = useGraphShape(selected ?? undefined);
+  return (
+    <div className="runs" style={{ maxWidth: 1100 }}>
+      <h1>Graphs</h1>
+      <div className="graphs-layout">
+        <div>
+          {graphs.map((g) => (
+            <div key={g.name} className={`run-row ${selected === g.name ? "selected" : ""}`} onClick={() => setSelected(g.name)}>
+              <span className="run-goal">{g.name}</span>
+              <span className="run-meta">{g.kind}</span>
+            </div>
+          ))}
+          <div className="field-hint" style={{ marginTop: 12 }}>
+            New graph: <code>howdah new-graph &lt;name&gt; --kind doc|custom</code> — scaffolds the TS file + prompts; tsc and validate() are the editor.
+          </div>
+        </div>
+        <div>
+          {shape ? <><div className="field-hint" style={{ marginBottom: 8 }}>{shape.description}</div><GraphDag shape={shape} /></> : <div className="empty">select a graph</div>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ---- settings (screen 5) ---------------------------------------------------------
 
 function Settings() {
@@ -455,19 +508,21 @@ function App() {
   const runMatch = path.match(/^\/run\/([^/]+)/);
   const isNew = path === "/new";
   const isSettings = path === "/settings";
+  const isGraphs = path === "/graphs";
   return (
     <div className="shell">
       <nav className="sidebar">
         <Mark className="mark" />
         <a className={`nav ${!runMatch && !isNew ? "active" : ""}`} href="/"><span className="label">Runs</span></a>
         <a className={`nav ${isNew ? "active" : ""}`} href="/new"><span className="label">New run</span></a>
+        <a className={`nav ${isGraphs ? "active" : ""}`} href="/graphs"><span className="label">Graphs</span></a>
         <a className={`nav ${isSettings ? "active" : ""}`} href="/settings"><span className="label">Settings</span></a>
         <div className="spacer" />
         <button className="theme-toggle" onClick={() => setTheme(theme === "dark" ? "light" : theme === "light" ? "system" : "dark")}>
           theme: {theme}
         </button>
       </nav>
-      <main>{runMatch ? <RunView id={runMatch[1]!} /> : isNew ? <StartRun /> : isSettings ? <Settings /> : <div className="runs"><RunsList /></div>}</main>
+      <main>{runMatch ? <RunView id={runMatch[1]!} /> : isNew ? <StartRun /> : isSettings ? <Settings /> : isGraphs ? <GraphsList /> : <div className="runs"><RunsList /></div>}</main>
     </div>
   );
 }

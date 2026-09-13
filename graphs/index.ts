@@ -9,6 +9,7 @@ import { improveCodebase } from "./improve-codebase";
 import { reviewTeammatePr } from "./review-teammate-pr";
 import { writeDoc } from "./write-doc";
 import { research } from "./research";
+import { quickTask } from "./quick-task";
 
 export const GRAPHS: Record<string, Graph<any>> = {
   [implementTicket.def.name]: implementTicket,
@@ -16,6 +17,7 @@ export const GRAPHS: Record<string, Graph<any>> = {
   [reviewTeammatePr.def.name]: reviewTeammatePr,
   [writeDoc.def.name]: writeDoc,
   [research.def.name]: research,
+  [quickTask.def.name]: quickTask,
 };
 
 for (const g of Object.values(GRAPHS)) g.validateOrThrow();

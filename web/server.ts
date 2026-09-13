@@ -17,7 +17,7 @@ import { homedir } from "node:os";
 import { EventLog, readLog } from "../log/write";
 import { deriveDetail, deriveSummary, sortRuns } from "./derive";
 import { AttentionCenter } from "../engine/attention";
-import { graphCatalog } from "../graphs/index";
+import { graphCatalog, GRAPHS } from "../graphs/index";
 import { loadConfig, saveConfig } from "../config/config";
 import { effectiveCwd } from "../engine/executors/worktree";
 
@@ -48,6 +48,32 @@ export function createHowdahServer(opts: ServerOpts) {
       const url = new URL(req.url);
 
       if (url.pathname === "/api/graphs") return json(graphCatalog());
+      const gm = url.pathname.match(/^\/api\/graphs\/([^/]+)$/);
+      if (gm) {
+        const g = GRAPHS[gm[1]!];
+        if (!g) return json({ error: "unknown graph" }, 404);
+        return json({
+          name: g.def.name,
+          description: g.def.description ?? "",
+          entry: g.def.entry,
+          inputs: g.def.inputs,
+          defaults: g.def.defaults ?? {},
+          nodes: Object.entries(g.def.nodes).map(([id, n]) => ({
+            id,
+            kind: n.kind,
+            class: "class" in n ? n.class : undefined,
+            prompt: n.kind === "agent" ? n.prompt : undefined,
+            run: n.kind === "command" ? n.run : undefined,
+            harness: n.kind === "agent" ? n.harness : undefined,
+            model: n.kind === "agent" ? n.model : undefined,
+            effort: n.kind === "agent" ? n.effort : undefined,
+            maxVisits: "maxVisits" in n ? n.maxVisits : undefined,
+            outcome: n.kind === "terminal" ? n.outcome : undefined,
+            duration: n.kind === "wait" ? n.duration : undefined,
+          })),
+          edges: g.def.edges.map((e) => ({ from: e.from, to: e.to, label: e.condition?.label, weight: e.weight })),
+        });
+      }
       if (url.pathname === "/api/settings") {
         if (req.method === "PUT") {
           const body = (await req.json()) as Record<string, unknown>;
