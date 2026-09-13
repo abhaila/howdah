@@ -1,0 +1,37 @@
+log/events.ts
+  s_220da8e953793c::t_28c0f640059cff 131-139
+web/app/main.tsx
+  s_220da8e953793c::t_7157f04c93bfef 141-158,160-163,169-209,302,311-318,329
+web/public/app.css
+  s_220da8e953793c::t_7157f04c93bfef 235-246
+web/server.ts
+  s_220da8e953793c::t_d5088761fe3622 24-25,216,258,263-299
+cli/main.ts
+  s_220da8e953793c::t_2e9d0a0f83c911 23,111,140,160-202,216,291-294,334
+engine/control.ts
+  s_220da8e953793c::t_169651c0e36d41 1-32
+web/derive.ts
+  s_220da8e953793c::t_d5088761fe3622 34-36,69,75,85-86,95-101,105,117-118
+engine/control.test.ts
+  s_220da8e953793c::t_dcb03f3092913c 142-180
+  s_220da8e953793c::t_8ee87bfaf146cc 1-141
+engine/run.ts
+  s_220da8e953793c::t_65896248a8cb7c 84-85,90-91,107-108,196-206,354-358
+  s_220da8e953793c::t_1587f6531f236b 176-177,369-370,384
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "649fa0e8ea6875063c6846b4477f428bf040b562",
+  "prompts": {},
+  "sessions": {
+    "s_220da8e953793c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2ba82f1f-e55e-4150-b238-4ff1b96ce382",
+        "model": "claude-fable-5"
+      },
+      "human_author": "areeb.bhaila <areeb.bhaila@gmail.com>"
+    }
+  }
+}
