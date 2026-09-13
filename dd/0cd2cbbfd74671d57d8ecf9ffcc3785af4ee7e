@@ -1,0 +1,27 @@
+watchdog/howdah-watchdog.plist
+  s_220da8e953793c::t_642eb1e44ca963 1-22
+tsconfig.json
+  s_220da8e953793c::t_0a62cf2dc4558e 12
+engine/attention.ts
+  s_220da8e953793c::t_55ad38967baa80 1-153
+engine/attention.test.ts
+  s_220da8e953793c::t_b2c673c154a939 1-159
+watchdog/check.ts
+  s_220da8e953793c::t_e427a9697587c6 1-75
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "dd0cd2cbbfd74671d57d8ecf9ffcc3785af4ee7e",
+  "prompts": {},
+  "sessions": {
+    "s_220da8e953793c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2ba82f1f-e55e-4150-b238-4ff1b96ce382",
+        "model": "claude-fable-5"
+      },
+      "human_author": "areeb.bhaila <areeb.bhaila@gmail.com>"
+    }
+  }
+}
