@@ -5,3 +5,4 @@ node_modules/
 .b.tmp
 .idea/
 web/public/app.js
+web/public/app.css
