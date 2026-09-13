@@ -1,0 +1,41 @@
+graphs/write-doc.ts
+  s_220da8e953793c::t_660f7a87c1e56e 1-73
+prompts/doc.draft.md
+  s_220da8e953793c::t_40613004a40f88 1-11
+prompts/research.synthesize.md
+  s_220da8e953793c::t_40613004a40f88 1-11
+core/prompt-ids.ts
+  s_220da8e953793c::t_40613004a40f88 12-15,22-25,40-43,50-53
+graphs/plain.test.ts
+  s_220da8e953793c::t_840197d201ea17 1-98
+graphs/research.ts
+  s_220da8e953793c::t_866c7cfb1ae069 1-73
+prompts/research.review.md
+  s_220da8e953793c::t_40613004a40f88 1-9
+prompts/research.plan.md
+  s_220da8e953793c::t_40613004a40f88 1-7
+prompts/doc.review.md
+  s_220da8e953793c::t_40613004a40f88 1-13
+prompts/doc.outline.md
+  s_220da8e953793c::t_40613004a40f88 1-9
+prompts/research.investigate.md
+  s_220da8e953793c::t_40613004a40f88 1-9
+prompts/doc.revise.md
+  s_220da8e953793c::t_40613004a40f88 1-15
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "6ffa122bd6f0f3109696415fed0cfd939790c7ce",
+  "prompts": {},
+  "sessions": {
+    "s_220da8e953793c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2ba82f1f-e55e-4150-b238-4ff1b96ce382",
+        "model": "claude-fable-5"
+      },
+      "human_author": "areeb.bhaila <areeb.bhaila@gmail.com>"
+    }
+  }
+}
