@@ -1,0 +1,21 @@
+engine/reconcile.ts
+  s_220da8e953793c::t_cd01ceb316f68e 1-149
+engine/reconcile.test.ts
+  s_220da8e953793c::t_bd1f0868f2492b 1-116
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "df53c53f46050d31011e015f00aa73b75d772fa7",
+  "prompts": {},
+  "sessions": {
+    "s_220da8e953793c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2ba82f1f-e55e-4150-b238-4ff1b96ce382",
+        "model": "claude-fable-5"
+      },
+      "human_author": "areeb.bhaila <areeb.bhaila@gmail.com>"
+    }
+  }
+}
