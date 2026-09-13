@@ -301,3 +301,31 @@ button.primary:disabled { opacity: 0.5; cursor: default; }
 .mark-btn { cursor: pointer; }
 .mark-btn .mark { transition: transform var(--dur-fast) var(--ease-out-strong); }
 .mark-btn:active .mark { transform: scale(0.94); }
+
+/* agent-log prose speaks the display face; data and tool detail stay mono */
+.turn .prose { font-family: var(--font-display); font-size: 14px; line-height: 1.6; }
+.operator-row { font-family: var(--font-display); font-size: 14px; }
+.ask-card .ask-reason, .ask-card > div:first-of-type { font-family: var(--font-display); font-size: 14px; }
+
+/* graph draw-on: edges stroke themselves in (line-drawing recipe), nodes fade by layer.
+   One-shot keyframes are fine here — the DAG remounts per graph/tuning change. */
+.dag-edge {
+  stroke-dasharray: 100 110; /* gap > dash so round arrowheads don't peek pre-draw */
+  stroke-dashoffset: 100;
+  animation: dag-draw 460ms var(--ease-out-strong) both;
+}
+.dag-edge-label {
+  opacity: 0;
+  animation: dag-appear 220ms var(--ease-out-strong) both;
+}
+.dag-node {
+  opacity: 0;
+  animation: dag-node-in 260ms var(--ease-out-strong) both;
+}
+@keyframes dag-draw { to { stroke-dashoffset: 0; } }
+@keyframes dag-appear { to { opacity: 1; } }
+/* nodes position via the transform ATTRIBUTE — CSS transform keyframes would override it, so opacity only */
+@keyframes dag-node-in { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .dag-edge, .dag-edge-label, .dag-node { animation: none; opacity: 1; stroke-dashoffset: 0; }
+}

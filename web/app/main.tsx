@@ -745,7 +745,7 @@ function GraphTuner({ shape, onSaved }: { shape: GraphShapeDto; onSaved: () => v
 
   return (
     <div className="tuner">
-      <GraphDag shape={shape} onSelect={setSelectedNode} selected={selectedNode ?? undefined} />
+      <GraphDag key={`${shape.name}:${JSON.stringify(shape.tuning ?? {})}`} shape={shape} onSelect={setSelectedNode} selected={selectedNode ?? undefined} />
       <div className="tuner-panels">
         <div className="form-card tuner-card">
           <h3>Graph defaults</h3>

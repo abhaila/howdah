@@ -84,11 +84,16 @@ export function GraphDag({ shape, current, visits, onSelect, selected }: { shape
             : `M ${x1} ${y1} C ${x1} ${y1 + 34}, ${x2} ${y2 - 34}, ${x2} ${y2}`;
           const midX = back ? Math.min(a.x, b.x) - 66 : (x1 + x2) / 2;
           const midY = back ? (a.y + b.y) / 2 + 26 : (y1 + y2) / 2;
+          const delay = Math.min(depthOf(e.from), depthOf(e.to)) / 92 * 55;
           return (
             <g key={i}>
-              <path d={d} fill="none" stroke="var(--fg-faint)" strokeWidth="1.2" markerEnd="url(#arrow)" opacity={back ? 0.7 : 1} />
+              <path
+                d={d} pathLength={100} className="dag-edge"
+                style={{ animationDelay: `${140 + delay}ms` }}
+                fill="none" stroke="var(--fg-faint)" strokeWidth="1.2" markerEnd="url(#arrow)" opacity={back ? 0.7 : 1}
+              />
               {e.label && (
-                <text x={midX} y={midY} className="dag-edge-label" textAnchor="middle">{e.label}</text>
+                <text x={midX} y={midY} className="dag-edge-label" style={{ animationDelay: `${300 + delay}ms` }} textAnchor="middle">{e.label}</text>
               )}
             </g>
           );
@@ -102,6 +107,7 @@ export function GraphDag({ shape, current, visits, onSelect, selected }: { shape
               key={n.id}
               transform={`translate(${p.x}, ${p.y})`}
               className={`dag-node ${isCurrent ? "current" : ""} ${selected === n.id ? "selected" : ""} ${onSelect && n.kind === "agent" ? "clickable" : ""} kind-${n.kind}`}
+              style={{ animationDelay: `${(p.y / 92) * 55}ms` }}
               onClick={() => n.kind === "agent" && onSelect?.(n.id)}
             >
               <rect width="180" height="52" rx="9" />
