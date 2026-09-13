@@ -1,0 +1,122 @@
+/*
+ * Howdah tokens — the single token source (design review: shadcn-style CSS variables,
+ * dark + light derived from one set; default follows the system).
+ *
+ * Rules encoded here, not in components:
+ *  - AMBER IS THE ONLY LOUD COLOR, reserved for attention. Nothing else may use it.
+ *  - Space Grotesk for headings/prose; JetBrains Mono for ids, costs, diffs, dense rows.
+ *  - Motion: --ease-out-strong + three durations. Exits use the shorter duration.
+ *  - Status enum has one renderer; these are its only colors.
+ */
+
+:root {
+  /* type */
+  --font-display: "Space Grotesk", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", monospace;
+
+  /* light theme (base set) */
+  --bg: #fafafa;
+  --bg-raised: #ffffff;
+  --bg-inset: #f0f0f2;
+  --fg: #17171c;
+  --fg-muted: #6b6b76;
+  --fg-faint: #a3a3ae;
+  --border: #e3e3e8;
+  --border-strong: #c9c9d2;
+
+  /* attention — the only loud color */
+  --attention: #d97706;      /* amber-600 on light */
+  --attention-fg: #7c2d12;
+  --attention-bg: #fef3c7;
+  --attention-border: #f59e0b;
+
+  /* status palette (one renderer) */
+  --status-queued: #a3a3ae;
+  --status-running: #2563eb;
+  --status-needs-input: var(--attention);
+  --status-waiting: #7c3aed;
+  --status-failed-recoverable: #dc2626;
+  --status-failed-terminal: #991b1b;
+  --status-done: #16a34a;
+  --status-harness-dead: #dc2626;
+
+  /* accents (quiet) */
+  --operator: #0e7490;       /* operator rows: cyan */
+  --diff-add: #16a34a;
+  --diff-del: #dc2626;
+
+  /* motion */
+  --ease-out-strong: cubic-bezier(0.19, 1, 0.22, 1);
+  --dur-fast: 120ms;
+  --dur-base: 200ms;
+  --dur-slow: 350ms;
+
+  /* shape */
+  --radius: 10px;
+  --radius-sm: 6px;
+}
+
+/* dark theme: system default… */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #101014;
+    --bg-raised: #17171c;
+    --bg-inset: #0a0a0d;
+    --fg: #e8e8ec;
+    --fg-muted: #8f8f9a;
+    --fg-faint: #56565f;
+    --border: #26262c;
+    --border-strong: #3a3a42;
+
+    --attention: #f59e0b;    /* amber-500 on dark */
+    --attention-fg: #fde68a;
+    --attention-bg: #2a1e05;
+    --attention-border: #b45309;
+
+    --status-running: #60a5fa;
+    --status-waiting: #a78bfa;
+    --status-failed-recoverable: #f87171;
+    --status-failed-terminal: #dc2626;
+    --status-done: #4ade80;
+
+    --operator: #22d3ee;
+    --diff-add: #4ade80;
+    --diff-del: #f87171;
+  }
+}
+
+/* …and the explicit toggle wins in both directions */
+:root[data-theme="dark"] {
+  --bg: #101014;
+  --bg-raised: #17171c;
+  --bg-inset: #0a0a0d;
+  --fg: #e8e8ec;
+  --fg-muted: #8f8f9a;
+  --fg-faint: #56565f;
+  --border: #26262c;
+  --border-strong: #3a3a42;
+
+  --attention: #f59e0b;
+  --attention-fg: #fde68a;
+  --attention-bg: #2a1e05;
+  --attention-border: #b45309;
+
+  --status-running: #60a5fa;
+  --status-waiting: #a78bfa;
+  --status-failed-recoverable: #f87171;
+  --status-failed-terminal: #dc2626;
+  --status-done: #4ade80;
+
+  --operator: #22d3ee;
+  --diff-add: #4ade80;
+  --diff-del: #f87171;
+}
+
+/* themed browser surfaces */
+::selection { background: color-mix(in srgb, var(--attention) 30%, transparent); }
+:focus-visible { outline: 2px solid var(--attention-border); outline-offset: 2px; }
+* { scrollbar-color: var(--border-strong) transparent; scrollbar-width: thin; }
+
+@media (prefers-reduced-motion: reduce) {
+  :root { --dur-fast: 0ms; --dur-base: 0ms; --dur-slow: 0ms; }
+}
