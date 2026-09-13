@@ -244,3 +244,56 @@ button.primary:disabled { opacity: 0.5; cursor: default; }
 .ctl.danger { border-color: var(--status-failed-recoverable); color: var(--status-failed-recoverable); font-weight: 600; }
 .banner.paused { background: color-mix(in srgb, var(--status-waiting) 12%, var(--bg)); color: var(--status-waiting); border-bottom-color: var(--status-waiting); }
 .banner.paused .retry { background: var(--status-waiting); }
+
+/* ---- motion pass (animate skill) ------------------------------------------------- */
+
+/* load splash: the mark draws itself (line-drawing recipe), once per session */
+.splash {
+  position: fixed; inset: 0; z-index: 50;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px;
+  background: var(--bg); color: var(--fg);
+  transition: opacity 350ms var(--ease-out-strong);
+}
+.splash.leaving { opacity: 0; pointer-events: none; }
+.splash-mark { width: 84px; height: 84px; overflow: visible; }
+.splash-stroke {
+  stroke-dasharray: 100 110; /* gap > dash: round caps peek otherwise */
+  stroke-dashoffset: 100;
+  animation: howdah-draw 700ms var(--ease-out-strong) forwards;
+}
+.splash-eye {
+  opacity: 0;
+  transform: scale(0.5);
+  transform-box: fill-box; transform-origin: center;
+  animation: howdah-eye 180ms var(--ease-out-strong) 580ms forwards;
+}
+.splash-word {
+  font-family: var(--font-display); font-weight: 600; font-size: 15px; letter-spacing: 0.02em;
+  opacity: 0; transform: translateY(4px);
+  animation: howdah-word 260ms var(--ease-out-strong) 640ms forwards;
+}
+@keyframes howdah-draw { to { stroke-dashoffset: 0; } }
+@keyframes howdah-eye  { to { opacity: 1; transform: scale(1); } }
+@keyframes howdah-word { to { opacity: 1; transform: translateY(0); } }
+@media (prefers-reduced-motion: reduce) {
+  .splash-stroke, .splash-eye, .splash-word { animation: none; opacity: 1; transform: none; stroke-dashoffset: 0; }
+}
+
+/* needs-attention entrance — the approved motion moment; @starting-style = interruptible */
+.banner {
+  transition: opacity var(--dur-base) var(--ease-out-strong), transform var(--dur-base) var(--ease-out-strong);
+  @starting-style { opacity: 0; transform: translateY(-8px); }
+}
+.ask-card {
+  transition: opacity var(--dur-base) var(--ease-out-strong), transform var(--dur-base) var(--ease-out-strong);
+  @starting-style { opacity: 0; transform: scale(0.97); }
+}
+
+/* reply-send morph: exit is shorter and simpler than the entry */
+.ask-card.collapsing { opacity: 0; transform: scale(0.98) translateY(4px); transition-duration: var(--dur-fast); }
+
+/* jump card sits above the DAG and enters like any ask */
+.jump-card { @starting-style { opacity: 0; transform: scale(0.97); } }
+
+/* selected node feedback is felt, not seen */
+.dag-node.clickable:active rect { transform: scale(0.985); transform-box: fill-box; transform-origin: center; }

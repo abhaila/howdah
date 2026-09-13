@@ -67,6 +67,34 @@ function useAttentionSurfaces(needsInput: boolean) {
   }, [needsInput]);
 }
 
+
+// ---- load splash: the mark draws itself, once per browser session ------------------
+// Delight is rare-frequency only: sessionStorage gates repeats, and the app loads
+// underneath — the splash never delays data. Reduced motion gets a plain fade.
+
+function Splash({ onDone }: { onDone: () => void }) {
+  const [leaving, setLeaving] = useState(false);
+  useEffect(() => {
+    new Audio("/boot.wav").play().catch(() => {}); // autoplay may be blocked — silence is fine
+    const hold = setTimeout(() => setLeaving(true), 1050);
+    const gone = setTimeout(() => { sessionStorage.setItem("howdah-splash", "1"); onDone(); }, 1400);
+    return () => { clearTimeout(hold); clearTimeout(gone); };
+  }, [onDone]);
+  return (
+    <div className={`splash ${leaving ? "leaving" : ""}`}>
+      <svg viewBox="0 0 64 64" fill="none" className="splash-mark" aria-label="Howdah">
+        <path
+          className="splash-stroke"
+          pathLength={100}
+          d="M 52 46 C 57 38 57 24 48 18 L 41 18 L 41 11 L 28 11 L 28 18 L 22 18 C 13 20 9 27 9 33 C 9 41 7 47 11 53 C 13 56 18 56 19 52"
+          stroke="currentColor" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round" />
+        <circle className="splash-eye" cx="21" cy="30" r="3" fill="#f59e0b" />
+      </svg>
+      <div className="splash-word">Howdah</div>
+    </div>
+  );
+}
+
 // ---- runs list -----------------------------------------------------------------
 
 function RunsList() {
@@ -190,14 +218,11 @@ function RunGraph({ runId, graph, timeline, status, onJumped }: { runId: string;
 
   return (
     <div style={{ paddingTop: 16 }}>
-      <GraphDag shape={shape} current={current} visits={visits} onSelect={jumpable ? setJumpTo : undefined} selected={jumpTo ?? undefined} />
-      {jumpable && !jumpTo && <div className="field-hint" style={{ marginTop: 8 }}>Click an agent node to jump the run there with instructions.</div>}
-      {!jumpable && status === "running" && <div className="field-hint" style={{ marginTop: 8 }}>Pause the run to enable jumping.</div>}
       {jumpTo && (
-        <div className="ask-card" style={{ marginTop: 12 }}>
+        <div className="ask-card jump-card" style={{ marginBottom: 12 }}>
           <h3>Jump to {jumpTo}</h3>
           <div className="field-hint">Starts a fresh attempt at this node using the current context. Your instruction is injected into its prompt and takes precedence.</div>
-          <textarea value={message} onChange={(e) => setMessage(e.target.value)} placeholder="Instructions for this step (optional)…" />
+          <textarea autoFocus value={message} onChange={(e) => setMessage(e.target.value)} placeholder="Instructions for this step (optional)…" />
           {error && <div className="field-error">{error}</div>}
           <div className="actions">
             <button className="primary" onClick={jump} disabled={state === "jumping"}>{state === "jumping" ? "Jumping…" : "Jump here"}</button>
@@ -205,6 +230,9 @@ function RunGraph({ runId, graph, timeline, status, onJumped }: { runId: string;
           </div>
         </div>
       )}
+      {jumpable && !jumpTo && <div className="field-hint" style={{ marginBottom: 8 }}>Click an agent node to jump the run there with instructions.</div>}
+      {!jumpable && status === "running" && <div className="field-hint" style={{ marginBottom: 8 }}>Pause the run to enable jumping.</div>}
+      <GraphDag shape={shape} current={current} visits={visits} onSelect={jumpable ? setJumpTo : undefined} selected={jumpTo ?? undefined} />
     </div>
   );
 }
@@ -240,14 +268,14 @@ function AskCard({ runId, ask, onResolved }: { runId: string; ask: NonNullable<R
       });
       if (!r.ok) throw new Error(await r.text());
       setState("delivered");
-      setTimeout(onResolved, 400); // card collapses into an operator row — the motion moment
+      setTimeout(onResolved, 420); // the collapse plays, then the thread takes over — the motion moment
     } catch {
       setState("failed");
     }
   }, [runId, text, onResolved]);
 
   return (
-    <div className="ask-card" id="needs-input">
+    <div className={`ask-card ${state === "delivered" ? "collapsing" : ""}`} id="needs-input">
       <h3>Needs you — {ask.node}@{ask.visit}</h3>
       <div>{ask.reason}</div>
       <textarea ref={ref} value={text} onChange={(e) => setText(e.target.value)} placeholder="Your reply…" disabled={state === "sending" || state === "delivered"} />
@@ -840,6 +868,7 @@ function App() {
     return () => { document.removeEventListener("click", onClick); window.removeEventListener("popstate", onPop); };
   }, []);
 
+  const [splashDone, setSplashDone] = useState<boolean>(() => sessionStorage.getItem("howdah-splash") === "1");
   const [theme, setTheme] = useState<string>(() => localStorage.getItem("howdah-theme") ?? "system");
   useEffect(() => {
     if (theme === "system") delete document.documentElement.dataset.theme;
@@ -853,6 +882,7 @@ function App() {
   const isGraphs = path === "/graphs";
   return (
     <div className="shell">
+      {!splashDone && <Splash onDone={() => setSplashDone(true)} />}
       <nav className="sidebar">
         <Mark className="mark" />
         <a className={`nav ${!runMatch && !isNew ? "active" : ""}`} href="/"><span className="label">Runs</span></a>
