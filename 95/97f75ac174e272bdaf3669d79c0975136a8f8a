@@ -1,0 +1,38 @@
+adapter/fixtures/claude-turn.jsonl
+  s_220da8e953793c::t_d44588e9c711b5 1-9
+adapter/fixtures/codex-turn.jsonl
+  s_220da8e953793c::t_d44588e9c711b5 1-7
+adapter/events.ts
+  s_220da8e953793c::t_f2afc979766105 1-37
+adapter/claude.ts
+  s_220da8e953793c::t_3dd86ad65745f3 1-119
+adapter/adapter.test.ts
+  s_220da8e953793c::t_32f886086d644d 1-185
+adapter/opencode.ts
+  s_220da8e953793c::t_f40e265e2b1287 1-25
+adapter/codex.ts
+  s_220da8e953793c::t_f40e265e2b1287 1-91
+tsconfig.json
+  s_220da8e953793c::t_32f886086d644d 12
+adapter/capabilities.ts
+  s_220da8e953793c::t_c5291ad8244be8 1-77
+adapter/parse.ts
+  s_220da8e953793c::t_4beb17b83ef668 38-39
+  s_220da8e953793c::t_52ae3e0227a1c2 1-37,40-71
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "9597f75ac174e272bdaf3669d79c0975136a8f8a",
+  "prompts": {},
+  "sessions": {
+    "s_220da8e953793c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2ba82f1f-e55e-4150-b238-4ff1b96ce382",
+        "model": "claude-fable-5"
+      },
+      "human_author": "areeb.bhaila <areeb.bhaila@gmail.com>"
+    }
+  }
+}
