@@ -53,6 +53,11 @@ export interface RunDetail {
   /** the unresolved ask, if any — drives the pinned banner + reply card */
   ask: Extract<LoggedEvent, { type: "attention-raised" }> | null;
   pinned_prompts: Record<string, number>;
+  /** latest reconciler observation (repo runs) — the GIT rail section */
+  git: Extract<LoggedEvent, { type: "reconciled" }> | null;
+  /** every PR ever observed on this run, deduped by url, latest state wins */
+  pull_requests: Array<{ url: string; state: string; observed_at: string }>;
+  identity: { cwd: string | null; folder_kind: "repo" | "plain" | null };
   events_seq: number;
 }
 
@@ -134,6 +139,18 @@ export function deriveDetail(id: string, events: LoggedEvent[]): RunDetail {
     }
   }
 
+  let git: RunDetail["git"] = null;
+  const prs = new Map<string, { url: string; state: string; observed_at: string }>();
+  let identity: RunDetail["identity"] = { cwd: null, folder_kind: null };
+  for (const e of events) {
+    if (e.type === "reconciled") {
+      git = e;
+      if (e.forge && e.forge.kind === "pr") prs.set(e.forge.url, { url: e.forge.url, state: e.forge.state, observed_at: e.ts });
+    } else if (e.type === "run-started") {
+      identity = { cwd: e.cwd ?? null, folder_kind: e.folder_kind ?? null };
+    }
+  }
+
   const { ask } = deriveStatus(events);
   const { id: _id, ...summaryRest } = summary;
   return {
@@ -146,6 +163,9 @@ export function deriveDetail(id: string, events: LoggedEvent[]): RunDetail {
     allowance: [...allowanceByHarness.values()],
     ask,
     pinned_prompts: pinned,
+    git,
+    pull_requests: [...prs.values()],
+    identity,
     events_seq: events.at(-1)?.seq ?? 0,
   };
 }

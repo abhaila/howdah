@@ -1,0 +1,195 @@
+/**
+ * Worktree + command executors (T18).
+ *
+ * WORKTREE: `create` makes an isolated checkout under $HOWDAH_HOME/worktrees/<runId> on a
+ * fresh `howdah/<runId>` branch and records it in the run dir (worktree.json) — every
+ * later executor resolves its effective cwd through that record, so the run "moves into"
+ * the worktree without the engine mutating state. `remove` deletes worktree + branch and
+ * emits the facts the graphs route on (worktree.clean / outcome). A dirty worktree
+ * refuses to die (Orbital's cleanup semantics: preserve local work; the graph's
+ * cleanup_pending edge handles it).
+ *
+ * COMMAND: `bash -c <script>` with a 10-minute default timeout (Orbital parity), stdout
+ * streamed as chunks, and declared facts read from THE FINAL JSON LINE of stdout. The
+ * built-in `probe:pr` routes through the reconciler: gh is the source, forge-unreachable
+ * THROWS (parks the run) rather than reading as "no PR".
+ */
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import type { Executor } from "../run";
+import { probeGit, ghForgeProbe, type ForgeProbe } from "../reconcile";
+
+export interface WorktreeRecord {
+  path: string;
+  branch: string;
+  repo: string;
+}
+
+export function worktreeRecordPath(runDir: string): string {
+  return join(runDir, "worktree.json");
+}
+
+export function readWorktreeRecord(runDir: string): WorktreeRecord | null {
+  const p = worktreeRecordPath(runDir);
+  if (!existsSync(p)) return null;
+  try {
+    return JSON.parse(readFileSync(p, "utf8")) as WorktreeRecord;
+  } catch {
+    return null;
+  }
+}
+
+/** where a node actually works: the run's worktree once one exists, else the run cwd */
+export function effectiveCwd(logPath: string, cwd: string | undefined): string | undefined {
+  return readWorktreeRecord(dirname(logPath))?.path ?? cwd;
+}
+
+function sh(cmd: string[], cwd?: string): { code: number; stdout: string; stderr: string } {
+  const r = Bun.spawnSync(cmd, { cwd, stdout: "pipe", stderr: "pipe", env: { ...process.env } });
+  return { code: r.exitCode ?? 1, stdout: new TextDecoder().decode(r.stdout), stderr: new TextDecoder().decode(r.stderr) };
+}
+
+export function worktreeExecutor(opts: { worktreesDir: string }): Executor {
+  return async ({ def, runId, cwd, log, effects }) => {
+    if (def.kind !== "worktree") throw new Error("worktreeExecutor on non-worktree node");
+    const runDir = dirname(log.path);
+
+    if (def.action === "create") {
+      const existing = readWorktreeRecord(runDir);
+      if (existing) return { status: "succeeded", writes: {} }; // idempotent re-visit
+      if (!cwd) throw new Error("worktree create needs a repo workspace (run has no cwd)");
+      const branch = `howdah/${runId}`;
+      const path = join(opts.worktreesDir, runId);
+      if (!effects.claim("worktree-create")) {
+        mkdirSync(opts.worktreesDir, { recursive: true });
+        const r = sh(["git", "worktree", "add", "-b", branch, path], cwd);
+        if (r.code !== 0) throw new Error(`git worktree add failed: ${r.stderr.trim().slice(0, 300)}`);
+        effects.done("worktree-create", { path, branch });
+      }
+      writeFileSync(worktreeRecordPath(runDir), JSON.stringify({ path, branch, repo: cwd } satisfies WorktreeRecord, null, 2));
+      return { status: "succeeded", writes: {} };
+    }
+
+    // remove: refuse to destroy local work — dirty/unpushed keeps the worktree
+    const record = readWorktreeRecord(runDir);
+    const writes: Record<string, unknown> = {};
+    const declared = new Set(Object.keys(def.writes ?? {}));
+    if (!record) {
+      if (declared.has("worktree.clean")) writes["worktree.clean"] = true; // nothing to clean
+      if (declared.has("outcome")) writes["outcome"] = "removed";
+      return { status: "succeeded", writes };
+    }
+    const g = probeGit(record.path);
+    if (g.uncommitted > 0) {
+      if (declared.has("worktree.clean")) writes["worktree.clean"] = false;
+      if (declared.has("outcome")) writes["outcome"] = "failed";
+      return { status: "succeeded", writes }; // the graph's retained/pending edge decides
+    }
+    const rm = sh(["git", "worktree", "remove", record.path], record.repo);
+    if (rm.code !== 0) {
+      if (declared.has("worktree.clean")) writes["worktree.clean"] = false;
+      if (declared.has("outcome")) writes["outcome"] = "failed";
+      return { status: "succeeded", writes };
+    }
+    sh(["git", "branch", "-D", record.branch], record.repo); // best-effort: merged branches may be gone
+    rmSync(worktreeRecordPath(runDir), { force: true });
+    if (declared.has("worktree.clean")) writes["worktree.clean"] = true;
+    if (declared.has("outcome")) writes["outcome"] = "removed";
+    return { status: "succeeded", writes };
+  };
+}
+
+// ---- command --------------------------------------------------------------------
+
+export type PrState = "OPEN" | "MERGED" | "CLOSED" | "CONFLICTS" | "CI_FAILED" | "CHANGES_REQUIRED";
+
+/** derive the routing state the graphs consume from gh's PR view */
+export function derivePrState(pr: { state: string; mergeable?: string; reviewDecision?: string; failedChecks?: boolean }): PrState {
+  if (pr.state === "MERGED") return "MERGED";
+  if (pr.state === "CLOSED") return "CLOSED";
+  if (pr.mergeable === "CONFLICTING") return "CONFLICTS";
+  if (pr.failedChecks) return "CI_FAILED";
+  if (pr.reviewDecision === "CHANGES_REQUESTED") return "CHANGES_REQUIRED";
+  return "OPEN";
+}
+
+/** gh probe with the fields routing needs; unreachable THROWS — absence of evidence parks */
+export const ghPrProbe = (cwd: string, branch: string): { state: PrState; url: string } | null => {
+  const r = sh(["gh", "pr", "view", branch, "--json", "state,url,mergeable,reviewDecision,statusCheckRollup"], cwd);
+  if (r.code !== 0) {
+    if (/no pull requests? found/i.test(r.stderr + r.stdout)) return null;
+    throw new Error(`forge unreachable: ${r.stderr.trim().slice(0, 200) || "gh failed"}`);
+  }
+  const j = JSON.parse(r.stdout) as { state: string; url: string; mergeable?: string; reviewDecision?: string; statusCheckRollup?: Array<{ conclusion?: string; state?: string }> };
+  const failedChecks = (j.statusCheckRollup ?? []).some((c) => (c.conclusion ?? c.state) === "FAILURE");
+  return { state: derivePrState({ ...j, failedChecks }), url: j.url };
+};
+
+export interface CommandExecutorOpts {
+  /** injectable pr probe for tests; default gh */
+  prProbe?: typeof ghPrProbe;
+  defaultTimeoutMs?: number;
+}
+
+export function commandExecutor(opts: CommandExecutorOpts = {}): Executor {
+  return async ({ nodeId, def, visit, cwd, log }) => {
+    if (def.kind !== "command") throw new Error("commandExecutor on non-command node");
+    const workDir = effectiveCwd(log.path, cwd);
+    const declared = Object.keys(def.writes ?? {});
+    let index = 0;
+    const chunk = (kind: "tool_call" | "tool_result" | "text", content: string) =>
+      log.append({ type: "chunk", node: nodeId, visit, turn: 1, index: index++, kind, content });
+
+    // built-in: probe:pr — the reconciler is the only source of PR truth (A6.2)
+    if (def.run === "probe:pr") {
+      if (!workDir) throw new Error("probe:pr needs a working directory");
+      const record = readWorktreeRecord(dirname(log.path));
+      const branch = record?.branch ?? probeGit(workDir).branch;
+      if (!branch) throw new Error("probe:pr: no branch to probe");
+      chunk("tool_call", `gh pr view ${branch}`);
+      const pr = (opts.prProbe ?? ghPrProbe)(record?.repo ?? workDir, branch);
+      if (pr === null) throw new Error(`no PR exists for branch "${branch}" — was publish skipped?`);
+      chunk("tool_result", `${pr.state} ${pr.url}`);
+      log.append({
+        type: "reconciled", node: nodeId,
+        git: probeGit(workDir),
+        forge: { kind: "pr", state: pr.state, url: pr.url },
+        disagreements: [],
+      });
+      return { status: "succeeded", writes: declared.includes("pr.state") ? { "pr.state": pr.state } : {} };
+    }
+
+    // general command: bash -c, stream stdout, facts from the FINAL JSON line
+    chunk("tool_call", def.run);
+    const proc = Bun.spawn(["bash", "-c", def.run], { cwd: workDir, stdout: "pipe", stderr: "pipe", env: { ...process.env } });
+    const timeoutMs = def.timeoutMs ?? opts.defaultTimeoutMs ?? 600_000;
+    const killer = setTimeout(() => proc.kill(), timeoutMs);
+    let stdout = "";
+    for await (const bytes of proc.stdout) {
+      const text = new TextDecoder().decode(bytes);
+      stdout += text;
+      chunk("text", text);
+    }
+    const stderr = await new Response(proc.stderr).text();
+    await proc.exited;
+    clearTimeout(killer);
+
+    if (proc.exitCode !== 0) {
+      chunk("tool_result", `exit ${proc.exitCode}: ${stderr.slice(0, 300)}`);
+      return { status: "failed", writes: {} };
+    }
+    if (declared.length === 0) return { status: "succeeded", writes: {} };
+    const lastLine = stdout.trim().split("\n").at(-1) ?? "";
+    try {
+      const facts = JSON.parse(lastLine) as Record<string, unknown>;
+      const missing = declared.filter((k) => !(k in facts));
+      if (missing.length) throw new Error(`facts missing: ${missing.join(", ")}`);
+      return { status: "succeeded", writes: Object.fromEntries(declared.map((k) => [k, facts[k]])) };
+    } catch (err) {
+      chunk("tool_result", `final line is not the declared facts JSON: ${err instanceof Error ? err.message : String(err)}`);
+      return { status: "failed", writes: {} };
+    }
+  };
+}
+
+export { type ForgeProbe };

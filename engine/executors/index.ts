@@ -7,7 +7,9 @@
 import type { Executor, EngineOpts } from "../run";
 import { claudeExecutor } from "./claude";
 import { codexExecutor } from "./codex";
+import { commandExecutor, worktreeExecutor } from "./worktree";
 import type { Notifier } from "../attention";
+import { join } from "node:path";
 
 export function parseDuration(spec: string): number {
   const m = spec.match(/^(\d+)\s*(ms|s|m|h)$/);
@@ -38,6 +40,8 @@ export function stubExecutors(): EngineOpts["executors"] {
 
 export interface LiveExecutorDeps {
   attentionDir: string;
+  /** where worktrees live — $HOWDAH_HOME/worktrees */
+  worktreesDir?: string;
   viewerBase?: string;
   notifiers?: Notifier[];
   claudeBinary?: string;
@@ -53,7 +57,7 @@ export function liveExecutors(deps: LiveExecutorDeps): EngineOpts["executors"] {
     wait: waitExecutor,
     agent: async (args) =>
       (args.def.kind === "agent" && args.def.harness === "codex" ? codex : claude)(args),
-    command: notYet("command", "T18"),
-    worktree: notYet("worktree", "T18"),
+    command: commandExecutor(),
+    worktree: worktreeExecutor({ worktreesDir: deps.worktreesDir ?? join(deps.attentionDir, "..", "worktrees") }),
   };
 }

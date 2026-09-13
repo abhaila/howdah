@@ -24,6 +24,7 @@ import { mapClaudeEvent, buildClaudePermissionResponse, buildClaudeUserTurn, cla
 import { buildOutputInstruction, parseOutputs } from "./outputs";
 import { AttentionCenter, osNotifier, type Notifier } from "../attention";
 import { readLog } from "../../log/write";
+import { effectiveCwd } from "./worktree";
 
 export interface ClaudeExecutorOpts {
   attentionDir: string;
@@ -47,7 +48,7 @@ export function claudeExecutor(opts: ClaudeExecutorOpts): Executor {
     const proc = Bun.spawn(
       [opts.binary ?? "claude", ...claudeArgs({ sessionId, permissionMode: opts.permissionMode ?? "acceptEdits" }),
         ...(opts.model ? ["--model", opts.model] : [])],
-      { cwd: cwd ?? dirname(log.path), env: { ...process.env }, stdin: "pipe", stdout: "pipe", stderr: "pipe" },
+      { cwd: effectiveCwd(log.path, cwd) ?? dirname(log.path), env: { ...process.env }, stdin: "pipe", stdout: "pipe", stderr: "pipe" },
     );
     proc.stdin.write(buildClaudeUserTurn(prompt));
     proc.stdin.flush();

@@ -15,6 +15,8 @@ import { liveExecutors, stubExecutors } from "../engine/executors";
 import { EventLog, readLog } from "../log/write";
 import { AttentionCenter, osNotifier, pidAlive, writeHeartbeat } from "../engine/attention";
 import { replayState } from "../engine/replay";
+import { Reconciler, readsForgeFacts } from "../engine/reconcile";
+import { effectiveCwd, readWorktreeRecord } from "../engine/executors/worktree";
 import { GRAPHS, graphCatalog } from "../graphs/index";
 import { howdahHome, loadConfig, resolveWorkspace } from "../config/config";
 
@@ -23,7 +25,29 @@ const runsDir = join(base, "runs");
 
 function executors() {
   // HOWDAH_STUB short-circuits real agent spawns — tests and dry runs
-  return process.env.HOWDAH_STUB ? stubExecutors() : liveExecutors({ attentionDir: join(base, "attention") });
+  return process.env.HOWDAH_STUB
+    ? stubExecutors()
+    : liveExecutors({ attentionDir: join(base, "attention"), worktreesDir: join(base, "worktrees") });
+}
+
+/** git before every node, forge before declared readers; observations land in the log */
+function reconcilerHook(runDir: string, engineRef: () => import("../engine/run").Engine) {
+  return async (nodeId: string, def: import("../core/graph").NodeDef<any>) => {
+    if (process.env.HOWDAH_STUB) return;
+    const started = replayState(readLog(join(runDir, "run.jsonl"))).started;
+    const cwd = effectiveCwd(join(runDir, "run.jsonl"), started?.cwd);
+    if (!cwd || started?.folder_kind !== "repo") return; // Plain runs never touch git
+    const record = readWorktreeRecord(runDir);
+    const rec = new Reconciler(cwd);
+    if (record) rec.claim({ branch: record.branch });
+    const r = await rec.reconcile(def);
+    engineRef().log.append({
+      type: "reconciled", node: nodeId, git: r.git,
+      forge: readsForgeFacts(def) ? r.forge : undefined,
+      intended: record ? { branch: record.branch } : undefined,
+      disagreements: r.disagreements,
+    });
+  };
 }
 
 function writePid(runDir: string): void {
@@ -72,7 +96,10 @@ export async function runCommand(argv: string[]): Promise<string> {
 
   const runId = id ?? `${graphName}-${Date.now().toString(36)}`;
   const runDir = join(runsDir, runId);
-  const engine = new Engine(graph, { dir: runDir, executors: executors(), cwd, folderKind });
+  const engine: Engine = new Engine(graph, {
+    dir: runDir, executors: executors(), cwd, folderKind,
+    beforeNode: reconcilerHook(runDir, () => engine),
+  });
   console.log(`run ${runId} starting (${cwd ?? "no folder"})`);
   writePid(runDir);
   const result = await engine.start(inputs);
@@ -93,12 +120,13 @@ export async function resumeCommand(runId: string): Promise<void> {
   if (replayed.finished) return void console.log(`run ${runId} already finished: ${replayed.finished.outcome}`);
   const graph = GRAPHS[replayed.started.graph];
   if (!graph) throw new Error(`run ${runId} uses unknown graph "${replayed.started.graph}"`);
-  const engine = new Engine(graph, {
+  const engine: Engine = new Engine(graph, {
     dir: runDir,
     executors: executors(),
     cwd: replayed.started.cwd,
     folderKind: replayed.started.folder_kind,
-    probe: async () => "unknown", // T18 wires the reconciler probe; unknown parks, never duplicates
+    beforeNode: reconcilerHook(runDir, () => engine),
+    probe: async () => "unknown", // ambiguous side effects park for the operator
   });
   writePid(runDir);
   const result = await engine.resume();

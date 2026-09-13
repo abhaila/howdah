@@ -154,3 +154,12 @@ button.primary:disabled { opacity: 0.5; cursor: default; }
 }
 .field-hint { color: var(--fg-muted); font-size: 12px; }
 .field-error { color: var(--status-failed-recoverable); font-size: 12px; }
+
+/* git rail + PR links (T18) */
+.kv .path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 180px; }
+.disagreement { color: var(--attention); font-size: 12px; padding: 3px 0; }
+.pr-link { text-decoration: underline; text-underline-offset: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 210px; }
+.pr-state { font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 8px; background: var(--bg-inset); }
+.pr-state.pr-open { color: var(--status-done); }
+.pr-state.pr-merged { color: var(--status-waiting); }
+.pr-state.pr-closed, .pr-state.pr-conflicts, .pr-state.pr-ci_failed { color: var(--status-failed-recoverable); }

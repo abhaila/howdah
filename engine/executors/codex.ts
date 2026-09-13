@@ -18,6 +18,7 @@ import { mapCodexEvent, buildCodexApprovalResponse } from "../../adapter/codex";
 import { buildOutputInstruction, parseOutputs } from "./outputs";
 import { AttentionCenter, osNotifier, type Notifier } from "../attention";
 import { readLog } from "../../log/write";
+import { effectiveCwd } from "./worktree";
 
 export interface CodexExecutorOpts {
   attentionDir: string;
@@ -39,7 +40,7 @@ export function codexExecutor(opts: CodexExecutorOpts): Executor {
     const prompt = (renderedPrompt ?? "") + buildOutputInstruction(writeKeys);
 
     const proc = Bun.spawn([opts.binary ?? "codex", "app-server"], {
-      cwd: cwd ?? dirname(log.path),
+      cwd: effectiveCwd(log.path, cwd) ?? dirname(log.path),
       env: { ...process.env },
       stdin: "pipe",
       stdout: "pipe",
@@ -145,7 +146,7 @@ export function codexExecutor(opts: CodexExecutorOpts): Executor {
     try {
       await request("initialize", { clientInfo: { name: "howdah", version: "0.0.1" } });
       const thread = await request("thread/start", {
-        cwd: cwd ?? dirname(log.path),
+        cwd: effectiveCwd(log.path, cwd) ?? dirname(log.path),
         approvalPolicy: "on-request",
         sandbox: opts.sandbox ?? "workspace-write",
         ...(opts.model ? { model: opts.model } : {}),

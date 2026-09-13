@@ -106,6 +106,23 @@ export type RunEvent =
       effect: string;
     }
   | { type: "side-effect-done"; node: string; visit: number; attempt_id: string; effect: string; result?: unknown }
+  | {
+      /** reconciler observation before a node (A6): git always, forge only for declared
+       *  readers. Disagreements between intended and observed identity are FACTS here —
+       *  surfaced, never auto-resolved. */
+      type: "reconciled";
+      node: string;
+      git: {
+        repo: boolean;
+        branch: string | null;
+        head: string | null;
+        uncommitted: number;
+        unpushed: number | null;
+      };
+      forge?: { kind: "pr"; state: string; url: string } | { kind: "no-pr" } | { kind: "unreachable"; error: string } | null;
+      intended?: { branch?: string; prUrl?: string };
+      disagreements: string[];
+    }
   | { type: "edge-taken"; from: string; to: string; label?: string }
   | { type: "attention-raised"; node: string; visit: number; reason: string; ask?: unknown }
   | { type: "attention-resolved"; node: string; visit: number; reply?: string }

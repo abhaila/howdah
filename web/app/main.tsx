@@ -220,6 +220,41 @@ function RunView({ id }: { id: string }) {
 
       <div className="rail">
         <section>
+          <h2>Identity</h2>
+          <div className="kv"><span className="k">run</span><span>{id}</span></div>
+          <div className="kv"><span className="k">graph</span><span>{summary.graph}</span></div>
+          {detail.identity.cwd && <div className="kv"><span className="k">{detail.identity.folder_kind === "repo" ? "repo" : "folder"}</span><span className="path" title={detail.identity.cwd}>{detail.identity.cwd.split("/").slice(-2).join("/")}</span></div>}
+          {detail.git?.intended?.branch && <div className="kv"><span className="k">branch</span><span>{detail.git.intended.branch}</span></div>}
+        </section>
+        {detail.identity.folder_kind === "repo" && (
+          <section>
+            <h2>Git</h2>
+            {detail.git ? (
+              <>
+                <div className="kv"><span className="k">observed branch</span><span>{detail.git.git.branch ?? "—"}</span></div>
+                <div className="kv"><span className="k">uncommitted</span><span>{detail.git.git.uncommitted}</span></div>
+                <div className="kv"><span className="k">unpushed</span><span>{detail.git.git.unpushed ?? "no upstream"}</span></div>
+                <div className="kv"><span className="k">probed</span><span>{fmtWait(detail.git.ts, now)} ago</span></div>
+                {detail.git.disagreements.map((d, i) => <div key={i} className="disagreement">⚠ {d}</div>)}
+                {detail.git.forge?.kind === "unreachable" && <div className="kv"><span className="k">forge</span><span className="allowance-unreachable">unreachable — not "no PR"</span></div>}
+              </>
+            ) : (
+              <div className="kv"><span className="k">git</span><span>not probed yet</span></div>
+            )}
+          </section>
+        )}
+        {detail.pull_requests.length > 0 && (
+          <section>
+            <h2>Pull requests</h2>
+            {detail.pull_requests.map((pr) => (
+              <div key={pr.url} className="kv">
+                <a href={pr.url} target="_blank" rel="noreferrer" className="pr-link">{pr.url.replace(/^https:\/\/github\.com\//, "")}</a>
+                <span className={`pr-state pr-${pr.state.toLowerCase()}`}>{pr.state}</span>
+              </div>
+            ))}
+          </section>
+        )}
+        <section>
           <h2>Timeline</h2>
           {detail.timeline.map((t, i) => (
             <div key={i} className="tl-row" style={{ ["--status-color" as any]: `var(--status-${t.status === "succeeded" ? "done" : t.status === "failed" ? "failed-recoverable" : "running"})` }}>

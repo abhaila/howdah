@@ -73,6 +73,8 @@ export interface EngineOpts {
   /** where the run works (worktree or plain folder) — stamped on run-started */
   cwd?: string;
   folderKind?: "repo" | "plain";
+  /** runs before every non-terminal node — the reconciler's seat (A6.1) */
+  beforeNode?: (nodeId: string, def: NodeDef<any>) => Promise<void>;
 }
 
 export type RunState =
@@ -189,6 +191,7 @@ export class Engine {
       if (maxVisits !== undefined && visit > maxVisits)
         return this.park(current, visit, `maxVisits exceeded (${visit} > ${maxVisits})`);
 
+      if (this.opts.beforeNode) await this.opts.beforeNode(current, def);
       const attemptId = `${current}#${visit}`;
       this.log.append({ type: "node-started", node: current, visit, attempt_id: attemptId });
       this.ctx.beginAttempt(current, visit);
