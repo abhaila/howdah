@@ -9,12 +9,20 @@ export type PromptId =
   | "delivery.review_repairs"
   | "delivery.revise_repairs"
   | "discover"
+  | "doc.draft"
+  | "doc.outline"
+  | "doc.review"
+  | "doc.revise"
   | "implementation.implement"
   | "implementation.implement_review"
   | "implementation.local_review"
   | "implementation.plan"
   | "implementation.plan_review"
   | "report.compile"
+  | "research.investigate"
+  | "research.plan"
+  | "research.review"
+  | "research.synthesize"
   | "review.seq_review"
   | "review.sonarqube"
   | "review.uncle_bob";
@@ -29,12 +37,20 @@ export const PROMPT_IDS = [
   "delivery.review_repairs",
   "delivery.revise_repairs",
   "discover",
+  "doc.draft",
+  "doc.outline",
+  "doc.review",
+  "doc.revise",
   "implementation.implement",
   "implementation.implement_review",
   "implementation.local_review",
   "implementation.plan",
   "implementation.plan_review",
   "report.compile",
+  "research.investigate",
+  "research.plan",
+  "research.review",
+  "research.synthesize",
   "review.seq_review",
   "review.sonarqube",
   "review.uncle_bob",
