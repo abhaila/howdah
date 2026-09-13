@@ -4,3 +4,4 @@ node_modules/
 .a.tmp
 .b.tmp
 .idea/
+web/public/app.js

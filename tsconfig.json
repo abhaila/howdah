@@ -1,13 +1,15 @@
 {
   "compilerOptions": {
-    "target": "ES2022",
+    "target": "ES2023",
     "module": "ESNext",
     "moduleResolution": "bundler",
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "noImplicitOverride": true,
     "skipLibCheck": true,
-    "types": ["bun"]
+    "types": ["bun"],
+    "jsx": "react-jsx",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"]
   },
-  "include": ["core", "reviser", "graphs", "scripts", "prompts", "log", "adapter", "engine", "watchdog"]
+  "include": ["core", "reviser", "graphs", "scripts", "prompts", "log", "adapter", "engine", "watchdog", "web"]
 }
