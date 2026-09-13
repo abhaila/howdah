@@ -12,9 +12,9 @@
   --color-faint: var(--fg-faint);
   --color-border: var(--border);
   --color-input: var(--border-strong);
-  --color-ring: var(--attention-border);
-  --color-primary: var(--attention);
-  --color-primary-foreground: #ffffff;
+  --color-ring: var(--ring);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-fg);
   --color-secondary: var(--bg-inset);
   --color-secondary-foreground: var(--fg);
   --color-destructive: var(--status-failed-recoverable);

@@ -121,7 +121,7 @@ main { flex: 1; min-width: 0; }
 }
 .ask-card .actions { display: flex; gap: 8px; margin-top: 8px; align-items: center; }
 button.primary {
-  background: var(--attention); color: #fff; border: 0;
+  background: var(--primary); color: var(--primary-fg); border: 0;
   padding: 7px 14px; border-radius: var(--radius-sm);
   font-family: var(--font-display); font-weight: 400; letter-spacing: 0.03em; font-size: 13px; cursor: pointer;
   transition: transform var(--dur-fast) var(--ease-out-strong), opacity var(--dur-fast);
@@ -184,13 +184,13 @@ button.primary:disabled { opacity: 0.5; cursor: default; }
 /* graph DAG (T20) */
 .dag-scroll { overflow: auto; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-inset); }
 .dag-node rect { fill: var(--bg-raised); stroke: var(--border-strong); stroke-width: 1.2; }
-.dag-node.current rect { stroke: var(--attention-border); stroke-width: 2; }
-.dag-node.current .dag-title { fill: var(--attention); }
+.dag-node.current rect { stroke: var(--status-running); stroke-width: 2; }
+.dag-node.current .dag-title { fill: var(--status-running); }
 .dag-node.kind-terminal rect { stroke-dasharray: 3 3; }
 .dag-title { fill: var(--fg); font-family: var(--font-mono); font-size: 12px; font-weight: 600; }
 .dag-sub { fill: var(--fg-muted); font-family: var(--font-mono); font-size: 10px; }
 .dag-edge-label { fill: var(--fg-faint); font-family: var(--font-mono); font-size: 9px; }
-.dag-node rect.dag-visits { fill: var(--attention); stroke: none; }
+.dag-node rect.dag-visits { fill: var(--status-running); stroke: none; }
 .dag-visits-text { fill: #fff; font-size: 10px; font-weight: 700; font-family: var(--font-mono); }
 .graphs-layout { display: grid; grid-template-columns: 280px 1fr; gap: 18px; align-items: start; }
 .run-row.selected { border-color: var(--border-strong); background: var(--bg-inset); }

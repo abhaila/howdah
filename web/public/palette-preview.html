@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Howdah — primary color candidates</title>
+<link rel="icon" href="/favicon.svg" />
+<link href="https://fonts.googleapis.com/css2?family=Special+Gothic&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: "Special Gothic", sans-serif; background: #fafafa; color: #17171c; padding: 40px 48px 80px; }
+  h1 { font-weight: 400; font-size: 22px; }
+  .note { color: #6b6b76; font-size: 13px; max-width: 760px; line-height: 1.6; margin-bottom: 30px; }
+  .candidate { margin-bottom: 44px; }
+  .label { font-size: 11px; text-transform: uppercase; letter-spacing: .1em; color: #a3a3ae; margin-bottom: 10px; }
+  .label b { color: #17171c; }
+  .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .panel { border-radius: 12px; padding: 22px; display: flex; flex-direction: column; gap: 12px; border: 1px solid #e3e3e8; }
+  .panel.light { background: #fafafa; color: #17171c; }
+  .panel.dark  { background: #101014; color: #e8e8ec; border-color: #26262c; }
+  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .btn { border: 0; border-radius: 6px; padding: 8px 16px; font-family: inherit; font-size: 13px; letter-spacing: .02em; color: var(--pfg); background: var(--p); cursor: pointer; }
+  .btn.outline { background: transparent; border: 1px solid currentColor; color: inherit; opacity: .75; }
+  .link { color: var(--p-text, var(--p)); text-decoration: underline; font-size: 13px; }
+  .running { display: inline-flex; align-items: center; gap: 6px; font-family: "JetBrains Mono", monospace; font-size: 12px; }
+  .running .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--run); }
+  .banner { display: flex; border-radius: 8px; padding: 9px 14px; font-size: 13px; }
+  .panel.light .banner { background: #fef3c7; color: #7c2d12; border: 1px solid #f59e0b; }
+  .panel.dark  .banner { background: #2a1e05; color: #fde68a; border: 1px solid #b45309; }
+  .banner span { margin-left: auto; font-family: "JetBrains Mono", monospace; }
+  .sel { font-size: 13px; }
+  .sel::selection, .sel *::selection { background: color-mix(in srgb, var(--p) 30%, transparent); }
+  .swatches { display: flex; gap: 6px; }
+  .sw { width: 40px; height: 22px; border-radius: 4px; }
+</style>
+</head>
+<body>
+  <h1>Primary color candidates — amber returns to attention-only</h1>
+  <p class="note">
+    Research: cyan-on-charcoal is the dev-tool cliché; blue/indigo/purple own AI SaaS; orange is
+    Anthropic's (and our attention signal). The open, uncommon territory is the Mughal miniature
+    palette Howdah is named from — lapis, peacock, madder, with gold already serving as attention.
+    Each candidate below shows both themes with the amber banner alongside, since the pairing is
+    the real test: the banner must outrank the buttons.
+  </p>
+
+  <div class="candidate">
+    <div class="label"><b>A — Peacock</b> · deep viridian · RECOMMENDED: coolest against amber, rare among dev tools at this depth</div>
+    <div class="pair">
+      <div class="panel light" style="--p:#0b7261; --pfg:#ffffff; --run:#3947c6">
+        <div class="row"><button class="btn">Launch run</button><button class="btn outline">Cancel</button><a class="link">Open PR #7</a><span class="running"><span class="dot"></span>running</span></div>
+        <div class="banner">Waiting on you — Bash needs permission<span>4h 12m</span></div>
+        <div class="sel">Selected text takes the primary tint — <b>try selecting this line</b>.</div>
+        <div class="swatches"><div class="sw" style="background:#0b7261"></div><div class="sw" style="background:#095e50"></div><div class="sw" style="background:#3947c6"></div><div class="sw" style="background:#f59e0b"></div></div>
+      </div>
+      <div class="panel dark" style="--p:#2fd4b0; --pfg:#052e26; --p-text:#2fd4b0; --run:#7c8cff">
+        <div class="row"><button class="btn">Launch run</button><button class="btn outline">Cancel</button><a class="link">Open PR #7</a><span class="running"><span class="dot"></span>running</span></div>
+        <div class="banner">Waiting on you — Bash needs permission<span>4h 12m</span></div>
+        <div class="sel">Selected text takes the primary tint — <b>try selecting this line</b>.</div>
+        <div class="swatches"><div class="sw" style="background:#2fd4b0"></div><div class="sw" style="background:#26b493"></div><div class="sw" style="background:#7c8cff"></div><div class="sw" style="background:#f59e0b"></div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="candidate">
+    <div class="label"><b>B — Lapis</b> · ultramarine, deeper and warmer than SaaS blue</div>
+    <div class="pair">
+      <div class="panel light" style="--p:#3341bd; --pfg:#ffffff; --run:#0b7261">
+        <div class="row"><button class="btn">Launch run</button><button class="btn outline">Cancel</button><a class="link">Open PR #7</a><span class="running"><span class="dot"></span>running</span></div>
+        <div class="banner">Waiting on you — Bash needs permission<span>4h 12m</span></div>
+        <div class="sel">Selected text takes the primary tint — <b>try selecting this line</b>.</div>
+        <div class="swatches"><div class="sw" style="background:#3341bd"></div><div class="sw" style="background:#2a35a0"></div><div class="sw" style="background:#0b7261"></div><div class="sw" style="background:#f59e0b"></div></div>
+      </div>
+      <div class="panel dark" style="--p:#8b9aff; --pfg:#101344; --p-text:#8b9aff; --run:#2fd4b0">
+        <div class="row"><button class="btn">Launch run</button><button class="btn outline">Cancel</button><a class="link">Open PR #7</a><span class="running"><span class="dot"></span>running</span></div>
+        <div class="banner">Waiting on you — Bash needs permission<span>4h 12m</span></div>
+        <div class="sel">Selected text takes the primary tint — <b>try selecting this line</b>.</div>
+        <div class="swatches"><div class="sw" style="background:#8b9aff"></div><div class="sw" style="background:#6e7ff3"></div><div class="sw" style="background:#2fd4b0"></div><div class="sw" style="background:#f59e0b"></div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="candidate">
+    <div class="label"><b>C — Madder</b> · oxblood red, editorial and rare — but reads "danger" on action buttons</div>
+    <div class="pair">
+      <div class="panel light" style="--p:#9c2b43; --pfg:#ffffff; --run:#3947c6">
+        <div class="row"><button class="btn">Launch run</button><button class="btn outline">Cancel</button><a class="link">Open PR #7</a><span class="running"><span class="dot"></span>running</span></div>
+        <div class="banner">Waiting on you — Bash needs permission<span>4h 12m</span></div>
+        <div class="sel">Selected text takes the primary tint — <b>try selecting this line</b>.</div>
+        <div class="swatches"><div class="sw" style="background:#9c2b43"></div><div class="sw" style="background:#822338"></div><div class="sw" style="background:#3947c6"></div><div class="sw" style="background:#f59e0b"></div></div>
+      </div>
+      <div class="panel dark" style="--p:#e56b84; --pfg:#3d0716; --p-text:#e56b84; --run:#7c8cff">
+        <div class="row"><button class="btn">Launch run</button><button class="btn outline">Cancel</button><a class="link">Open PR #7</a><span class="running"><span class="dot"></span>running</span></div>
+        <div class="banner">Waiting on you — Bash needs permission<span>4h 12m</span></div>
+        <div class="sel">Selected text takes the primary tint — <b>try selecting this line</b>.</div>
+        <div class="swatches"><div class="sw" style="background:#e56b84"></div><div class="sw" style="background:#d15570"></div><div class="sw" style="background:#7c8cff"></div><div class="sw" style="background:#f59e0b"></div></div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

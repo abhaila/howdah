@@ -1,7 +1,7 @@
 /**
  * shadcn/ui components for Howdah (the deferred T11 follow-up). Same patterns as the
  * shadcn registry — cva variants + cn merge — with the theme mapped onto Howdah's tokens
- * in globals.css, so bg-primary IS the amber and dark/light keep working from one set.
+ * in globals.css, so bg-primary IS the peacock and dark/light keep working from one set.
  * Select stays a styled native <select>: no Radix dependency, keyboard-correct for free.
  */
 import { forwardRef } from "react";
@@ -18,7 +18,7 @@ export function cn(...inputs: ClassValue[]) {
 // ---- Button -----------------------------------------------------------------------
 
 const buttonVariants = cva(
-  "inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md text-[13px] tracking-wide transition-[transform,opacity,background,border-color] duration-[var(--dur-fast)] cursor-pointer select-none active:scale-[0.97] disabled:pointer-events-none disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-[var(--attention-border)] focus-visible:outline-offset-2 [&_svg]:size-3.5 [&_svg]:shrink-0",
+  "inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md text-[13px] tracking-wide transition-[transform,opacity,background,border-color] duration-[var(--dur-fast)] cursor-pointer select-none active:scale-[0.97] disabled:pointer-events-none disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-[var(--ring)] focus-visible:outline-offset-2 [&_svg]:size-3.5 [&_svg]:shrink-0",
   {
     variants: {
       variant: {
@@ -69,7 +69,7 @@ export const Input = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputE
   <input
     ref={ref}
     className={cn(
-      "h-8 w-full rounded-md border border-border bg-muted px-2.5 font-mono text-[13px] text-foreground placeholder:text-faint focus-visible:outline-2 focus-visible:outline-[var(--attention-border)] focus-visible:outline-offset-1",
+      "h-8 w-full rounded-md border border-border bg-muted px-2.5 font-mono text-[13px] text-foreground placeholder:text-faint focus-visible:outline-2 focus-visible:outline-[var(--ring)] focus-visible:outline-offset-1",
       className,
     )}
     {...props}
@@ -81,7 +81,7 @@ export const Textarea = forwardRef<HTMLTextAreaElement, TextareaHTMLAttributes<H
   <textarea
     ref={ref}
     className={cn(
-      "min-h-16 w-full resize-y rounded-md border border-border bg-muted p-2.5 font-mono text-[13px] text-foreground placeholder:text-faint focus-visible:outline-2 focus-visible:outline-[var(--attention-border)] focus-visible:outline-offset-1",
+      "min-h-16 w-full resize-y rounded-md border border-border bg-muted p-2.5 font-mono text-[13px] text-foreground placeholder:text-faint focus-visible:outline-2 focus-visible:outline-[var(--ring)] focus-visible:outline-offset-1",
       className,
     )}
     {...props}
@@ -94,7 +94,7 @@ export const Select = forwardRef<HTMLSelectElement, SelectHTMLAttributes<HTMLSel
   <span className={cn("relative block w-full", className)}>
     <select
       ref={ref}
-      className="h-8 w-full appearance-none rounded-md border border-border bg-muted pl-2.5 pr-8 font-mono text-[13px] text-foreground focus-visible:outline-2 focus-visible:outline-[var(--attention-border)] focus-visible:outline-offset-1"
+      className="h-8 w-full appearance-none rounded-md border border-border bg-muted pl-2.5 pr-8 font-mono text-[13px] text-foreground focus-visible:outline-2 focus-visible:outline-[var(--ring)] focus-visible:outline-offset-1"
       {...props}
     >
       {children}
