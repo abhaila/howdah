@@ -18,7 +18,8 @@ import { EventLog, readLog } from "../log/write";
 import { deriveDetail, deriveSummary, sortRuns } from "./derive";
 import { AttentionCenter } from "../engine/attention";
 import { graphCatalog } from "../graphs/index";
-import { loadConfig } from "../config/config";
+import { loadConfig, saveConfig } from "../config/config";
+import { effectiveCwd } from "../engine/executors/worktree";
 
 export interface ServerOpts {
   runsDir: string;
@@ -47,6 +48,18 @@ export function createHowdahServer(opts: ServerOpts) {
       const url = new URL(req.url);
 
       if (url.pathname === "/api/graphs") return json(graphCatalog());
+      if (url.pathname === "/api/settings") {
+        if (req.method === "PUT") {
+          const body = (await req.json()) as Record<string, unknown>;
+          const c = loadConfig();
+          for (const k of ["editorCommand", "slackWebhook", "theme", "chime"] as const)
+            if (k in body) (c as any)[k] = body[k];
+          saveConfig(c);
+          return json({ ok: true });
+        }
+        const { repos, folders, ...settings } = loadConfig();
+        return json(settings);
+      }
       if (url.pathname === "/api/workspaces") {
         const c = loadConfig();
         return json({
@@ -69,7 +82,7 @@ export function createHowdahServer(opts: ServerOpts) {
         return json({ id: runId }, 202);
       }
 
-      const m = url.pathname.match(/^\/api\/runs(?:\/([^/]+)(?:\/(events|reply))?)?$/);
+      const m = url.pathname.match(/^\/api\/runs(?:\/([^/]+)(?:\/(events|reply|open-ide))?)?$/);
       if (!m) {
         // static: /public assets by name, everything else → the app shell
         const asset = url.pathname.replace(/^\//, "");
@@ -85,6 +98,18 @@ export function createHowdahServer(opts: ServerOpts) {
       }
       const path = logPath(opts.runsDir, id);
       if (!existsSync(path)) return json({ error: "unknown run" }, 404);
+
+      if (sub === "open-ide" && req.method === "POST") {
+        const editor = loadConfig().editorCommand;
+        if (!editor) return json({ error: "no editor configured — set one in Settings" }, 409);
+        const events = readLog(path);
+        const started = events.find((e) => e.type === "run-started");
+        const target = effectiveCwd(path, started?.type === "run-started" ? started.cwd : undefined);
+        if (!target) return json({ error: "run has no folder" }, 404);
+        if (!existsSync(target)) return json({ error: "folder is gone (worktree cleaned)" }, 410);
+        Bun.spawn([editor, target], { stdout: "ignore", stderr: "ignore" }).unref();
+        return json({ ok: true, opened: target });
+      }
 
       if (sub === "reply" && req.method === "POST") {
         const body = (await req.json()) as { text?: string };
@@ -125,7 +150,13 @@ export function createHowdahServer(opts: ServerOpts) {
         });
       }
 
-      return json(deriveDetail(id, readLog(path)));
+      const detail = deriveDetail(id, readLog(path));
+      const target = effectiveCwd(path, detail.identity.cwd ?? undefined);
+      return json({
+        ...detail,
+        cwd_exists: target ? existsSync(target) : false,
+        editor_configured: Boolean(loadConfig().editorCommand),
+      });
     },
   });
 }

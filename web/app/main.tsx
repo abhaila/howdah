@@ -137,6 +137,21 @@ function Turn({ turn, render }: { turn: CoalescedTurn; render?: RunDetail["rende
   );
 }
 
+function OpenIdeButton({ runId, detail }: { runId: string; detail: RunDetail & { cwd_exists?: boolean; editor_configured?: boolean } }) {
+  // design rules: hidden for Plain runs without a folder; disabled+tooltip for cleaned
+  // worktrees; unconfigured routes to Settings
+  if (!detail.identity.cwd) return null;
+  if (!detail.editor_configured)
+    return <a className="ide-btn" href="/settings" title="No editor configured">Open in IDE…</a>;
+  if (!detail.cwd_exists)
+    return <span className="ide-btn disabled" title="Folder is gone — worktree was cleaned">Open in IDE</span>;
+  return (
+    <button className="ide-btn" onClick={() => fetch(`/api/runs/${runId}/open-ide`, { method: "POST" })}>
+      Open in IDE
+    </button>
+  );
+}
+
 function AskCard({ runId, ask, onResolved }: { runId: string; ask: NonNullable<RunDetail["ask"]>; onResolved: () => void }) {
   const [text, setText] = useState("");
   const [state, setState] = useState<"idle" | "sending" | "delivered" | "failed">("idle");
@@ -175,7 +190,7 @@ function AskCard({ runId, ask, onResolved }: { runId: string; ask: NonNullable<R
 }
 
 function RunView({ id }: { id: string }) {
-  const [detail, setDetail] = useState<RunDetail | null>(null);
+  const [detail, setDetail] = useState<(RunDetail & { cwd_exists?: boolean; editor_configured?: boolean }) | null>(null);
   const now = useNow();
   const reload = useCallback(() => fetch(`/api/runs/${id}`).then((r) => r.json()).then(setDetail).catch(() => {}), [id]);
   useEffect(() => { reload(); }, [reload]);
@@ -207,6 +222,7 @@ function RunView({ id }: { id: string }) {
           <h1>{summary.goal || id}</h1>
           <StatusBadge status={summary.status} />
           <span className="meta">{summary.graph}</span>
+          <OpenIdeButton runId={id} detail={detail} />
         </div>
         {summary.status === "needs-input" && summary.waiting_since && (
           <div className="banner">
@@ -375,6 +391,41 @@ function StartRun() {
   );
 }
 
+
+// ---- settings (screen 5) ---------------------------------------------------------
+
+function Settings() {
+  const [s, setS] = useState<{ editorCommand?: string; slackWebhook?: string; chime?: boolean } | null>(null);
+  const [saved, setSaved] = useState(false);
+  useEffect(() => { fetch("/api/settings").then((r) => r.json()).then(setS).catch(() => {}); }, []);
+  if (!s) return <div className="empty">loading…</div>;
+  const save = async () => {
+    await fetch("/api/settings", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(s) });
+    setSaved(true);
+    setTimeout(() => setSaved(false), 1500);
+  };
+  return (
+    <div className="runs">
+      <h1>Settings</h1>
+      <div className="form-card">
+        <label className="field">
+          <span>Editor command (Open-in-IDE)</span>
+          <input value={s.editorCommand ?? ""} onChange={(e) => setS({ ...s, editorCommand: e.target.value })} placeholder="idea — IntelliJ launcher on PATH (Tools → Create Command-line Launcher)" />
+        </label>
+        <label className="field">
+          <span>Slack webhook (attention DMs)</span>
+          <input value={s.slackWebhook ?? ""} onChange={(e) => setS({ ...s, slackWebhook: e.target.value })} placeholder="https://hooks.slack.com/…" />
+        </label>
+        <label className="field" style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+          <input type="checkbox" checked={s.chime !== false} onChange={(e) => setS({ ...s, chime: e.target.checked })} style={{ width: "auto" }} />
+          <span style={{ textTransform: "none", fontSize: 13, color: "var(--fg)" }}>Attention chime</span>
+        </label>
+        <button className="primary" onClick={save}>{saved ? "Saved" : "Save"}</button>
+      </div>
+    </div>
+  );
+}
+
 // ---- shell + routing ----------------------------------------------------------
 
 function App() {
@@ -403,18 +454,20 @@ function App() {
 
   const runMatch = path.match(/^\/run\/([^/]+)/);
   const isNew = path === "/new";
+  const isSettings = path === "/settings";
   return (
     <div className="shell">
       <nav className="sidebar">
         <Mark className="mark" />
         <a className={`nav ${!runMatch && !isNew ? "active" : ""}`} href="/"><span className="label">Runs</span></a>
         <a className={`nav ${isNew ? "active" : ""}`} href="/new"><span className="label">New run</span></a>
+        <a className={`nav ${isSettings ? "active" : ""}`} href="/settings"><span className="label">Settings</span></a>
         <div className="spacer" />
         <button className="theme-toggle" onClick={() => setTheme(theme === "dark" ? "light" : theme === "light" ? "system" : "dark")}>
           theme: {theme}
         </button>
       </nav>
-      <main>{runMatch ? <RunView id={runMatch[1]!} /> : isNew ? <StartRun /> : <div className="runs"><RunsList /></div>}</main>
+      <main>{runMatch ? <RunView id={runMatch[1]!} /> : isNew ? <StartRun /> : isSettings ? <Settings /> : <div className="runs"><RunsList /></div>}</main>
     </div>
   );
 }

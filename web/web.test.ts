@@ -160,3 +160,46 @@ describe("server API", () => {
     expect(await css.text()).toContain("--attention");
   });
 });
+
+describe("settings + open-ide (T19)", () => {
+  const base2 = mkdtempSync(join(tmpdir(), "howdah-t19-"));
+  const runsDir2 = join(base2, "runs");
+  mkdirSync(runsDir2, { recursive: true });
+  let server2: ReturnType<typeof createHowdahServer>;
+  const url2 = (p: string) => `http://localhost:${server2.port}${p}`;
+
+  test("settings round-trip via the API", async () => {
+    process.env.HOWDAH_HOME = base2;
+    server2 = createHowdahServer({ runsDir: runsDir2, attentionDir: join(base2, "attention"), port: 0 });
+    expect(((await (await fetch(url2("/api/settings"))).json()) as any).editorCommand).toBeUndefined();
+    await fetch(url2("/api/settings"), { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ editorCommand: "idea", chime: false }) });
+    const s = (await (await fetch(url2("/api/settings"))).json()) as any;
+    expect(s).toMatchObject({ editorCommand: "idea", chime: false });
+    expect(s.repos).toBeUndefined(); // workspaces are not settings
+  });
+
+  test("open-ide: 404 no folder, 410 cleaned worktree, 409 unconfigured; detail carries the button facts", async () => {
+    process.env.HOWDAH_HOME = base2;
+    // run with a real folder
+    const folder = mkdtempSync(join(tmpdir(), "howdah-t19-folder-"));
+    const log = new EventLog(join(runsDir2, "with-folder", "run.jsonl"));
+    log.append({ type: "run-started", graph: "write-doc", inputs: {}, pinned_prompts: {}, cwd: folder, folder_kind: "plain" });
+    // run whose folder is gone
+    const gone = new EventLog(join(runsDir2, "gone-folder", "run.jsonl"));
+    gone.append({ type: "run-started", graph: "write-doc", inputs: {}, pinned_prompts: {}, cwd: join(folder, "deleted"), folder_kind: "repo" });
+    // run with no folder at all
+    const plain = new EventLog(join(runsDir2, "no-folder", "run.jsonl"));
+    plain.append({ type: "run-started", graph: "research", inputs: {}, pinned_prompts: {} });
+
+    const detail = (await (await fetch(url2("/api/runs/with-folder"))).json()) as any;
+    expect(detail).toMatchObject({ cwd_exists: true, editor_configured: true });
+
+    expect((await fetch(url2("/api/runs/no-folder/open-ide"), { method: "POST" })).status).toBe(404);
+    expect((await fetch(url2("/api/runs/gone-folder/open-ide"), { method: "POST" })).status).toBe(410);
+
+    // unconfigure the editor → 409 routes the user to Settings
+    await fetch(url2("/api/settings"), { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ editorCommand: "" }) });
+    expect((await fetch(url2("/api/runs/with-folder/open-ide"), { method: "POST" })).status).toBe(409);
+    server2.stop(true);
+  });
+});

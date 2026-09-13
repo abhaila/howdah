@@ -166,3 +166,12 @@ button.primary:disabled { opacity: 0.5; cursor: default; }
 
 /* per-turn model chip (T17 — the "Model —" Orbital gap, fixed) */
 .model-chip { margin-left: 8px; background: var(--bg-inset); border-radius: 8px; padding: 1px 7px; font-size: 10px; color: var(--fg-muted); }
+
+/* open-in-IDE button (T19) */
+.ide-btn {
+  background: none; border: 1px solid var(--border-strong); color: var(--fg-muted);
+  border-radius: var(--radius-sm); padding: 5px 10px; cursor: pointer;
+  font-family: var(--font-mono); font-size: 12px; text-decoration: none; flex-shrink: 0;
+}
+.ide-btn:hover { color: var(--fg); border-color: var(--fg-faint); }
+.ide-btn.disabled { opacity: 0.45; cursor: default; }
