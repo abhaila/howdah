@@ -301,7 +301,7 @@ Synthesized from this review's findings. Each derives from a specific finding ab
   - Surfaced by: Architecture D3 + OV-4
   - Files: core/context.ts
   - Verify: reading an unwritten key and an undeclared output are compile errors; sticky/cleared/per-visit covered by tests
-- [ ] **T3 (P1, human: ~2d / CC: ~2h)** — core/graphs — TS graph schema; agent, command, wait, terminal, worktree nodes
+- [x] **T3 (P1, human: ~2d / CC: ~2h)** — core/graphs — TS graph schema; agent, command, wait, terminal, worktree nodes ✅ 2026-09-13: all three Orbital graphs ported + validate clean; 17 prompts extracted, 11 shared across graphs
   - Surfaced by: Architecture D2 + D11
   - Files: core/graph.ts, graphs/*.ts
   - Verify: the four Orbital graphs port and type-check; a bad edge condition fails compile

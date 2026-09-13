@@ -1,0 +1,33 @@
+---
+id: delivery.address_reviews
+version: 1
+tags: [implement-ticket]
+provenance: ported from Orbital implement-ticket
+---
+Discover and use relevant installed skills for addressing pull request feedback, verification and communicating with reviewers.
+
+User supplied goal:
+
+{{ inputs.goal }}
+
+Work scope:
+
+{{ context.work }}
+
+Publication summary:
+
+{{ context.publication_summary }}
+
+Inspect the current PR, its published head, review decisions and unresolved threads. Read the affected code and applicable repository instructions.
+
+Address feedback within the work scope and goal. Make the required local changes, verify them and create or update local commits using the repository’s conventions. Preserve unrelated work.
+
+For feedback already satisfied by the published change, reply with supporting evidence and resolve the thread. For feedback requiring a new local change, keep the thread unresolved until that correction is published and verified. Check existing replies before posting to avoid duplicates.
+
+Explain with evidence when a requested change is unnecessary or outside scope.
+
+If the PR has merged or closed, report that state without modifying it.
+
+This step may change repository files, run checks, create local commits, reply to reviews and resolve addressed threads. Later steps own local review and publication. The caller owns any tracker updates.
+
+Return `repair_summary` with the feedback addressed, changes, verification evidence, published corrections confirmed, and threads awaiting publication or further resolution.

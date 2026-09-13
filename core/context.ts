@@ -67,17 +67,23 @@ export class ContextError extends Error {}
 
 export class ContextStore<C extends object> {
   private cells = new Map<keyof C & string, Cell>();
-  private declarations: Map<keyof C & string, { scope: Scope; writer: string }>;
+  private declarations: Map<keyof C & string, { scope: Scope; writers: string[] }>;
   private buffer = new Map<keyof C & string, unknown>();
   private attempt: { node: string; visit: number } | null = null;
   private readLog: ReadRecord[] = [];
 
   /**
-   * `declared` maps each context key to its scope and its writing node.
-   * One writer per key — shared keys are a design smell the validator also rejects.
+   * `declared` maps each context key to its scope and its writing node(s).
+   * Multiple writers are legal and common (plan and plan_review both write
+   * implementation_plan); scope effects fire when ANY declared writer re-enters,
+   * because the key is being redone regardless of who redoes it.
    */
-  constructor(declared: { [K in keyof C & string]: { scope: Scope; writer: string } }) {
-    this.declarations = new Map(Object.entries(declared) as [keyof C & string, { scope: Scope; writer: string }][]);
+  constructor(declared: { [K in keyof C & string]: { scope: Scope; writer: string | string[] } }) {
+    this.declarations = new Map(
+      (Object.entries(declared) as [keyof C & string, { scope: Scope; writer: string | string[] }][]).map(
+        ([k, d]) => [k, { scope: d.scope, writers: Array.isArray(d.writer) ? d.writer : [d.writer] }],
+      ),
+    );
   }
 
   /**
@@ -90,7 +96,7 @@ export class ContextStore<C extends object> {
     this.attempt = { node, visit };
     this.buffer.clear();
     for (const [key, decl] of this.declarations) {
-      if (decl.writer !== node) continue;
+      if (!decl.writers.includes(node)) continue;
       const cell = this.cells.get(key);
       if (!cell) continue;
       if (cell.scope === "cleared") cell.veiled = true;
@@ -103,8 +109,10 @@ export class ContextStore<C extends object> {
     if (!this.attempt) throw new ContextError(`set(${key}) outside an attempt`);
     const decl = this.declarations.get(key);
     if (!decl) throw new ContextError(`undeclared context key written: ${key} (by ${this.attempt.node})`);
-    if (decl.writer !== this.attempt.node)
-      throw new ContextError(`${this.attempt.node} is not the declared writer of ${key} (writer: ${decl.writer})`);
+    if (!decl.writers.includes(this.attempt.node))
+      throw new ContextError(
+        `${this.attempt.node} is not a declared writer of ${key} (writers: ${decl.writers.join(", ")})`,
+      );
     this.buffer.set(key, value);
   }
 
@@ -130,7 +138,7 @@ export class ContextStore<C extends object> {
     } else {
       // failed: restore visibility of cleared cells this writer had veiled
       for (const [key, decl] of this.declarations) {
-        if (decl.writer !== node) continue;
+        if (!decl.writers.includes(node)) continue;
         const cell = this.cells.get(key);
         if (cell && cell.scope === "cleared") cell.veiled = false;
         // per-visit cells stay invalidated: a new visit permanently outdates them

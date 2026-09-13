@@ -37,7 +37,7 @@ describe("declaration discipline (D3)", () => {
   test("only the declared writer may write", () => {
     const s = store();
     s.beginAttempt("publish", 1);
-    expect(() => s.set("work", "hijack")).toThrow(/not the declared writer/);
+    expect(() => s.set("work", "hijack")).toThrow(/not a declared writer/);
     s.endAttempt("failed");
   });
 

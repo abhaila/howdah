@@ -25,7 +25,8 @@ export interface GraphShape {
   /** run inputs: available at entry (shaping: `inputs="work,notes?"` — required ones only) */
   inputs: string[];
   nodes: Record<string, { reads: string[]; writes: string[] }>;
-  edges: Array<{ from: string; to: string }>;
+  /** condition reads are evaluated AFTER `from` completes: checked against out(from) */
+  edges: Array<{ from: string; to: string; reads?: string[] }>;
 }
 
 export interface Violation {
@@ -89,6 +90,14 @@ export function validateGraph(g: GraphShape): Violation[] {
     for (const key of g.nodes[id]!.reads) {
       if (!available.has(key)) {
         violations.push({ node: id, key, witness: witnessPath(g, id, key) });
+      }
+    }
+  }
+  // edge-condition reads: evaluated at from's exit, so out(from) is the availability set
+  for (const e of g.edges) {
+    for (const key of e.reads ?? []) {
+      if (!out.get(e.from)!.has(key)) {
+        violations.push({ node: `${e.from} → ${e.to} (condition)`, key, witness: witnessPath(g, e.from, key) });
       }
     }
   }
