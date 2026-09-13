@@ -20,6 +20,8 @@ const sticky = { scope: "sticky" } as const;
 
 export const reviewTeammatePr = defineGraph<ReviewTeammatePrCtx>({
   name: "review-teammate-pr",
+  // agents act without tool-permission prompts; real questions still raise asks
+  defaults: { permissionMode: "auto" },
   description:
     "Pull a teammate's PR into a local worktree and run three read-only reviews in sequence, then compile every finding into one color-coded local report",
   entry: "create_worktree",

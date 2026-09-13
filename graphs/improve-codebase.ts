@@ -34,6 +34,8 @@ const perVisit = { scope: "per-visit" } as const;
 
 export const improveCodebase = defineGraph<ImproveCodebaseCtx>({
   name: "improve-codebase",
+  // agents act without tool-permission prompts; real questions still raise asks
+  defaults: { permissionMode: "auto" },
   description: "Continuously discover and deliver one worthwhile codebase improvement at a time",
   entry: "discover",
   inputs: ["goal"],

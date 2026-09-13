@@ -11,6 +11,8 @@ export interface QuickTaskCtx {
 
 export const quickTask = defineGraph<QuickTaskCtx>({
   name: "quick-task",
+  // agents act without tool-permission prompts; real questions still raise asks
+  defaults: { permissionMode: "auto" },
   description: "TODO: one line on what this graph does",
   entry: "quick-task.work",
   inputs: ["goal"],

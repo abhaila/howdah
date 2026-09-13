@@ -31,7 +31,7 @@ export type PromptRef = PromptId;
 export type Harness = "claude" | "codex" | "opencode";
 
 export type Effort = "low" | "medium" | "high" | "xhigh";
-export type PermissionMode = "manual" | "acceptEdits" | "auto" | "plan";
+export type PermissionMode = "manual" | "acceptEdits" | "auto" | "bypassPermissions" | "dontAsk" | "plan";
 
 /** per-agent execution config — resolution order: run override → node → graph default */
 export interface AgentConfig {

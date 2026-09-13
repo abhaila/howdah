@@ -22,6 +22,8 @@ const cleared = { scope: "cleared" } as const;
 
 export const writeDoc = defineGraph<WriteDocCtx>({
   name: "write-doc",
+  // agents act without tool-permission prompts; real questions still raise asks
+  defaults: { permissionMode: "auto" },
   description: "Outline, draft, and review a document in a plain folder — no repo required",
   entry: "doc.outline",
   inputs: ["goal", "work"],

@@ -22,6 +22,8 @@ const cleared = { scope: "cleared" } as const;
 
 export const research = defineGraph<ResearchCtx>({
   name: "research",
+  // agents act without tool-permission prompts; real questions still raise asks
+  defaults: { permissionMode: "auto" },
   description: "Plan, investigate, and synthesize a research question into a cited report",
   entry: "research.plan",
   inputs: ["goal"],

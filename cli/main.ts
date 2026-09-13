@@ -79,6 +79,7 @@ function parseRunArgs(argv: string[]) {
     else if (a === "--model") overrides.model = rest[++i];
     else if (a === "--harness") overrides.harness = rest[++i] as any;
     else if (a === "--effort") overrides.effort = rest[++i] as any;
+    else if (a === "--permission-mode") overrides.permissionMode = rest[++i] as any;
     else throw new Error(`unknown flag: ${a}`);
   }
   return { graphName, inputs, workspace, dir, id, overrides };

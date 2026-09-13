@@ -47,6 +47,8 @@ export interface ${v[0]!.toUpperCase()}${v.slice(1)}Ctx {
 
 export const ${v} = defineGraph<${v[0]!.toUpperCase()}${v.slice(1)}Ctx>({
   name: "${name}",
+  // agents act without tool-permission prompts; real questions still raise asks
+  defaults: { permissionMode: "auto" },
   description: "TODO: one line on what this graph does",
   entry: "${name}.draft",
   inputs: ["goal", "work"],
@@ -112,6 +114,8 @@ export interface ${v[0]!.toUpperCase()}${v.slice(1)}Ctx {
 
 export const ${v} = defineGraph<${v[0]!.toUpperCase()}${v.slice(1)}Ctx>({
   name: "${name}",
+  // agents act without tool-permission prompts; real questions still raise asks
+  defaults: { permissionMode: "auto" },
   description: "TODO: one line on what this graph does",
   entry: "${name}.work",
   inputs: ["goal"],
