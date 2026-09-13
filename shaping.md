@@ -386,10 +386,12 @@ Caution note: revisit any word-mark before public use.
   pick made blind — and over mono-first and editorial-serif directions). Both free (Google
   Fonts), variable. Discipline note: Space Grotesk's quirk lives in headings; data stays mono.
 - shadcn CSS variables as the single token source; both themes derive from it.
-  🟡 PALETTE CHANGED 2026-09-13 (user-picked, Pigment by ShapeFactory lead trio):
-  #1E8F7D teal-green = primary actions, #4B5096 indigo = activity/running, #E0CD84
-  sand-gold = attention — still the only loud color, reserved for attention, never actions.
-  Shades derived per theme; favicon eye now sand-gold. (Original: amber attention only.) Status palette + the two motion tokens
+  🟡 PALETTE CHANGED 2026-09-13 (user-picked from Pigment, screenshot decision):
+  SINBAD #94CBC8 = primary actions · LAVENDER PURPLE #9675A8 = activity/running ·
+  sand-gold #E0CD84 = attention (kept: the pair has no warm color and attention must
+  outrank; never on buttons). Waiting/paused → neutral slate to avoid lavender collision.
+  Exact hexes on dark, deepened derivations on light. Favicon eye sand-gold.
+  (History: amber attention → peacock/lapis trio → this pair, all same day.) Status palette + the two motion tokens
   (`--ease-out-strong: cubic-bezier(0.19,1,0.22,1)`; durations 120/200/350ms) live as variables.
 - Browser surfaces themed: selection, focus rings, scrollbars.
 
