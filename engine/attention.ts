@@ -13,7 +13,7 @@
  * a stale heartbeat with a dead pid IS an attention event ("the harness died").
  */
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 export interface AttentionRecord {
   id: string; // `${run}:${node}:${visit}`
@@ -131,6 +131,7 @@ export interface Heartbeat {
 }
 
 export function writeHeartbeat(path: string, clock: () => Date = () => new Date(), pid = process.pid): void {
+  mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, JSON.stringify({ pid, at: clock().toISOString() } satisfies Heartbeat));
 }
 

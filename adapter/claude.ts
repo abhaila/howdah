@@ -11,6 +11,7 @@ import type { AgentEvent } from "./events";
 export function claudeArgs(opts: { sessionId: string; permissionMode?: string; resume?: boolean }): string[] {
   return [
     "-p",
+    "--verbose", // required by --output-format stream-json under -p (claude >= 2.1.2xx)
     "--input-format", "stream-json",
     "--output-format", "stream-json",
     "--include-partial-messages",
@@ -81,6 +82,7 @@ export function mapClaudeEvent(raw: unknown): AgentEvent[] {
           cost_usd: e.total_cost_usd,
         },
         error: e.is_error ? String(e.result ?? e.subtype ?? "error") : undefined,
+        result_text: !e.is_error && typeof e.result === "string" ? e.result : undefined,
       }];
 
     case "rate_limit_event": {

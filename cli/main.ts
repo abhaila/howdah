@@ -8,17 +8,34 @@
  *   howdah reply <run-id> <text>
  *   howdah graphs --json
  */
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Engine } from "../engine/run";
-import { defaultExecutors } from "../engine/executors";
+import { liveExecutors, stubExecutors } from "../engine/executors";
 import { EventLog, readLog } from "../log/write";
-import { AttentionCenter, osNotifier } from "../engine/attention";
+import { AttentionCenter, osNotifier, pidAlive, writeHeartbeat } from "../engine/attention";
+import { replayState } from "../engine/replay";
 import { GRAPHS, graphCatalog } from "../graphs/index";
 import { howdahHome, loadConfig, resolveWorkspace } from "../config/config";
 
 const base = howdahHome();
 const runsDir = join(base, "runs");
+
+function executors() {
+  // HOWDAH_STUB short-circuits real agent spawns — tests and dry runs
+  return process.env.HOWDAH_STUB ? stubExecutors() : liveExecutors({ attentionDir: join(base, "attention") });
+}
+
+function writePid(runDir: string): void {
+  writeFileSync(join(runDir, "runner.pid"), String(process.pid));
+}
+
+function runnerAlive(runDir: string): boolean {
+  const p = join(runDir, "runner.pid");
+  if (!existsSync(p)) return false;
+  const pid = Number(readFileSync(p, "utf8").trim());
+  return Number.isFinite(pid) && pid > 0 && pidAlive(pid);
+}
 
 function parseRunArgs(argv: string[]) {
   const inputs: Record<string, string> = {};
@@ -55,8 +72,9 @@ export async function runCommand(argv: string[]): Promise<string> {
 
   const runId = id ?? `${graphName}-${Date.now().toString(36)}`;
   const runDir = join(runsDir, runId);
-  const engine = new Engine(graph, { dir: runDir, executors: defaultExecutors(), cwd, folderKind });
+  const engine = new Engine(graph, { dir: runDir, executors: executors(), cwd, folderKind });
   console.log(`run ${runId} starting (${cwd ?? "no folder"})`);
+  writePid(runDir);
   const result = await engine.start(inputs);
   if (result.state === "parked") {
     const center = new AttentionCenter(join(base, "attention"), [osNotifier]);
@@ -64,6 +82,101 @@ export async function runCommand(argv: string[]): Promise<string> {
   }
   console.log(`run ${runId}: ${JSON.stringify(result)}`);
   return runId;
+}
+
+export async function resumeCommand(runId: string): Promise<void> {
+  const runDir = join(runsDir, runId);
+  const path = join(runDir, "run.jsonl");
+  if (!existsSync(path)) throw new Error(`unknown run: ${runId}`);
+  const replayed = replayState(readLog(path));
+  if (!replayed.started) throw new Error(`${runId}: empty log`);
+  if (replayed.finished) return void console.log(`run ${runId} already finished: ${replayed.finished.outcome}`);
+  const graph = GRAPHS[replayed.started.graph];
+  if (!graph) throw new Error(`run ${runId} uses unknown graph "${replayed.started.graph}"`);
+  const engine = new Engine(graph, {
+    dir: runDir,
+    executors: executors(),
+    cwd: replayed.started.cwd,
+    folderKind: replayed.started.folder_kind,
+    probe: async () => "unknown", // T18 wires the reconciler probe; unknown parks, never duplicates
+  });
+  writePid(runDir);
+  const result = await engine.resume();
+  if (result.state === "parked") {
+    const center = new AttentionCenter(join(base, "attention"), [osNotifier]);
+    const visit = replayed.visits[result.node] ?? 1;
+    await center.raise({ run: runId, node: result.node, visit, reason: result.reason }).catch(() => {});
+  }
+  console.log(`run ${runId}: ${JSON.stringify(result)}`);
+}
+
+/**
+ * howdah up — the supervisor (A7.2's heartbeat + R7's resume-on-boot). Every tick:
+ * write the heartbeat; resume any unfinished run whose runner process is dead and whose
+ * park (if any) has been answered. Parked-and-unanswered runs stay parked — the human is
+ * the unblock, not the supervisor.
+ */
+export async function upCommand(opts: { intervalMs?: number; once?: boolean } = {}): Promise<void> {
+  const interval = opts.intervalMs ?? 5000;
+  console.log(`howdah up: supervising ${runsDir}`);
+  for (;;) {
+    writeHeartbeat(join(base, "heartbeat.json"));
+    const ids = existsSync(runsDir) ? readdirSync(runsDir).filter((d) => existsSync(join(runsDir, d, "run.jsonl"))) : [];
+    for (const id of ids) {
+      const runDir = join(runsDir, id);
+      try {
+        const replayed = replayState(readLog(join(runDir, "run.jsonl")));
+        if (!replayed.started || replayed.finished) continue;
+        if (runnerAlive(runDir)) continue;
+        if (replayed.parked) continue; // awaiting the human; the reply flow resumes it
+        console.log(`resuming dead run ${id}`);
+        const child = Bun.spawn(["bun", import.meta.path, "resume", id], {
+          env: { ...process.env },
+          stdout: "ignore",
+          stderr: "ignore",
+        });
+        child.unref();
+      } catch {
+        /* torn log mid-write — next tick */
+      }
+    }
+    if (opts.once) return;
+    await Bun.sleep(interval);
+  }
+}
+
+export async function doctorCommand(): Promise<boolean> {
+  const checks: Array<[string, boolean, string]> = [];
+  const probe = (cmd: string[]): string | null => {
+    try {
+      const r = Bun.spawnSync(cmd, { stdout: "pipe", stderr: "pipe" });
+      return r.exitCode === 0 ? new TextDecoder().decode(r.stdout).trim().split("\n")[0] ?? "" : null;
+    } catch {
+      return null;
+    }
+  };
+  const claude = probe(["claude", "--version"]);
+  checks.push(["claude CLI", claude !== null, claude ?? "not on PATH — install Claude Code (subscription auth)"]);
+  const codex = probe(["codex", "--version"]);
+  checks.push(["codex CLI", codex !== null, codex ?? "not on PATH — install Codex (subscription auth)"]);
+  const gh = probe(["gh", "--version"]);
+  checks.push(["gh CLI", gh !== null, gh ?? "not on PATH — needed for PR probes (T18)"]);
+  const git = probe(["git", "--version"]);
+  checks.push(["git", git !== null, git ?? "not on PATH"]);
+  const config = loadConfig(base);
+  for (const [name, r] of Object.entries(config.repos))
+    checks.push([`repo ${name}`, existsSync(r.path), r.path]);
+  for (const [name, f] of Object.entries(config.folders))
+    checks.push([`folder ${name}`, existsSync(f.path), f.path]);
+  const hb = existsSync(join(base, "heartbeat.json"));
+  checks.push(["howdah up heartbeat", hb, hb ? join(base, "heartbeat.json") : "not running — start `howdah up`"]);
+
+  let ok = true;
+  for (const [name, pass, detail] of checks) {
+    if (!pass) ok = false;
+    console.log(`${pass ? "✓" : "✗"} ${name.padEnd(24)} ${detail}`);
+  }
+  return ok;
 }
 
 function replyCommand(runId: string, text: string): void {
@@ -75,6 +188,10 @@ function replyCommand(runId: string, text: string): void {
     throw new Error("nothing awaiting a reply");
   new EventLog(path).append({ type: "attention-resolved", node: ask.node, visit: ask.visit, reply: text });
   new AttentionCenter(join(base, "attention"), []).resolve(`${runId}:${ask.node}:${ask.visit}`);
+  // if the runner died while parked, kick a resume so the answer takes effect
+  if (!runnerAlive(join(runsDir, runId))) {
+    Bun.spawn(["bun", import.meta.path, "resume", runId], { env: { ...process.env }, stdout: "ignore", stderr: "ignore" }).unref();
+  }
   console.log("replied");
 }
 
@@ -86,9 +203,12 @@ if (import.meta.main) {
       const ids = existsSync(runsDir) ? readdirSync(runsDir).filter((d) => existsSync(join(runsDir, d, "run.jsonl"))) : [];
       console.log(JSON.stringify(ids));
     } else if (verb === "reply") replyCommand(rest[0] ?? "", rest.slice(1).join(" "));
+    else if (verb === "resume") await resumeCommand(rest[0] ?? "");
+    else if (verb === "up") await upCommand({ once: rest.includes("--once") });
+    else if (verb === "doctor") process.exit((await doctorCommand()) ? 0 : 1);
     else if (verb === "graphs") console.log(JSON.stringify(graphCatalog(), null, 2));
     else {
-      console.error("usage: howdah run <graph> [-i k=v]... [--workspace name|--dir path] | runs | reply <id> <text> | graphs");
+      console.error("usage: howdah run|resume|reply|runs|graphs|up|doctor");
       process.exit(1);
     }
   } catch (err) {

@@ -1,0 +1,78 @@
+#!/usr/bin/env bun
+/**
+ * A fake `claude` binary for executor tests: speaks the stream-json wire protocol
+ * (verified shapes from agent-deck spikes) without spending tokens. Reads the user turn
+ * from stdin, streams deltas, optionally demands a permission (FAKE_CLAUDE_ASK=1) and
+ * honours the control_response, then emits the outputs contract and a result event.
+ */
+const out = (o: unknown) => process.stdout.write(JSON.stringify(o) + "\n");
+
+const decoder = new TextDecoder();
+let buffer = "";
+const lines: string[] = [];
+let wake: () => void = () => {};
+
+(async () => {
+  for await (const chunk of Bun.stdin.stream()) {
+    buffer += decoder.decode(chunk, { stream: true });
+    let nl;
+    while ((nl = buffer.indexOf("\n")) >= 0) {
+      lines.push(buffer.slice(0, nl));
+      buffer = buffer.slice(nl + 1);
+      wake();
+    }
+  }
+})();
+
+async function nextLine(): Promise<string> {
+  for (;;) {
+    const line = lines.shift();
+    if (line !== undefined) return line;
+    await new Promise<void>((r) => (wake = r));
+  }
+}
+
+const userTurn = JSON.parse(await nextLine()) as { message: { content: Array<{ text: string }> } };
+const promptText = userTurn.message.content[0]?.text ?? "";
+
+out({ type: "system", subtype: "init", session_id: "fake-session-0001" });
+out({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: "Working on it — " } } });
+out({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: "doing the thing. 🐘" } } });
+
+if (process.env.FAKE_CLAUDE_ASK === "1") {
+  out({
+    type: "control_request",
+    request_id: "req-42",
+    request: {
+      subtype: "can_use_tool", tool_name: "Write", display_name: "Write",
+      input: { file_path: "out.txt", content: "hi" },
+      permission_suggestions: [{ type: "setMode", mode: "acceptEdits", destination: "session" }],
+    },
+  });
+  // wait for the control_response before continuing — the real CLI blocks here too
+  for (;;) {
+    const line = JSON.parse(await nextLine()) as any;
+    if (line.type === "control_response" && line.response?.request_id === "req-42") {
+      const behavior = line.response?.response?.behavior;
+      out({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: behavior === "allow" ? " Permission granted, wrote the file." : " Denied, skipping the write." } } });
+      break;
+    }
+  }
+}
+
+if (process.env.FAKE_CLAUDE_RATELIMIT === "1")
+  out({ type: "rate_limit_event", rate_limit: { status: "allowed", remaining: 0.31, resetsAt: "2026-09-13T18:00:00Z" } });
+
+// derive the demanded output keys from the appended contract so tests exercise parsing
+const keys = [...promptText.matchAll(/"(\w+)": <value>/g)].map((m) => m[1]!);
+const outputs = Object.fromEntries(keys.map((k) => [k, k === "review_verdict" ? (process.env.FAKE_CLAUDE_VERDICT ?? "pass") : `fake ${k}`]));
+const finalText = `All done.\n{"outputs": ${JSON.stringify(outputs)}}`;
+
+out({
+  type: "result", subtype: "success", is_error: false,
+  usage: { input_tokens: 321, output_tokens: 45 }, total_cost_usd: 0.0042,
+  result: finalText,
+});
+process.exit(0);
+
+export {};

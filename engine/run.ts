@@ -20,6 +20,7 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import type { Graph, NodeDef, EdgeDef } from "../core/graph";
+import { basename } from "node:path";
 import { ContextStore, type Scope } from "../core/context";
 import { EventLog } from "../log/write";
 import { replayState, effectKey } from "./replay";
@@ -38,6 +39,10 @@ export interface ExecArgs {
   attemptId: string;
   /** the run's working directory, when it has one */
   cwd?: string;
+  /** the run id (the run directory's name) */
+  runId: string;
+  /** the run's event log — executors append chunk/allowance events as they stream */
+  log: EventLog;
   /** declared reads, resolved */
   reads: Record<string, unknown>;
   /** agent nodes: the rendered prompt + its hash (already logged as prompt-rendered) */
@@ -235,7 +240,13 @@ export class Engine {
       },
     };
 
-    return executor({ nodeId, def, visit, attemptId, cwd: this.opts.cwd, reads, renderedPrompt, effects });
+    return executor({
+      nodeId, def, visit, attemptId,
+      cwd: this.opts.cwd,
+      runId: basename(this.opts.dir),
+      log: this.log,
+      reads, renderedPrompt, effects,
+    });
   }
 
   private route(from: string, visit: number): EdgeDef<any> | null {

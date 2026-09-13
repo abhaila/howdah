@@ -59,7 +59,7 @@ describe("howdah run (CLI)", () => {
       ["bun", join(import.meta.dir, "main.ts"), "run", "write-doc",
         "-i", "goal=test the launcher", "-i", "work=doc.md",
         "--workspace", "notes", "--id", "launch-test"],
-      { env: { ...process.env, HOWDAH_HOME: base }, stdout: "pipe", stderr: "pipe" },
+      { env: { ...process.env, HOWDAH_HOME: base, HOWDAH_STUB: "1" }, stdout: "pipe", stderr: "pipe" },
     );
     await proc.exited;
     expect(proc.exitCode).toBe(0);
@@ -72,9 +72,9 @@ describe("howdah run (CLI)", () => {
       cwd: notes,
       folder_kind: "plain",
     });
-    // agent executor is a T16 stub — the run parks honestly, naming the gap
+    // stub registry (HOWDAH_STUB=1) — the run parks honestly, naming the gap
     const parked: any = events.find((e) => e.type === "attention-raised");
-    expect(parked.reason).toContain("T16");
+    expect(parked.reason).toContain("stub");
   });
 
   test("unknown graph and unknown workspace fail with useful errors", async () => {
@@ -98,6 +98,7 @@ describe("launch API", () => {
   const base = mkdtempSync(join(tmpdir(), "howdah-launch-"));
   mkdirSync(join(base, "runs"), { recursive: true });
   process.env.HOWDAH_HOME = base; // loadConfig in the server reads this
+  process.env.HOWDAH_STUB = "1"; // the detached CLI inherits this — no real agent spawns in tests
   const server = createHowdahServer({ runsDir: join(base, "runs"), attentionDir: join(base, "attention"), port: 0 });
   const url = (p: string) => `http://localhost:${server.port}${p}`;
   afterAll(() => server.stop(true));

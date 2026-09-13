@@ -5,6 +5,9 @@
  * never a silent no-op.
  */
 import type { Executor, EngineOpts } from "../run";
+import { claudeExecutor } from "./claude";
+import { codexExecutor } from "./codex";
+import type { Notifier } from "../attention";
 
 export function parseDuration(spec: string): number {
   const m = spec.match(/^(\d+)\s*(ms|s|m|h)$/);
@@ -23,11 +26,33 @@ const notYet = (what: string, task: string): Executor => async () => {
   throw new Error(`${what} executor not built yet (${task})`);
 };
 
-/** the default registry; callers may override any kind (tests do) */
-export function defaultExecutors(): EngineOpts["executors"] {
+/** stub-only registry — tests and dry runs */
+export function stubExecutors(): EngineOpts["executors"] {
   return {
     wait: waitExecutor,
-    agent: notYet("agent", "T16"),
+    agent: notYet("agent", "stub registry"),
+    command: notYet("command", "T18"),
+    worktree: notYet("worktree", "T18"),
+  };
+}
+
+export interface LiveExecutorDeps {
+  attentionDir: string;
+  viewerBase?: string;
+  notifiers?: Notifier[];
+  claudeBinary?: string;
+  codexBinary?: string;
+}
+
+/** the real registry: agent nodes dispatch on their declared harness (default claude) */
+export function liveExecutors(deps: LiveExecutorDeps): EngineOpts["executors"] {
+  // HOWDAH_MODEL sets the default model until per-node config lands (T17)
+  const claude = claudeExecutor({ attentionDir: deps.attentionDir, viewerBase: deps.viewerBase, notifiers: deps.notifiers, binary: deps.claudeBinary, model: process.env.HOWDAH_MODEL });
+  const codex = codexExecutor({ attentionDir: deps.attentionDir, viewerBase: deps.viewerBase, notifiers: deps.notifiers, binary: deps.codexBinary });
+  return {
+    wait: waitExecutor,
+    agent: async (args) =>
+      (args.def.kind === "agent" && args.def.harness === "codex" ? codex : claude)(args),
     command: notYet("command", "T18"),
     worktree: notYet("worktree", "T18"),
   };

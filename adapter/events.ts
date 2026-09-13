@@ -26,6 +26,8 @@ export type AgentEvent =
       usage?: { input_tokens?: number; output_tokens?: number; cost_usd?: number };
       /** harness-reported error for the turn, if any */
       error?: string;
+      /** the final assistant text — where the outputs contract is parsed from */
+      result_text?: string;
     }
   | {
       type: "rate_limit";
