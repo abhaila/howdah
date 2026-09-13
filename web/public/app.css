@@ -209,3 +209,15 @@ button.primary:disabled { opacity: 0.5; cursor: default; }
 .ws-row .run-meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ws-remove { background: none; border: 0; color: var(--fg-faint); cursor: pointer; font-size: 13px; }
 .ws-remove:hover { color: var(--status-failed-recoverable); }
+
+/* github repo picker */
+.gh-picker { display: flex; flex-direction: column; gap: 6px; }
+.gh-picker > input {
+  background: var(--bg-inset); color: var(--fg); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); padding: 8px 10px; font-family: var(--font-mono); font-size: 12px;
+}
+.gh-repo-row { display: flex; align-items: center; gap: 10px; padding: 5px 2px; border-bottom: 1px solid var(--border); }
+.gh-meta { color: var(--fg-faint); font-size: 11px; margin-left: auto; flex-shrink: 0; }
+.gh-add { padding: 3px 10px; font-size: 12px; }
+.gh-added { color: var(--status-done); font-weight: 700; }
+.linkish { text-decoration: underline; cursor: pointer; }

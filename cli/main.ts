@@ -257,6 +257,11 @@ if (import.meta.main) {
           console.log(`registered folder "${name}" → ${p} (not a git repo — Plain workspace)`);
         }
         saveConfig(config, base);
+      } else if (action === "add-github" && name) {
+        const { registerGithubRepo } = await import("../config/github");
+        const r = registerGithubRepo(config, name);
+        saveConfig(config, base);
+        console.log(`registered repo "${r.name}" → ${r.path} (${r.cloned ? "cloned" : "existing clone"}, default ${r.defaultBranch})`);
       } else if (action === "remove" && name) {
         delete config.repos[name];
         delete config.folders[name];
@@ -264,7 +269,7 @@ if (import.meta.main) {
         console.log(`removed "${name}"`);
       } else if (action === "list" || action === undefined) {
         console.log(JSON.stringify({ repos: config.repos, folders: config.folders }, null, 2));
-      } else throw new Error("usage: howdah workspace add <name> <path> | remove <name> | list");
+      } else throw new Error("usage: howdah workspace add <name> <path> | add-github <owner/name> | remove <name> | list");
     }
     else if (verb === "new-graph") {
       const { newGraph } = await import("./new-graph");

@@ -25,6 +25,8 @@ export interface HowdahConfig {
   folders: Record<string, PlainWorkspace>;
   /** e.g. "idea" | "code" — the Open-in-IDE command (T19) */
   editorCommand?: string;
+  /** where GitHub-picked repos are cloned; default ~/code */
+  cloneRoot?: string;
   slackWebhook?: string;
   viewerBase?: string;
   theme?: "system" | "dark" | "light";

@@ -345,6 +345,77 @@ function RunView({ id }: { id: string }) {
 
 // ---- workspace registration ------------------------------------------------------
 
+interface GhRepoDto { nameWithOwner: string; name: string; defaultBranch: string; isPrivate: boolean; updatedAt: string; localPath: string | null; registeredAs: string | null }
+
+function GithubRepoPicker({ onAdded }: { onAdded: () => void }) {
+  const [repos, setRepos] = useState<GhRepoDto[] | null>(null);
+  const [query, setQuery] = useState("");
+  const [busy, setBusy] = useState<string | null>(null); // nameWithOwner being registered
+  const [error, setError] = useState<string | null>(null);
+
+  const load = (q?: string) =>
+    fetch(`/api/github/repos${q ? `?q=${encodeURIComponent(q)}` : ""}`)
+      .then(async (r) => {
+        const body = await r.json();
+        if (!r.ok) throw new Error((body as any).error);
+        setRepos(body as GhRepoDto[]);
+        setError(null);
+      })
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)));
+  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    // owner/name queries hit gh directly (any accessible repo); plain text filters locally
+    if (query.includes("/")) {
+      const t = setTimeout(() => load(query), 400);
+      return () => clearTimeout(t);
+    }
+  }, [query]);
+
+  const add = async (nameWithOwner: string) => {
+    setBusy(nameWithOwner);
+    setError(null);
+    try {
+      const r = await fetch("/api/workspaces/github", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ nameWithOwner }),
+      });
+      const body = (await r.json()) as any;
+      if (!r.ok) throw new Error(body.error);
+      onAdded();
+      load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const shown = (repos ?? []).filter((r) => !query || query.includes("/") || r.nameWithOwner.toLowerCase().includes(query.toLowerCase())).slice(0, 8);
+  return (
+    <div className="gh-picker">
+      <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search your GitHub repos, or type owner/name for any repo…" />
+      {error && <div className="field-error">{error}</div>}
+      {repos === null && !error && <div className="field-hint">loading your repos from GitHub…</div>}
+      {shown.map((r) => (
+        <div key={r.nameWithOwner} className="gh-repo-row">
+          <span className="run-goal">{r.nameWithOwner}</span>
+          <span className="gh-meta">
+            {r.isPrivate ? "private" : "public"}
+            {r.registeredAs ? ` · registered as ${r.registeredAs}` : r.localPath ? " · clone found" : " · will clone"}
+          </span>
+          {r.registeredAs
+            ? <span className="gh-added">✓</span>
+            : <button className="primary gh-add" disabled={busy !== null} onClick={() => add(r.nameWithOwner)}>
+                {busy === r.nameWithOwner ? (r.localPath ? "Adding…" : "Cloning…") : "Add"}
+              </button>}
+        </div>
+      ))}
+      {repos !== null && shown.length === 0 && <div className="field-hint">no matches — try owner/name</div>}
+    </div>
+  );
+}
+
 function AddWorkspace({ onAdded, hint }: { onAdded: () => void; hint?: string }) {
   const [name, setName] = useState("");
   const [path, setPath] = useState("");
@@ -370,16 +441,26 @@ function AddWorkspace({ onAdded, hint }: { onAdded: () => void; hint?: string })
       setBusy(false);
     }
   };
+  const [manual, setManual] = useState(false);
   return (
     <div className="add-workspace">
       {hint && <div className="field-hint">{hint}</div>}
-      <div className="add-workspace-row">
-        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="name (e.g. platform-api)" />
-        <input value={path} onChange={(e) => setPath(e.target.value)} placeholder="/Users/areeb/code/… or ~/code/…" style={{ flex: 2 }} />
-        <button className="primary" onClick={add} disabled={busy || !name.trim() || !path.trim()}>{busy ? "…" : "Add"}</button>
-      </div>
-      {error && <div className="field-error">{error}</div>}
-      <div className="field-hint">A git repo registers as a repo (worktrees + PRs); any other folder registers as Plain.</div>
+      <GithubRepoPicker onAdded={onAdded} />
+      {!manual ? (
+        <div className="field-hint">
+          Plain folder (notes, docs — no git)? <a className="linkish" onClick={() => setManual(true)}>register a local path</a>
+        </div>
+      ) : (
+        <>
+          <div className="add-workspace-row">
+            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="name (e.g. notes)" />
+            <input value={path} onChange={(e) => setPath(e.target.value)} placeholder="~/notes or /Users/areeb/…" style={{ flex: 2 }} />
+            <button className="primary" onClick={add} disabled={busy || !name.trim() || !path.trim()}>{busy ? "…" : "Add"}</button>
+          </div>
+          {error && <div className="field-error">{error}</div>}
+          <div className="field-hint">A git repo registers as a repo; any other folder registers as Plain.</div>
+        </>
+      )}
     </div>
   );
 }

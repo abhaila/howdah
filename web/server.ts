@@ -19,6 +19,7 @@ import { deriveDetail, deriveSummary, sortRuns } from "./derive";
 import { AttentionCenter } from "../engine/attention";
 import { graphCatalog, GRAPHS } from "../graphs/index";
 import { loadConfig, saveConfig } from "../config/config";
+import { listGithubRepos, registerGithubRepo } from "../config/github";
 import { effectiveCwd } from "../engine/executors/worktree";
 
 export interface ServerOpts {
@@ -98,6 +99,25 @@ export function createHowdahServer(opts: ServerOpts) {
         }
         const { repos, folders, ...settings } = loadConfig();
         return json(settings);
+      }
+      if (url.pathname === "/api/github/repos") {
+        try {
+          return json(listGithubRepos(loadConfig(), { query: url.searchParams.get("q") ?? undefined }));
+        } catch (err) {
+          return json({ error: err instanceof Error ? err.message : String(err) }, 502);
+        }
+      }
+      if (url.pathname === "/api/workspaces/github" && req.method === "POST") {
+        const body = (await req.json()) as { nameWithOwner?: string };
+        if (!body.nameWithOwner) return json({ error: "nameWithOwner required" }, 400);
+        try {
+          const c = loadConfig();
+          const result = registerGithubRepo(c, body.nameWithOwner);
+          saveConfig(c);
+          return json({ ok: true, kind: "repo", ...result }, 201);
+        } catch (err) {
+          return json({ error: err instanceof Error ? err.message : String(err) }, 400);
+        }
       }
       if (url.pathname === "/api/workspaces") {
         if (req.method === "POST") {
