@@ -1,0 +1,33 @@
+graphs/improve-codebase.ts
+  s_220da8e953793c::t_4e70ea34576adf 37-38
+core/graph.ts
+  s_220da8e953793c::t_4e70ea34576adf 34
+graphs/review-teammate-pr.ts
+  s_220da8e953793c::t_4e70ea34576adf 23-24
+graphs/research.ts
+  s_220da8e953793c::t_4e70ea34576adf 25-26
+cli/main.ts
+  s_220da8e953793c::t_4e70ea34576adf 82
+graphs/quick-task.ts
+  s_220da8e953793c::t_4e70ea34576adf 14-15
+graphs/implement-ticket.ts
+  s_220da8e953793c::t_4e70ea34576adf 41-42
+graphs/write-doc.ts
+  s_220da8e953793c::t_4e70ea34576adf 25-26
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "382c49835dc21274ff1c34f325c5c71c30438ae1",
+  "prompts": {},
+  "sessions": {
+    "s_220da8e953793c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2ba82f1f-e55e-4150-b238-4ff1b96ce382",
+        "model": "claude-fable-5"
+      },
+      "human_author": "areeb.bhaila <areeb.bhaila@gmail.com>"
+    }
+  }
+}
