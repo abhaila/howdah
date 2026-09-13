@@ -545,6 +545,8 @@ function StartRun() {
   const [graph, setGraph] = useState<string>("");
   const [inputs, setInputs] = useState<Record<string, string>>({});
   const [workspace, setWorkspace] = useState<string>("");
+  const [overrides, setOverrides] = useState<AgentConfigDto>({});
+  const [showOverrides, setShowOverrides] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -563,7 +565,7 @@ function StartRun() {
       const r = await fetch("/api/runs", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ graph, inputs, workspace: workspace || undefined }),
+        body: JSON.stringify({ graph, inputs, workspace: workspace || undefined, overrides }),
       });
       if (!r.ok) throw new Error((await r.json() as any).error ?? "launch failed");
       const { id } = (await r.json()) as { id: string };
@@ -604,6 +606,17 @@ function StartRun() {
         )}
         {selected?.kind === "repo" && options.length === 0 && (
           <AddWorkspace hint="This graph creates worktrees and PRs, so it needs a registered git repo:" onAdded={loadWorkspaces} />
+        )}
+        {selected && (
+          <div className="field-hint">
+            <a className="linkish" onClick={() => setShowOverrides(!showOverrides)}>
+              Run overrides {showOverrides ? "▾" : "▸"}
+            </a>{" "}
+            — beat every node and graph setting for this run only
+          </div>
+        )}
+        {selected && showOverrides && (
+          <ConfigFields value={overrides} onChange={setOverrides} />
         )}
         {error && <div className="field-error">{error}</div>}
         <button

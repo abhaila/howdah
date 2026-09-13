@@ -82,6 +82,8 @@ function parseRunArgs(argv: string[]) {
     else if (a === "--harness") overrides.harness = rest[++i] as any;
     else if (a === "--effort") overrides.effort = rest[++i] as any;
     else if (a === "--permission-mode") overrides.permissionMode = rest[++i] as any;
+    else if (a === "--max-turns") overrides.maxTurns = Number(rest[++i]);
+    else if (a === "--skills") overrides.skills = (rest[++i] ?? "").split(",").map((x) => x.trim()).filter(Boolean);
     else throw new Error(`unknown flag: ${a}`);
   }
   return { graphName, inputs, workspace, dir, id, overrides };

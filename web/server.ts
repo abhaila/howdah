@@ -200,13 +200,23 @@ export function createHowdahServer(opts: ServerOpts) {
       }
       if (url.pathname === "/api/runs" && req.method === "POST") {
         // launch: hand off to the CLI, detached — the viewer never owns an engine loop
-        const body = (await req.json()) as { graph?: string; inputs?: Record<string, string>; workspace?: string; dir?: string };
+        const body = (await req.json()) as {
+          graph?: string; inputs?: Record<string, string>; workspace?: string; dir?: string;
+          overrides?: { model?: string; effort?: string; permissionMode?: string; harness?: string; maxTurns?: number; skills?: string[] };
+        };
         if (!body.graph) return json({ error: "graph required" }, 400);
         const runId = `${body.graph}-${Date.now().toString(36)}`;
         const args = ["run", body.graph, "--id", runId];
         for (const [k, v] of Object.entries(body.inputs ?? {})) args.push("-i", `${k}=${v}`);
         if (body.workspace) args.push("--workspace", body.workspace);
         if (body.dir) args.push("--dir", body.dir);
+        const o = body.overrides ?? {};
+        if (o.model) args.push("--model", o.model);
+        if (o.effort) args.push("--effort", o.effort);
+        if (o.permissionMode) args.push("--permission-mode", o.permissionMode);
+        if (o.harness) args.push("--harness", o.harness);
+        if (o.maxTurns) args.push("--max-turns", String(o.maxTurns));
+        if (o.skills?.length) args.push("--skills", o.skills.join(","));
         Bun.spawn(["bun", join(import.meta.dir, "..", "cli", "main.ts"), ...args], {
           stdout: "ignore", stderr: "ignore", env: { ...process.env },
         }).unref();
