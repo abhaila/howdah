@@ -578,7 +578,7 @@ authoring + visualization, and the remaining screens.
     store.accept (D7 stale-base + OV-3 guards), stale-base → re-draft affordance. Run view
     "Add feedback" writes reviser-format jsonl pre-filled with run/node/visit/rendered_hash.
   - Verify: feedback from a run → reviser proposal → accept in UI → next run pins v+1.
-- [ ] **T22 (P2, human: ~2d / CC: ~1.5h)** — engine+web — Steering + run controls
+- [x] **T22 (P2, human: ~2d / CC: ~1.5h)** — engine+web — Steering + run controls ✅ 2026-09-13: control.json boundary pause/abort, operator-jump w/ prompt-injected instructions + read precheck, UI controls + Graph-tab jump
   - "Message the agent" box on running runs (claude: queued next-turn injection; codex:
     turn/steer). Controls: pause / resume / retry (new visit) / abort, as API + UI,
     executed by `howdah up`.
