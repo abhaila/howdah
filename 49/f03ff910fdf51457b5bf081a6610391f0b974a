@@ -1,0 +1,20 @@
+shaping.md
+  ai_agent 500
+  s_220da8e953793c::t_eed072a8973607 312,316,320,324,328,332,336,340
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "49f03ff910fdf51457b5bf081a6610391f0b974a",
+  "prompts": {},
+  "sessions": {
+    "s_220da8e953793c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2ba82f1f-e55e-4150-b238-4ff1b96ce382",
+        "model": "claude-fable-5"
+      },
+      "human_author": "areeb.bhaila <areeb.bhaila@gmail.com>"
+    }
+  }
+}
