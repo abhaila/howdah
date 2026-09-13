@@ -1,0 +1,23 @@
+core/prompt-ids.ts
+  s_220da8e953793c::t_1f98b22b71f591 1-41
+prompts/codegen.ts
+  s_220da8e953793c::t_f21b796a15a141 1-51
+core/graph.ts
+  s_220da8e953793c::t_1f98b22b71f591 26,28-29
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "c46d556871ad517ea784423e3925887678d09f35",
+  "prompts": {},
+  "sessions": {
+    "s_220da8e953793c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2ba82f1f-e55e-4150-b238-4ff1b96ce382",
+        "model": "claude-fable-5"
+      },
+      "human_author": "areeb.bhaila <areeb.bhaila@gmail.com>"
+    }
+  }
+}
