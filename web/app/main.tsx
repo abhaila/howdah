@@ -343,6 +343,47 @@ function RunView({ id }: { id: string }) {
 }
 
 
+// ---- workspace registration ------------------------------------------------------
+
+function AddWorkspace({ onAdded, hint }: { onAdded: () => void; hint?: string }) {
+  const [name, setName] = useState("");
+  const [path, setPath] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const add = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await fetch("/api/workspaces", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name, path }),
+      });
+      const body = (await r.json()) as any;
+      if (!r.ok) throw new Error(body.error ?? "failed");
+      setName("");
+      setPath("");
+      onAdded();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="add-workspace">
+      {hint && <div className="field-hint">{hint}</div>}
+      <div className="add-workspace-row">
+        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="name (e.g. platform-api)" />
+        <input value={path} onChange={(e) => setPath(e.target.value)} placeholder="/Users/areeb/code/… or ~/code/…" style={{ flex: 2 }} />
+        <button className="primary" onClick={add} disabled={busy || !name.trim() || !path.trim()}>{busy ? "…" : "Add"}</button>
+      </div>
+      {error && <div className="field-error">{error}</div>}
+      <div className="field-hint">A git repo registers as a repo (worktrees + PRs); any other folder registers as Plain.</div>
+    </div>
+  );
+}
+
 // ---- start-run form (screen 6) ---------------------------------------------------
 
 interface GraphInfo { name: string; description: string; inputs: string[]; kind: "repo" | "plain" }
@@ -357,9 +398,10 @@ function StartRun() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const loadWorkspaces = () => fetch("/api/workspaces").then((r) => r.json()).then(setWorkspaces).catch(() => {});
   useEffect(() => {
     fetch("/api/graphs").then((r) => r.json()).then(setGraphs).catch(() => {});
-    fetch("/api/workspaces").then((r) => r.json()).then(setWorkspaces).catch(() => {});
+    loadWorkspaces();
   }, []);
   const selected = graphs.find((g) => g.name === graph);
   const options = selected?.kind === "repo" ? workspaces.repos : [...workspaces.repos, ...workspaces.folders];
@@ -405,10 +447,13 @@ function StartRun() {
           <label className="field">
             <span>Workspace {selected.kind === "repo" ? "(repo required)" : ""}</span>
             <select value={workspace} onChange={(e) => setWorkspace(e.target.value)}>
-              <option value="">{selected.kind === "repo" ? "choose a repo…" : "none (log-only)"}</option>
+              <option value="">{selected.kind === "repo" ? (options.length ? "choose a repo…" : "no repos registered") : "none (log-only)"}</option>
               {options.map((w) => <option key={w.name} value={w.name}>{w.name} — {w.path}</option>)}
             </select>
           </label>
+        )}
+        {selected?.kind === "repo" && options.length === 0 && (
+          <AddWorkspace hint="This graph creates worktrees and PRs, so it needs a registered git repo:" onAdded={loadWorkspaces} />
         )}
         {error && <div className="field-error">{error}</div>}
         <button
@@ -460,7 +505,13 @@ function GraphsList() {
 function Settings() {
   const [s, setS] = useState<{ editorCommand?: string; slackWebhook?: string; chime?: boolean } | null>(null);
   const [saved, setSaved] = useState(false);
-  useEffect(() => { fetch("/api/settings").then((r) => r.json()).then(setS).catch(() => {}); }, []);
+  const [ws, setWs] = useState<Workspaces>({ repos: [], folders: [] });
+  const loadWs = () => fetch("/api/workspaces").then((r) => r.json()).then(setWs).catch(() => {});
+  const removeWs = async (name: string) => {
+    await fetch("/api/workspaces", { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ name }) });
+    loadWs();
+  };
+  useEffect(() => { fetch("/api/settings").then((r) => r.json()).then(setS).catch(() => {}); loadWs(); }, []);
   if (!s) return <div className="empty">loading…</div>;
   const save = async () => {
     await fetch("/api/settings", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(s) });
@@ -484,6 +535,20 @@ function Settings() {
           <span style={{ textTransform: "none", fontSize: 13, color: "var(--fg)" }}>Attention chime</span>
         </label>
         <button className="primary" onClick={save}>{saved ? "Saved" : "Save"}</button>
+      </div>
+
+      <h1 style={{ marginTop: 28 }}>Workspaces</h1>
+      <div className="form-card">
+        {[...ws.repos.map((w) => ({ ...w, kind: "repo" })), ...ws.folders.map((w) => ({ ...w, kind: "plain" }))].map((w) => (
+          <div key={w.name} className="ws-row">
+            <span className="ws-kind">{w.kind}</span>
+            <span className="run-goal">{w.name}</span>
+            <span className="run-meta" title={w.path}>{w.path}</span>
+            <button className="ws-remove" onClick={() => removeWs(w.name)} title="Remove (files untouched)">✕</button>
+          </div>
+        ))}
+        {ws.repos.length + ws.folders.length === 0 && <div className="field-hint">No workspaces yet.</div>}
+        <AddWorkspace onAdded={loadWs} />
       </div>
     </div>
   );

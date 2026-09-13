@@ -281,3 +281,44 @@ describe("failure visibility + reply-resumes (blog-post regression)", () => {
     }
   }, 15000);
 });
+
+describe("workspace registration (repo-picker gap)", () => {
+  test("POST detects git repos vs plain folders, validates, and DELETE removes", async () => {
+    const base = mkdtempSync(join(tmpdir(), "howdah-ws-"));
+    mkdirSync(join(base, "runs"), { recursive: true });
+    process.env.HOWDAH_HOME = base;
+    const server = createHowdahServer({ runsDir: join(base, "runs"), attentionDir: join(base, "attention"), port: 0 });
+    const url = (p: string) => `http://localhost:${server.port}${p}`;
+    const post = (body: unknown) => fetch(url("/api/workspaces"), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    try {
+      // a real git repo → kind repo with detected default branch
+      const repoDir = mkdtempSync(join(tmpdir(), "howdah-ws-repo-"));
+      const { execSync } = await import("node:child_process");
+      execSync("git init -q -b main && git config user.email t@t && git config user.name t", { cwd: repoDir });
+      const r1 = await post({ name: "my-api", path: repoDir });
+      expect(r1.status).toBe(201);
+      expect(await r1.json()).toMatchObject({ kind: "repo", defaultBranch: "main" });
+
+      // a plain folder → kind plain
+      const folder = mkdtempSync(join(tmpdir(), "howdah-ws-plain-"));
+      expect((await (await post({ name: "notes", path: folder })).json())).toMatchObject({ kind: "plain" });
+
+      // validation: missing path, bad name, duplicate
+      expect((await post({ name: "ghost", path: join(base, "nope") })).status).toBe(400);
+      expect((await post({ name: "bad name!", path: folder })).status).toBe(400);
+      expect((await post({ name: "my-api", path: repoDir })).status).toBe(409);
+
+      // list reflects both; the form's repo-required picker now has an option
+      const ws = (await (await fetch(url("/api/workspaces"))).json()) as any;
+      expect(ws.repos.map((w: any) => w.name)).toEqual(["my-api"]);
+      expect(ws.folders.map((w: any) => w.name)).toEqual(["notes"]);
+
+      // delete
+      expect((await fetch(url("/api/workspaces"), { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "notes" }) })).status).toBe(200);
+      const after = (await (await fetch(url("/api/workspaces"))).json()) as any;
+      expect(after.folders).toEqual([]);
+    } finally {
+      server.stop(true);
+    }
+  });
+});

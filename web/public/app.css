@@ -196,3 +196,16 @@ button.primary:disabled { opacity: 0.5; cursor: default; }
 /* failure banner + retry (failed runs must say WHY) */
 .banner.failed { background: color-mix(in srgb, var(--status-failed-recoverable) 12%, var(--bg)); color: var(--status-failed-recoverable); border-bottom-color: var(--status-failed-recoverable); }
 .banner .retry { margin-left: auto; background: var(--status-failed-recoverable); color: #fff; border: 0; border-radius: var(--radius-sm); padding: 4px 12px; font-family: var(--font-display); font-weight: 600; font-size: 12px; cursor: pointer; }
+
+/* workspace registration */
+.add-workspace { display: flex; flex-direction: column; gap: 6px; border-top: 1px solid var(--border); padding-top: 10px; }
+.add-workspace-row { display: flex; gap: 8px; }
+.add-workspace-row input {
+  flex: 1; background: var(--bg-inset); color: var(--fg); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); padding: 8px 10px; font-family: var(--font-mono); font-size: 12px;
+}
+.ws-row { display: flex; align-items: center; gap: 10px; padding: 6px 0; border-bottom: 1px solid var(--border); }
+.ws-kind { font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--fg-faint); width: 40px; }
+.ws-row .run-meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ws-remove { background: none; border: 0; color: var(--fg-faint); cursor: pointer; font-size: 13px; }
+.ws-remove:hover { color: var(--status-failed-recoverable); }

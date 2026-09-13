@@ -18,7 +18,7 @@ import { replayState } from "../engine/replay";
 import { Reconciler, readsForgeFacts } from "../engine/reconcile";
 import { effectiveCwd, readWorktreeRecord } from "../engine/executors/worktree";
 import { GRAPHS, graphCatalog } from "../graphs/index";
-import { howdahHome, loadConfig, resolveWorkspace } from "../config/config";
+import { howdahHome, loadConfig, saveConfig, resolveWorkspace } from "../config/config";
 
 const base = howdahHome();
 const runsDir = join(base, "runs");
@@ -241,13 +241,38 @@ if (import.meta.main) {
     else if (verb === "up") await upCommand({ once: rest.includes("--once") });
     else if (verb === "doctor") process.exit((await doctorCommand()) ? 0 : 1);
     else if (verb === "graphs") console.log(JSON.stringify(graphCatalog(), null, 2));
+    else if (verb === "workspace") {
+      const [action, name, rawPath] = rest;
+      const config = loadConfig(base);
+      if (action === "add" && name && rawPath) {
+        const p = rawPath.replace(/^~(?=\/|$)/, process.env.HOME ?? "~");
+        if (!existsSync(p)) throw new Error(`path does not exist: ${p}`);
+        if (config.repos[name] || config.folders[name]) throw new Error(`workspace "${name}" already exists`);
+        const probe = Bun.spawnSync(["git", "-C", p, "rev-parse", "--is-inside-work-tree"], { stdout: "pipe", stderr: "pipe" });
+        if (probe.exitCode === 0 && new TextDecoder().decode(probe.stdout).trim() === "true") {
+          config.repos[name] = { path: p };
+          console.log(`registered repo "${name}" → ${p}`);
+        } else {
+          config.folders[name] = { path: p };
+          console.log(`registered folder "${name}" → ${p} (not a git repo — Plain workspace)`);
+        }
+        saveConfig(config, base);
+      } else if (action === "remove" && name) {
+        delete config.repos[name];
+        delete config.folders[name];
+        saveConfig(config, base);
+        console.log(`removed "${name}"`);
+      } else if (action === "list" || action === undefined) {
+        console.log(JSON.stringify({ repos: config.repos, folders: config.folders }, null, 2));
+      } else throw new Error("usage: howdah workspace add <name> <path> | remove <name> | list");
+    }
     else if (verb === "new-graph") {
       const { newGraph } = await import("./new-graph");
       const kind = (rest[rest.indexOf("--kind") + 1] ?? "custom") as import("./new-graph").GraphKind;
       console.log(`scaffolded ${await newGraph(rest[0] ?? "", kind)}`);
     }
     else {
-      console.error("usage: howdah run|resume|reply|runs|graphs|new-graph|up|doctor");
+      console.error("usage: howdah run|resume|reply|runs|graphs|new-graph|workspace|up|doctor");
       process.exit(1);
     }
   } catch (err) {

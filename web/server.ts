@@ -100,6 +100,42 @@ export function createHowdahServer(opts: ServerOpts) {
         return json(settings);
       }
       if (url.pathname === "/api/workspaces") {
+        if (req.method === "POST") {
+          const body = (await req.json()) as { name?: string; path?: string };
+          const name = (body.name ?? "").trim();
+          let p = (body.path ?? "").trim().replace(/^~(?=\/|$)/, process.env.HOME ?? "~");
+          if (!/^[\w][\w.-]*$/.test(name)) return json({ error: "name must be alphanumeric/dash/dot" }, 400);
+          if (!existsSync(p)) return json({ error: `path does not exist: ${p}` }, 400);
+          const c = loadConfig();
+          if (c.repos[name] || c.folders[name]) return json({ error: `workspace "${name}" already exists` }, 409);
+          // the path decides the kind: a git repo gets worktrees + forge probes, else Plain
+          const probe = Bun.spawnSync(["git", "-C", p, "rev-parse", "--is-inside-work-tree"], { stdout: "pipe", stderr: "pipe" });
+          if (probe.exitCode === 0 && new TextDecoder().decode(probe.stdout).trim() === "true") {
+            const head = Bun.spawnSync(["git", "-C", p, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"], { stdout: "pipe", stderr: "pipe" });
+            const fallback = Bun.spawnSync(["git", "-C", p, "symbolic-ref", "--short", "HEAD"], { stdout: "pipe", stderr: "pipe" });
+            const raw = head.exitCode === 0
+              ? new TextDecoder().decode(head.stdout).trim().replace(/^origin\//, "")
+              : new TextDecoder().decode(fallback.stdout).trim();
+            const defaultBranch = raw && raw !== "HEAD" ? raw : "main";
+            c.repos[name] = { path: p, defaultBranch };
+            saveConfig(c);
+            return json({ ok: true, kind: "repo", name, path: p, defaultBranch }, 201);
+          }
+          c.folders[name] = { path: p };
+          saveConfig(c);
+          return json({ ok: true, kind: "plain", name, path: p }, 201);
+        }
+        if (req.method === "DELETE") {
+          const body = (await req.json()) as { name?: string };
+          const c = loadConfig();
+          if (body.name && (c.repos[body.name] || c.folders[body.name])) {
+            delete c.repos[body.name];
+            delete c.folders[body.name];
+            saveConfig(c);
+            return json({ ok: true });
+          }
+          return json({ error: "unknown workspace" }, 404);
+        }
         const c = loadConfig();
         return json({
           repos: Object.entries(c.repos).map(([name, r]) => ({ name, ...r })),
