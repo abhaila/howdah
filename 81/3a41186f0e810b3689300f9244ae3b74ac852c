@@ -1,0 +1,44 @@
+cli/new-graph.test.ts
+  s_220da8e953793c::t_3339eb6670cc1e 1-18
+web/server.ts
+  s_220da8e953793c::t_bce5c3318a87ad 20,51-76
+web/app/graph-dag.tsx
+  s_220da8e953793c::t_8c4ddcb0dacff5 1-112
+engine/executors/index.ts
+  s_220da8e953793c::t_ba69bad0180612 53
+cli/new-graph.ts
+  s_220da8e953793c::t_62acbe58990576 1-190
+cli/main.ts
+  s_220da8e953793c::t_bce5c3318a87ad 244-248,250
+  s_220da8e953793c::t_ba69bad0180612 89-90
+web/public/app.css
+  s_220da8e953793c::t_ed88e8e98b98fd 178-194
+graphs/index.ts
+  s_220da8e953793c::t_0bb2b13e65f882 12,20
+web/app/main.tsx
+  s_220da8e953793c::t_ed88e8e98b98fd 10,141-150,205,237-240,249-259,417-447,511,518,525
+core/prompt-ids.ts
+  s_220da8e953793c::t_0bb2b13e65f882 21,50
+graphs/quick-task.ts
+  s_220da8e953793c::t_0bb2b13e65f882 1-27
+prompts/quick-task.work.md
+  s_220da8e953793c::t_0bb2b13e65f882 1-7
+web/web.test.ts
+  s_220da8e953793c::t_aea4a2bed0d30a 206-219
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "813a41186f0e810b3689300f9244ae3b74ac852c",
+  "prompts": {},
+  "sessions": {
+    "s_220da8e953793c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2ba82f1f-e55e-4150-b238-4ff1b96ce382",
+        "model": "claude-fable-5"
+      },
+      "human_author": "areeb.bhaila <areeb.bhaila@gmail.com>"
+    }
+  }
+}
