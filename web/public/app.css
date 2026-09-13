@@ -8,7 +8,7 @@ body {
   font-size: 13px;
   line-height: 1.55;
 }
-h1, h2, h3, .display { font-family: var(--font-display); }
+h1, h2, h3, .display { font-family: var(--font-display); font-weight: 400; letter-spacing: 0.01em; }
 a { color: inherit; }
 
 .shell { display: flex; min-height: 100vh; }
@@ -40,7 +40,7 @@ main { flex: 1; min-width: 0; }
 
 /* runs list */
 .runs { max-width: 880px; margin: 0 auto; padding: 28px 24px; }
-.runs h1 { font-size: 20px; margin: 0 0 18px; }
+.runs h1 { font-size: 22px; margin: 0 0 18px; letter-spacing: 0.015em; }
 .run-row {
   display: flex; align-items: center; gap: 12px;
   padding: 13px 16px; margin-bottom: 8px;
@@ -73,7 +73,7 @@ main { flex: 1; min-width: 0; }
   padding: 14px 0 12px; background: var(--bg);
   border-bottom: 1px solid var(--border);
 }
-.topbar h1 { font-size: 15px; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.topbar h1 { font-size: 16px; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .topbar .meta { color: var(--fg-muted); font-size: 12px; flex-shrink: 0; margin-left: auto; }
 
 /* pinned needs-you banner */
@@ -118,7 +118,7 @@ main { flex: 1; min-width: 0; }
 button.primary {
   background: var(--attention); color: #fff; border: 0;
   padding: 7px 14px; border-radius: var(--radius-sm);
-  font-family: var(--font-display); font-weight: 600; font-size: 13px; cursor: pointer;
+  font-family: var(--font-display); font-weight: 400; letter-spacing: 0.03em; font-size: 13px; cursor: pointer;
   transition: transform var(--dur-fast) var(--ease-out-strong), opacity var(--dur-fast);
 }
 button.primary:active { transform: scale(0.97); }
@@ -195,7 +195,7 @@ button.primary:disabled { opacity: 0.5; cursor: default; }
 
 /* failure banner + retry (failed runs must say WHY) */
 .banner.failed { background: color-mix(in srgb, var(--status-failed-recoverable) 12%, var(--bg)); color: var(--status-failed-recoverable); border-bottom-color: var(--status-failed-recoverable); }
-.banner .retry { margin-left: auto; background: var(--status-failed-recoverable); color: #fff; border: 0; border-radius: var(--radius-sm); padding: 4px 12px; font-family: var(--font-display); font-weight: 600; font-size: 12px; cursor: pointer; }
+.banner .retry { margin-left: auto; background: var(--status-failed-recoverable); color: #fff; border: 0; border-radius: var(--radius-sm); padding: 4px 12px; font-family: var(--font-display); letter-spacing: 0.03em; font-size: 12px; cursor: pointer; }
 
 /* workspace registration */
 .add-workspace { display: flex; flex-direction: column; gap: 6px; border-top: 1px solid var(--border); padding-top: 10px; }
@@ -268,7 +268,7 @@ button.primary:disabled { opacity: 0.5; cursor: default; }
   animation: howdah-eye 220ms var(--ease-out-strong) 980ms forwards;
 }
 .splash-word {
-  font-family: var(--font-display); font-weight: 600; font-size: 15px; letter-spacing: 0.02em;
+  font-family: var(--font-display); font-weight: 400; font-size: 16px; letter-spacing: 0.09em; text-transform: uppercase;
   opacity: 0; transform: translateY(4px);
   animation: howdah-word 300ms var(--ease-out-strong) 1080ms forwards;
 }

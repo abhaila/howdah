@@ -375,7 +375,12 @@ Caution note: revisit any word-mark before public use.
 
 ### Typography & tokens
 
-- 🟡 **Space Grotesk (display/headings) + JetBrains Mono (ids/costs/diffs/data)**, with
+- 🟡 **Special Gothic (display/headings) + JetBrains Mono (ids/costs/diffs/data)** —
+  CHANGED 2026-09-13 from Space Grotesk: user picked Special Gothic (Google Fonts) after a
+  Prateek Kuhad tour-poster reference (Neue Haas-genre neo-grotesque); decided from a
+  five-face specimen render (web/public/fonts-preview.html). Single weight 400 →
+  font-synthesis disabled, hierarchy via size + tracking. Original decision kept for
+  history: Space Grotesk + JetBrains Mono, with
   JetBrains Mono doubling as the body face for dense rows and Space Grotesk for headings and
   prose. User-picked from six rendered specimens across two rounds (over Geist — the P4-1
   pick made blind — and over mono-first and editorial-serif directions). Both free (Google

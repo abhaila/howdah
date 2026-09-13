@@ -4,14 +4,15 @@
  *
  * Rules encoded here, not in components:
  *  - AMBER IS THE ONLY LOUD COLOR, reserved for attention. Nothing else may use it.
- *  - Space Grotesk for headings/prose; JetBrains Mono for ids, costs, diffs, dense rows.
+ *  - Special Gothic (single weight) for headings/prose; JetBrains Mono for ids, costs, diffs, dense rows.
  *  - Motion: --ease-out-strong + three durations. Exits use the shorter duration.
  *  - Status enum has one renderer; these are its only colors.
  */
 
 :root {
-  /* type */
-  --font-display: "Space Grotesk", system-ui, sans-serif;
+  /* type — Special Gothic ships ONE weight (400): no faux bold, hierarchy comes from
+     size and tracking. JetBrains Mono keeps its real 400/500/600. */
+  --font-display: "Special Gothic", system-ui, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", monospace;
 
   /* light theme (base set) */
@@ -113,6 +114,9 @@
 }
 
 /* themed browser surfaces */
+/* the display face has no bold — never let the browser invent one */
+h1, h2, h3, .display, button { font-synthesis-weight: none; }
+
 ::selection { background: color-mix(in srgb, var(--attention) 30%, transparent); }
 :focus-visible { outline: 2px solid var(--attention-border); outline-offset: 2px; }
 * { scrollbar-color: var(--border-strong) transparent; scrollbar-width: thin; }

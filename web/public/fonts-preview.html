@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Howdah — display font candidates</title>
+<link rel="icon" href="/favicon.svg" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter+Tight:wght@400;500;600;700&family=Archivo:wght@400;500;600;700&family=Instrument+Sans:wght@400;500;600;700&family=Special+Gothic&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="/tokens.css" />
+<style>
+  body { margin: 0; background: var(--bg); color: var(--fg); font-family: var(--font-mono); padding: 40px 48px 80px; }
+  h1 { font-family: var(--font-display); font-size: 20px; }
+  .note { color: var(--fg-muted); font-size: 13px; max-width: 720px; line-height: 1.6; margin-bottom: 36px; }
+  .candidate { margin-bottom: 56px; }
+  .label { font-size: 11px; text-transform: uppercase; letter-spacing: .1em; color: var(--fg-faint); margin-bottom: 12px; }
+  .label b { color: var(--fg); }
+  .board { border: 1px solid var(--border); border-radius: 12px; overflow: hidden; background: var(--bg-raised); }
+  .poster {
+    padding: 34px 30px 26px; border-bottom: 1px solid var(--border);
+    text-transform: uppercase; letter-spacing: -0.01em; line-height: 1.18;
+  }
+  .poster .big { font-size: 34px; font-weight: 600; display: flex; justify-content: space-between; }
+  .poster .mid { font-size: 34px; font-weight: 600; word-spacing: 0.35em; }
+  .ui { padding: 22px 30px; display: flex; flex-direction: column; gap: 14px; }
+  .topbar-mock { display: flex; align-items: center; gap: 12px; }
+  .topbar-mock h2 { font-size: 15px; margin: 0; font-weight: 600; }
+  .badge-mock { font-size: 12px; color: var(--attention); }
+  .btn-mock { margin-left: auto; background: var(--attention); color: #fff; padding: 6px 14px; border-radius: 6px; font-weight: 600; font-size: 13px; }
+  .banner-mock { background: var(--attention-bg); color: var(--attention-fg); border: 1px solid var(--attention-border); border-radius: 8px; padding: 9px 14px; font-weight: 600; font-size: 13px; display: flex; }
+  .banner-mock span { margin-left: auto; font-variant-numeric: tabular-nums; }
+  .row-mock { display: flex; gap: 12px; align-items: center; border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; font-size: 13px; }
+  .row-mock .goal { font-weight: 500; }
+  .row-mock .meta { margin-left: auto; color: var(--fg-muted); font-family: var(--font-mono); font-size: 12px; }
+  .prose-mock { font-size: 13px; color: var(--fg-muted); max-width: 640px; line-height: 1.55; }
+  .mono-note { font-family: var(--font-mono); color: var(--fg-faint); font-size: 11px; padding: 10px 30px 16px; }
+</style>
+</head>
+<body>
+  <h1>Display font candidates — rendered in Howdah's UI</h1>
+  <p class="note">
+    The poster face is a Helvetica-lineage neo-grotesque (Neue Haas Grotesk / Helvetica Now / Neue
+    Montreal — all commercial). Below: the current Space Grotesk vs three free faces in that genre,
+    each shown poster-style and in the real UI pieces. Data/ids stay JetBrains Mono in all options —
+    only the display face changes.
+  </p>
+
+  <div class="candidate" style="--f: 'Space Grotesk'">
+    <div class="label"><b>A — Space Grotesk</b> · current · quirky grotesque, geometric tics</div>
+    <div class="board" style="font-family: var(--f)">
+      <div class="poster"><div class="big"><span>Howdah</span><span>2026</span></div><div class="mid">Full graph chamber tour</div></div>
+      <div class="ui">
+        <div class="topbar-mock" style="font-family: var(--f)"><h2>Add retry backoff to dunning emails</h2><span class="badge-mock">● needs input</span><span class="btn-mock">Reply</span></div>
+        <div class="banner-mock">Waiting on you — Bash needs permission<span>4h 12m</span></div>
+        <div class="row-mock"><span class="goal">Can we serve credit balance reads from BigQuery?</span><span class="meta">research · done</span></div>
+        <div class="prose-mock">Prompts deserve version control. Howdah records what every agent read, renders the exact prompt, and lets feedback become the next revision.</div>
+      </div>
+      <div class="mono-note">run implement-ticket-mtzmb8ht · $0.2363 · howdah/implement-ticket — JetBrains Mono unchanged</div>
+    </div>
+  </div>
+
+  <div class="candidate" style="--f: 'Inter Tight'">
+    <div class="label"><b>B — Inter Tight</b> · free · closest to the poster's tight neo-grotesque caps</div>
+    <div class="board" style="font-family: var(--f)">
+      <div class="poster"><div class="big"><span>Howdah</span><span>2026</span></div><div class="mid">Full graph chamber tour</div></div>
+      <div class="ui">
+        <div class="topbar-mock" style="font-family: var(--f)"><h2>Add retry backoff to dunning emails</h2><span class="badge-mock">● needs input</span><span class="btn-mock">Reply</span></div>
+        <div class="banner-mock">Waiting on you — Bash needs permission<span>4h 12m</span></div>
+        <div class="row-mock"><span class="goal">Can we serve credit balance reads from BigQuery?</span><span class="meta">research · done</span></div>
+        <div class="prose-mock">Prompts deserve version control. Howdah records what every agent read, renders the exact prompt, and lets feedback become the next revision.</div>
+      </div>
+      <div class="mono-note">run implement-ticket-mtzmb8ht · $0.2363 · howdah/implement-ticket — JetBrains Mono unchanged</div>
+    </div>
+  </div>
+
+  <div class="candidate" style="--f: 'Archivo'">
+    <div class="label"><b>C — Archivo</b> · free · grotesque with sturdier caps, slightly warmer</div>
+    <div class="board" style="font-family: var(--f)">
+      <div class="poster"><div class="big"><span>Howdah</span><span>2026</span></div><div class="mid">Full graph chamber tour</div></div>
+      <div class="ui">
+        <div class="topbar-mock" style="font-family: var(--f)"><h2>Add retry backoff to dunning emails</h2><span class="badge-mock">● needs input</span><span class="btn-mock">Reply</span></div>
+        <div class="banner-mock">Waiting on you — Bash needs permission<span>4h 12m</span></div>
+        <div class="row-mock"><span class="goal">Can we serve credit balance reads from BigQuery?</span><span class="meta">research · done</span></div>
+        <div class="prose-mock">Prompts deserve version control. Howdah records what every agent read, renders the exact prompt, and lets feedback become the next revision.</div>
+      </div>
+      <div class="mono-note">run implement-ticket-mtzmb8ht · $0.2363 · howdah/implement-ticket — JetBrains Mono unchanged</div>
+    </div>
+  </div>
+
+  <div class="candidate" style="--f: 'Instrument Sans'">
+    <div class="label"><b>D — Instrument Sans</b> · free · neutral Swiss feel, rounder counters</div>
+    <div class="board" style="font-family: var(--f)">
+      <div class="poster"><div class="big"><span>Howdah</span><span>2026</span></div><div class="mid">Full graph chamber tour</div></div>
+      <div class="ui">
+        <div class="topbar-mock" style="font-family: var(--f)"><h2>Add retry backoff to dunning emails</h2><span class="badge-mock">● needs input</span><span class="btn-mock">Reply</span></div>
+        <div class="banner-mock">Waiting on you — Bash needs permission<span>4h 12m</span></div>
+        <div class="row-mock"><span class="goal">Can we serve credit balance reads from BigQuery?</span><span class="meta">research · done</span></div>
+        <div class="prose-mock">Prompts deserve version control. Howdah records what every agent read, renders the exact prompt, and lets feedback become the next revision.</div>
+      </div>
+      <div class="mono-note">run implement-ticket-mtzmb8ht · $0.2363 · howdah/implement-ticket — JetBrains Mono unchanged</div>
+    </div>
+  </div>
+  <div class="candidate" style="--f: 'Special Gothic'">
+    <div class="label"><b>E — Special Gothic</b> · free · CHOSEN 2026-09-13 · single weight, hierarchy via size + tracking</div>
+    <div class="board" style="font-family: var(--f)">
+      <div class="poster"><div class="big"><span>Howdah</span><span>2026</span></div><div class="mid">Full graph chamber tour</div></div>
+      <div class="ui">
+        <div class="topbar-mock" style="font-family: var(--f)"><h2 style="font-weight:400">Add retry backoff to dunning emails</h2><span class="badge-mock">● needs input</span><span class="btn-mock" style="font-weight:400">Reply</span></div>
+        <div class="banner-mock" style="font-weight:400">Waiting on you — Bash needs permission<span>4h 12m</span></div>
+        <div class="row-mock"><span class="goal">Can we serve credit balance reads from BigQuery?</span><span class="meta">research · done</span></div>
+        <div class="prose-mock">Prompts deserve version control. Howdah records what every agent read, renders the exact prompt, and lets feedback become the next revision.</div>
+      </div>
+      <div class="mono-note">run implement-ticket-mtzmb8ht · $0.2363 · howdah/implement-ticket — JetBrains Mono unchanged</div>
+    </div>
+  </div>
+</body>
+</html>
