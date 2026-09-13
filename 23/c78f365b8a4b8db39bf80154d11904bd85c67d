@@ -1,0 +1,28 @@
+web/public/app.css
+  s_220da8e953793c::t_c9f0c290161dbe 199-211
+cli/main.ts
+  s_220da8e953793c::t_11854f934c3616 21,244-268,275
+web/server.ts
+  s_220da8e953793c::t_7faaa3d8966a6c 115-116,118-119
+  s_220da8e953793c::t_11854f934c3616 103-114,117,120-138
+web/web.test.ts
+  s_220da8e953793c::t_9dc9a8a1f76e5f 284-324
+web/app/main.tsx
+  s_220da8e953793c::t_c9f0c290161dbe 346-386,401,404,450,455-457,508-514,539-551
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "23c78f365b8a4b8db39bf80154d11904bd85c67d",
+  "prompts": {},
+  "sessions": {
+    "s_220da8e953793c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2ba82f1f-e55e-4150-b238-4ff1b96ce382",
+        "model": "claude-fable-5"
+      },
+      "human_author": "areeb.bhaila <areeb.bhaila@gmail.com>"
+    }
+  }
+}
