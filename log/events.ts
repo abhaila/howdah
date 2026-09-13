@@ -85,7 +85,24 @@ export type RunEvent =
       terminal_outcome?: RunOutcome;
       error?: string;
     }
-  | { type: "node-finished"; node: string; visit: number; status: "succeeded" | "failed"; writes: string[] }
+  | {
+      type: "node-finished";
+      node: string;
+      visit: number;
+      status: "succeeded" | "failed";
+      /** the values written, keyed by context key — replay rebuilds context from these */
+      writes: Record<string, unknown>;
+    }
+  | {
+      /** written BEFORE a side-effecting step (OV-1) — intent without a matching done
+       *  marks an AMBIGUOUS execution that must be probed before any retry */
+      type: "side-effect-intent";
+      node: string;
+      visit: number;
+      attempt_id: string;
+      effect: string;
+    }
+  | { type: "side-effect-done"; node: string; visit: number; attempt_id: string; effect: string; result?: unknown }
   | { type: "edge-taken"; from: string; to: string; label?: string }
   | { type: "attention-raised"; node: string; visit: number; reason: string; ask?: unknown }
   | { type: "attention-resolved"; node: string; visit: number; reply?: string }
