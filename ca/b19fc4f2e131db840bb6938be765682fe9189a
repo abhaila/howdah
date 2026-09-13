@@ -1,0 +1,27 @@
+prompts/store.ts
+  s_220da8e953793c::t_8357e9bf30a769 1-112
+prompts/proposals.ts
+  s_220da8e953793c::t_5111f42c546b2e 1-88
+tsconfig.json
+  s_220da8e953793c::t_617b61a85317d6 12
+prompts/store.test.ts
+  s_220da8e953793c::t_1a2e6d03ee3fdd 1-109,111-123
+  s_220da8e953793c::t_a98c8a0634b880 110
+  s_220da8e953793c::t_6d8fd873294ad2 124-162
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "cab19fc4f2e131db840bb6938be765682fe9189a",
+  "prompts": {},
+  "sessions": {
+    "s_220da8e953793c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2ba82f1f-e55e-4150-b238-4ff1b96ce382",
+        "model": "claude-fable-5"
+      },
+      "human_author": "areeb.bhaila <areeb.bhaila@gmail.com>"
+    }
+  }
+}
