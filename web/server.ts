@@ -21,6 +21,8 @@ import { graphCatalog, GRAPHS } from "../graphs/index";
 import { loadConfig, saveConfig } from "../config/config";
 import { listGithubRepos, registerGithubRepo } from "../config/github";
 import { loadTuning, saveTuning, pruneTuning } from "../config/tuning";
+import { writeControl, clearControl } from "../engine/control";
+import { EventLog as ControlLog } from "../log/write";
 import { effectiveCwd } from "../engine/executors/worktree";
 
 export interface ServerOpts {
@@ -211,7 +213,7 @@ export function createHowdahServer(opts: ServerOpts) {
         return json({ id: runId }, 202);
       }
 
-      const m = url.pathname.match(/^\/api\/runs(?:\/([^/]+)(?:\/(events|reply|open-ide|resume))?)?$/);
+      const m = url.pathname.match(/^\/api\/runs(?:\/([^/]+)(?:\/(events|reply|open-ide|resume|pause|abort|jump))?)?$/);
       if (!m) {
         // static: /public assets by name, everything else → the app shell
         const asset = url.pathname.replace(/^\//, "");
@@ -253,7 +255,48 @@ export function createHowdahServer(opts: ServerOpts) {
       }
 
       if (sub === "resume" && req.method === "POST") {
+        clearControl(join(opts.runsDir, id));
         spawnResume(id);
+        return json({ ok: true }, 202);
+      }
+
+      if (sub === "pause" && req.method === "POST") {
+        writeControl(join(opts.runsDir, id), "pause");
+        return json({ ok: true, note: "pause lands at the next node boundary" }, 202);
+      }
+
+      if (sub === "abort" && req.method === "POST") {
+        const runDir = join(opts.runsDir, id);
+        writeControl(runDir, "abort");
+        // a live runner aborts at the boundary; a hung/mid-turn one is killed with its agents
+        const pidFile = join(runDir, "runner.pid");
+        if (existsSync(pidFile)) {
+          const pid = Number(readFileSync(pidFile, "utf8").trim());
+          if (pid > 0) {
+            try { process.kill(pid, 0); } catch { pid_dead: {
+              // dead already — fall through to sealing the log
+            } }
+            try {
+              Bun.spawnSync(["pkill", "-TERM", "-P", String(pid)]); // the claude/codex child too
+              process.kill(pid, "SIGTERM");
+              await Bun.sleep(500);
+              try { process.kill(pid, 0); process.kill(pid, "SIGKILL"); } catch { /* gone */ }
+            } catch { /* already dead */ }
+          }
+        }
+        const events = readLog(path);
+        if (!events.some((e) => e.type === "run-finished"))
+          new ControlLog(path).append({ type: "run-finished", outcome: "aborted" });
+        return json({ ok: true });
+      }
+
+      if (sub === "jump" && req.method === "POST") {
+        const body = (await req.json()) as { node?: string; message?: string };
+        if (!body.node) return json({ error: "node required" }, 400);
+        const cli = join(import.meta.dir, "..", "cli", "main.ts");
+        const args = ["bun", cli, "jump", id, body.node, ...(body.message ? [body.message] : [])];
+        const r = Bun.spawnSync(args, { stdout: "pipe", stderr: "pipe", env: { ...process.env } });
+        if (r.exitCode !== 0) return json({ error: new TextDecoder().decode(r.stderr).trim().slice(0, 300) }, 400);
         return json({ ok: true }, 202);
       }
 

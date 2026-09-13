@@ -31,6 +31,9 @@ export interface RunSummary {
   needs_input_reason: string | null;
   /** the most recent failure, kept visible even after its ask was resolved */
   failure: { node: string; visit: number; reason: string | null; at: string } | null;
+  /** paused by the operator (status shows waiting) */
+  paused: boolean;
+  outcome: "success" | "failed" | "aborted" | null;
 }
 
 export interface TimelineRow {
@@ -63,12 +66,13 @@ export interface RunDetail {
   events_seq: number;
 }
 
-export function deriveStatus(events: LoggedEvent[]): { status: RunStatus; ask: RunDetail["ask"]; failure: RunSummary["failure"] } {
+export function deriveStatus(events: LoggedEvent[]): { status: RunStatus; ask: RunDetail["ask"]; failure: RunSummary["failure"]; paused: boolean; outcome: RunSummary["outcome"] } {
   let finished: Extract<LoggedEvent, { type: "run-finished" }> | null = null;
   let ask: RunDetail["ask"] = null;
   let sawStart = false;
   let lastFailed: { node: string; visit: number; at: string } | null = null;
   let failure: RunSummary["failure"] = null;
+  let paused = false;
   for (const e of events) {
     if (e.type === "run-started") sawStart = true;
     else if (e.type === "run-finished") finished = e;
@@ -78,6 +82,8 @@ export function deriveStatus(events: LoggedEvent[]): { status: RunStatus; ask: R
       if (lastFailed && e.node === lastFailed.node && e.visit === lastFailed.visit)
         failure = { node: e.node, visit: e.visit, reason: e.reason, at: e.ts };
     } else if (e.type === "attention-resolved") ask = null;
+    else if (e.type === "run-paused") paused = true;
+    else if (e.type === "run-resumed") paused = false;
     else if (e.type === "node-finished") {
       if (e.status === "failed") {
         lastFailed = { node: e.node, visit: e.visit, at: e.ts };
@@ -86,15 +92,17 @@ export function deriveStatus(events: LoggedEvent[]): { status: RunStatus; ask: R
     } else if (e.type === "node-started") lastFailed = null;
   }
   // needs-input outranks everything except a completed run
-  if (finished) return { status: finished.outcome === "success" ? "done" : "failed-terminal", ask: null, failure };
-  if (ask) return { status: "needs-input", ask, failure };
-  if (!sawStart) return { status: "queued", ask: null, failure };
-  if (lastFailed) return { status: "failed-recoverable", ask: null, failure };
-  return { status: "running", ask: null, failure: null };
+  if (finished)
+    return { status: finished.outcome === "success" ? "done" : "failed-terminal", ask: null, failure, paused: false, outcome: finished.outcome };
+  if (ask) return { status: "needs-input", ask, failure, paused, outcome: null };
+  if (paused) return { status: "waiting", ask: null, failure, paused, outcome: null };
+  if (!sawStart) return { status: "queued", ask: null, failure, paused, outcome: null };
+  if (lastFailed) return { status: "failed-recoverable", ask: null, failure, paused, outcome: null };
+  return { status: "running", ask: null, failure: null, paused, outcome: null };
 }
 
 export function deriveSummary(id: string, events: LoggedEvent[]): RunSummary {
-  const { status, ask, failure } = deriveStatus(events);
+  const { status, ask, failure, paused, outcome } = deriveStatus(events);
   const started = events.find((e) => e.type === "run-started");
   return {
     id,
@@ -106,6 +114,8 @@ export function deriveSummary(id: string, events: LoggedEvent[]): RunSummary {
     waiting_since: ask?.ts ?? null,
     needs_input_reason: ask?.reason ?? null,
     failure,
+    paused,
+    outcome,
   };
 }
 

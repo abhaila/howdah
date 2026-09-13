@@ -128,6 +128,15 @@ export type RunEvent =
       disagreements: string[];
     }
   | { type: "edge-taken"; from: string; to: string; label?: string }
+  | { type: "run-paused"; by: string }
+  | { type: "run-resumed"; by: string }
+  | {
+      /** operator moved the run to a node; the message is injected into that node's next
+       *  prompt as an operator instruction */
+      type: "operator-jump";
+      to: string;
+      message?: string;
+    }
   | { type: "attention-raised"; node: string; visit: number; reason: string; ask?: unknown }
   | { type: "attention-resolved"; node: string; visit: number; reply?: string }
   | {

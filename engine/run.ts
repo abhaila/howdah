@@ -81,11 +81,14 @@ export interface EngineOpts {
   overrides?: AgentConfig;
   /** UI tuning overlay: per-node beats TS node; graph-level beats TS defaults */
   tuning?: { defaults?: AgentConfig; nodes?: Record<string, AgentConfig> };
+  /** operator control, read at every node boundary — pause/abort land between attempts */
+  control?: () => "pause" | "abort" | null;
 }
 
 export type RunState =
   | { state: "finished"; outcome: "success" | "failed" | "aborted" }
-  | { state: "parked"; node: string; reason: string };
+  | { state: "parked"; node: string; reason: string }
+  | { state: "paused"; node: string };
 
 export class EngineError extends Error {}
 
@@ -101,6 +104,8 @@ export class Engine {
   private completedEffects = new Set<string>();
   /** rendered_hash per agent node's latest render — outcome attribution joins here */
   private lastRender = new Map<string, string>();
+  /** operator-jump instruction awaiting the target node's next attempt */
+  private jumpNote: { node: string; message: string } | null = null;
 
   constructor(graph: Graph<any>, opts: EngineOpts) {
     graph.validateOrThrow();
@@ -168,6 +173,8 @@ export class Engine {
 
     // resume() IS the operator action: a standing park is resolved by resuming. Parks whose
     // cause still holds (maxVisits, exhausted conditions) simply re-park deterministically.
+    this.jumpNote = replayed.jumpNote;
+    if (replayed.paused) this.log.append({ type: "run-resumed", by: "operator" });
     if (replayed.parked)
       this.log.append({ type: "attention-resolved", node: replayed.parked.node, visit: replayed.parked.visit, reply: "resume" });
 
@@ -185,6 +192,17 @@ export class Engine {
     for (let step = 0; step < maxSteps; step++) {
       const def = this.graph.def.nodes[current];
       if (!def) throw new EngineError(`unknown node: ${current}`);
+
+      const command = this.opts.control?.() ?? null;
+      if (command === "abort") {
+        this.log.append({ type: "run-finished", outcome: "aborted" });
+        this.attributeTerminal("aborted");
+        return { state: "finished", outcome: "aborted" };
+      }
+      if (command === "pause") {
+        this.log.append({ type: "run-paused", by: "operator" });
+        return { state: "paused", node: current };
+      }
 
       if (def.kind === "terminal") {
         this.log.append({ type: "run-finished", outcome: def.outcome });
@@ -333,6 +351,11 @@ export class Engine {
     const body = m && m[2] !== undefined ? m[2] : raw;
     const version = m && m[1] !== undefined ? Number(m[1].match(/^version:\s*(\d+)\s*$/m)?.[1] ?? 1) : 1;
 
+    let operatorSuffix = "";
+    if (this.jumpNote && this.jumpNote.node === nodeId) {
+      operatorSuffix = `\n\n## Operator instruction\nThe operator moved the run to this step with this instruction — it takes precedence:\n${this.jumpNote.message}`;
+      this.jumpNote = null; // consumed by this attempt
+    }
     const contextRead: Record<string, unknown> = {};
     const rendered = body.replace(
       /\{\{\s*(context|inputs)\.([\w.]+)(?:\s*\|[^}]*)?\s*\}\}/g,
@@ -343,7 +366,8 @@ export class Engine {
         return typeof value === "string" ? value : JSON.stringify(value);
       },
     );
-    const hash = createHash("sha256").update(rendered).digest("hex").slice(0, 16);
+    const finalRendered = rendered + operatorSuffix;
+    const hash = createHash("sha256").update(finalRendered).digest("hex").slice(0, 16);
     this.lastRender.set(nodeId, hash);
     this.log.append({
       type: "prompt-rendered",
@@ -357,7 +381,7 @@ export class Engine {
       model: config?.model,
       effort: config?.effort,
     });
-    return rendered;
+    return finalRendered;
   }
 
   // ---- attribution (A5.3) ------------------------------------------------------

@@ -20,6 +20,7 @@ import { effectiveCwd, readWorktreeRecord } from "../engine/executors/worktree";
 import { GRAPHS, graphCatalog } from "../graphs/index";
 import { howdahHome, loadConfig, saveConfig, resolveWorkspace } from "../config/config";
 import { loadTuning } from "../config/tuning";
+import { readControl, writeControl, clearControl } from "../engine/control";
 
 const base = howdahHome();
 const runsDir = join(base, "runs");
@@ -107,6 +108,7 @@ export async function runCommand(argv: string[]): Promise<string> {
   const engine: Engine = new Engine(graph, {
     dir: runDir, executors: executors(), cwd, folderKind, overrides,
     tuning: loadTuning(base)[graphName!],
+    control: () => readControl(runDir),
     beforeNode: reconcilerHook(runDir, () => engine),
   });
   console.log(`run ${runId} starting (${cwd ?? "no folder"})`);
@@ -135,6 +137,7 @@ export async function resumeCommand(runId: string): Promise<void> {
     cwd: replayed.started.cwd,
     folderKind: replayed.started.folder_kind,
     tuning: loadTuning(base)[replayed.started.graph],
+    control: () => readControl(runDir),
     beforeNode: reconcilerHook(runDir, () => engine),
     probe: async () => "unknown", // ambiguous side effects park for the operator
   });
@@ -154,6 +157,49 @@ export async function resumeCommand(runId: string): Promise<void> {
  * park (if any) has been answered. Parked-and-unanswered runs stay parked — the human is
  * the unblock, not the supervisor.
  */
+export async function jumpCommand(runId: string, node: string, message?: string): Promise<void> {
+  const runDir = join(runsDir, runId);
+  const path = join(runDir, "run.jsonl");
+  if (!existsSync(path)) throw new Error(`unknown run: ${runId}`);
+  if (runnerAlive(runDir)) throw new Error("runner is live — pause or abort first, then jump");
+  const replayed = replayState(readLog(path));
+  if (!replayed.started) throw new Error("empty run");
+  if (replayed.finished) throw new Error(`run already finished (${replayed.finished.outcome})`);
+  const graph = GRAPHS[replayed.started.graph];
+  if (!graph) throw new Error(`unknown graph ${replayed.started.graph}`);
+  const def = graph.def.nodes[node];
+  if (!def) throw new Error(`unknown node "${node}" — have: ${Object.keys(graph.def.nodes).join(", ")}`);
+  if (def.kind === "terminal") throw new Error("cannot jump to a terminal node");
+
+  // precheck: the target's declared reads must be satisfiable from the replayed context,
+  // otherwise the jump is refused with the missing keys named — never a runtime surprise
+  const { ContextStore } = await import("../core/context");
+  const declared = graph.declarations() as Record<string, { scope: any; writer: string[] }>;
+  for (const k of graph.def.inputs) {
+    if (declared[k]) declared[k]!.writer.push("__inputs__");
+    else declared[k] = { scope: "sticky", writer: ["__inputs__"] };
+  }
+  const ctx = new ContextStore(declared as any);
+  ctx.beginAttempt("__inputs__", 0);
+  for (const k of graph.def.inputs) ctx.set(k as never, (replayed.started.inputs as any)[k] as never);
+  ctx.endAttempt("succeeded");
+  for (const f of replayed.finishes) {
+    ctx.beginAttempt(f.node, f.visit);
+    for (const [k, v] of Object.entries(f.writes)) ctx.set(k as never, v as never);
+    ctx.endAttempt(f.status);
+  }
+  const reads: string[] = "reads" in def && def.reads ? def.reads : [];
+  const missing = reads.filter((k) => !ctx.has(k as never));
+  if (missing.length)
+    throw new Error(`cannot jump to "${node}": context missing ${missing.join(", ")} — those writers have not run`);
+
+  new EventLog(path).append({ type: "operator-jump", to: node, message });
+  new AttentionCenter(join(base, "attention"), []).resolve(`${runId}:${replayed.parked?.node}:${replayed.parked?.visit}`);
+  clearControl(runDir);
+  console.log(`jumped ${runId} to ${node}${message ? " with instruction" : ""}; resuming`);
+  await resumeCommand(runId);
+}
+
 export async function upCommand(opts: { intervalMs?: number; once?: boolean } = {}): Promise<void> {
   const interval = opts.intervalMs ?? 5000;
   console.log(`howdah up: supervising ${runsDir}`);
@@ -167,6 +213,7 @@ export async function upCommand(opts: { intervalMs?: number; once?: boolean } = 
         if (!replayed.started || replayed.finished) continue;
         if (runnerAlive(runDir)) continue;
         if (replayed.parked) continue; // awaiting the human; the reply flow resumes it
+        if (replayed.paused || readControl(runDir)) continue; // operator holds it — never auto-resume
         console.log(`resuming dead run ${id}`);
         const child = Bun.spawn(["bun", import.meta.path, "resume", id], {
           env: { ...process.env },
@@ -241,7 +288,10 @@ if (import.meta.main) {
       const ids = existsSync(runsDir) ? readdirSync(runsDir).filter((d) => existsSync(join(runsDir, d, "run.jsonl"))) : [];
       console.log(JSON.stringify(ids));
     } else if (verb === "reply") replyCommand(rest[0] ?? "", rest.slice(1).join(" "));
-    else if (verb === "resume") await resumeCommand(rest[0] ?? "");
+    else if (verb === "resume") { clearControl(join(runsDir, rest[0] ?? "")); await resumeCommand(rest[0] ?? ""); }
+    else if (verb === "pause") { writeControl(join(runsDir, rest[0] ?? ""), "pause"); console.log("pause requested — lands at the next node boundary"); }
+    else if (verb === "abort") { writeControl(join(runsDir, rest[0] ?? ""), "abort"); console.log("abort requested — lands at the next node boundary"); }
+    else if (verb === "jump") await jumpCommand(rest[0] ?? "", rest[1] ?? "", rest.slice(2).join(" ") || undefined);
     else if (verb === "up") await upCommand({ once: rest.includes("--once") });
     else if (verb === "doctor") process.exit((await doctorCommand()) ? 0 : 1);
     else if (verb === "graphs") console.log(JSON.stringify(graphCatalog(), null, 2));
@@ -281,7 +331,7 @@ if (import.meta.main) {
       console.log(`scaffolded ${await newGraph(rest[0] ?? "", kind)}`);
     }
     else {
-      console.error("usage: howdah run|resume|reply|runs|graphs|new-graph|workspace|up|doctor");
+      console.error("usage: howdah run|resume|pause|abort|jump|reply|runs|graphs|new-graph|workspace|up|doctor");
       process.exit(1);
     }
   } catch (err) {

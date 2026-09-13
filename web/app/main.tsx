@@ -138,14 +138,75 @@ function Turn({ turn, render }: { turn: CoalescedTurn; render?: RunDetail["rende
   );
 }
 
-function RunGraph({ graph, timeline }: { graph: string; timeline: RunDetail["timeline"] }) {
+function RunControls({ runId, summary, onAction }: { runId: string; summary: RunDetail["summary"]; onAction: () => void }) {
+  const [confirmAbort, setConfirmAbort] = useState(false);
+  const act = (verb: string) => fetch(`/api/runs/${runId}/${verb}`, { method: "POST" }).then(() => { setConfirmAbort(false); setTimeout(onAction, 300); });
+  const active = ["running", "needs-input", "waiting", "failed-recoverable", "queued"].includes(summary.status);
+  if (!active) return null;
+  return (
+    <span className="run-controls">
+      {summary.paused
+        ? <button className="ctl" onClick={() => act("resume")}>Resume</button>
+        : summary.status === "running" && <button className="ctl" onClick={() => act("pause")}>Pause</button>}
+      {confirmAbort
+        ? <button className="ctl danger" onClick={() => act("abort")}>Really abort?</button>
+        : <button className="ctl" onClick={() => setConfirmAbort(true)}>Abort</button>}
+    </span>
+  );
+}
+
+function RunGraph({ runId, graph, timeline, status, onJumped }: { runId: string; graph: string; timeline: RunDetail["timeline"]; status: string; onJumped: () => void }) {
   const shape = useGraphShape(graph);
+  const [jumpTo, setJumpTo] = useState<string | null>(null);
+  const [message, setMessage] = useState("");
+  const [state, setState] = useState<"idle" | "jumping" | "failed">("idle");
+  const [error, setError] = useState<string | null>(null);
   if (!shape) return <div className="empty">loading graph…</div>;
   const visits: Record<string, number> = {};
   for (const t of timeline) visits[t.node] = Math.max(visits[t.node] ?? 0, t.visit);
   const running = timeline.findLast((t) => t.status === "running");
   const current = running?.node ?? timeline.at(-1)?.node;
-  return <div style={{ paddingTop: 16 }}><GraphDag shape={shape} current={current} visits={visits} /></div>;
+  const jumpable = status !== "done" && status !== "failed-terminal" && status !== "running";
+
+  const jump = async () => {
+    setState("jumping");
+    setError(null);
+    try {
+      const r = await fetch(`/api/runs/${runId}/jump`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ node: jumpTo, message: message || undefined }),
+      });
+      if (!r.ok) throw new Error(((await r.json()) as any).error);
+      setJumpTo(null);
+      setMessage("");
+      setState("idle");
+      setTimeout(onJumped, 500);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setState("failed");
+    }
+  };
+
+  return (
+    <div style={{ paddingTop: 16 }}>
+      <GraphDag shape={shape} current={current} visits={visits} onSelect={jumpable ? setJumpTo : undefined} selected={jumpTo ?? undefined} />
+      {jumpable && !jumpTo && <div className="field-hint" style={{ marginTop: 8 }}>Click an agent node to jump the run there with instructions.</div>}
+      {!jumpable && status === "running" && <div className="field-hint" style={{ marginTop: 8 }}>Pause the run to enable jumping.</div>}
+      {jumpTo && (
+        <div className="ask-card" style={{ marginTop: 12 }}>
+          <h3>Jump to {jumpTo}</h3>
+          <div className="field-hint">Starts a fresh attempt at this node using the current context. Your instruction is injected into its prompt and takes precedence.</div>
+          <textarea value={message} onChange={(e) => setMessage(e.target.value)} placeholder="Instructions for this step (optional)…" />
+          {error && <div className="field-error">{error}</div>}
+          <div className="actions">
+            <button className="primary" onClick={jump} disabled={state === "jumping"}>{state === "jumping" ? "Jumping…" : "Jump here"}</button>
+            <button className="ctl" onClick={() => { setJumpTo(null); setError(null); }}>Cancel</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
 
 function OpenIdeButton({ runId, detail }: { runId: string; detail: RunDetail & { cwd_exists?: boolean; editor_configured?: boolean } }) {
@@ -238,6 +299,7 @@ function RunView({ id }: { id: string }) {
             <button className={`tab ${tab === "thread" ? "active" : ""}`} onClick={() => setTab("thread")}>Thread</button>
             <button className={`tab ${tab === "graph" ? "active" : ""}`} onClick={() => setTab("graph")}>Graph</button>
           </span>
+          <RunControls runId={id} summary={summary} onAction={reload} />
           <OpenIdeButton runId={id} detail={detail} />
         </div>
         {summary.status === "needs-input" && summary.waiting_since && (
@@ -246,7 +308,14 @@ function RunView({ id }: { id: string }) {
             <span className="timer">{fmtWait(summary.waiting_since, now)}</span>
           </div>
         )}
-        {(summary.status === "failed-recoverable" || summary.status === "failed-terminal") && (
+        {summary.paused && (
+          <div className="banner paused">
+            Paused by you — the run holds at the node boundary.
+            <button className="retry" onClick={() => fetch(`/api/runs/${id}/resume`, { method: "POST" }).then(reload)}>Resume</button>
+          </div>
+        )}
+        {summary.outcome === "aborted" && <div className="banner failed">Aborted by you.</div>}
+        {summary.outcome !== "aborted" && (summary.status === "failed-recoverable" || summary.status === "failed-terminal") && (
           <div className="banner failed">
             {summary.failure
               ? <>Failed at {summary.failure.node}@{summary.failure.visit}{summary.failure.reason ? <> — {summary.failure.reason.replace(/^executor threw: /, "")}</> : null}</>
@@ -257,7 +326,7 @@ function RunView({ id }: { id: string }) {
           </div>
         )}
         {tab === "graph" ? (
-          <RunGraph graph={summary.graph} timeline={detail.timeline} />
+          <RunGraph runId={id} graph={summary.graph} timeline={detail.timeline} status={summary.status} onJumped={reload} />
         ) : (
           <>
             {resolvedTurns.map((t) => (
