@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- launchd interval job: the watchdog OUTSIDE the harness (A7.2 / OV-10).
+     Install: cp watchdog/howdah-watchdog.plist ~/Library/LaunchAgents/
+              launchctl load ~/Library/LaunchAgents/howdah-watchdog.plist -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.howdah.watchdog</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/homebrew/bin/bun</string>
+    <string>/Users/areeb/code/howdah/watchdog/check.ts</string>
+  </array>
+  <key>StartInterval</key>
+  <integer>60</integer>
+  <key>StandardOutPath</key>
+  <string>/tmp/howdah-watchdog.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/howdah-watchdog.err</string>
+</dict>
+</plist>

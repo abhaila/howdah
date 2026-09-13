@@ -9,5 +9,5 @@
     "skipLibCheck": true,
     "types": ["bun"]
   },
-  "include": ["core", "reviser", "graphs", "scripts", "prompts", "log", "adapter", "engine"]
+  "include": ["core", "reviser", "graphs", "scripts", "prompts", "log", "adapter", "engine", "watchdog"]
 }
