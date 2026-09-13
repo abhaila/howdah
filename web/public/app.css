@@ -4,12 +4,17 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--fg);
-  font-family: var(--font-mono);
-  font-size: 13px;
+  font-family: var(--font-display); /* the UI speaks Special Gothic… */
+  font-size: 13.5px;
   line-height: 1.55;
 }
-h1, h2, h3, .display { font-family: var(--font-display); font-weight: 400; letter-spacing: 0.01em; }
+h1, h2, h3, .display { font-weight: 400; letter-spacing: 0.01em; }
 a { color: inherit; }
+/* …and JetBrains Mono is reserved for DATA: ids, costs, durations, code, tool output */
+code, pre, .run-meta, .wait-timer, .timer, .kv, .tl-row, .tool-cluster, .tool-detail,
+.prompt-context, .turn .who, .pr-link, .pr-state, .gh-meta, .mono-note, .model-chip, .ws-kind {
+  font-family: var(--font-mono);
+}
 
 .shell { display: flex; min-height: 100vh; }
 
@@ -142,7 +147,7 @@ button.primary:disabled { opacity: 0.5; cursor: default; }
 .empty .mark { width: 56px; height: 56px; color: var(--fg-faint); margin-bottom: 12px; }
 .empty code { background: var(--bg-inset); padding: 2px 6px; border-radius: 4px; }
 
-.theme-toggle { background: none; border: 1px solid var(--border); color: var(--fg-muted); border-radius: var(--radius-sm); padding: 5px 10px; cursor: pointer; font-family: var(--font-mono); font-size: 12px; }
+.theme-toggle { background: none; border: 1px solid var(--border); color: var(--fg-muted); border-radius: var(--radius-sm); padding: 5px 10px; cursor: pointer; font-family: var(--font-display); font-size: 12px; letter-spacing: 0.02em; }
 
 /* start-run form (screen 6) */
 .form-card { background: var(--bg-raised); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px; max-width: 560px; display: flex; flex-direction: column; gap: 12px; }
@@ -171,7 +176,7 @@ button.primary:disabled { opacity: 0.5; cursor: default; }
 .ide-btn {
   background: none; border: 1px solid var(--border-strong); color: var(--fg-muted);
   border-radius: var(--radius-sm); padding: 5px 10px; cursor: pointer;
-  font-family: var(--font-mono); font-size: 12px; text-decoration: none; flex-shrink: 0;
+  font-family: var(--font-display); font-size: 12px; letter-spacing: 0.02em; text-decoration: none; flex-shrink: 0;
 }
 .ide-btn:hover { color: var(--fg); border-color: var(--fg-faint); }
 .ide-btn.disabled { opacity: 0.45; cursor: default; }
@@ -190,7 +195,7 @@ button.primary:disabled { opacity: 0.5; cursor: default; }
 .graphs-layout { display: grid; grid-template-columns: 280px 1fr; gap: 18px; align-items: start; }
 .run-row.selected { border-color: var(--border-strong); background: var(--bg-inset); }
 .tabs { display: flex; gap: 2px; background: var(--bg-inset); border-radius: var(--radius-sm); padding: 2px; }
-.tab { background: none; border: 0; color: var(--fg-muted); font-family: var(--font-mono); font-size: 12px; padding: 4px 12px; border-radius: 5px; cursor: pointer; }
+.tab { background: none; border: 0; color: var(--fg-muted); font-family: var(--font-display); font-size: 12px; letter-spacing: 0.02em; padding: 4px 12px; border-radius: 5px; cursor: pointer; }
 .tab.active { background: var(--bg-raised); color: var(--fg); font-weight: 600; }
 
 /* failure banner + retry (failed runs must say WHY) */
@@ -238,7 +243,7 @@ button.primary:disabled { opacity: 0.5; cursor: default; }
 .ctl {
   background: none; border: 1px solid var(--border-strong); color: var(--fg-muted);
   border-radius: var(--radius-sm); padding: 5px 10px; cursor: pointer;
-  font-family: var(--font-mono); font-size: 12px;
+  font-family: var(--font-display); font-size: 12px; letter-spacing: 0.02em;
 }
 .ctl:hover { color: var(--fg); }
 .ctl.danger { border-color: var(--status-failed-recoverable); color: var(--status-failed-recoverable); font-weight: 600; }
