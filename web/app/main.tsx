@@ -52,7 +52,7 @@ function Mark({ className }: { className?: string }) {
     <svg className={className} viewBox="0 0 64 64" fill="none" aria-label="Howdah">
       <path d="M 52 46 C 57 38 57 24 48 18 L 41 18 L 41 11 L 28 11 L 28 18 L 22 18 C 13 20 9 27 9 33 C 9 41 7 47 11 53 C 13 56 18 56 19 52"
         stroke="currentColor" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round" />
-      <circle cx="21" cy="30" r="3" fill="#f59e0b" />
+      <circle cx="21" cy="30" r="3" fill="#cfac3f" />
     </svg>
   );
 }
@@ -105,7 +105,7 @@ function Splash({ onDone }: { onDone: () => void }) {
           pathLength={100}
           d="M 52 46 C 57 38 57 24 48 18 L 41 18 L 41 11 L 28 11 L 28 18 L 22 18 C 13 20 9 27 9 33 C 9 41 7 47 11 53 C 13 56 18 56 19 52"
           stroke="currentColor" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round" />
-        <circle className="splash-eye" cx="21" cy="30" r="3" fill="#f59e0b" />
+        <circle className="splash-eye" cx="21" cy="30" r="3" fill="#cfac3f" />
       </svg>
       <div className="splash-word">Howdah</div>
     </div>

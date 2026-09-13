@@ -3,8 +3,10 @@
  * dark + light derived from one set; default follows the system).
  *
  * Rules encoded here, not in components:
- *  - AMBER IS RESERVED FOR ATTENTION — never actions. Primary actions are PEACOCK
- *    (deep viridian; Mughal-palette anchor with lapis for running + amber gold attention).
+ *  - Palette: Pigment lead trio (pigment.shapefactory.co, user-picked 2026-09-13):
+ *    #1E8F7D teal-green = ACTIONS · #4B5096 indigo = ACTIVITY · #E0CD84 sand-gold =
+ *    ATTENTION (still the only loud voice — never on buttons). Shades derived per theme
+ *    for contrast; the base hexes appear exactly where the theme allows.
  *  - Special Gothic (single weight) for headings/prose; JetBrains Mono for ids, costs, diffs, dense rows.
  *  - Motion: --ease-out-strong + three durations. Exits use the shorter duration.
  *  - Status enum has one renderer; these are its only colors.
@@ -26,21 +28,21 @@
   --border: #e3e3e8;
   --border-strong: #c9c9d2;
 
-  /* primary actions — peacock (deep viridian) */
-  --primary: #0b7261;
-  --primary-hover: #095e50;
+  /* primary actions — Pigment teal-green */
+  --primary: #1E8F7D;
+  --primary-hover: #177262;
   --primary-fg: #ffffff;
-  --ring: #0b7261;
+  --ring: #1E8F7D;
 
-  /* attention — amber, reserved for "an agent needs you" */
-  --attention: #d97706;      /* amber-600 on light */
-  --attention-fg: #7c2d12;
-  --attention-bg: #fef3c7;
-  --attention-border: #f59e0b;
+  /* attention — sand-gold, reserved for "an agent needs you" (darkened for light bg) */
+  --attention: #9c7c1d;
+  --attention-fg: #5c4a10;
+  --attention-bg: #f6efd3;
+  --attention-border: #c9a94a;
 
   /* status palette (one renderer) */
   --status-queued: #a3a3ae;
-  --status-running: #3947c6;  /* lapis */
+  --status-running: #4B5096;  /* Pigment indigo */
   --status-needs-input: var(--attention);
   --status-waiting: #7c3aed;
   --status-failed-recoverable: #dc2626;
@@ -76,17 +78,17 @@
     --border: #26262c;
     --border-strong: #3a3a42;
 
-    --primary: #2fd4b0;
-    --primary-hover: #26b493;
-    --primary-fg: #052e26;
-    --ring: #2fd4b0;
+    --primary: #2fb89f;
+    --primary-hover: #29a58e;
+    --primary-fg: #04241e;
+    --ring: #2fb89f;
 
-    --attention: #f59e0b;    /* amber-500 on dark */
-    --attention-fg: #fde68a;
-    --attention-bg: #2a1e05;
-    --attention-border: #b45309;
+    --attention: #E0CD84;    /* the sand-gold, exact, sings on dark */
+    --attention-fg: #f2e8c4;
+    --attention-bg: #292310;
+    --attention-border: #a38a3e;
 
-    --status-running: #7c8cff;  /* lapis, dark */
+    --status-running: #8f94d9;  /* Pigment indigo, lifted for dark */
     --status-waiting: #a78bfa;
     --status-failed-recoverable: #f87171;
     --status-failed-terminal: #dc2626;
@@ -109,17 +111,17 @@
   --border: #26262c;
   --border-strong: #3a3a42;
 
-  --primary: #2fd4b0;
-  --primary-hover: #26b493;
-  --primary-fg: #052e26;
-  --ring: #2fd4b0;
+  --primary: #2fb89f;
+  --primary-hover: #29a58e;
+  --primary-fg: #04241e;
+  --ring: #2fb89f;
 
-  --attention: #f59e0b;
-  --attention-fg: #fde68a;
-  --attention-bg: #2a1e05;
-  --attention-border: #b45309;
+  --attention: #E0CD84;
+  --attention-fg: #f2e8c4;
+  --attention-bg: #292310;
+  --attention-border: #a38a3e;
 
-  --status-running: #7c8cff;  /* lapis, dark */
+  --status-running: #8f94d9;  /* Pigment indigo, lifted for dark */
   --status-waiting: #a78bfa;
   --status-failed-recoverable: #f87171;
   --status-failed-terminal: #dc2626;
