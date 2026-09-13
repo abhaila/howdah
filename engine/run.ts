@@ -79,6 +79,8 @@ export interface EngineOpts {
   beforeNode?: (nodeId: string, def: NodeDef<any>) => Promise<void>;
   /** run-level agent overrides — beat node settings, which beat graph defaults */
   overrides?: AgentConfig;
+  /** UI tuning overlay: per-node beats TS node; graph-level beats TS defaults */
+  tuning?: { defaults?: AgentConfig; nodes?: Record<string, AgentConfig> };
 }
 
 export type RunState =
@@ -237,7 +239,7 @@ export class Engine {
     let renderedPrompt: string | undefined;
     let agentConfig: AgentConfig | undefined;
     if (def.kind === "agent") {
-      agentConfig = this.resolveAgentConfig(def);
+      agentConfig = this.resolveAgentConfig(def, nodeId);
       renderedPrompt = this.renderPrompt(nodeId, def.prompt, visit, reads, agentConfig);
     }
 
@@ -303,15 +305,18 @@ export class Engine {
     return pinned;
   }
 
-  /** Orbital's resolution order, kept: run override → node setting → graph default. */
-  private resolveAgentConfig(def: Extract<NodeDef<any>, { kind: "agent" }>): AgentConfig {
+  /** run override → UI node tuning → TS node → UI graph tuning → TS graph default */
+  private resolveAgentConfig(def: Extract<NodeDef<any>, { kind: "agent" }>, nodeId: string): AgentConfig {
     const defaults = this.graph.def.defaults ?? {};
     const node: AgentConfig = {
       harness: def.harness, model: def.model, effort: def.effort,
       permissionMode: def.permissionMode, maxTurns: def.maxTurns, skills: def.skills,
     };
     const overrides = this.opts.overrides ?? {};
-    const pick = <K extends keyof AgentConfig>(k: K): AgentConfig[K] => overrides[k] ?? node[k] ?? defaults[k];
+    const tunedNode = this.opts.tuning?.nodes?.[nodeId] ?? {};
+    const tunedDefaults = this.opts.tuning?.defaults ?? {};
+    const pick = <K extends keyof AgentConfig>(k: K): AgentConfig[K] =>
+      overrides[k] ?? tunedNode[k] ?? node[k] ?? tunedDefaults[k] ?? defaults[k];
     return {
       harness: pick("harness") ?? "claude",
       model: pick("model"),

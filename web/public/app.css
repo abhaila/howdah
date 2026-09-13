@@ -221,3 +221,14 @@ button.primary:disabled { opacity: 0.5; cursor: default; }
 .gh-add { padding: 3px 10px; font-size: 12px; }
 .gh-added { color: var(--status-done); font-weight: 700; }
 .linkish { text-decoration: underline; cursor: pointer; }
+
+/* graph tuner (UI-editable node config) */
+.dag-node.clickable { cursor: pointer; }
+.dag-node.clickable:hover rect { stroke: var(--fg-muted); }
+.dag-node.selected rect { stroke: var(--status-running); stroke-width: 2; }
+.dag-tuned { fill: var(--status-waiting); }
+.tuner { display: flex; flex-direction: column; gap: 14px; }
+.tuner-panels { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; align-items: start; }
+.tuner-card { max-width: none; gap: 8px; }
+.tuner-card h3 { margin: 0; font-size: 14px; }
+.tuner-save { display: flex; align-items: center; gap: 10px; }

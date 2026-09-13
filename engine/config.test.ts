@@ -72,3 +72,41 @@ describe("per-node agent config (T17)", () => {
     expect(seen[1].effort).toBe("xhigh"); // untouched fields still resolve per node
   });
 });
+
+describe("UI tuning overlay", () => {
+  test("resolution: run override → node tuning → TS node → graph tuning → TS default", async () => {
+    const seen: any[] = [];
+    const make = (opts: any = {}) =>
+      new Engine(graph(), {
+        dir: mkdtempSync(join(tmpdir(), "howdah-tune-")),
+        promptsDir: prompts(),
+        ...opts,
+        executors: {
+          agent: async ({ nodeId, agentConfig }) => {
+            seen.push({ nodeId, ...agentConfig });
+            return { status: "succeeded", writes: nodeId === "one" ? { a: "x" } : { b: "y" } };
+          },
+        },
+      });
+
+    // node tuning beats the TS node's own model; graph tuning beats TS defaults
+    await make({
+      tuning: {
+        defaults: { effort: "low" },
+        nodes: { one: { model: "tuned-model", permissionMode: "manual" } },
+      },
+    }).start({ goal: "g" });
+    // graph-level tuning beats the TS graph default (effort low, not medium)…
+    expect(seen[0]).toMatchObject({ nodeId: "one", model: "tuned-model", permissionMode: "manual", effort: "low" });
+    // …but an explicit TS node setting survives graph-level tuning (two keeps its xhigh)
+    expect(seen[1]).toMatchObject({ nodeId: "two", effort: "xhigh", model: "graph-default-model" });
+    seen.length = 0;
+
+    // run override still beats node tuning
+    await make({
+      tuning: { nodes: { one: { model: "tuned-model" } } },
+      overrides: { model: "run-model" },
+    }).start({ goal: "g" });
+    expect(seen[0]!.model).toBe("run-model");
+  });
+});

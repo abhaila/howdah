@@ -19,6 +19,7 @@ import { Reconciler, readsForgeFacts } from "../engine/reconcile";
 import { effectiveCwd, readWorktreeRecord } from "../engine/executors/worktree";
 import { GRAPHS, graphCatalog } from "../graphs/index";
 import { howdahHome, loadConfig, saveConfig, resolveWorkspace } from "../config/config";
+import { loadTuning } from "../config/tuning";
 
 const base = howdahHome();
 const runsDir = join(base, "runs");
@@ -105,6 +106,7 @@ export async function runCommand(argv: string[]): Promise<string> {
   const runDir = join(runsDir, runId);
   const engine: Engine = new Engine(graph, {
     dir: runDir, executors: executors(), cwd, folderKind, overrides,
+    tuning: loadTuning(base)[graphName!],
     beforeNode: reconcilerHook(runDir, () => engine),
   });
   console.log(`run ${runId} starting (${cwd ?? "no folder"})`);
@@ -132,6 +134,7 @@ export async function resumeCommand(runId: string): Promise<void> {
     executors: executors(),
     cwd: replayed.started.cwd,
     folderKind: replayed.started.folder_kind,
+    tuning: loadTuning(base)[replayed.started.graph],
     beforeNode: reconcilerHook(runDir, () => engine),
     probe: async () => "unknown", // ambiguous side effects park for the operator
   });

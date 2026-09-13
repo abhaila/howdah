@@ -6,11 +6,27 @@
  */
 import { useEffect, useState } from "react";
 
+export interface AgentConfigDto {
+  harness?: string;
+  model?: string;
+  effort?: string;
+  permissionMode?: string;
+  maxTurns?: number;
+  skills?: string[];
+}
+
 export interface GraphShapeDto {
   name: string;
   description: string;
   entry: string;
-  nodes: Array<{ id: string; kind: string; class?: string; prompt?: string; run?: string; model?: string; harness?: string; effort?: string; maxVisits?: number; outcome?: string; duration?: string }>;
+  inputs?: string[];
+  defaults?: AgentConfigDto;
+  tuning?: { defaults?: AgentConfigDto; nodes?: Record<string, AgentConfigDto> };
+  nodes: Array<{
+    id: string; kind: string; class?: string; prompt?: string; run?: string;
+    model?: string; harness?: string; effort?: string; maxVisits?: number; outcome?: string; duration?: string;
+    baseline?: AgentConfigDto; node_tuning?: AgentConfigDto; effective?: AgentConfigDto;
+  }>;
   edges: Array<{ from: string; to: string; label?: string; weight?: number }>;
 }
 
@@ -44,7 +60,7 @@ function layout(shape: GraphShapeDto): Map<string, { x: number; y: number }> {
   return pos;
 }
 
-export function GraphDag({ shape, current, visits }: { shape: GraphShapeDto; current?: string; visits?: Record<string, number> }) {
+export function GraphDag({ shape, current, visits, onSelect, selected }: { shape: GraphShapeDto; current?: string; visits?: Record<string, number>; onSelect?: (id: string) => void; selected?: string }) {
   const pos = layout(shape);
   const width = Math.max(...[...pos.values()].map((p) => p.x)) + 230;
   const height = Math.max(...[...pos.values()].map((p) => p.y)) + 90;
@@ -82,7 +98,12 @@ export function GraphDag({ shape, current, visits }: { shape: GraphShapeDto; cur
           const isCurrent = n.id === current;
           const v = visits?.[n.id];
           return (
-            <g key={n.id} transform={`translate(${p.x}, ${p.y})`} className={`dag-node ${isCurrent ? "current" : ""} kind-${n.kind}`}>
+            <g
+              key={n.id}
+              transform={`translate(${p.x}, ${p.y})`}
+              className={`dag-node ${isCurrent ? "current" : ""} ${selected === n.id ? "selected" : ""} ${onSelect && n.kind === "agent" ? "clickable" : ""} kind-${n.kind}`}
+              onClick={() => n.kind === "agent" && onSelect?.(n.id)}
+            >
               <rect width="180" height="52" rx="9" />
               <text x="12" y="21" className="dag-title">
                 {KIND_GLYPH[n.kind] ?? "?"} {n.id.length > 20 ? n.id.slice(0, 19) + "…" : n.id}
@@ -94,6 +115,7 @@ export function GraphDag({ shape, current, visits }: { shape: GraphShapeDto; cur
                  n.kind === "terminal" ? (n.outcome ?? "") : n.kind}
               </text>
               {v !== undefined && v > 0 && <g><rect x="150" y="-9" width="30" height="18" rx="9" className="dag-visits" /><text x="165" y="4" textAnchor="middle" className="dag-visits-text">×{v}</text></g>}
+              {n.node_tuning && <circle cx="8" cy="8" r="3.5" className="dag-tuned" />}
             </g>
           );
         })}

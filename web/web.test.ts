@@ -322,3 +322,36 @@ describe("workspace registration (repo-picker gap)", () => {
     }
   });
 });
+
+describe("graph tuning API", () => {
+  test("PUT round-trips, rejects unknown nodes, prunes empties, and effective values shift", async () => {
+    const base = mkdtempSync(join(tmpdir(), "howdah-tuneapi-"));
+    mkdirSync(join(base, "runs"), { recursive: true });
+    process.env.HOWDAH_HOME = base;
+    const server = createHowdahServer({ runsDir: join(base, "runs"), attentionDir: join(base, "attention"), port: 0 });
+    const url = (p: string) => `http://localhost:${server.port}${p}`;
+    try {
+      const put = (body: unknown) => fetch(url("/api/graphs/write-doc/tuning"), { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+
+      // unknown node refused — a typo must not silently no-op
+      expect((await put({ nodes: { "doc.ghost": { model: "x" } } })).status).toBe(400);
+
+      // tune one node + graph defaults
+      expect((await put({ defaults: { effort: "low" }, nodes: { "doc.draft": { model: "claude-opus-5", effort: "" } } })).status).toBe(200);
+      const shape = (await (await fetch(url("/api/graphs/write-doc"))).json()) as any;
+      const draft = shape.nodes.find((n: any) => n.id === "doc.draft");
+      expect(draft.node_tuning).toEqual({ model: "claude-opus-5" }); // empty effort pruned
+      expect(draft.effective).toMatchObject({ model: "claude-opus-5", effort: "low" });
+      const review = shape.nodes.find((n: any) => n.id === "doc.review");
+      expect(review.effective).toMatchObject({ effort: "low" }); // graph tuning reaches untouched nodes
+      expect(review.node_tuning).toBeUndefined();
+
+      // clearing everything removes the overlay entirely
+      expect((await put({})).status).toBe(200);
+      const after = (await (await fetch(url("/api/graphs/write-doc"))).json()) as any;
+      expect(after.tuning).toEqual({});
+    } finally {
+      server.stop(true);
+    }
+  });
+});

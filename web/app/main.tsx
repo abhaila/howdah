@@ -7,7 +7,7 @@ import { createRoot } from "react-dom/client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { RunDetail, RunSummary, RunStatus } from "../derive";
 import type { CoalescedTurn } from "../../log/coalesce";
-import { GraphDag, useGraphShape } from "./graph-dag";
+import { GraphDag, useGraphShape, type GraphShapeDto, type AgentConfigDto } from "./graph-dag";
 
 // ---- shared bits ---------------------------------------------------------------
 
@@ -551,13 +551,117 @@ function StartRun() {
 
 
 
+
+// ---- graph tuning editor (UI-editable per-node config) ----------------------------
+
+const EFFORTS = ["", "low", "medium", "high", "xhigh"];
+const PERMISSION_MODES = ["", "manual", "acceptEdits", "auto", "bypassPermissions", "dontAsk", "plan"];
+const MODEL_SUGGESTIONS = ["claude-opus-5", "claude-sonnet-5", "haiku", "gpt-5.3-codex"];
+
+function ConfigFields({ value, baseline, onChange }: { value: AgentConfigDto; baseline?: AgentConfigDto; onChange: (v: AgentConfigDto) => void }) {
+  const ph = (k: keyof AgentConfigDto, fallback: string) => {
+    const b = baseline?.[k];
+    return b !== undefined && b !== null && String(b) !== "" ? `inherits: ${Array.isArray(b) ? b.join(", ") : b}` : fallback;
+  };
+  return (
+    <>
+      <label className="field">
+        <span>Harness</span>
+        <select value={value.harness ?? ""} onChange={(e) => onChange({ ...value, harness: e.target.value || undefined })}>
+          <option value="">{ph("harness", "inherit (claude)")}</option>
+          <option value="claude">claude</option>
+          <option value="codex">codex</option>
+        </select>
+      </label>
+      <label className="field">
+        <span>Model</span>
+        <input list="model-suggestions" value={value.model ?? ""} placeholder={ph("model", "harness default")} onChange={(e) => onChange({ ...value, model: e.target.value || undefined })} />
+        <datalist id="model-suggestions">{MODEL_SUGGESTIONS.map((m) => <option key={m} value={m} />)}</datalist>
+      </label>
+      <label className="field">
+        <span>Effort</span>
+        <select value={value.effort ?? ""} onChange={(e) => onChange({ ...value, effort: (e.target.value || undefined) as any })}>
+          {EFFORTS.map((x) => <option key={x} value={x}>{x || ph("effort", "inherit")}</option>)}
+        </select>
+      </label>
+      <label className="field">
+        <span>Permission mode</span>
+        <select value={value.permissionMode ?? ""} onChange={(e) => onChange({ ...value, permissionMode: (e.target.value || undefined) as any })}>
+          {PERMISSION_MODES.map((x) => <option key={x} value={x}>{x || ph("permissionMode", "inherit")}</option>)}
+        </select>
+      </label>
+      <label className="field">
+        <span>Max turns</span>
+        <input type="number" min="1" value={value.maxTurns ?? ""} placeholder={ph("maxTurns", "unlimited")} onChange={(e) => onChange({ ...value, maxTurns: e.target.value ? Number(e.target.value) : undefined })} />
+      </label>
+      <label className="field">
+        <span>Skills (comma-separated)</span>
+        <input value={(value.skills ?? []).join(", ")} placeholder={ph("skills", "none")} onChange={(e) => onChange({ ...value, skills: e.target.value ? e.target.value.split(",").map((x) => x.trim()).filter(Boolean) : undefined })} />
+      </label>
+    </>
+  );
+}
+
+function GraphTuner({ shape, onSaved }: { shape: GraphShapeDto; onSaved: () => void }) {
+  const [selectedNode, setSelectedNode] = useState<string | null>(null);
+  const [tuning, setTuning] = useState<{ defaults?: AgentConfigDto; nodes?: Record<string, AgentConfigDto> }>(shape.tuning ?? {});
+  const [dirty, setDirty] = useState(false);
+  const [state, setState] = useState<"idle" | "saving" | "saved" | "failed">("idle");
+  useEffect(() => { setTuning(shape.tuning ?? {}); setDirty(false); setSelectedNode(null); }, [shape.name]);
+
+  const node = shape.nodes.find((n) => n.id === selectedNode);
+  const setNodeCfg = (id: string, v: AgentConfigDto) => { setTuning({ ...tuning, nodes: { ...tuning.nodes, [id]: v } }); setDirty(true); };
+  const save = async () => {
+    setState("saving");
+    try {
+      const r = await fetch(`/api/graphs/${shape.name}/tuning`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(tuning) });
+      if (!r.ok) throw new Error(((await r.json()) as any).error);
+      setState("saved");
+      setDirty(false);
+      onSaved();
+      setTimeout(() => setState("idle"), 1500);
+    } catch { setState("failed"); }
+  };
+
+  return (
+    <div className="tuner">
+      <GraphDag shape={shape} onSelect={setSelectedNode} selected={selectedNode ?? undefined} />
+      <div className="tuner-panels">
+        <div className="form-card tuner-card">
+          <h3>Graph defaults</h3>
+          <div className="field-hint">Applies to every agent node unless the node sets its own. Cleared fields fall back to the graph file.</div>
+          <ConfigFields value={tuning.defaults ?? {}} baseline={shape.defaults} onChange={(v) => { setTuning({ ...tuning, defaults: v }); setDirty(true); }} />
+        </div>
+        <div className="form-card tuner-card">
+          {node?.kind === "agent" ? (
+            <>
+              <h3>{node.id}</h3>
+              <div className="field-hint">prompt: {node.prompt} · effective now: {node.effective?.harness}{node.effective?.model ? ` · ${node.effective.model}` : ""}{node.effective?.effort ? ` · ${node.effective.effort}` : ""}{node.effective?.permissionMode ? ` · ${node.effective.permissionMode}` : ""}</div>
+              <ConfigFields value={tuning.nodes?.[node.id] ?? {}} baseline={node.baseline} onChange={(v) => setNodeCfg(node.id, v)} />
+            </>
+          ) : (
+            <div className="field-hint">Click an agent node (◆) in the graph to tune it.</div>
+          )}
+        </div>
+      </div>
+      <div className="tuner-save">
+        <button className="primary" onClick={save} disabled={!dirty || state === "saving"}>
+          {state === "saving" ? "Saving…" : state === "saved" ? "Saved — applies to new runs" : state === "failed" ? "Failed — retry" : "Save tuning"}
+        </button>
+        {dirty && <span className="field-hint">unsaved changes</span>}
+      </div>
+    </div>
+  );
+}
+
 // ---- graphs screen (T20) ---------------------------------------------------------
 
 function GraphsList() {
   const [graphs, setGraphs] = useState<Array<{ name: string; description: string; kind: string }>>([]);
   const [selected, setSelected] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
   useEffect(() => { fetch("/api/graphs").then((r) => r.json()).then(setGraphs).catch(() => {}); }, []);
-  const shape = useGraphShape(selected ?? undefined);
+  const shape = useGraphShape(selected ? `${selected}?v=${reloadKey}` as any : undefined);
   return (
     <div className="runs" style={{ maxWidth: 1100 }}>
       <h1>Graphs</h1>
@@ -574,7 +678,7 @@ function GraphsList() {
           </div>
         </div>
         <div>
-          {shape ? <><div className="field-hint" style={{ marginBottom: 8 }}>{shape.description}</div><GraphDag shape={shape} /></> : <div className="empty">select a graph</div>}
+          {shape ? <><div className="field-hint" style={{ marginBottom: 8 }}>{shape.description}</div><GraphTuner shape={shape} onSaved={() => setReloadKey((k) => k + 1)} /></> : <div className="empty">select a graph</div>}
         </div>
       </div>
     </div>

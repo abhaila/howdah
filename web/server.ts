@@ -20,6 +20,7 @@ import { AttentionCenter } from "../engine/attention";
 import { graphCatalog, GRAPHS } from "../graphs/index";
 import { loadConfig, saveConfig } from "../config/config";
 import { listGithubRepos, registerGithubRepo } from "../config/github";
+import { loadTuning, saveTuning, pruneTuning } from "../config/tuning";
 import { effectiveCwd } from "../engine/executors/worktree";
 
 export interface ServerOpts {
@@ -62,25 +63,58 @@ export function createHowdahServer(opts: ServerOpts) {
       const url = new URL(req.url);
 
       if (url.pathname === "/api/graphs") return json(graphCatalog());
-      const gm = url.pathname.match(/^\/api\/graphs\/([^/]+)$/);
+      const gm = url.pathname.match(/^\/api\/graphs\/([^/]+)(\/tuning)?$/);
       if (gm) {
         const g = GRAPHS[gm[1]!];
         if (!g) return json({ error: "unknown graph" }, 404);
+
+        if (gm[2] === "/tuning" && req.method === "PUT") {
+          const body = pruneTuning((await req.json()) as any);
+          // only real node ids may be tuned — a typo must not silently no-op
+          for (const id of Object.keys(body.nodes ?? {}))
+            if (!g.def.nodes[id]) return json({ error: `unknown node "${id}"` }, 400);
+          const all = loadTuning();
+          if (Object.keys(body).length === 0) delete all[g.def.name];
+          else all[g.def.name] = body;
+          saveTuning(all);
+          return json({ ok: true, tuning: body });
+        }
+
+        const tuning = loadTuning()[g.def.name] ?? {};
+        const tsDefaults = g.def.defaults ?? {};
+        const effectiveOf = (id: string, n: (typeof g.def.nodes)[string]) => {
+          if (n.kind !== "agent") return undefined;
+          const base = { harness: n.harness, model: n.model, effort: n.effort, permissionMode: n.permissionMode, maxTurns: n.maxTurns, skills: n.skills };
+          const tn = tuning.nodes?.[id] ?? {};
+          const td = tuning.defaults ?? {};
+          const pick = (k: keyof typeof base) => (tn as any)[k] ?? (base as any)[k] ?? (td as any)[k] ?? (tsDefaults as any)[k];
+          return {
+            harness: pick("harness") ?? "claude", model: pick("model"), effort: pick("effort"),
+            permissionMode: pick("permissionMode"), maxTurns: pick("maxTurns"), skills: pick("skills"),
+          };
+        };
         return json({
           name: g.def.name,
           description: g.def.description ?? "",
           entry: g.def.entry,
           inputs: g.def.inputs,
-          defaults: g.def.defaults ?? {},
+          defaults: tsDefaults,
+          tuning,
           nodes: Object.entries(g.def.nodes).map(([id, n]) => ({
             id,
             kind: n.kind,
             class: "class" in n ? n.class : undefined,
             prompt: n.kind === "agent" ? n.prompt : undefined,
             run: n.kind === "command" ? n.run : undefined,
-            harness: n.kind === "agent" ? n.harness : undefined,
-            model: n.kind === "agent" ? n.model : undefined,
-            effort: n.kind === "agent" ? n.effort : undefined,
+            baseline: n.kind === "agent"
+              ? { harness: n.harness, model: n.model, effort: n.effort, permissionMode: n.permissionMode, maxTurns: n.maxTurns, skills: n.skills }
+              : undefined,
+            node_tuning: tuning.nodes?.[id],
+            effective: effectiveOf(id, n),
+            // effective values drive the DAG subtitles
+            harness: effectiveOf(id, n)?.harness,
+            model: effectiveOf(id, n)?.model,
+            effort: effectiveOf(id, n)?.effort,
             maxVisits: "maxVisits" in n ? n.maxVisits : undefined,
             outcome: n.kind === "terminal" ? n.outcome : undefined,
             duration: n.kind === "wait" ? n.duration : undefined,
