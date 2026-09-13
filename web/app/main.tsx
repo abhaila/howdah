@@ -3,7 +3,14 @@
  * (deep-linkable, `#needs-input` focuses the reply). Live via SSE. Served pre-bundled
  * as /app.js (bun build web/app/main.tsx — see web/server.ts startup).
  */
+import "./globals.css";
 import { createRoot } from "react-dom/client";
+import { Button, Card, CardContent, CardDescription, CardHeader, CardTitle, Input, Label, Select, Tabs, Textarea, Badge } from "./ui";
+import {
+  Rows3, Plus, Workflow, Settings as SettingsIcon, Play, Pause, OctagonX, RotateCcw, Send,
+  ExternalLink, GitBranch, GitPullRequest, Clock, Coins, Pin, Fingerprint, MessagesSquare,
+  CornerDownRight, FolderGit2, X,
+} from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { RunDetail, RunSummary, RunStatus } from "../derive";
 import type { CoalescedTurn } from "../../log/coalesce";
@@ -184,11 +191,11 @@ function RunControls({ runId, summary, onAction }: { runId: string; summary: Run
   return (
     <span className="run-controls">
       {summary.paused
-        ? <button className="ctl" onClick={() => act("resume")}>Resume</button>
-        : summary.status === "running" && <button className="ctl" onClick={() => act("pause")}>Pause</button>}
+        ? <Button variant="outline" size="sm" onClick={() => act("resume")}><Play />Resume</Button>
+        : summary.status === "running" && <Button variant="outline" size="sm" onClick={() => act("pause")}><Pause />Pause</Button>}
       {confirmAbort
-        ? <button className="ctl danger" onClick={() => act("abort")}>Really abort?</button>
-        : <button className="ctl" onClick={() => setConfirmAbort(true)}>Abort</button>}
+        ? <Button variant="destructive" size="sm" onClick={() => act("abort")}><OctagonX />Really abort?</Button>
+        : <Button variant="outline" size="sm" onClick={() => setConfirmAbort(true)}><OctagonX />Abort</Button>}
     </span>
   );
 }
@@ -232,11 +239,11 @@ function RunGraph({ runId, graph, timeline, status, onJumped }: { runId: string;
         <div className="ask-card jump-card" style={{ marginBottom: 12 }}>
           <h3>Jump to {jumpTo}</h3>
           <div className="field-hint">Starts a fresh attempt at this node using the current context. Your instruction is injected into its prompt and takes precedence.</div>
-          <textarea autoFocus value={message} onChange={(e) => setMessage(e.target.value)} placeholder="Instructions for this step (optional)…" />
+          <Textarea autoFocus value={message} onChange={(e) => setMessage(e.target.value)} placeholder="Instructions for this step (optional)…" />
           {error && <div className="field-error">{error}</div>}
           <div className="actions">
-            <button className="primary" onClick={jump} disabled={state === "jumping"}>{state === "jumping" ? "Jumping…" : "Jump here"}</button>
-            <button className="ctl" onClick={() => { setJumpTo(null); setError(null); }}>Cancel</button>
+            <Button onClick={jump} disabled={state === "jumping"}><CornerDownRight />{state === "jumping" ? "Jumping…" : "Jump here"}</Button>
+            <Button variant="outline" size="sm" onClick={() => { setJumpTo(null); setError(null); }}><X />Cancel</Button>
           </div>
         </div>
       )}
@@ -252,13 +259,13 @@ function OpenIdeButton({ runId, detail }: { runId: string; detail: RunDetail & {
   // worktrees; unconfigured routes to Settings
   if (!detail.identity.cwd) return null;
   if (!detail.editor_configured)
-    return <a className="ide-btn" href="/settings" title="No editor configured">Open in IDE…</a>;
+    return <a href="/settings" title="No editor configured"><Button variant="outline" size="sm"><ExternalLink />Open in IDE…</Button></a>;
   if (!detail.cwd_exists)
-    return <span className="ide-btn disabled" title="Folder is gone — worktree was cleaned">Open in IDE</span>;
+    return <Button variant="outline" size="sm" disabled title="Folder is gone — worktree was cleaned"><ExternalLink />Open in IDE</Button>;
   return (
-    <button className="ide-btn" onClick={() => fetch(`/api/runs/${runId}/open-ide`, { method: "POST" })}>
-      Open in IDE
-    </button>
+    <Button variant="outline" size="sm" onClick={() => fetch(`/api/runs/${runId}/open-ide`, { method: "POST" })}>
+      <ExternalLink />Open in IDE
+    </Button>
   );
 }
 
@@ -288,11 +295,11 @@ function AskCard({ runId, ask, onResolved }: { runId: string; ask: NonNullable<R
     <div className={`ask-card ${state === "delivered" ? "collapsing" : ""}`} id="needs-input">
       <h3>Needs you — {ask.node}@{ask.visit}</h3>
       <div>{ask.reason}</div>
-      <textarea ref={ref} value={text} onChange={(e) => setText(e.target.value)} placeholder="Your reply…" disabled={state === "sending" || state === "delivered"} />
+      <Textarea ref={ref} value={text} onChange={(e) => setText(e.target.value)} placeholder="Your reply…" disabled={state === "sending" || state === "delivered"} />
       <div className="actions">
-        <button className="primary" onClick={send} disabled={state === "sending" || state === "delivered"}>
-          {state === "sending" ? "Sending…" : state === "delivered" ? "Delivered" : "Reply"}
-        </button>
+        <Button onClick={send} disabled={state === "sending" || state === "delivered"}>
+          <Send />{state === "sending" ? "Sending…" : state === "delivered" ? "Delivered" : "Reply"}
+        </Button>
         {state === "failed" && <span className="send-state">failed — <a onClick={send} style={{ cursor: "pointer", textDecoration: "underline" }}>retry</a></span>}
       </div>
     </div>
@@ -333,10 +340,14 @@ function RunView({ id }: { id: string }) {
           <h1>{summary.goal || id}</h1>
           <StatusBadge status={summary.status} />
           <span className="meta">{summary.graph}</span>
-          <span className="tabs">
-            <button className={`tab ${tab === "thread" ? "active" : ""}`} onClick={() => setTab("thread")}>Thread</button>
-            <button className={`tab ${tab === "graph" ? "active" : ""}`} onClick={() => setTab("graph")}>Graph</button>
-          </span>
+          <Tabs
+            value={tab}
+            onValueChange={(v) => setTab(v as "thread" | "graph")}
+            items={[
+              { value: "thread", label: "Thread", icon: <MessagesSquare /> },
+              { value: "graph", label: "Graph", icon: <Workflow /> },
+            ]}
+          />
           <RunControls runId={id} summary={summary} onAction={reload} />
           <OpenIdeButton runId={id} detail={detail} />
         </div>
@@ -349,7 +360,7 @@ function RunView({ id }: { id: string }) {
         {summary.paused && (
           <div className="banner paused">
             Paused by you — the run holds at the node boundary.
-            <button className="retry" onClick={() => fetch(`/api/runs/${id}/resume`, { method: "POST" }).then(reload)}>Resume</button>
+            <Button size="sm" className="ml-auto bg-[var(--status-waiting)]" onClick={() => fetch(`/api/runs/${id}/resume`, { method: "POST" }).then(reload)}><Play />Resume</Button>
           </div>
         )}
         {summary.outcome === "aborted" && <div className="banner failed">Aborted by you.</div>}
@@ -359,7 +370,7 @@ function RunView({ id }: { id: string }) {
               ? <>Failed at {summary.failure.node}@{summary.failure.visit}{summary.failure.reason ? <> — {summary.failure.reason.replace(/^executor threw: /, "")}</> : null}</>
               : <>Run failed — see the last thread entry</>}
             {summary.status === "failed-recoverable" && (
-              <button className="retry" onClick={() => fetch(`/api/runs/${id}/resume`, { method: "POST" }).then(reload)}>Retry</button>
+              <Button variant="destructive" size="sm" className="ml-auto" onClick={() => fetch(`/api/runs/${id}/resume`, { method: "POST" }).then(reload)}><RotateCcw />Retry</Button>
             )}
           </div>
         )}
@@ -378,7 +389,7 @@ function RunView({ id }: { id: string }) {
 
       <div className="rail">
         <section>
-          <h2>Identity</h2>
+          <h2><Fingerprint size={12} /> Identity</h2>
           <div className="kv"><span className="k">run</span><span>{id}</span></div>
           <div className="kv"><span className="k">graph</span><span>{summary.graph}</span></div>
           {detail.identity.cwd && <div className="kv"><span className="k">{detail.identity.folder_kind === "repo" ? "repo" : "folder"}</span><span className="path" title={detail.identity.cwd}>{detail.identity.cwd.split("/").slice(-2).join("/")}</span></div>}
@@ -386,7 +397,7 @@ function RunView({ id }: { id: string }) {
         </section>
         {detail.identity.folder_kind === "repo" && (
           <section>
-            <h2>Git</h2>
+            <h2><GitBranch size={12} /> Git</h2>
             {detail.git ? (
               <>
                 <div className="kv"><span className="k">observed branch</span><span>{detail.git.git.branch ?? "—"}</span></div>
@@ -403,17 +414,17 @@ function RunView({ id }: { id: string }) {
         )}
         {detail.pull_requests.length > 0 && (
           <section>
-            <h2>Pull requests</h2>
+            <h2><GitPullRequest size={12} /> Pull requests</h2>
             {detail.pull_requests.map((pr) => (
               <div key={pr.url} className="kv">
                 <a href={pr.url} target="_blank" rel="noreferrer" className="pr-link">{pr.url.replace(/^https:\/\/github\.com\//, "")}</a>
-                <span className={`pr-state pr-${pr.state.toLowerCase()}`}>{pr.state}</span>
+                <Badge variant={pr.state === "MERGED" ? "success" : pr.state === "OPEN" ? "outline" : "destructive"}>{pr.state}</Badge>
               </div>
             ))}
           </section>
         )}
         <section>
-          <h2>Timeline</h2>
+          <h2><Clock size={12} /> Timeline</h2>
           {detail.timeline.map((t, i) => (
             <div key={i} className="tl-row" style={{ ["--status-color" as any]: `var(--status-${t.status === "succeeded" ? "done" : t.status === "failed" ? "failed-recoverable" : "running"})` }}>
               <span className="tl-node">{t.node}@{t.visit}</span>
@@ -423,7 +434,7 @@ function RunView({ id }: { id: string }) {
           ))}
         </section>
         <section>
-          <h2>Usage</h2>
+          <h2><Coins size={12} /> Usage</h2>
           <div className="kv"><span className="k">input tokens</span><span>{detail.usage.input_tokens.toLocaleString()}</span></div>
           <div className="kv"><span className="k">output tokens</span><span>{detail.usage.output_tokens.toLocaleString()}</span></div>
           <div className="kv"><span className="k">cost</span><span>${detail.usage.cost_usd.toFixed(4)}</span></div>
@@ -439,7 +450,7 @@ function RunView({ id }: { id: string }) {
           {detail.allowance.length === 0 && <div className="kv"><span className="k">allowance</span><span>—</span></div>}
         </section>
         <section>
-          <h2>Pinned prompts</h2>
+          <h2><Pin size={12} /> Pinned prompts</h2>
           {Object.entries(detail.pinned_prompts).map(([p, v]) => (
             <div key={p} className="kv"><span className="k">{p}</span><span>v{v}</span></div>
           ))}
@@ -501,7 +512,7 @@ function GithubRepoPicker({ onAdded }: { onAdded: () => void }) {
   const shown = (repos ?? []).filter((r) => !query || query.includes("/") || r.nameWithOwner.toLowerCase().includes(query.toLowerCase())).slice(0, 8);
   return (
     <div className="gh-picker">
-      <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search your GitHub repos, or type owner/name for any repo…" />
+      <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search your GitHub repos, or type owner/name for any repo…" />
       {error && <div className="field-error">{error}</div>}
       {repos === null && !error && <div className="field-hint">loading your repos from GitHub…</div>}
       {shown.map((r) => (
@@ -513,9 +524,9 @@ function GithubRepoPicker({ onAdded }: { onAdded: () => void }) {
           </span>
           {r.registeredAs
             ? <span className="gh-added">✓</span>
-            : <button className="primary gh-add" disabled={busy !== null} onClick={() => add(r.nameWithOwner)}>
-                {busy === r.nameWithOwner ? (r.localPath ? "Adding…" : "Cloning…") : "Add"}
-              </button>}
+            : <Button size="sm" disabled={busy !== null} onClick={() => add(r.nameWithOwner)}>
+                <Plus />{busy === r.nameWithOwner ? (r.localPath ? "Adding…" : "Cloning…") : "Add"}
+              </Button>}
         </div>
       ))}
       {repos !== null && shown.length === 0 && <div className="field-hint">no matches — try owner/name</div>}
@@ -560,9 +571,9 @@ function AddWorkspace({ onAdded, hint }: { onAdded: () => void; hint?: string })
       ) : (
         <>
           <div className="add-workspace-row">
-            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="name (e.g. notes)" />
-            <input value={path} onChange={(e) => setPath(e.target.value)} placeholder="~/notes or /Users/areeb/…" style={{ flex: 2 }} />
-            <button className="primary" onClick={add} disabled={busy || !name.trim() || !path.trim()}>{busy ? "…" : "Add"}</button>
+            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="name (e.g. notes)" className="flex-1" />
+            <Input value={path} onChange={(e) => setPath(e.target.value)} placeholder="~/notes or /Users/areeb/…" className="flex-[2]" />
+            <Button onClick={add} disabled={busy || !name.trim() || !path.trim()}><Plus />{busy ? "…" : "Add"}</Button>
           </div>
           {error && <div className="field-error">{error}</div>}
           <div className="field-hint">A git repo registers as a repo; any other folder registers as Plain.</div>
@@ -618,29 +629,30 @@ function StartRun() {
   return (
     <div className="runs">
       <h1>Start a run</h1>
-      <div className="form-card">
-        <label className="field">
-          <span>Graph</span>
-          <select value={graph} onChange={(e) => { setGraph(e.target.value); setInputs({}); }}>
+      <Card className="max-w-[560px]">
+        <CardContent className="pt-4">
+        <Label>
+          Graph
+          <Select value={graph} onChange={(e) => { setGraph(e.target.value); setInputs({}); }}>
             <option value="">choose…</option>
             {graphs.map((g) => <option key={g.name} value={g.name}>{g.name}</option>)}
-          </select>
-        </label>
+          </Select>
+        </Label>
         {selected && <div className="field-hint">{selected.description}</div>}
         {selected?.inputs.map((k) => (
-          <label className="field" key={k}>
-            <span>{k}</span>
-            <input value={inputs[k] ?? ""} onChange={(e) => setInputs({ ...inputs, [k]: e.target.value })} placeholder={k} />
-          </label>
+          <Label key={k}>
+            {k}
+            <Input value={inputs[k] ?? ""} onChange={(e) => setInputs({ ...inputs, [k]: e.target.value })} placeholder={k} />
+          </Label>
         ))}
         {selected && (
-          <label className="field">
-            <span>Workspace {selected.kind === "repo" ? "(repo required)" : ""}</span>
-            <select value={workspace} onChange={(e) => setWorkspace(e.target.value)}>
+          <Label>
+            Workspace {selected.kind === "repo" ? "(repo required)" : ""}
+            <Select value={workspace} onChange={(e) => setWorkspace(e.target.value)}>
               <option value="">{selected.kind === "repo" ? (options.length ? "choose a repo…" : "no repos registered") : "none (log-only)"}</option>
               {options.map((w) => <option key={w.name} value={w.name}>{w.name} — {w.path}</option>)}
-            </select>
-          </label>
+            </Select>
+          </Label>
         )}
         {selected?.kind === "repo" && options.length === 0 && (
           <AddWorkspace hint="This graph creates worktrees and PRs, so it needs a registered git repo:" onAdded={loadWorkspaces} />
@@ -657,14 +669,14 @@ function StartRun() {
           <ConfigFields value={overrides} onChange={setOverrides} />
         )}
         {error && <div className="field-error">{error}</div>}
-        <button
-          className="primary"
+        <Button
           disabled={busy || !selected || selected.inputs.some((k) => !(inputs[k] ?? "").trim()) || (selected.kind === "repo" && !workspace)}
           onClick={launch}
         >
-          {busy ? "Launching…" : "Launch run"}
-        </button>
-      </div>
+          <Play />{busy ? "Launching…" : "Launch run"}
+        </Button>
+        </CardContent>
+      </Card>
     </div>
   );
 }
@@ -685,39 +697,39 @@ function ConfigFields({ value, baseline, onChange }: { value: AgentConfigDto; ba
   };
   return (
     <>
-      <label className="field">
-        <span>Harness</span>
-        <select value={value.harness ?? ""} onChange={(e) => onChange({ ...value, harness: e.target.value || undefined })}>
+      <Label>
+        Harness
+        <Select value={value.harness ?? ""} onChange={(e) => onChange({ ...value, harness: (e.target.value || undefined) as any })}>
           <option value="">{ph("harness", "inherit (claude)")}</option>
           <option value="claude">claude</option>
           <option value="codex">codex</option>
-        </select>
-      </label>
-      <label className="field">
-        <span>Model</span>
-        <input list="model-suggestions" value={value.model ?? ""} placeholder={ph("model", "harness default")} onChange={(e) => onChange({ ...value, model: e.target.value || undefined })} />
+        </Select>
+      </Label>
+      <Label>
+        Model
+        <Input list="model-suggestions" value={value.model ?? ""} placeholder={ph("model", "harness default")} onChange={(e) => onChange({ ...value, model: e.target.value || undefined })} />
         <datalist id="model-suggestions">{MODEL_SUGGESTIONS.map((m) => <option key={m} value={m} />)}</datalist>
-      </label>
-      <label className="field">
-        <span>Effort</span>
-        <select value={value.effort ?? ""} onChange={(e) => onChange({ ...value, effort: (e.target.value || undefined) as any })}>
+      </Label>
+      <Label>
+        Effort
+        <Select value={value.effort ?? ""} onChange={(e) => onChange({ ...value, effort: (e.target.value || undefined) as any })}>
           {EFFORTS.map((x) => <option key={x} value={x}>{x || ph("effort", "inherit")}</option>)}
-        </select>
-      </label>
-      <label className="field">
-        <span>Permission mode</span>
-        <select value={value.permissionMode ?? ""} onChange={(e) => onChange({ ...value, permissionMode: (e.target.value || undefined) as any })}>
+        </Select>
+      </Label>
+      <Label>
+        Permission mode
+        <Select value={value.permissionMode ?? ""} onChange={(e) => onChange({ ...value, permissionMode: (e.target.value || undefined) as any })}>
           {PERMISSION_MODES.map((x) => <option key={x} value={x}>{x || ph("permissionMode", "inherit")}</option>)}
-        </select>
-      </label>
-      <label className="field">
-        <span>Max turns</span>
-        <input type="number" min="1" value={value.maxTurns ?? ""} placeholder={ph("maxTurns", "unlimited")} onChange={(e) => onChange({ ...value, maxTurns: e.target.value ? Number(e.target.value) : undefined })} />
-      </label>
-      <label className="field">
-        <span>Skills (comma-separated)</span>
-        <input value={(value.skills ?? []).join(", ")} placeholder={ph("skills", "none")} onChange={(e) => onChange({ ...value, skills: e.target.value ? e.target.value.split(",").map((x) => x.trim()).filter(Boolean) : undefined })} />
-      </label>
+        </Select>
+      </Label>
+      <Label>
+        Max turns
+        <Input type="number" min="1" value={value.maxTurns ?? ""} placeholder={ph("maxTurns", "unlimited")} onChange={(e) => onChange({ ...value, maxTurns: e.target.value ? Number(e.target.value) : undefined })} />
+      </Label>
+      <Label>
+        Skills (comma-separated)
+        <Input value={(value.skills ?? []).join(", ")} placeholder={ph("skills", "none")} onChange={(e) => onChange({ ...value, skills: e.target.value ? e.target.value.split(",").map((x) => x.trim()).filter(Boolean) : undefined })} />
+      </Label>
     </>
   );
 }
@@ -747,27 +759,35 @@ function GraphTuner({ shape, onSaved }: { shape: GraphShapeDto; onSaved: () => v
     <div className="tuner">
       <GraphDag key={`${shape.name}:${JSON.stringify(shape.tuning ?? {})}`} shape={shape} onSelect={setSelectedNode} selected={selectedNode ?? undefined} />
       <div className="tuner-panels">
-        <div className="form-card tuner-card">
-          <h3>Graph defaults</h3>
-          <div className="field-hint">Applies to every agent node unless the node sets its own. Cleared fields fall back to the graph file.</div>
-          <ConfigFields value={tuning.defaults ?? {}} baseline={shape.defaults} onChange={(v) => { setTuning({ ...tuning, defaults: v }); setDirty(true); }} />
-        </div>
-        <div className="form-card tuner-card">
+        <Card>
+          <CardHeader>
+            <CardTitle>Graph defaults</CardTitle>
+            <CardDescription>Applies to every agent node unless the node sets its own. Cleared fields fall back to the graph file.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <ConfigFields value={tuning.defaults ?? {}} baseline={shape.defaults} onChange={(v) => { setTuning({ ...tuning, defaults: v }); setDirty(true); }} />
+          </CardContent>
+        </Card>
+        <Card>
           {node?.kind === "agent" ? (
             <>
-              <h3>{node.id}</h3>
-              <div className="field-hint">prompt: {node.prompt} · effective now: {node.effective?.harness}{node.effective?.model ? ` · ${node.effective.model}` : ""}{node.effective?.effort ? ` · ${node.effective.effort}` : ""}{node.effective?.permissionMode ? ` · ${node.effective.permissionMode}` : ""}</div>
-              <ConfigFields value={tuning.nodes?.[node.id] ?? {}} baseline={node.baseline} onChange={(v) => setNodeCfg(node.id, v)} />
+              <CardHeader>
+                <CardTitle className="font-mono">{node.id}</CardTitle>
+                <CardDescription>prompt: {node.prompt} · effective now: {node.effective?.harness}{node.effective?.model ? ` · ${node.effective.model}` : ""}{node.effective?.effort ? ` · ${node.effective.effort}` : ""}{node.effective?.permissionMode ? ` · ${node.effective.permissionMode}` : ""}</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <ConfigFields value={tuning.nodes?.[node.id] ?? {}} baseline={node.baseline} onChange={(v) => setNodeCfg(node.id, v)} />
+              </CardContent>
             </>
           ) : (
-            <div className="field-hint">Click an agent node (◆) in the graph to tune it.</div>
+            <CardContent className="pt-4"><div className="field-hint">Click an agent node (◆) in the graph to tune it.</div></CardContent>
           )}
-        </div>
+        </Card>
       </div>
       <div className="tuner-save">
-        <button className="primary" onClick={save} disabled={!dirty || state === "saving"}>
+        <Button onClick={save} disabled={!dirty || state === "saving"}>
           {state === "saving" ? "Saving…" : state === "saved" ? "Saved — applies to new runs" : state === "failed" ? "Failed — retry" : "Save tuning"}
-        </button>
+        </Button>
         {dirty && <span className="field-hint">unsaved changes</span>}
       </div>
     </div>
@@ -790,7 +810,7 @@ function GraphsList() {
           {graphs.map((g) => (
             <div key={g.name} className={`run-row ${selected === g.name ? "selected" : ""}`} onClick={() => setSelected(g.name)}>
               <span className="run-goal">{g.name}</span>
-              <span className="run-meta">{g.kind}</span>
+              <Badge variant="outline" className="ml-auto">{g.kind === "repo" ? <GitBranch /> : <FolderGit2 />}{g.kind}</Badge>
             </div>
           ))}
           <div className="field-hint" style={{ marginTop: 12 }}>
@@ -826,35 +846,39 @@ function Settings() {
   return (
     <div className="runs">
       <h1>Settings</h1>
-      <div className="form-card">
-        <label className="field">
-          <span>Editor command (Open-in-IDE)</span>
-          <input value={s.editorCommand ?? ""} onChange={(e) => setS({ ...s, editorCommand: e.target.value })} placeholder="idea — IntelliJ launcher on PATH (Tools → Create Command-line Launcher)" />
-        </label>
-        <label className="field">
-          <span>Slack webhook (attention DMs)</span>
-          <input value={s.slackWebhook ?? ""} onChange={(e) => setS({ ...s, slackWebhook: e.target.value })} placeholder="https://hooks.slack.com/…" />
-        </label>
-        <label className="field" style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-          <input type="checkbox" checked={s.chime !== false} onChange={(e) => setS({ ...s, chime: e.target.checked })} style={{ width: "auto" }} />
-          <span style={{ textTransform: "none", fontSize: 13, color: "var(--fg)" }}>Attention chime</span>
-        </label>
-        <button className="primary" onClick={save}>{saved ? "Saved" : "Save"}</button>
-      </div>
+      <Card className="max-w-[560px]">
+        <CardContent className="pt-4">
+          <Label>
+            Editor command (Open-in-IDE)
+            <Input value={s.editorCommand ?? ""} onChange={(e) => setS({ ...s, editorCommand: e.target.value })} placeholder="idea — IntelliJ launcher on PATH (Tools → Create Command-line Launcher)" />
+          </Label>
+          <Label>
+            Slack webhook (attention DMs)
+            <Input value={s.slackWebhook ?? ""} onChange={(e) => setS({ ...s, slackWebhook: e.target.value })} placeholder="https://hooks.slack.com/…" />
+          </Label>
+          <Label className="flex-row items-center gap-2 normal-case tracking-normal text-[13px] text-foreground">
+            <input type="checkbox" checked={s.chime !== false} onChange={(e) => setS({ ...s, chime: e.target.checked })} className="w-auto" />
+            Attention chime
+          </Label>
+          <Button onClick={save} className="self-start">{saved ? "Saved" : "Save"}</Button>
+        </CardContent>
+      </Card>
 
       <h1 style={{ marginTop: 28 }}>Workspaces</h1>
-      <div className="form-card">
-        {[...ws.repos.map((w) => ({ ...w, kind: "repo" })), ...ws.folders.map((w) => ({ ...w, kind: "plain" }))].map((w) => (
-          <div key={w.name} className="ws-row">
-            <span className="ws-kind">{w.kind}</span>
-            <span className="run-goal">{w.name}</span>
-            <span className="run-meta" title={w.path}>{w.path}</span>
-            <button className="ws-remove" onClick={() => removeWs(w.name)} title="Remove (files untouched)">✕</button>
-          </div>
-        ))}
-        {ws.repos.length + ws.folders.length === 0 && <div className="field-hint">No workspaces yet.</div>}
-        <AddWorkspace onAdded={loadWs} />
-      </div>
+      <Card className="max-w-[560px]">
+        <CardContent className="pt-4">
+          {[...ws.repos.map((w) => ({ ...w, kind: "repo" })), ...ws.folders.map((w) => ({ ...w, kind: "plain" }))].map((w) => (
+            <div key={w.name} className="ws-row">
+              <Badge variant="outline">{w.kind === "repo" ? <GitBranch /> : <FolderGit2 />}{w.kind}</Badge>
+              <span className="run-goal">{w.name}</span>
+              <span className="run-meta" title={w.path}>{w.path}</span>
+              <Button variant="ghost" size="icon" className="ml-auto size-6 text-faint hover:text-destructive" onClick={() => removeWs(w.name)} title="Remove (files untouched)"><X /></Button>
+            </div>
+          ))}
+          {ws.repos.length + ws.folders.length === 0 && <div className="field-hint">No workspaces yet.</div>}
+          <AddWorkspace onAdded={loadWs} />
+        </CardContent>
+      </Card>
     </div>
   );
 }
@@ -895,14 +919,14 @@ function App() {
       {!splashDone && <Splash onDone={() => setSplashDone(true)} />}
       <nav className="sidebar">
         <a className="mark-btn" title="Replay the splash" onClick={() => setSplashDone(false)}><Mark className="mark" /></a>
-        <a className={`nav ${!runMatch && !isNew ? "active" : ""}`} href="/"><span className="label">Runs</span></a>
-        <a className={`nav ${isNew ? "active" : ""}`} href="/new"><span className="label">New run</span></a>
-        <a className={`nav ${isGraphs ? "active" : ""}`} href="/graphs"><span className="label">Graphs</span></a>
-        <a className={`nav ${isSettings ? "active" : ""}`} href="/settings"><span className="label">Settings</span></a>
+        <a className={`nav ${!runMatch && !isNew && !isGraphs && !isSettings ? "active" : ""}`} href="/"><Rows3 size={15} /><span className="label">Runs</span></a>
+        <a className={`nav ${isNew ? "active" : ""}`} href="/new"><Plus size={15} /><span className="label">New run</span></a>
+        <a className={`nav ${isGraphs ? "active" : ""}`} href="/graphs"><Workflow size={15} /><span className="label">Graphs</span></a>
+        <a className={`nav ${isSettings ? "active" : ""}`} href="/settings"><SettingsIcon size={15} /><span className="label">Settings</span></a>
         <div className="spacer" />
-        <button className="theme-toggle" onClick={() => setTheme(theme === "dark" ? "light" : theme === "light" ? "system" : "dark")}>
+        <Button variant="outline" size="sm" onClick={() => setTheme(theme === "dark" ? "light" : theme === "light" ? "system" : "dark")}>
           theme: {theme}
-        </button>
+        </Button>
       </nav>
       <main>{runMatch ? <RunView id={runMatch[1]!} /> : isNew ? <StartRun /> : isSettings ? <Settings /> : isGraphs ? <GraphsList /> : <div className="runs"><RunsList /></div>}</main>
     </div>

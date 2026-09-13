@@ -349,12 +349,14 @@ export function createHowdahServer(opts: ServerOpts) {
   });
 }
 
-/** bundle the React app to public/app.js — run at server start, no separate toolchain */
+/** bundle the React app (with Tailwind) to public/app.js + public/app.css artifacts */
 export async function buildApp(): Promise<void> {
+  const tailwind = (await import("bun-plugin-tailwind")).default;
   const result = await Bun.build({
     entrypoints: [join(import.meta.dir, "app", "main.tsx")],
     outdir: join(import.meta.dir, "public"),
-    naming: "app.js",
+    naming: "app.[ext]",
+    plugins: [tailwind],
     minify: false,
   });
   if (!result.success) throw new Error("app bundle failed: " + result.logs.join("\n"));
