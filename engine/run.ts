@@ -36,6 +36,8 @@ export interface ExecArgs {
   def: NodeDef<any>;
   visit: number;
   attemptId: string;
+  /** the run's working directory, when it has one */
+  cwd?: string;
   /** declared reads, resolved */
   reads: Record<string, unknown>;
   /** agent nodes: the rendered prompt + its hash (already logged as prompt-rendered) */
@@ -63,6 +65,9 @@ export interface EngineOpts {
   /** loop guard — perpetual graphs park here instead of spinning forever */
   maxSteps?: number;
   clock?: () => Date;
+  /** where the run works (worktree or plain folder) — stamped on run-started */
+  cwd?: string;
+  folderKind?: "repo" | "plain";
 }
 
 export type RunState =
@@ -96,7 +101,14 @@ export class Engine {
   async start(inputs: Record<string, unknown>): Promise<RunState> {
     this.inputs = inputs;
     const pinned = this.pinPrompts();
-    this.log.append({ type: "run-started", graph: this.graph.def.name, inputs, pinned_prompts: pinned });
+    this.log.append({
+      type: "run-started",
+      graph: this.graph.def.name,
+      inputs,
+      pinned_prompts: pinned,
+      cwd: this.opts.cwd,
+      folder_kind: this.opts.folderKind,
+    });
     this.freshContext();
     this.seedInputs(inputs);
     return this.loop(this.graph.def.entry);
@@ -223,7 +235,7 @@ export class Engine {
       },
     };
 
-    return executor({ nodeId, def, visit, attemptId, reads, renderedPrompt, effects });
+    return executor({ nodeId, def, visit, attemptId, cwd: this.opts.cwd, reads, renderedPrompt, effects });
   }
 
   private route(from: string, visit: number): EdgeDef<any> | null {

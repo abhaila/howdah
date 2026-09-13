@@ -37,6 +37,9 @@ export type RunEvent =
       type: "run-started";
       graph: string;
       inputs: Record<string, unknown>;
+      /** where the run works — recorded once; the reconciler probes it, the IDE button opens it */
+      cwd?: string;
+      folder_kind?: "repo" | "plain";
       /** prompt versions pinned at start (OV-2) — revisions apply to new runs only */
       pinned_prompts: Partial<Record<PromptId, number>>;
     }

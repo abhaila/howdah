@@ -256,6 +256,87 @@ function RunView({ id }: { id: string }) {
   );
 }
 
+
+// ---- start-run form (screen 6) ---------------------------------------------------
+
+interface GraphInfo { name: string; description: string; inputs: string[]; kind: "repo" | "plain" }
+interface Workspaces { repos: Array<{ name: string; path: string }>; folders: Array<{ name: string; path: string }> }
+
+function StartRun() {
+  const [graphs, setGraphs] = useState<GraphInfo[]>([]);
+  const [workspaces, setWorkspaces] = useState<Workspaces>({ repos: [], folders: [] });
+  const [graph, setGraph] = useState<string>("");
+  const [inputs, setInputs] = useState<Record<string, string>>({});
+  const [workspace, setWorkspace] = useState<string>("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetch("/api/graphs").then((r) => r.json()).then(setGraphs).catch(() => {});
+    fetch("/api/workspaces").then((r) => r.json()).then(setWorkspaces).catch(() => {});
+  }, []);
+  const selected = graphs.find((g) => g.name === graph);
+  const options = selected?.kind === "repo" ? workspaces.repos : [...workspaces.repos, ...workspaces.folders];
+
+  const launch = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await fetch("/api/runs", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ graph, inputs, workspace: workspace || undefined }),
+      });
+      if (!r.ok) throw new Error((await r.json() as any).error ?? "launch failed");
+      const { id } = (await r.json()) as { id: string };
+      history.pushState(null, "", `/run/${id}`);
+      dispatchEvent(new PopStateEvent("popstate"));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="runs">
+      <h1>Start a run</h1>
+      <div className="form-card">
+        <label className="field">
+          <span>Graph</span>
+          <select value={graph} onChange={(e) => { setGraph(e.target.value); setInputs({}); }}>
+            <option value="">choose…</option>
+            {graphs.map((g) => <option key={g.name} value={g.name}>{g.name}</option>)}
+          </select>
+        </label>
+        {selected && <div className="field-hint">{selected.description}</div>}
+        {selected?.inputs.map((k) => (
+          <label className="field" key={k}>
+            <span>{k}</span>
+            <input value={inputs[k] ?? ""} onChange={(e) => setInputs({ ...inputs, [k]: e.target.value })} placeholder={k} />
+          </label>
+        ))}
+        {selected && (
+          <label className="field">
+            <span>Workspace {selected.kind === "repo" ? "(repo required)" : ""}</span>
+            <select value={workspace} onChange={(e) => setWorkspace(e.target.value)}>
+              <option value="">{selected.kind === "repo" ? "choose a repo…" : "none (log-only)"}</option>
+              {options.map((w) => <option key={w.name} value={w.name}>{w.name} — {w.path}</option>)}
+            </select>
+          </label>
+        )}
+        {error && <div className="field-error">{error}</div>}
+        <button
+          className="primary"
+          disabled={busy || !selected || selected.inputs.some((k) => !(inputs[k] ?? "").trim()) || (selected.kind === "repo" && !workspace)}
+          onClick={launch}
+        >
+          {busy ? "Launching…" : "Launch run"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ---- shell + routing ----------------------------------------------------------
 
 function App() {
@@ -283,17 +364,19 @@ function App() {
   }, [theme]);
 
   const runMatch = path.match(/^\/run\/([^/]+)/);
+  const isNew = path === "/new";
   return (
     <div className="shell">
       <nav className="sidebar">
         <Mark className="mark" />
-        <a className={`nav ${!runMatch ? "active" : ""}`} href="/"><span className="label">Runs</span></a>
+        <a className={`nav ${!runMatch && !isNew ? "active" : ""}`} href="/"><span className="label">Runs</span></a>
+        <a className={`nav ${isNew ? "active" : ""}`} href="/new"><span className="label">New run</span></a>
         <div className="spacer" />
         <button className="theme-toggle" onClick={() => setTheme(theme === "dark" ? "light" : theme === "light" ? "system" : "dark")}>
           theme: {theme}
         </button>
       </nav>
-      <main>{runMatch ? <RunView id={runMatch[1]!} /> : <div className="runs"><RunsList /></div>}</main>
+      <main>{runMatch ? <RunView id={runMatch[1]!} /> : isNew ? <StartRun /> : <div className="runs"><RunsList /></div>}</main>
     </div>
   );
 }

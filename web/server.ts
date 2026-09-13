@@ -17,6 +17,8 @@ import { homedir } from "node:os";
 import { EventLog, readLog } from "../log/write";
 import { deriveDetail, deriveSummary, sortRuns } from "./derive";
 import { AttentionCenter } from "../engine/attention";
+import { graphCatalog } from "../graphs/index";
+import { loadConfig } from "../config/config";
 
 export interface ServerOpts {
   runsDir: string;
@@ -43,6 +45,30 @@ export function createHowdahServer(opts: ServerOpts) {
     idleTimeout: 0,
     async fetch(req) {
       const url = new URL(req.url);
+
+      if (url.pathname === "/api/graphs") return json(graphCatalog());
+      if (url.pathname === "/api/workspaces") {
+        const c = loadConfig();
+        return json({
+          repos: Object.entries(c.repos).map(([name, r]) => ({ name, ...r })),
+          folders: Object.entries(c.folders).map(([name, f]) => ({ name, ...f })),
+        });
+      }
+      if (url.pathname === "/api/runs" && req.method === "POST") {
+        // launch: hand off to the CLI, detached — the viewer never owns an engine loop
+        const body = (await req.json()) as { graph?: string; inputs?: Record<string, string>; workspace?: string; dir?: string };
+        if (!body.graph) return json({ error: "graph required" }, 400);
+        const runId = `${body.graph}-${Date.now().toString(36)}`;
+        const args = ["run", body.graph, "--id", runId];
+        for (const [k, v] of Object.entries(body.inputs ?? {})) args.push("-i", `${k}=${v}`);
+        if (body.workspace) args.push("--workspace", body.workspace);
+        if (body.dir) args.push("--dir", body.dir);
+        Bun.spawn(["bun", join(import.meta.dir, "..", "cli", "main.ts"), ...args], {
+          stdout: "ignore", stderr: "ignore", env: { ...process.env },
+        }).unref();
+        return json({ id: runId }, 202);
+      }
+
       const m = url.pathname.match(/^\/api\/runs(?:\/([^/]+)(?:\/(events|reply))?)?$/);
       if (!m) {
         // static: /public assets by name, everything else → the app shell
