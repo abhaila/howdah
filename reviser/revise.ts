@@ -36,9 +36,9 @@ function parseArgs(argv: string[]) {
 function loadPrompt(id: string): { version: number; body: string; raw: string } {
   const raw = readFileSync(join(ROOT, "prompts", `${id}.md`), "utf8");
   const m = raw.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
-  if (!m) throw new Error(`prompts/${id}.md has no front-matter`);
+  if (!m || m[1] === undefined || m[2] === undefined) throw new Error(`prompts/${id}.md has no front-matter`);
   const vm = m[1].match(/^version:\s*(\d+)/m);
-  if (!vm) throw new Error(`prompts/${id}.md front-matter has no version`);
+  if (!vm || vm[1] === undefined) throw new Error(`prompts/${id}.md front-matter has no version`);
   return { version: Number(vm[1]), body: m[2], raw };
 }
 
@@ -112,7 +112,7 @@ console.error(`revising ${id} v${version} from ${feedback.length} feedback entr$
 const answer = runClaude(buildReflection(id, version, body, feedback, instancesText));
 
 const m = answer.match(/<<<REVISED\n?([\s\S]*?)\n?REVISED>>>/);
-if (!m) {
+if (!m || m[1] === undefined) {
   console.error("model output contained no <<<REVISED>>> block:\n" + answer.slice(0, 800));
   process.exit(1);
 }

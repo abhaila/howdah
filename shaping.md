@@ -297,7 +297,7 @@ Synthesized from this review's findings. Each derives from a specific finding ab
   - Surfaced by: Architecture D5 + Step 0 search check + D8
   - Files: reviser/revise.ts, reviser/eval/delivery-publish.case.ts
   - Verify: proposal for the stock delivery.publish prompt + PR-structure feedback scored against the hand-written fork; you would accept the diff
-- [ ] **T2 (P1, human: ~1d / CC: ~1h)** — core — Typed context model with visit-scoping semantics
+- [x] **T2 (P1, human: ~1d / CC: ~1h)** — core — Typed context model with visit-scoping semantics ✅ 2026-09-13: core/context.ts + core/validate.ts, 20 tests, tsc clean
   - Surfaced by: Architecture D3 + OV-4
   - Files: core/context.ts
   - Verify: reading an unwritten key and an undeclared output are compile errors; sticky/cleared/per-visit covered by tests
