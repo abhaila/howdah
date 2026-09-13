@@ -1,0 +1,56 @@
+digraph "review-teammate-pr" {
+
+  graph [
+    version = "1"
+    description = "Pull a teammate's PR into a local worktree and run three read-only reviews in sequence, then compile every finding into one color-coded local report"
+    entry = "create_worktree"
+    inputs = "pull_request"
+    permissions = "auto-accept"
+    claude_model = "Opus"
+    claude_effort = "medium"
+    claude_setting_sources = "project"
+    codex_model = "GPT5"
+    codex_effort = "medium"
+  ]
+
+  create_worktree [ shape = "folder", action = "create" ]
+  create_worktree -> "checkout.pull_pr"
+
+  "checkout.pull_pr" [
+    class = "checkout"
+    prompt = "Discover and use relevant installed skills for checking out pull requests.\n\nPull request to review:\n\n{{ inputs.pull_request }}\n\nIn the freshly created worktree, fetch and check out the supplied pull request's branch. Identify its base/target branch and the exact head commit under review.\n\nCompute the diff against the target branch: changed files, added/removed lines, and the PR's own title, description and author. Do not modify the branch, push anything, or comment on the PR.\n\nThis step only prepares the worktree and gathers context. It must not run any review, start any service, or write any report.\n\nReturn `pr_context` with the PR metadata, target branch, head commit and the full list of changed files with their diff hunks. Later steps use this as the shared scope for all reviews — no review may flag anything outside these changed lines.\n"
+    outputs = "pr_context:text"
+  ]
+  "checkout.pull_pr" -> "review.sonarqube"
+
+  "review.sonarqube" [
+    class = "review"
+    prompt = "Discover and use relevant installed skills for running static analysis and communicating findings.\n\nPR context:\n\n{{ context.pr_context }}\n\nEnsure the local SonarQube service is running (start it if needed, e.g. `docker compose up -d sequence-local-sonarqube`, and wait for it to report ready) and run a scan of the checked-out worktree against it.\n\nFilter results to issues on lines actually touched by this PR's diff — do not report pre-existing issues in code the PR did not change.\n\nClassify every finding's severity as one color:\n- 🔴 blocker or critical (bugs, vulnerabilities, correctness)\n- 🟠 major (code smells with real maintainability impact)\n- 🟢 minor or info\n\nThis step is strictly read-only with respect to the PR: never post an inline comment, a PR review, or any GitHub comment, regardless of what the SonarQube integration supports.\n\nReturn `sonarqube_findings` as a list of objects, each with file, line, severity color, rule, and a one-line description. Return an empty list if there are none — do not omit the output.\n"
+    outputs = "sonarqube_findings:json"
+  ]
+  "review.sonarqube" -> "review.uncle_bob"
+
+  "review.uncle_bob" [
+    class = "review"
+    prompt = "Discover and use relevant installed skills for code review and communicating findings.\n\nPR context:\n\n{{ context.pr_context }}\n\nReview the diff in the spirit of Robert C. Martin's Clean Code: single responsibility, function and class size, meaningful and pronounceable names, absence of duplication, appropriate abstraction levels, dependency direction, comments that explain why rather than what, and the boy-scout rule for code the PR already touches.\n\nOnly evaluate lines the PR actually changed or added — do not flag pre-existing code the PR left untouched.\n\nClassify every finding's severity as one color:\n- 🔴 a clean-code violation serious enough to actively mislead future maintainers or hide a defect\n- 🟠 a real violation worth fixing but not urgent\n- 🟢 a minor stylistic nit\n\nThis step is strictly read-only with respect to the PR: never post an inline comment, a PR review, or any GitHub comment.\n\nReturn `uncle_bob_findings` as a list of objects, each with file, line, severity color, principle violated, and a one-line description. Return an empty list if there are none — do not omit the output.\n"
+    outputs = "uncle_bob_findings:json"
+  ]
+  "review.uncle_bob" -> "review.seq_review"
+
+  "review.seq_review" [
+    class = "review"
+    prompt = "Discover and use relevant installed skills for reviewing pull requests against this repository's own engineering standards — prefer the repository's own review skill (e.g. `seq-review`) if installed, falling back to the generic `/review` skill or applicable repository instructions otherwise.\n\nPR context:\n\n{{ context.pr_context }}\n\nRun that review against the PR's diff: correctness bugs, violations of mandatory repository rules (architecture, testing conventions, comment style, error handling), and simplification or efficiency opportunities. Only evaluate lines the PR changed.\n\nClassify every finding's severity as one color:\n- 🔴 correctness/security defect or a violation of a mandatory repository rule\n- 🟠 a real but non-blocking quality issue\n- 🟢 a minor nit or suggestion\n\nThis step is strictly read-only with respect to the PR: even if the invoked skill is capable of posting inline PR comments, do not let it — capture findings only, do not post anything to GitHub.\n\nReturn `seq_review_findings` as a list of objects, each with file, line, severity color, rule or principle, and a one-line description. Return an empty list if there are none — do not omit the output.\n"
+    outputs = "seq_review_findings:json"
+  ]
+  "review.seq_review" -> "report.compile"
+
+  "report.compile" [
+    class = "report"
+    prompt = "Discover and use relevant installed skills for communicating review findings.\n\nPR context:\n\n{{ context.pr_context }}\n\nSonarQube findings:\n\n{{ context.sonarqube_findings | dump }}\n\nUncle Bob findings:\n\n{{ context.uncle_bob_findings | dump }}\n\nSeq review findings:\n\n{{ context.seq_review_findings | dump }}\n\nMerge all three findings lists into one table with columns: Review, File, Line, Severity, Finding. Sort by severity (🔴 first, then 🟠, then 🟢). Do not de-duplicate findings from different reviews that happen to land on the same line — each review's voice stays distinct.\n\nWrite the table to a local markdown file in the worktree (do not commit it). Print the complete table in your response so it can be reviewed immediately without opening the file.\n\nUnder no circumstances post any of these findings as PR comments, inline review comments, or a GitHub review — this entire flow is local-only and read-only with respect to the PR.\n\nReturn `report_path` with the markdown file's path and `finding_counts` with the number of 🔴, 🟠 and 🟢 findings.\n"
+    outputs = "report_path:text, finding_counts:json"
+  ]
+  "report.compile" -> complete
+
+  complete [ shape = "Msquare" ]
+
+}

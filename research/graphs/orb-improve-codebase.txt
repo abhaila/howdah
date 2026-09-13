@@ -1,0 +1,128 @@
+digraph "improve-codebase" {
+
+  graph [
+    version = "1"
+    description = "Continuously discover and deliver one worthwhile codebase improvement at a time"
+    entry = "discover"
+    defaults = "goal='Find and deliver one worthwhile improvement at a time anywhere in the codebase.'"
+    permissions = "auto-accept"
+    max_visits = "100000"
+  ]
+
+  discover [ prompt = "Discover and use relevant installed skills for assessing and improving this codebase.\n\nUser supplied goal:\n\n{{ inputs.goal }}\n\nRead applicable repository instructions and inspect the code and tests. Focus on any area named by the goal; otherwise consider the whole codebase, including code that has not changed recently.\n\nSelect one worthwhile improvement supported by concrete evidence and a verifiable outcome. Check relevant tickets, pull requests and previous attempts to avoid duplicating work or repeating a rejected proposal without new evidence.\n\nReturn `discovery` as `candidate` when an improvement is selected. Set `work` to a self-contained description of the affected area, observed problem, evidence, proposed change, scope boundaries and acceptance criteria. This becomes the work scope used by planning, implementation, review and PR delivery.\n\nReturn `discovery` as `idle` when no worthwhile candidate is found. Set `work` to a brief account of the areas examined and why no candidate was selected. The idle path waits thirty minutes and searches again; it does not enter implementation.\n\nThis step investigates and proposes only. Leave repository files, branches, pull requests and tracker records unchanged. Do not create a ticket for the candidate.\n\nLater steps create a worktree, plan and implement the selected improvement, review it and manage PR delivery. After cleanup, this workflow searches for the next improvement.\n", outputs = "discovery:choice, work:text" ]
+  discover -> create_worktree [ condition = "discovery == 'candidate'", weight = "2" ]
+  discover -> idle_wait [ condition = "discovery == 'idle'", weight = "1" ]
+
+  idle_wait [ shape = "insulator", duration = "30m" ]
+  idle_wait -> discover [ loop_restart = "true" ]
+
+  create_worktree [ shape = "folder", action = "create" ]
+  create_worktree -> "implementation.plan"
+
+  "implementation.plan" [
+    class = "implementation"
+    prompt = "Discover and use relevant installed skills for planning and communicating the plan.\n\nUser supplied goal:\n\n{{ inputs.goal }}\n\nWork scope:\n\n{{ context.work }}\n\nRead the supplied work scope, relevant linked context and applicable repository instructions. Inspect the affected code and tests. For ticket-based work, read the identified ticket.\n\nPlan the changes needed to satisfy the work scope. Use the goal to guide decisions without expanding that scope. Choose the smallest implementation that meets every requirement.\n\nExplain the required behaviour, affected components, implementation order and how each acceptance criterion will be verified. Ground decisions in the inspected code.\n\nReturn the plan as `implementation_plan`. Leave repository files and tracker records unchanged.\n\nLater steps will implement and publish the changes.\n"
+    outputs = "implementation_plan:text"
+  ]
+  "implementation.plan" -> "implementation.implement"
+
+  "implementation.implement" [
+    class = "implementation"
+    prompt = "Discover and use relevant installed skills for implementation and verification.\n\nUser supplied goal:\n\n{{ inputs.goal }}\n\nWork scope:\n\n{{ context.work }}\n\nImplementation plan:\n\n{{ context.implementation_plan }}\n\nImplement the planned change in the prepared worktree. Follow applicable repository instructions and preserve unrelated work.\n\nSatisfy every requirement in the work scope and goal. If the code reveals an error in the plan, make the necessary adjustment within that scope and explain it.\n\nRun the relevant checks. Record what each check establishes and any failures or verification gaps. Create or update local commits using the repository’s conventions.\n\nThis step may change repository files, run checks and create local commits. Later steps own publication. The caller owns any tracker updates.\n\nReturn `implementation_summary` with the changes, verification evidence, deviations from the plan and any unmet requirements.\n"
+    outputs = "implementation_summary:text"
+  ]
+  "implementation.implement" -> "implementation.local_review"
+
+  "implementation.local_review" [
+    class = "implementation"
+    prompt = "Discover and use relevant installed skills for code review and communicating findings.\n\nUser supplied goal:\n\n{{ inputs.goal }}\n\nWork scope:\n\n{{ context.work }}\n\nImplementation plan:\n\n{{ context.implementation_plan }}\n\nImplementation summary:\n\n{{ context.implementation_summary }}\n\nReview the current change against the work scope, goal, plan and applicable repository instructions. Inspect the complete branch diff against its target, including uncommitted changes, affected code and relevant tests.\n\nReview only requirements and defects that can be verified through automated checks or code inspection. For each rejection, identify the requirement, concrete evidence, required correction and machine-checkable completion condition.\n\nUse the work scope, plan and summary as context. Verify their claims against the code and available evidence.\n\nReject unmet requirements, correctness or security defects, violations of mandatory repository rules, missing verification of required behaviour and changes made which are outside the work scope. Treat preferences as non-blocking unless repository instructions require them.\n\nHuman reviews, manual acceptance, visual approval and user sign-off are non-blocking. Report them as outstanding without requiring their completion to pass.\n\nCompare each finding with previous reviews and attempted corrections. If the same finding returns without new evidence or a materially different actionable correction, recognise that the review is looping. Do not reject again for that finding. Report the unresolved concern and explain why another repair pass would not advance it\n\nFor each blocking finding, identify the requirement or defect, supporting evidence and the correction needed.\n\nThis step is read-only. Leave files, commits, branches, pull requests and tracker records unchanged.\n\nReturn review_verdict as reject only when actionable, machine-checkable blocking findings remain. Otherwise return pass. Keep outstanding human or manual checks and concerns excluded. Return `review_findings` as an array containing those findings, or an empty array when the review passes.\n"
+    outputs = "review_verdict:choice, review_findings:json"
+  ]
+  "implementation.local_review" -> "implementation.plan_review" [ condition = "review_verdict == 'reject'", weight = "2" ]
+  "implementation.local_review" -> "delivery.publish" [ condition = "review_verdict == 'pass'", weight = "1" ]
+
+  "implementation.plan_review" [
+    class = "implementation"
+    prompt = "Discover and use relevant installed skills for planning and communicating the plan.\n\nUser supplied goal:\n\n{{ inputs.goal }}\n\nWork scope:\n\n{{ context.work }}\n\nPrevious implementation plan:\n\n{{ context.implementation_plan }}\n\nImplementation summary:\n\n{{ context.implementation_summary }}\n\nReview verdict:\n\n{{ context.review_verdict }}\n\nReview findings:\n\n{{ context.review_findings | dump }}\n\nRead the work scope, applicable repository instructions and current changes. Investigate each blocking finding against the code and available evidence.\n\nRevise the implementation plan to address every blocking finding. Specify each correction and how it will be verified. Preserve work that already satisfies the requirements and identify any changes that must be removed or revised.\n\nKeep the revised plan complete enough for implementation. Cover the work scope and goal without adding unrelated work. State assumptions and material risks.\n\nReturn the revised plan as `implementation_plan`. Leave repository files and tracker records unchanged.\n\nLater steps will implement and publish the changes. The caller owns any tracker updates.\n"
+    outputs = "implementation_plan:text"
+  ]
+  "implementation.plan_review" -> "implementation.implement_review"
+
+  "implementation.implement_review" [
+    class = "implementation"
+    prompt = "Discover and use relevant installed skills for implementation and verification.\n\nUser supplied goal:\n\n{{ inputs.goal }}\n\nWork scope:\n\n{{ context.work }}\n\nRevised implementation plan:\n\n{{ context.implementation_plan }}\n\nPrevious implementation summary:\n\n{{ context.implementation_summary }}\n\nReview verdict:\n\n{{ context.review_verdict }}\n\nReview findings:\n\n{{ context.review_findings | dump }}\n\nInspect the current changes and applicable repository instructions. Apply the revised plan and address every blocking finding. Preserve correct work and remove changes the plan identifies as outside scope.\n\nVerify each correction and run the relevant checks for the complete change. Close all remaining defects, unmet requirements or verification gaps in the work scope and the plan. Address all required changes from the plan and review. Create or update local commits using the repository’s conventions.\n\nThis step may change repository files, run checks and create local commits. Later steps own local review and publication. The caller owns any tracker updates.\n\nReturn an updated `implementation_summary` describing the complete current change, the correction and verification for each finding, and anything still unresolved.\n"
+    outputs = "implementation_summary:text"
+  ]
+  "implementation.implement_review" -> "implementation.local_review"
+
+  "delivery.publish" [
+    class = "delivery"
+    prompt = "Discover and use relevant installed skills for publishing pull requests and communicating the change.\n\nUser supplied goal:\n\n{{ inputs.goal }}\n\nWork scope:\n\n{{ context.work }}\n\nInspect the prepared worktree, current branch and any associated pull request.\n\nPush the intended local commits. Update the existing open PR, or create one against the repository’s intended target branch. Describe the complete change, its relationship to the work scope and the verification performed.\n\nUse ticket references only when the work scope identifies an existing ticket.\n\nEnable auto-merge if possible. Respect required checks, approvals and merge-queue rules.\n\nIf the associated PR is already merged and the branch contains follow up changes, open a new PR.\n\nConfirm the PR URL from the remote. If publication or enabling auto-merge fails, inspect the current remote state before retrying. Preserve local work and avoid creating duplicate PRs.\n\nThis step owns publication and the merge request. Leave implementation files and tracker records unchanged. Later steps handle PR feedback, CI and conflicts. The caller owns any tracker updates.\n\nReturn `publication_summary` with the PR URL, confirmed remote state, published commits and merge-request status.\n"
+    outputs = "publication_summary:text"
+  ]
+  "delivery.publish" -> "delivery.probe_pr"
+
+  "delivery.probe_pr" [
+    shape = "parallelogram"
+    class = "delivery"
+    probes = "pr"
+  ]
+  "delivery.probe_pr" -> cleanup [ condition = "pr.state == 'MERGED'", weight = "6" ]
+  "delivery.probe_pr" -> cleanup [ condition = "pr.state == 'CLOSED'", weight = "5" ]
+  "delivery.probe_pr" -> "delivery.resolve_conflicts" [ condition = "pr.state == 'CONFLICTS'", weight = "4" ]
+  "delivery.probe_pr" -> "delivery.fix_ci" [ condition = "pr.state == 'CI_FAILED'", weight = "3" ]
+  "delivery.probe_pr" -> "delivery.address_reviews" [ condition = "pr.state == 'CHANGES_REQUIRED'", weight = "2" ]
+  "delivery.probe_pr" -> "delivery.wait"
+
+  "delivery.address_reviews" [
+    class = "delivery"
+    prompt = "Discover and use relevant installed skills for addressing pull request feedback, verification and communicating with reviewers.\n\nUser supplied goal:\n\n{{ inputs.goal }}\n\nWork scope:\n\n{{ context.work }}\n\nPublication summary:\n\n{{ context.publication_summary }}\n\nInspect the current PR, its published head, review decisions and unresolved threads. Read the affected code and applicable repository instructions.\n\nAddress feedback within the work scope and goal. Make the required local changes, verify them and create or update local commits using the repository’s conventions. Preserve unrelated work.\n\nFor feedback already satisfied by the published change, reply with supporting evidence and resolve the thread. For feedback requiring a new local change, keep the thread unresolved until that correction is published and verified. Check existing replies before posting to avoid duplicates.\n\nExplain with evidence when a requested change is unnecessary or outside scope.\n\nIf the PR has merged or closed, report that state without modifying it.\n\nThis step may change repository files, run checks, create local commits, reply to reviews and resolve addressed threads. Later steps own local review and publication. The caller owns any tracker updates.\n\nReturn `repair_summary` with the feedback addressed, changes, verification evidence, published corrections confirmed, and threads awaiting publication or further resolution.\n"
+    outputs = "repair_summary:text"
+  ]
+  "delivery.address_reviews" -> "delivery.review_repairs"
+
+  "delivery.fix_ci" [
+    class = "delivery"
+    prompt = "Discover and use relevant installed skills for diagnosing CI failures, implementing corrections and verification.\n\nUser supplied goal:\n\n{{ inputs.goal }}\n\nWork scope:\n\n{{ context.work }}\n\nPublication summary:\n\n{{ context.publication_summary }}\n\nInspect the current PR, published head and failing checks. Read their logs, affected code and applicable repository instructions. Confirm the failures belong to the current published change.\n\nIdentify the cause of each failure. Use focused local checks where possible and compare against the target branch when needed to distinguish defects in this change from existing failures or external problems.\n\nCorrect failures within the work scope and goal. Preserve unrelated work. Rerun a failed remote check when the evidence supports a transient failure; do not rerun checks repeatedly without investigating.\n\nVerify the corrections and create or update local commits using the repository’s conventions.\n\nIf the PR has merged or closed, report that state without modifying it.\n\nThis step may change repository files, run checks, rerun remote CI and create local commits. Later steps own local review and publication. The caller owns any tracker updates.\n\nYou need to get the PR into a state where required CI checks are green.\n\nReturn `repair_summary` with the failed checks, diagnosis, corrections, verification results and anything still unresolved.\n"
+    outputs = "repair_summary:text"
+  ]
+  "delivery.fix_ci" -> "delivery.review_repairs"
+
+  "delivery.resolve_conflicts" [
+    class = "delivery"
+    prompt = "Discover and use relevant installed skills for resolving merge conflicts and verifying the resulting change.\n\nUser supplied goal:\n\n{{ inputs.goal }}\n\nWork scope:\n\n{{ context.work }}\n\nPublication summary:\n\n{{ context.publication_summary }}\n\nInspect the current PR, its target branch, published head and prepared worktree. Read applicable repository instructions.\n\nIf the PR has merged or closed, report that state without modifying it.\n\nFetch the latest target branch and integrate it using the repository’s conventions. Prefer rebase. Resolve conflicts by understanding both changes. Preserve the required behaviour of the work scope, relevant target-branch changes and unrelated work.\n\nVerify that the local branch integrates cleanly with the fetched target. Run the relevant checks and create or update local commits using the repository’s conventions.\n\nIf the conflict has already disappeared, report the evidence without introducing unnecessary changes.\n\nThis step may fetch remote changes, merge or rebase locally, resolve conflicts, run checks and create local commits. Later steps own local review and publication. The caller owns any tracker updates.\n\nYour job is to make the PR mergeable and resolve any conflicts with the base branch.\n\nReturn `repair_summary` with the target revision, conflicts resolved, resulting changes, verification evidence and anything still unresolved.\n\nFollow-up steps review and publish the changes, monitor the PR and return the result to the caller. The caller owns tracker updates and worktree cleanup.\n"
+    outputs = "repair_summary:text"
+  ]
+  "delivery.resolve_conflicts" -> "delivery.review_repairs"
+
+  "delivery.review_repairs" [
+    class = "delivery"
+    prompt = "Discover and use relevant installed skills for code review and communicating findings.\n\nUser supplied goal:\n\n{{ inputs.goal }}\n\nWork scope:\n\n{{ context.work }}\n\nPublication summary:\n\n{{ context.publication_summary }}\n\nRepair summary:\n\n{{ context.repair_summary }}\n\nReview the complete current branch change against the work scope, goal and applicable repository instructions. Inspect the diff against the current target branch, including uncommitted changes, affected code and relevant tests.\n\nVerify the corrections and verification claims in the repair summary against the code and available evidence.\n\nReject unmet requirements, correctness or security defects, violations of mandatory repository rules, missing verification of required behaviour and changes outside the work scope. Treat preferences as non-blocking unless repository instructions require them.\n\nThis step is read-only. Leave files, commits, branches, pull requests and tracker records unchanged.\n\nReturn `review_verdict` as `reject` when blocking findings remain, otherwise `pass`. Return `review_findings` as an array of blocking findings, each with `requirement`, `evidence` and `correction`. A pass returns an empty array.\n\nFollow-up steps address rejected findings or publish the reviewed changes, then continue monitoring the PR.\n"
+    outputs = "review_verdict:choice, review_findings:json"
+  ]
+  "delivery.review_repairs" -> "delivery.revise_repairs" [ condition = "review_verdict == 'reject'", weight = "2" ]
+  "delivery.review_repairs" -> "delivery.publish" [ condition = "review_verdict == 'pass'", weight = "1" ]
+
+  "delivery.revise_repairs" [
+    class = "delivery"
+    prompt = "Discover and use relevant installed skills for implementation and verification.\n\nUser supplied goal:\n\n{{ inputs.goal }}\n\nWork scope:\n\n{{ context.work }}\n\nPublication summary:\n\n{{ context.publication_summary }}\n\nPrevious repair summary:\n\n{{ context.repair_summary }}\n\nReview verdict:\n\n{{ context.review_verdict }}\n\nReview findings:\n\n{{ context.review_findings | dump }}\n\nInspect the current changes and applicable repository instructions. Address every blocking finding. Preserve correct work and remove changes identified as outside the work scope.\n\nVerify each correction and run the relevant checks for the complete change. Satisfy the work scope and goal, including the required PR repairs. Create or update local commits using the repository’s conventions.\n\nThis step may change repository files, run checks and create local commits. Leave the PR and tracker records unchanged.\n\nReturn an updated `repair_summary` describing the complete repair, the correction and verification for each finding, and anything still unresolved.\n\nFollow-up steps review the changes again, publish them after a passing review, and continue monitoring the PR.\n"
+    outputs = "repair_summary:text"
+  ]
+  "delivery.revise_repairs" -> "delivery.review_repairs"
+
+  "delivery.wait" [
+    shape = "insulator"
+    class = "delivery"
+    duration = "5m"
+  ]
+  "delivery.wait" -> "delivery.probe_pr"
+
+  cleanup [ shape = "folder", action = "remove" ]
+  cleanup -> cleanup_wait [ condition = "outcome == 'failed'", weight = "2" ]
+  cleanup -> discover [ condition = "worktree.clean == true", weight = "1", loop_restart = "true" ]
+  cleanup -> cleanup_wait
+
+  cleanup_wait [ shape = "insulator", duration = "5m" ]
+  cleanup_wait -> cleanup
+
+}
