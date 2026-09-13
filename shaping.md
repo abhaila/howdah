@@ -524,13 +524,13 @@ authoring + visualization, and the remaining screens.
 
 ### Tasks
 
-- [ ] **T15 (P1, human: ~2d / CC: ~2h)** — config — Workspaces + run launcher
+- [x] **T15 (P1, human: ~2d / CC: ~2h)** — config — Workspaces + run launcher ✅ 2026-09-13: config.json workspaces, howdah run/reply/graphs CLI, start-run form, run-started carries cwd
   - `~/.howdah/config.json`: repos (path, defaultBranch, setupScript) + Plain folders;
     `howdah run <graph> --repo <name> -i k=v` CLI; web start-run form (screen 6: graph
     picker, typed inputs as a real form, folder, harness override); run-started event
     gains `cwd` + `folder_kind`.
   - Verify: start a run from the web form against a registered repo; run-started carries cwd.
-- [ ] **T16 (P1, human: ~1wk / CC: ~4h)** — engine — REAL executors + `howdah up` + doctor (THE keystone)
+- [x] **T16 (P1, human: ~1wk / CC: ~4h)** — engine — REAL executors + `howdah up` + doctor (THE keystone) ✅ 2026-09-13: REAL claude+codex executors on subscription auth, permission round-trip browser→wire, howdah up + doctor; live write-doc run $0.13
   - `engine/executors/claude.ts`: spawn the logged-in `claude` CLI (Max subscription, no API
     key) with the T7 claudeArgs; stdout → JsonlChunkParser → mapClaudeEvent → chunk events;
     permission_request → structured ask (attention + reply card maps to control_response);
@@ -541,14 +541,14 @@ authoring + visualization, and the remaining screens.
     capability-matrix assertions, allowance probe.
   - Verify: a real write-doc run end-to-end on the claude subscription; permission
     round-trip answered from the web reply card; codex run reaches turn/completed.
-- [ ] **T17 (P2, human: ~2d / CC: ~2h)** — core+adapter+web — Per-node agent config
+- [x] **T17 (P2, human: ~2d / CC: ~2h)** — core+adapter+web — Per-node agent config ✅ 2026-09-13: per-node model/effort/skills/permissionMode/maxTurns, run→node→graph resolution, model+cost per turn recorded
   - NodeDef agent gains `model`, `effort`, `skills[]`, `permissionMode`, `maxTurns`
     (harness already exists). Resolution order = run override → node → graph default
     (Orbital semantics). Adapters pass model/effort flags; skills asserted present by
     doctor (claude loads them via settingSources — proven in spikes). Model/effort/harness
     recorded on prompt-rendered + turn-finalized — fixes Orbital gap #6 ("Model —, Cost —").
   - Verify: two nodes in one graph run on different models; per-turn model + cost visible in UI.
-- [ ] **T18 (P1, human: ~4d / CC: ~3h)** — engine+web — Worktrees, commands, PRs with links
+- [x] **T18 (P1, human: ~4d / CC: ~3h)** — engine+web — Worktrees, commands, PRs with links ✅ 2026-09-13: worktree + command executors, probe:pr via gh, reconciled events, GIT rail + PR links + identity block
   - Worktree executor: `git worktree add -b howdah/<run>` under `~/.howdah/worktrees/`,
     setup script, remove + branch cleanup with clean/failed facts. Command executor:
     `bash -c`, 10min default timeout, final-JSON-line facts (Orbital parity); `probe:pr`
@@ -559,13 +559,13 @@ authoring + visualization, and the remaining screens.
     branch, worktree, run id) and per-run pull-requests list (Orbital Overview parity).
   - Verify: implement-ticket against a scratch GitHub repo produces a PR whose link
     renders in the run view; disagreement banner fires on a mid-run branch rename.
-- [ ] **T19 (P2, human: ~1d / CC: ~1h)** — web — Settings + IDE deep link
+- [x] **T19 (P2, human: ~1d / CC: ~1h)** — web — Settings + IDE deep link ✅ 2026-09-13: settings screen, POST /api/open-ide, header button with hidden/disabled/route-to-settings rules
   - Settings screen (5): editor command, Slack webhook, theme, chime, notification prefs →
     config.json. POST /api/open-ide spawns `idea <path>` (IntelliJ first). Header button
     per design: hidden for Plain runs without a folder, disabled + tooltip for cleaned
     worktrees, unconfigured routes to Settings.
   - Verify: button opens IntelliJ at the run's worktree.
-- [ ] **T20 (P2, human: ~3d / CC: ~3h)** — cli+web — Graph authoring + visualization
+- [x] **T20 (P2, human: ~3d / CC: ~3h)** — cli+web — Graph authoring + visualization ✅ 2026-09-13: howdah new-graph scaffolder (validated-or-rolled-back), Graphs screen + live DAG tab; quick-task example live at $0.04
   - `howdah new-graph`: scaffolder by kind (code / doc / research / custom) writing
     graphs/<name>.ts from a template + prompt stubs; gate stays tsc + validate — the
     TS-native decision stands, no visual editor in v1 (authoring UI = scaffold + your IDE).
