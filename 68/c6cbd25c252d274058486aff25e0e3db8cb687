@@ -1,0 +1,9 @@
+shaping.md
+  ai_agent 506-599
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "68c6cbd25c252d274058486aff25e0e3db8cb687",
+  "prompts": {}
+}
