@@ -34,7 +34,7 @@ export interface CodexExecutorOpts {
 const ALLOW_WORDS = new Set(["allow", "approve", "approved", "yes", "y", "ok", "lgtm", "resume"]);
 
 export function codexExecutor(opts: CodexExecutorOpts): Executor {
-  return async ({ nodeId, def, visit, runId, cwd, log, renderedPrompt }) => {
+  return async ({ nodeId, def, visit, runId, cwd, log, renderedPrompt, agentConfig }) => {
     if (def.kind !== "agent") throw new Error("codexExecutor on non-agent node");
     const writeKeys = Object.keys(def.writes ?? {});
     const prompt = (renderedPrompt ?? "") + buildOutputInstruction(writeKeys);
@@ -149,7 +149,7 @@ export function codexExecutor(opts: CodexExecutorOpts): Executor {
         cwd: effectiveCwd(log.path, cwd) ?? dirname(log.path),
         approvalPolicy: "on-request",
         sandbox: opts.sandbox ?? "workspace-write",
-        ...(opts.model ? { model: opts.model } : {}),
+        ...((agentConfig?.model ?? opts.model) ? { model: agentConfig?.model ?? opts.model } : {}),
       });
       const threadId = thread?.threadId ?? thread?.thread?.id;
       if (!threadId) throw new Error(`thread/start gave no threadId: ${JSON.stringify(thread).slice(0, 200)}`);
@@ -158,7 +158,7 @@ export function codexExecutor(opts: CodexExecutorOpts): Executor {
       await request("turn/start", {
         threadId,
         input: [{ type: "text", text: prompt }],
-        ...(opts.effort ? { effort: opts.effort } : {}),
+        ...((agentConfig?.effort ?? opts.effort) ? { effort: agentConfig?.effort ?? opts.effort } : {}),
       });
       await done;
     } finally {

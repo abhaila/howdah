@@ -55,8 +55,7 @@ export function liveExecutors(deps: LiveExecutorDeps): EngineOpts["executors"] {
   const codex = codexExecutor({ attentionDir: deps.attentionDir, viewerBase: deps.viewerBase, notifiers: deps.notifiers, binary: deps.codexBinary });
   return {
     wait: waitExecutor,
-    agent: async (args) =>
-      (args.def.kind === "agent" && args.def.harness === "codex" ? codex : claude)(args),
+    agent: async (args) => ((args.agentConfig?.harness ?? "claude") === "codex" ? codex : claude)(args),
     command: commandExecutor(),
     worktree: worktreeExecutor({ worktreesDir: deps.worktreesDir ?? join(deps.attentionDir, "..", "worktrees") }),
   };

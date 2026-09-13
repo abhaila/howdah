@@ -114,7 +114,10 @@ function Turn({ turn, render }: { turn: CoalescedTurn; render?: RunDetail["rende
   const textParts = turn.parts.filter((p) => p.kind === "text");
   return (
     <div className={`turn ${turn.finalized ? "" : "unfinalized"}`}>
-      <div className="who">{turn.node}@{turn.visit} · turn {turn.turn}{turn.finalized ? "" : " · interrupted"}</div>
+      <div className="who">
+        {turn.node}@{turn.visit} · turn {turn.turn}{turn.finalized ? "" : " · interrupted"}
+        {render?.model && <span className="model-chip">{render.harness ?? "claude"} · {render.model}{render.effort ? ` · ${render.effort}` : ""}</span>}
+      </div>
       {textParts.map((p, i) => <div key={i} className="prose">{p.content}</div>)}
       {toolParts.length > 0 && (
         <div className="tool-cluster" onClick={() => setOpen(!open)}>

@@ -163,3 +163,6 @@ button.primary:disabled { opacity: 0.5; cursor: default; }
 .pr-state.pr-open { color: var(--status-done); }
 .pr-state.pr-merged { color: var(--status-waiting); }
 .pr-state.pr-closed, .pr-state.pr-conflicts, .pr-state.pr-ci_failed { color: var(--status-failed-recoverable); }
+
+/* per-turn model chip (T17 — the "Model —" Orbital gap, fixed) */
+.model-chip { margin-left: 8px; background: var(--bg-inset); border-radius: 8px; padding: 1px 7px; font-size: 10px; color: var(--fg-muted); }

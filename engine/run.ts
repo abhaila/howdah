@@ -19,7 +19,7 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
-import type { Graph, NodeDef, EdgeDef } from "../core/graph";
+import type { Graph, NodeDef, EdgeDef, AgentConfig } from "../core/graph";
 import { basename } from "node:path";
 import { ContextStore, type Scope } from "../core/context";
 import { EventLog } from "../log/write";
@@ -47,6 +47,8 @@ export interface ExecArgs {
   reads: Record<string, unknown>;
   /** agent nodes: the rendered prompt + its hash (already logged as prompt-rendered) */
   renderedPrompt?: string;
+  /** agent nodes: resolved execution config (run override → node → graph default) */
+  agentConfig?: AgentConfig;
   effects: EffectsHandle;
 }
 
@@ -75,6 +77,8 @@ export interface EngineOpts {
   folderKind?: "repo" | "plain";
   /** runs before every non-terminal node — the reconciler's seat (A6.1) */
   beforeNode?: (nodeId: string, def: NodeDef<any>) => Promise<void>;
+  /** run-level agent overrides — beat node settings, which beat graph defaults */
+  overrides?: AgentConfig;
 }
 
 export type RunState =
@@ -228,7 +232,11 @@ export class Engine {
     if ("reads" in def && def.reads) for (const k of def.reads) reads[k] = this.ctx.get(k, { node: nodeId, visit });
 
     let renderedPrompt: string | undefined;
-    if (def.kind === "agent") renderedPrompt = this.renderPrompt(nodeId, def.prompt, visit, reads);
+    let agentConfig: AgentConfig | undefined;
+    if (def.kind === "agent") {
+      agentConfig = this.resolveAgentConfig(def);
+      renderedPrompt = this.renderPrompt(nodeId, def.prompt, visit, reads, agentConfig);
+    }
 
     const effects: EffectsHandle = {
       claim: (effect) => {
@@ -248,7 +256,7 @@ export class Engine {
       cwd: this.opts.cwd,
       runId: basename(this.opts.dir),
       log: this.log,
-      reads, renderedPrompt, effects,
+      reads, renderedPrompt, agentConfig, effects,
     });
   }
 
@@ -292,7 +300,26 @@ export class Engine {
     return pinned;
   }
 
-  private renderPrompt(nodeId: string, prompt: PromptId, visit: number, reads: Record<string, unknown>): string {
+  /** Orbital's resolution order, kept: run override → node setting → graph default. */
+  private resolveAgentConfig(def: Extract<NodeDef<any>, { kind: "agent" }>): AgentConfig {
+    const defaults = this.graph.def.defaults ?? {};
+    const node: AgentConfig = {
+      harness: def.harness, model: def.model, effort: def.effort,
+      permissionMode: def.permissionMode, maxTurns: def.maxTurns, skills: def.skills,
+    };
+    const overrides = this.opts.overrides ?? {};
+    const pick = <K extends keyof AgentConfig>(k: K): AgentConfig[K] => overrides[k] ?? node[k] ?? defaults[k];
+    return {
+      harness: pick("harness") ?? "claude",
+      model: pick("model"),
+      effort: pick("effort"),
+      permissionMode: pick("permissionMode"),
+      maxTurns: pick("maxTurns"),
+      skills: pick("skills"),
+    };
+  }
+
+  private renderPrompt(nodeId: string, prompt: PromptId, visit: number, reads: Record<string, unknown>, config?: AgentConfig): string {
     const raw = readFileSync(join(this.pinDir(), `${prompt}.md`), "utf8");
     const m = raw.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
     const body = m && m[2] !== undefined ? m[2] : raw;
@@ -318,6 +345,9 @@ export class Engine {
       prompt_version: version,
       rendered_hash: hash,
       context_read: contextRead,
+      harness: config?.harness,
+      model: config?.model,
+      effort: config?.effort,
     });
     return rendered;
   }

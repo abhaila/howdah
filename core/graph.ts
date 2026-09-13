@@ -30,6 +30,20 @@ export type PromptRef = PromptId;
 
 export type Harness = "claude" | "codex" | "opencode";
 
+export type Effort = "low" | "medium" | "high" | "xhigh";
+export type PermissionMode = "manual" | "acceptEdits" | "auto" | "plan";
+
+/** per-agent execution config — resolution order: run override → node → graph default */
+export interface AgentConfig {
+  harness?: Harness;
+  model?: string;
+  effort?: Effort;
+  permissionMode?: PermissionMode;
+  maxTurns?: number;
+  /** skills the node expects available; surfaced to the agent and asserted by doctor */
+  skills?: string[];
+}
+
 export interface OutputSpec {
   scope: Scope;
   /** doc string surfaced in the UI and to the reviser */
@@ -39,15 +53,14 @@ export interface OutputSpec {
 type Keys<C> = keyof C & string;
 
 export type NodeDef<C extends object> =
-  | {
+  | ({
       kind: "agent";
       prompt: PromptRef;
       reads?: Keys<C>[];
       writes?: Partial<Record<Keys<C>, OutputSpec>>;
-      harness?: Harness;
       maxVisits?: number;
       class?: string;
-    }
+    } & AgentConfig)
   | {
       kind: "command";
       /** shell script or named probe (e.g. "probe:pr") */
@@ -86,6 +99,8 @@ export interface EdgeDef<C extends object> {
 export interface GraphDef<C extends object> {
   name: string;
   description?: string;
+  /** graph-wide agent defaults; node settings override these, run overrides beat both */
+  defaults?: AgentConfig;
   entry: string;
   /** required run inputs — available in context at entry */
   inputs: Keys<C>[];

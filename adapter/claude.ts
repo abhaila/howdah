@@ -8,7 +8,7 @@
 import type { AgentEvent } from "./events";
 
 /** argv for a headless claude session the engine can own. */
-export function claudeArgs(opts: { sessionId: string; permissionMode?: string; resume?: boolean }): string[] {
+export function claudeArgs(opts: { sessionId: string; permissionMode?: string; resume?: boolean; model?: string; maxTurns?: number }): string[] {
   return [
     "-p",
     "--verbose", // required by --output-format stream-json under -p (claude >= 2.1.2xx)
@@ -17,6 +17,8 @@ export function claudeArgs(opts: { sessionId: string; permissionMode?: string; r
     "--include-partial-messages",
     "--permission-prompt-tool", "stdio",
     "--permission-mode", opts.permissionMode ?? "manual",
+    ...(opts.model ? ["--model", opts.model] : []),
+    ...(opts.maxTurns ? ["--max-turns", String(opts.maxTurns)] : []),
     ...(opts.resume ? ["--resume", opts.sessionId] : ["--session-id", opts.sessionId]),
   ];
 }

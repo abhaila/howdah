@@ -54,6 +54,10 @@ export type RunEvent =
       rendered_hash: string;
       /** exactly the context the template read, at render time (A5.1) */
       context_read: Record<string, unknown>;
+      /** resolved execution config — run override → node → graph default */
+      harness?: Harness;
+      model?: string;
+      effort?: string;
     }
   | {
       type: "chunk";

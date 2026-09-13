@@ -63,6 +63,7 @@ function runnerAlive(runDir: string): boolean {
 
 function parseRunArgs(argv: string[]) {
   const inputs: Record<string, string> = {};
+  const overrides: import("../core/graph").AgentConfig = {};
   let workspace: string | undefined, dir: string | undefined, id: string | undefined;
   const [graphName, ...rest] = argv;
   for (let i = 0; i < rest.length; i++) {
@@ -75,13 +76,16 @@ function parseRunArgs(argv: string[]) {
     } else if (a === "--workspace") workspace = rest[++i];
     else if (a === "--dir") dir = rest[++i];
     else if (a === "--id") id = rest[++i];
+    else if (a === "--model") overrides.model = rest[++i];
+    else if (a === "--harness") overrides.harness = rest[++i] as any;
+    else if (a === "--effort") overrides.effort = rest[++i] as any;
     else throw new Error(`unknown flag: ${a}`);
   }
-  return { graphName, inputs, workspace, dir, id };
+  return { graphName, inputs, workspace, dir, id, overrides };
 }
 
 export async function runCommand(argv: string[]): Promise<string> {
-  const { graphName, inputs, workspace, dir, id } = parseRunArgs(argv);
+  const { graphName, inputs, workspace, dir, id, overrides } = parseRunArgs(argv);
   const graph = graphName ? GRAPHS[graphName] : undefined;
   if (!graph) throw new Error(`unknown graph "${graphName}" — have: ${Object.keys(GRAPHS).join(", ")}`);
 
@@ -97,7 +101,7 @@ export async function runCommand(argv: string[]): Promise<string> {
   const runId = id ?? `${graphName}-${Date.now().toString(36)}`;
   const runDir = join(runsDir, runId);
   const engine: Engine = new Engine(graph, {
-    dir: runDir, executors: executors(), cwd, folderKind,
+    dir: runDir, executors: executors(), cwd, folderKind, overrides,
     beforeNode: reconcilerHook(runDir, () => engine),
   });
   console.log(`run ${runId} starting (${cwd ?? "no folder"})`);

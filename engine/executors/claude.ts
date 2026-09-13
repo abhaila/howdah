@@ -39,15 +39,21 @@ export interface ClaudeExecutorOpts {
 const ALLOW_WORDS = new Set(["allow", "approve", "approved", "yes", "y", "ok", "lgtm", "resume"]);
 
 export function claudeExecutor(opts: ClaudeExecutorOpts): Executor {
-  return async ({ nodeId, def, visit, runId, cwd, log, renderedPrompt }) => {
+  return async ({ nodeId, def, visit, runId, cwd, log, renderedPrompt, agentConfig }) => {
     if (def.kind !== "agent") throw new Error("claudeExecutor on non-agent node");
     const writeKeys = Object.keys(def.writes ?? {});
-    const prompt = (renderedPrompt ?? "") + buildOutputInstruction(writeKeys);
+    const skills = agentConfig?.skills ?? [];
+    const skillHint = skills.length ? `\n\nRelevant installed skills for this task: ${skills.map((s) => `/${s}`).join(", ")} — invoke them where they apply.` : "";
+    const prompt = (renderedPrompt ?? "") + skillHint + buildOutputInstruction(writeKeys);
     const sessionId = randomUUID();
 
     const proc = Bun.spawn(
-      [opts.binary ?? "claude", ...claudeArgs({ sessionId, permissionMode: opts.permissionMode ?? "acceptEdits" }),
-        ...(opts.model ? ["--model", opts.model] : [])],
+      [opts.binary ?? "claude", ...claudeArgs({
+        sessionId,
+        permissionMode: agentConfig?.permissionMode ?? opts.permissionMode ?? "acceptEdits",
+        model: agentConfig?.model ?? opts.model,
+        maxTurns: agentConfig?.maxTurns,
+      })],
       { cwd: effectiveCwd(log.path, cwd) ?? dirname(log.path), env: { ...process.env }, stdin: "pipe", stdout: "pipe", stderr: "pipe" },
     );
     proc.stdin.write(buildClaudeUserTurn(prompt));
