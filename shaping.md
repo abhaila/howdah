@@ -503,6 +503,100 @@ amber-on-dark. 44px targets.
 - T10 gains: notification text carries wait duration + deep link; viewer supervised
   separately from engine.
 
+## Build Phase 2 — Orbital-core parity (planned 2026-09-13)
+
+Phase 1 (T1-T14) built the spine: typed graphs, prompt store + reviser loop, durable log,
+adapters, engine with exactly-once + pinning, reconciler, attention, viewer v0. Phase 2
+closes the gap to Orbital's observed core (research/orbital-spec.md) and autoresearcherUI:
+REAL executors on your subscriptions, repos/worktrees/PRs, per-node agent config, graph
+authoring + visualization, and the remaining screens.
+
+### Gap map (user asks 2026-09-13 → tasks)
+
+| Ask | Task |
+|---|---|
+| (a) create new graphs for kinds of work | T20 (+ T15 start-run form) |
+| (b) connect GitHub repos for work | T15 + T18 |
+| (c) per-node prompt/skills/model/effort | T17 |
+| (d) PRs created, with links | T18 |
+| (e) link to IntelliJ | T19 |
+| (f) connect codex/claude subscriptions | T16 |
+
+### Tasks
+
+- [ ] **T15 (P1, human: ~2d / CC: ~2h)** — config — Workspaces + run launcher
+  - `~/.howdah/config.json`: repos (path, defaultBranch, setupScript) + Plain folders;
+    `howdah run <graph> --repo <name> -i k=v` CLI; web start-run form (screen 6: graph
+    picker, typed inputs as a real form, folder, harness override); run-started event
+    gains `cwd` + `folder_kind`.
+  - Verify: start a run from the web form against a registered repo; run-started carries cwd.
+- [ ] **T16 (P1, human: ~1wk / CC: ~4h)** — engine — REAL executors + `howdah up` + doctor (THE keystone)
+  - `engine/executors/claude.ts`: spawn the logged-in `claude` CLI (Max subscription, no API
+    key) with the T7 claudeArgs; stdout → JsonlChunkParser → mapClaudeEvent → chunk events;
+    permission_request → structured ask (attention + reply card maps to control_response);
+    rate_limit_event → allowance rows. `engine/executors/codex.ts`: `codex app-server`
+    child, thread/start per run with cwd, notifications → events, approvals → asks,
+    account/rateLimits/updated → allowance. `howdah up`: supervisor owning executors,
+    resume-on-boot, heartbeat for the watchdog. `howdah doctor`: CLI presence/version/auth,
+    capability-matrix assertions, allowance probe.
+  - Verify: a real write-doc run end-to-end on the claude subscription; permission
+    round-trip answered from the web reply card; codex run reaches turn/completed.
+- [ ] **T17 (P2, human: ~2d / CC: ~2h)** — core+adapter+web — Per-node agent config
+  - NodeDef agent gains `model`, `effort`, `skills[]`, `permissionMode`, `maxTurns`
+    (harness already exists). Resolution order = run override → node → graph default
+    (Orbital semantics). Adapters pass model/effort flags; skills asserted present by
+    doctor (claude loads them via settingSources — proven in spikes). Model/effort/harness
+    recorded on prompt-rendered + turn-finalized — fixes Orbital gap #6 ("Model —, Cost —").
+  - Verify: two nodes in one graph run on different models; per-turn model + cost visible in UI.
+- [ ] **T18 (P1, human: ~4d / CC: ~3h)** — engine+web — Worktrees, commands, PRs with links
+  - Worktree executor: `git worktree add -b howdah/<run>` under `~/.howdah/worktrees/`,
+    setup script, remove + branch cleanup with clean/failed facts. Command executor:
+    `bash -c`, 10min default timeout, final-JSON-line facts (Orbital parity); `probe:pr`
+    routes through the T9 reconciler. New `reconciled` event (git + forge observation);
+    run claims intended branch/PR at publish.
+  - Web: GIT rail goes real — branch, uncommitted/unpushed, **PR link + state chip**,
+    "probed Ns ago", intended-vs-observed disagreement banner; identity block (repo,
+    branch, worktree, run id) and per-run pull-requests list (Orbital Overview parity).
+  - Verify: implement-ticket against a scratch GitHub repo produces a PR whose link
+    renders in the run view; disagreement banner fires on a mid-run branch rename.
+- [ ] **T19 (P2, human: ~1d / CC: ~1h)** — web — Settings + IDE deep link
+  - Settings screen (5): editor command, Slack webhook, theme, chime, notification prefs →
+    config.json. POST /api/open-ide spawns `idea <path>` (IntelliJ first). Header button
+    per design: hidden for Plain runs without a folder, disabled + tooltip for cleaned
+    worktrees, unconfigured routes to Settings.
+  - Verify: button opens IntelliJ at the run's worktree.
+- [ ] **T20 (P2, human: ~3d / CC: ~3h)** — cli+web — Graph authoring + visualization
+  - `howdah new-graph`: scaffolder by kind (code / doc / research / custom) writing
+    graphs/<name>.ts from a template + prompt stubs; gate stays tsc + validate — the
+    TS-native decision stands, no visual editor in v1 (authoring UI = scaffold + your IDE).
+  - Web: Graphs screen (list + SVG DAG render, class lanes); run view gains a Graph tab
+    with current node + visit counts highlighted (Orbital / autoresearcherUI parity).
+  - Verify: scaffold a new graph, launch it from the form, watch it advance on the Graph tab.
+- [ ] **T21 (P1, human: ~3d / CC: ~2h)** — web — Prompt library + proposal review screens
+  - Prompts screen (3): versions from git, consuming graphs, joined outcomes, attached
+    feedback. Proposals screen (4): diff, evidence, eval score, accept/reject wired to
+    store.accept (D7 stale-base + OV-3 guards), stale-base → re-draft affordance. Run view
+    "Add feedback" writes reviser-format jsonl pre-filled with run/node/visit/rendered_hash.
+  - Verify: feedback from a run → reviser proposal → accept in UI → next run pins v+1.
+- [ ] **T22 (P2, human: ~2d / CC: ~1.5h)** — engine+web — Steering + run controls
+  - "Message the agent" box on running runs (claude: queued next-turn injection; codex:
+    turn/steer). Controls: pause / resume / retry (new visit) / abort, as API + UI,
+    executed by `howdah up`.
+  - Verify: a steering message lands in the next turn and renders as an operator row.
+
+### Order
+
+```
+T15 ──▶ T16 ──▶ T18 ──▶ (real code work end-to-end: repo → worktree → PR link)
+                 ├────▶ T17
+                 └────▶ T22
+T21 (independent — store + logs exist)     T19, T20 (after T15)
+```
+
+T16 is the convergence point: (f) unlocks (b,c,d) being real rather than seeded. Suggested
+first slice: T15+T16 together — after them, a real claude-subscription run is visible in the
+viewer end to end, which is the moment Howdah replaces Orbital for one workflow.
+
 ## GSTACK REVIEW REPORT
 
 | Review | Trigger | Why | Runs | Status | Findings |
