@@ -225,11 +225,14 @@ export function createHowdahServer(opts: ServerOpts) {
 
       const m = url.pathname.match(/^\/api\/runs(?:\/([^/]+)(?:\/(events|reply|open-ide|resume|pause|abort|jump))?)?$/);
       if (!m) {
-        // static: /public assets by name, everything else → the app shell
+        // static: /public assets by name, everything else → the app shell.
+        // no-cache: this is a local app whose bundle changes constantly — the browser must
+        // revalidate every load (a cached stale /app.css once served a whole old UI)
+        const noCache = { "cache-control": "no-cache" };
         const asset = url.pathname.replace(/^\//, "");
         const file = Bun.file(join(import.meta.dir, "public", asset));
-        if (asset && (await file.exists())) return new Response(file);
-        return new Response(Bun.file(join(import.meta.dir, "public", "index.html")));
+        if (asset && (await file.exists())) return new Response(file, { headers: noCache });
+        return new Response(Bun.file(join(import.meta.dir, "public", "index.html")), { headers: noCache });
       }
       const [, id, sub] = m;
 
