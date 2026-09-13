@@ -1,0 +1,40 @@
+package.json
+  s_220da8e953793c::t_d0a897440690a4 7-10,22
+  s_220da8e953793c::t_dd9e27a1aae6bb 14-15,17-20
+web/app/main.tsx
+  s_220da8e953793c::t_5362961a17ba60 1-301
+.gitignore
+  s_220da8e953793c::t_d0a897440690a4 7
+web/server.ts
+  s_220da8e953793c::t_de3a732ca46a25 107-117,119
+  s_220da8e953793c::t_fda198d4b78839 79
+  s_220da8e953793c::t_da49c734288b0b 1-78,80-106,118,120-123
+web/public/index.html
+  s_220da8e953793c::t_ba2f5f2184ee7b 1-18
+web/public/app.css
+  s_220da8e953793c::t_9ea86b600f19ec 1-145
+tsconfig.json
+  s_220da8e953793c::t_e8a72291416746 3,12
+  s_220da8e953793c::t_de3a732ca46a25 10-11,14
+web/derive.ts
+  s_220da8e953793c::t_467389c9bdb08e 1-164
+web/web.test.ts
+  s_220da8e953793c::t_b52f279a0e65b0 144-149
+  s_220da8e953793c::t_b32cdbf8debe4f 1-143,150-162
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "5ebb58ebc0b01c4bbba8d1c4865238b16b8617bd",
+  "prompts": {},
+  "sessions": {
+    "s_220da8e953793c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2ba82f1f-e55e-4150-b238-4ff1b96ce382",
+        "model": "claude-fable-5"
+      },
+      "human_author": "areeb.bhaila <areeb.bhaila@gmail.com>"
+    }
+  }
+}
