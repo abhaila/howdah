@@ -11,7 +11,7 @@
  *
  * Run layout: <runsDir>/<run-id>/run.jsonl (the engine's dir option).
  */
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { EventLog, readLog } from "../log/write";
@@ -38,6 +38,19 @@ function listRunIds(runsDir: string): string[] {
 
 export function createHowdahServer(opts: ServerOpts) {
   const pollMs = opts.pollMs ?? 500;
+  const spawnResume = (id: string) => {
+    // a live runner is already polling the log for the reply — don't double-run
+    const pidFile = join(opts.runsDir, id, "runner.pid");
+    if (existsSync(pidFile)) {
+      try {
+        const pid = Number(readFileSync(pidFile, "utf8").trim());
+        if (pid > 0) { process.kill(pid, 0); return; } // alive → it will pick the reply up
+      } catch { /* dead pid → resume below */ }
+    }
+    Bun.spawn(["bun", join(import.meta.dir, "..", "cli", "main.ts"), "resume", id], {
+      stdout: "ignore", stderr: "ignore", env: { ...process.env },
+    }).unref();
+  };
   const json = (body: unknown, status = 200) =>
     new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
@@ -108,7 +121,7 @@ export function createHowdahServer(opts: ServerOpts) {
         return json({ id: runId }, 202);
       }
 
-      const m = url.pathname.match(/^\/api\/runs(?:\/([^/]+)(?:\/(events|reply|open-ide))?)?$/);
+      const m = url.pathname.match(/^\/api\/runs(?:\/([^/]+)(?:\/(events|reply|open-ide|resume))?)?$/);
       if (!m) {
         // static: /public assets by name, everything else → the app shell
         const asset = url.pathname.replace(/^\//, "");
@@ -145,7 +158,13 @@ export function createHowdahServer(opts: ServerOpts) {
         if (!ask || resolved) return json({ error: "nothing awaiting a reply" }, 409);
         new EventLog(path).append({ type: "attention-resolved", node: ask.node, visit: ask.visit, reply: body.text ?? "" });
         new AttentionCenter(opts.attentionDir, []).resolve(`${id}:${ask.node}:${ask.visit}`);
+        spawnResume(id); // the reply must MOVE the run, not just record the answer
         return json({ ok: true });
+      }
+
+      if (sub === "resume" && req.method === "POST") {
+        spawnResume(id);
+        return json({ ok: true }, 202);
       }
 
       if (sub === "events") {

@@ -185,10 +185,14 @@ button.primary:disabled { opacity: 0.5; cursor: default; }
 .dag-title { fill: var(--fg); font-family: var(--font-mono); font-size: 12px; font-weight: 600; }
 .dag-sub { fill: var(--fg-muted); font-family: var(--font-mono); font-size: 10px; }
 .dag-edge-label { fill: var(--fg-faint); font-family: var(--font-mono); font-size: 9px; }
-.dag-visits { fill: var(--attention); }
+.dag-node rect.dag-visits { fill: var(--attention); stroke: none; }
 .dag-visits-text { fill: #fff; font-size: 10px; font-weight: 700; font-family: var(--font-mono); }
 .graphs-layout { display: grid; grid-template-columns: 280px 1fr; gap: 18px; align-items: start; }
 .run-row.selected { border-color: var(--border-strong); background: var(--bg-inset); }
 .tabs { display: flex; gap: 2px; background: var(--bg-inset); border-radius: var(--radius-sm); padding: 2px; }
 .tab { background: none; border: 0; color: var(--fg-muted); font-family: var(--font-mono); font-size: 12px; padding: 4px 12px; border-radius: 5px; cursor: pointer; }
 .tab.active { background: var(--bg-raised); color: var(--fg); font-weight: 600; }
+
+/* failure banner + retry (failed runs must say WHY) */
+.banner.failed { background: color-mix(in srgb, var(--status-failed-recoverable) 12%, var(--bg)); color: var(--status-failed-recoverable); border-bottom-color: var(--status-failed-recoverable); }
+.banner .retry { margin-left: auto; background: var(--status-failed-recoverable); color: #fff; border: 0; border-radius: var(--radius-sm); padding: 4px 12px; font-family: var(--font-display); font-weight: 600; font-size: 12px; cursor: pointer; }

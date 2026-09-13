@@ -204,9 +204,12 @@ export class Engine {
       try {
         result = await this.execute(current, def, visit, attemptId);
       } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
         this.ctx.endAttempt("failed");
+        // the reason must be readable in the thread, not only in the (resolvable) ask
+        this.log.append({ type: "chunk", node: current, visit, turn: 1, index: 9999, kind: "text", content: `\n[attempt failed: ${message}]` });
         this.log.append({ type: "node-finished", node: current, visit, status: "failed", writes: {} });
-        return this.park(current, visit, `executor threw: ${err instanceof Error ? err.message : String(err)}`);
+        return this.park(current, visit, `executor threw: ${message}`);
       }
 
       for (const [k, v] of Object.entries(result.writes)) this.ctx.set(k, v);

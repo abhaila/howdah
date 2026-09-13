@@ -246,6 +246,16 @@ function RunView({ id }: { id: string }) {
             <span className="timer">{fmtWait(summary.waiting_since, now)}</span>
           </div>
         )}
+        {(summary.status === "failed-recoverable" || summary.status === "failed-terminal") && (
+          <div className="banner failed">
+            {summary.failure
+              ? <>Failed at {summary.failure.node}@{summary.failure.visit}{summary.failure.reason ? <> — {summary.failure.reason.replace(/^executor threw: /, "")}</> : null}</>
+              : <>Run failed — see the last thread entry</>}
+            {summary.status === "failed-recoverable" && (
+              <button className="retry" onClick={() => fetch(`/api/runs/${id}/resume`, { method: "POST" }).then(reload)}>Retry</button>
+            )}
+          </div>
+        )}
         {tab === "graph" ? (
           <RunGraph graph={summary.graph} timeline={detail.timeline} />
         ) : (

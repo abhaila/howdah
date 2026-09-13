@@ -217,3 +217,67 @@ describe("graph shape API (T20)", () => {
     s3.stop(true);
   });
 });
+
+describe("failure visibility + reply-resumes (blog-post regression)", () => {
+  test("a failed node's park reason survives ask resolution as summary.failure", () => {
+    const dir = mkdtempSync(join(tmpdir(), "howdah-fail-"));
+    const log = new EventLog(join(dir, "r", "run.jsonl"));
+    log.append({ type: "run-started", graph: "write-doc", inputs: { goal: "g" }, pinned_prompts: {} });
+    log.append({ type: "node-started", node: "doc.review", visit: 1, attempt_id: "doc.review#1" });
+    log.append({ type: "node-finished", node: "doc.review", visit: 1, status: "failed", writes: {} });
+    log.append({ type: "attention-raised", node: "doc.review", visit: 1, reason: "executor threw: reviewer needs your call" });
+
+    let s = deriveSummary("r", log.read());
+    expect(s.status).toBe("needs-input");
+    expect(s.failure).toMatchObject({ node: "doc.review", reason: "executor threw: reviewer needs your call" });
+
+    // the ask gets answered — the WHY must remain visible on the failed run
+    log.append({ type: "attention-resolved", node: "doc.review", visit: 1, reply: "yes" });
+    s = deriveSummary("r", log.read());
+    expect(s.status).toBe("failed-recoverable");
+    expect(s.failure).toMatchObject({ node: "doc.review", visit: 1, reason: "executor threw: reviewer needs your call" });
+
+    // a successful re-attempt clears the failure state
+    log.append({ type: "node-started", node: "doc.review", visit: 2, attempt_id: "doc.review#2" });
+    log.append({ type: "node-finished", node: "doc.review", visit: 2, status: "succeeded", writes: {} });
+    expect(deriveSummary("r", log.read()).status).toBe("running");
+  });
+
+  test("web reply spawns a resume when the runner is dead", async () => {
+    const base = mkdtempSync(join(tmpdir(), "howdah-replyres-"));
+    const runsDir = join(base, "runs");
+    mkdirSync(runsDir, { recursive: true });
+    process.env.HOWDAH_HOME = base;
+    process.env.HOWDAH_STUB = "1";
+    const server = createHowdahServer({ runsDir, attentionDir: join(base, "attention"), port: 0 });
+    try {
+      // seed a parked run with pinned prompts so resume can rebuild it
+      const { Engine } = await import("../engine/run");
+      const { writeDoc } = await import("../graphs/write-doc");
+      const engine = new Engine(writeDoc, {
+        dir: join(runsDir, "parked"),
+        executors: { agent: async ({ nodeId }) => {
+          if (nodeId === "doc.review") throw new Error("needs your call");
+          return { status: "succeeded", writes: nodeId === "doc.outline" ? { doc_outline: "o" } : { doc_summary: "s" } };
+        } },
+      });
+      const parked = await engine.start({ goal: "g", work: "w" });
+      expect(parked.state).toBe("parked");
+
+      await fetch(`http://localhost:${server.port}/api/runs/parked/reply`, {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: "yes go" }),
+      });
+      // the detached stub resume re-attempts doc.review, which parks on the stub registry
+      let resumed = false;
+      for (let i = 0; i < 60 && !resumed; i++) {
+        await Bun.sleep(100);
+        const events = readLog(join(runsDir, "parked", "run.jsonl"));
+        resumed = events.some((e: any) => e.type === "node-started" && e.node === "doc.review" && e.visit === 2);
+      }
+      expect(resumed).toBe(true); // the reply MOVED the run
+    } finally {
+      server.stop(true);
+      delete process.env.HOWDAH_STUB;
+    }
+  }, 15000);
+});
