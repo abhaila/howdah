@@ -1,0 +1,39 @@
+engine/executors/index.ts
+  s_220da8e953793c::t_90c931bee8225e 58
+cli/main.ts
+  s_220da8e953793c::t_90c931bee8225e 66,79-81,84,88,104
+engine/config.test.ts
+  s_220da8e953793c::t_1e64df996d1e0d 1-74
+web/app/main.tsx
+  s_220da8e953793c::t_1e64df996d1e0d 117-120
+engine/run.ts
+  s_220da8e953793c::t_d05c5a62273aaa 22,50-51,80-81,235-239,259,303-322,348-350
+web/public/app.css
+  s_220da8e953793c::t_1e64df996d1e0d 166-168
+adapter/claude.ts
+  s_220da8e953793c::t_90c931bee8225e 11,20-21
+engine/executors/claude.ts
+  s_220da8e953793c::t_90c931bee8225e 42,45-47,51-56
+log/events.ts
+  s_220da8e953793c::t_571864d760ed39 57-60
+core/graph.ts
+  s_220da8e953793c::t_571864d760ed39 33-46,56,63,102-103
+engine/executors/codex.ts
+  s_220da8e953793c::t_90c931bee8225e 37,152,161
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "067f0829e44b724e97b4e03abd06c48626c2807c",
+  "prompts": {},
+  "sessions": {
+    "s_220da8e953793c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2ba82f1f-e55e-4150-b238-4ff1b96ce382",
+        "model": "claude-fable-5"
+      },
+      "human_author": "areeb.bhaila <areeb.bhaila@gmail.com>"
+    }
+  }
+}
