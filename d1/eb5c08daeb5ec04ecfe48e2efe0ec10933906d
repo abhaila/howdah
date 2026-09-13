@@ -1,0 +1,29 @@
+web/public/favicon.svg
+  s_220da8e953793c::t_20ad7f43bc6bde 15
+web/public/logo.svg
+  s_220da8e953793c::t_20ad7f43bc6bde 14
+web/public/favicon-raise-1.svg
+  s_220da8e953793c::t_20ad7f43bc6bde 14
+web/app/main.tsx
+  s_220da8e953793c::t_20ad7f43bc6bde 55
+web/public/favicon-raise-2.svg
+  s_220da8e953793c::t_20ad7f43bc6bde 14
+web/public/tokens.css
+  s_220da8e953793c::t_20ad7f43bc6bde 6-9,31-33,35,37-41,45,81-84,86-89,91,114-117,119-122,124
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "d1eb5c08daeb5ec04ecfe48e2efe0ec10933906d",
+  "prompts": {},
+  "sessions": {
+    "s_220da8e953793c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2ba82f1f-e55e-4150-b238-4ff1b96ce382",
+        "model": "claude-fable-5"
+      },
+      "human_author": "areeb.bhaila <areeb.bhaila@gmail.com>"
+    }
+  }
+}
