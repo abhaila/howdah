@@ -254,23 +254,23 @@ button.primary:disabled { opacity: 0.5; cursor: default; }
   background: var(--bg); color: var(--fg);
   transition: opacity 350ms var(--ease-out-strong);
 }
-.splash.leaving { opacity: 0; pointer-events: none; }
+.splash.leaving { opacity: 0; pointer-events: none; transition-duration: 420ms; }
 .splash-mark { width: 84px; height: 84px; overflow: visible; }
 .splash-stroke {
   stroke-dasharray: 100 110; /* gap > dash: round caps peek otherwise */
   stroke-dashoffset: 100;
-  animation: howdah-draw 700ms var(--ease-out-strong) forwards;
+  animation: howdah-draw 1150ms var(--ease-out-strong) forwards;
 }
 .splash-eye {
   opacity: 0;
   transform: scale(0.5);
   transform-box: fill-box; transform-origin: center;
-  animation: howdah-eye 180ms var(--ease-out-strong) 580ms forwards;
+  animation: howdah-eye 220ms var(--ease-out-strong) 980ms forwards;
 }
 .splash-word {
   font-family: var(--font-display); font-weight: 600; font-size: 15px; letter-spacing: 0.02em;
   opacity: 0; transform: translateY(4px);
-  animation: howdah-word 260ms var(--ease-out-strong) 640ms forwards;
+  animation: howdah-word 300ms var(--ease-out-strong) 1080ms forwards;
 }
 @keyframes howdah-draw { to { stroke-dashoffset: 0; } }
 @keyframes howdah-eye  { to { opacity: 1; transform: scale(1); } }
@@ -297,3 +297,7 @@ button.primary:disabled { opacity: 0.5; cursor: default; }
 
 /* selected node feedback is felt, not seen */
 .dag-node.clickable:active rect { transform: scale(0.985); transform-box: fill-box; transform-origin: center; }
+
+.mark-btn { cursor: pointer; }
+.mark-btn .mark { transition: transform var(--dur-fast) var(--ease-out-strong); }
+.mark-btn:active .mark { transform: scale(0.94); }

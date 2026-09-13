@@ -75,9 +75,19 @@ function useAttentionSurfaces(needsInput: boolean) {
 function Splash({ onDone }: { onDone: () => void }) {
   const [leaving, setLeaving] = useState(false);
   useEffect(() => {
-    new Audio("/boot.wav").play().catch(() => {}); // autoplay may be blocked — silence is fine
-    const hold = setTimeout(() => setLeaving(true), 1050);
-    const gone = setTimeout(() => { sessionStorage.setItem("howdah-splash", "1"); onDone(); }, 1400);
+    // autoplay is blocked until the user's first gesture on the origin — if the direct
+    // play is refused, the jingle rides the first click/keypress instead (12s window)
+    const audio = new Audio("/boot.wav");
+    let cleanupUnlock = () => {};
+    audio.play().catch(() => {
+      const unlock = () => { audio.play().catch(() => {}); cleanupUnlock(); };
+      addEventListener("pointerdown", unlock, { once: true });
+      addEventListener("keydown", unlock, { once: true });
+      const expire = setTimeout(cleanupUnlock, 12000);
+      cleanupUnlock = () => { removeEventListener("pointerdown", unlock); removeEventListener("keydown", unlock); clearTimeout(expire); };
+    });
+    const hold = setTimeout(() => setLeaving(true), 1900);
+    const gone = setTimeout(() => { sessionStorage.setItem("howdah-splash", "1"); onDone(); }, 2350);
     return () => { clearTimeout(hold); clearTimeout(gone); };
   }, [onDone]);
   return (
@@ -884,7 +894,7 @@ function App() {
     <div className="shell">
       {!splashDone && <Splash onDone={() => setSplashDone(true)} />}
       <nav className="sidebar">
-        <Mark className="mark" />
+        <a className="mark-btn" title="Replay the splash" onClick={() => setSplashDone(false)}><Mark className="mark" /></a>
         <a className={`nav ${!runMatch && !isNew ? "active" : ""}`} href="/"><span className="label">Runs</span></a>
         <a className={`nav ${isNew ? "active" : ""}`} href="/new"><span className="label">New run</span></a>
         <a className={`nav ${isGraphs ? "active" : ""}`} href="/graphs"><span className="label">Graphs</span></a>
