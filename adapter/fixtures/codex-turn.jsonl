@@ -1,0 +1,7 @@
+{"jsonrpc":"2.0","method":"thread/started","params":{"threadId":"thr_123"}}
+{"jsonrpc":"2.0","method":"item/agentMessage/delta","params":{"delta":"Working on it — 更新中 🐘"}}
+{"jsonrpc":"2.0","method":"item/started","params":{"item":{"type":"commandExecution","id":"item_1","command":"bun test"}}}
+{"jsonrpc":"2.0","id":7,"method":"item/commandExecution/requestApproval","params":{"threadId":"thr_123","turnId":"t1","itemId":"item_1","command":"bun test","reason":"Do you want to allow running bun test?"}}
+{"jsonrpc":"2.0","method":"item/completed","params":{"item":{"type":"commandExecution","id":"item_1","status":"completed","aggregatedOutput":"31 pass"}}}
+{"jsonrpc":"2.0","method":"account/rateLimits/updated","params":{"rateLimits":{"primary":{"usedPercent":100,"resetsAt":"2026-09-13T20:00:00Z"}}}}
+{"jsonrpc":"2.0","method":"turn/completed","params":{"usage":{"input_tokens":900,"output_tokens":120}}}
