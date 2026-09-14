@@ -25,6 +25,7 @@ import { buildOutputInstruction, parseOutputs } from "./outputs";
 import { AttentionCenter, osNotifier, type Notifier } from "../attention";
 import { readLog } from "../../log/write";
 import { effectiveCwd } from "./worktree";
+import { isAllowReply } from "./reply";
 
 export interface ClaudeExecutorOpts {
   attentionDir: string;
@@ -35,8 +36,6 @@ export interface ClaudeExecutorOpts {
   notifiers?: Notifier[];
   viewerBase?: string;
 }
-
-const ALLOW_WORDS = new Set(["allow", "approve", "approved", "yes", "y", "ok", "lgtm", "resume"]);
 
 export function claudeExecutor(opts: ClaudeExecutorOpts): Executor {
   return async ({ nodeId, def, visit, runId, cwd, log, renderedPrompt, agentConfig }) => {
@@ -86,7 +85,7 @@ export function claudeExecutor(opts: ClaudeExecutorOpts): Executor {
         const resolved = readLog(log.path).find((e) => e.type === "attention-resolved" && e.seq > raised.seq);
         if (resolved && resolved.type === "attention-resolved") {
           const reply = (resolved.reply ?? "").trim();
-          const allow = reply === "" || ALLOW_WORDS.has(reply.toLowerCase());
+          const allow = isAllowReply(reply);
           proc.stdin.write(
             buildClaudePermissionResponse(requestId, allow ? { behavior: "allow", updatedInput: input } : { behavior: "deny", message: reply }),
           );

@@ -688,7 +688,7 @@ function StartRun() {
 
 const EFFORTS = ["", "low", "medium", "high", "xhigh"];
 const PERMISSION_MODES = ["", "manual", "acceptEdits", "auto", "bypassPermissions", "dontAsk", "plan"];
-const MODEL_SUGGESTIONS = ["claude-opus-5", "claude-sonnet-5", "haiku", "gpt-5.3-codex"];
+const MODEL_SUGGESTIONS = ["claude-opus-5", "claude-sonnet-5", "haiku", "gpt-5.6-terra"];
 
 function ConfigFields({ value, baseline, onChange }: { value: AgentConfigDto; baseline?: AgentConfigDto; onChange: (v: AgentConfigDto) => void }) {
   const ph = (k: keyof AgentConfigDto, fallback: string) => {

@@ -38,8 +38,9 @@ const perVisit = { scope: "per-visit" } as const;
 
 export const implementTicket = defineGraph<ImplementTicketCtx>({
   name: "implement-ticket",
-  // agents act without tool-permission prompts; real questions still raise asks
-  defaults: { permissionMode: "auto" },
+  // full autonomy in the worktree: "auto" still routes Bash to the ask card (observed);
+  // bypassPermissions is the mode that actually does not ask
+  defaults: { permissionMode: "bypassPermissions" },
   description: "Deliver one ticket through reviewed implementation and a merged PR",
   entry: "create_worktree",
   inputs: ["goal", "work"],

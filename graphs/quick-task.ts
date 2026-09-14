@@ -11,8 +11,9 @@ export interface QuickTaskCtx {
 
 export const quickTask = defineGraph<QuickTaskCtx>({
   name: "quick-task",
-  // agents act without tool-permission prompts; real questions still raise asks
-  defaults: { permissionMode: "auto" },
+  // full autonomy in the worktree: "auto" still routes Bash to the ask card (observed);
+  // bypassPermissions is the mode that actually does not ask
+  defaults: { permissionMode: "bypassPermissions" },
   description: "TODO: one line on what this graph does",
   entry: "quick-task.work",
   inputs: ["goal"],

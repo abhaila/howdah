@@ -138,6 +138,7 @@ export async function resumeCommand(runId: string): Promise<void> {
     executors: executors(),
     cwd: replayed.started.cwd,
     folderKind: replayed.started.folder_kind,
+    overrides: (replayed.started.overrides ?? undefined) as any, // the launch overrides survive resume
     tuning: loadTuning(base)[replayed.started.graph],
     control: () => readControl(runDir),
     beforeNode: reconcilerHook(runDir, () => engine),

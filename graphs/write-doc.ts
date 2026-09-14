@@ -22,8 +22,9 @@ const cleared = { scope: "cleared" } as const;
 
 export const writeDoc = defineGraph<WriteDocCtx>({
   name: "write-doc",
-  // agents act without tool-permission prompts; real questions still raise asks
-  defaults: { permissionMode: "auto" },
+  // full autonomy in the worktree: "auto" still routes Bash to the ask card (observed);
+  // bypassPermissions is the mode that actually does not ask
+  defaults: { permissionMode: "bypassPermissions" },
   description: "Outline, draft, and review a document in a plain folder — no repo required",
   entry: "doc.outline",
   inputs: ["goal", "work"],

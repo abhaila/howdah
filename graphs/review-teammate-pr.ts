@@ -20,8 +20,9 @@ const sticky = { scope: "sticky" } as const;
 
 export const reviewTeammatePr = defineGraph<ReviewTeammatePrCtx>({
   name: "review-teammate-pr",
-  // agents act without tool-permission prompts; real questions still raise asks
-  defaults: { permissionMode: "auto" },
+  // full autonomy in the worktree: "auto" still routes Bash to the ask card (observed);
+  // bypassPermissions is the mode that actually does not ask
+  defaults: { permissionMode: "bypassPermissions" },
   description:
     "Pull a teammate's PR into a local worktree and run three read-only reviews in sequence, then compile every finding into one color-coded local report",
   entry: "create_worktree",

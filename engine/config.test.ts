@@ -110,3 +110,37 @@ describe("UI tuning overlay", () => {
     expect(seen[0]!.model).toBe("run-model");
   });
 });
+
+describe("overrides survive resume (implement-ticket-mu1brke9 regression)", () => {
+  test("run-started persists overrides and replay hands them back", async () => {
+    const { replayState } = await import("./replay");
+    const engine = new Engine(graph(), {
+      dir: mkdtempSync(join(tmpdir(), "howdah-ovr-")),
+      promptsDir: prompts(),
+      overrides: { harness: "codex", model: "gpt-5.3-codex", effort: "medium" },
+      executors: { agent: async ({ nodeId }) => ({ status: "succeeded", writes: nodeId === "one" ? { a: "x" } : { b: "y" } }) },
+    });
+    await engine.start({ goal: "g" });
+    const started = replayState(engine.log.read()).started!;
+    expect(started.overrides).toEqual({ harness: "codex", model: "gpt-5.3-codex", effort: "medium" });
+  });
+});
+
+describe("cross-harness model leak (haiku→codex regression)", () => {
+  test("a model from a lower layer is dropped when it does not fit the resolved harness", async () => {
+    const seen: any[] = [];
+    const engine = new Engine(graph(), {
+      dir: mkdtempSync(join(tmpdir(), "howdah-leak-")),
+      promptsDir: prompts(),
+      overrides: { harness: "codex" },
+      tuning: { defaults: { model: "haiku" } }, // claude model in tuning
+      executors: { agent: async ({ nodeId, agentConfig }) => { seen.push(agentConfig); return { status: "succeeded", writes: nodeId === "one" ? { a: "x" } : { b: "y" } }; } },
+    });
+    await engine.start({ goal: "g" });
+    expect(seen[0]).toMatchObject({ harness: "codex" });
+    expect(seen[0].model).toBeUndefined(); // haiku dropped — codex uses its own default
+    // node "one" declares claude-opus-5 in TS — clearly claude, dropped under codex;
+    // unknown names (graph-default-model) are NOT dropped: custom models must pass
+    expect(seen.every((s: any) => s.model === undefined || !/claude|opus|sonnet|haiku/i.test(s.model))).toBe(true);
+  });
+});

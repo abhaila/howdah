@@ -18,6 +18,7 @@ import { mapCodexEvent, buildCodexApprovalResponse } from "../../adapter/codex";
 import { buildOutputInstruction, parseOutputs } from "./outputs";
 import { AttentionCenter, osNotifier, type Notifier } from "../attention";
 import { readLog } from "../../log/write";
+import { isAllowReply } from "./reply";
 import { effectiveCwd } from "./worktree";
 
 export interface CodexExecutorOpts {
@@ -30,8 +31,6 @@ export interface CodexExecutorOpts {
   notifiers?: Notifier[];
   viewerBase?: string;
 }
-
-const ALLOW_WORDS = new Set(["allow", "approve", "approved", "yes", "y", "ok", "lgtm", "resume"]);
 
 export function codexExecutor(opts: CodexExecutorOpts): Executor {
   return async ({ nodeId, def, visit, runId, cwd, log, renderedPrompt, agentConfig }) => {
@@ -66,6 +65,7 @@ export function codexExecutor(opts: CodexExecutorOpts): Executor {
     let turnDone: () => void = () => {}; // reassigned when the turn begins
     let usage: { input_tokens?: number; output_tokens?: number } | undefined;
     let turnError: string | undefined;
+    let turnCompleted = false;
     const chunk = (kind: "text" | "thinking" | "tool_call" | "tool_result", content: string, tool?: { id?: string; name?: string }) =>
       log.append({ type: "chunk", node: nodeId, visit, turn: 1, index: index++, kind, content, tool_id: tool?.id, tool_name: tool?.name });
 
@@ -82,7 +82,7 @@ export function codexExecutor(opts: CodexExecutorOpts): Executor {
         const resolved = readLog(log.path).find((e) => e.type === "attention-resolved" && e.seq > raised.seq);
         if (resolved && resolved.type === "attention-resolved") {
           const reply = (resolved.reply ?? "").trim();
-          const allow = reply === "" || ALLOW_WORDS.has(reply.toLowerCase());
+          const allow = isAllowReply(reply);
           proc.stdin.write(buildCodexApprovalResponse(rpcRequestId, allow ? "approved" : "denied"));
           proc.stdin.flush();
           chunk("tool_result", allow ? "approval granted" : `approval denied: ${reply}`, { name: toolName });
@@ -112,7 +112,7 @@ export function codexExecutor(opts: CodexExecutorOpts): Executor {
             const t = raw.params?.tokenUsage?.total;
             if (t) usage = { input_tokens: t.inputTokens ?? t.input_tokens, output_tokens: t.outputTokens ?? t.output_tokens };
           }
-          if (raw.method === "turn/completed") turnDone();
+          if (raw.method === "turn/completed") { turnCompleted = true; turnDone(); }
 
           for (const ev of mapCodexEvent(raw)) {
             switch (ev.type) {
@@ -133,8 +133,11 @@ export function codexExecutor(opts: CodexExecutorOpts): Executor {
                 log.append({ type: "allowance", harness: "codex", state: ev.state, remaining: ev.remaining, resets_at: ev.resets_at, raw: ev.raw });
                 break;
               case "error":
+                // NOT fatal: codex emits error notifications for startup noise (expired
+                // MCP server auth, observed live) and keeps working. Record it; the turn
+                // fails only if it never completes.
+                chunk("text", `\n[codex notice: ${ev.message}]`);
                 turnError = ev.message;
-                turnDone();
                 break;
             }
           }
@@ -171,8 +174,8 @@ export function codexExecutor(opts: CodexExecutorOpts): Executor {
     }
 
     log.append({ type: "turn-finalized", node: nodeId, visit, turn: 1, usage });
-    if (turnError) {
-      chunk("text", `\n[turn error: ${turnError}]`);
+    if (!turnCompleted) {
+      chunk("text", `\n[turn error: ${turnError ?? "app-server stream ended before turn/completed"}]`);
       return { status: "failed", writes: {} };
     }
     const parsed = parseOutputs(finalMessage ?? accumulated, writeKeys);

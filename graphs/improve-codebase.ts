@@ -34,8 +34,9 @@ const perVisit = { scope: "per-visit" } as const;
 
 export const improveCodebase = defineGraph<ImproveCodebaseCtx>({
   name: "improve-codebase",
-  // agents act without tool-permission prompts; real questions still raise asks
-  defaults: { permissionMode: "auto" },
+  // full autonomy in the worktree: "auto" still routes Bash to the ask card (observed);
+  // bypassPermissions is the mode that actually does not ask
+  defaults: { permissionMode: "bypassPermissions" },
   description: "Continuously discover and deliver one worthwhile codebase improvement at a time",
   entry: "discover",
   inputs: ["goal"],

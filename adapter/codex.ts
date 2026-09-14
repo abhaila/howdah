@@ -77,8 +77,12 @@ export function mapCodexEvent(raw: unknown): AgentEvent[] {
       }];
     }
 
-    case "error":
-      return [{ type: "error", message: String(e.params?.message ?? "codex error") }];
+    case "error": {
+      // ErrorNotification carries { error: TurnError, willRetry } — surface the real message
+      const err = e.params?.error ?? e.params;
+      const message = String(err?.message ?? "codex error");
+      return [{ type: "error", message: e.params?.willRetry ? `${message} (retrying)` : message }];
+    }
 
     default:
       return [];

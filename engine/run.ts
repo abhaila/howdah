@@ -126,6 +126,7 @@ export class Engine {
       pinned_prompts: pinned,
       cwd: this.opts.cwd,
       folder_kind: this.opts.folderKind,
+      overrides: this.opts.overrides,
     });
     this.freshContext();
     this.seedInputs(inputs);
@@ -335,9 +336,20 @@ export class Engine {
     const tunedDefaults = this.opts.tuning?.defaults ?? {};
     const pick = <K extends keyof AgentConfig>(k: K): AgentConfig[K] =>
       overrides[k] ?? tunedNode[k] ?? node[k] ?? tunedDefaults[k] ?? defaults[k];
+    const harness = pick("harness") ?? "claude";
+    // model names are HARNESS-SPECIFIC; a lower layer's model must not leak across a
+    // harness override (observed: tuning model "haiku" reached codex → API 400)
+    const model = pick("model");
+    const CLAUDE_LIKE = /claude|opus|sonnet|haiku|fable/i;
+    const CODEX_LIKE = /gpt|codex|terra|^o\d/i;
+    // drop only a model that CLEARLY belongs to the other harness; unknown names pass
+    const conflict =
+      model !== undefined &&
+      ((harness === "codex" && CLAUDE_LIKE.test(model) && !CODEX_LIKE.test(model)) ||
+        (harness === "claude" && CODEX_LIKE.test(model) && !CLAUDE_LIKE.test(model)));
     return {
-      harness: pick("harness") ?? "claude",
-      model: pick("model"),
+      harness,
+      model: conflict ? undefined : model,
       effort: pick("effort"),
       permissionMode: pick("permissionMode"),
       maxTurns: pick("maxTurns"),
