@@ -6,9 +6,11 @@ import { execSync } from "node:child_process";
 import { listGithubRepos, registerGithubRepo, cloneMatches, ghExec, type Exec } from "./github";
 import type { HowdahConfig } from "./config";
 
+// REST /user/repos shape — the affiliation endpoint that includes ORG repos
 const REPO_LIST = JSON.stringify([
-  { nameWithOwner: "abhaila/howdah", name: "howdah", defaultBranchRef: { name: "main" }, isPrivate: true, updatedAt: "2026-09-13T08:00:00Z" },
-  { nameWithOwner: "abhaila/abstack", name: "abstack", defaultBranchRef: { name: "main" }, isPrivate: false, updatedAt: "2026-09-11T15:00:00Z" },
+  { full_name: "abhaila/howdah", name: "howdah", default_branch: "main", private: true, pushed_at: "2026-09-13T08:00:00Z" },
+  { full_name: "SequenceHQ/sequence-platform-api", name: "sequence-platform-api", default_branch: "main", private: true, pushed_at: "2026-09-12T09:00:00Z" },
+  { full_name: "abhaila/abstack", name: "abstack", default_branch: "main", private: false, pushed_at: "2026-09-11T15:00:00Z" },
 ]);
 
 /** fake gh/git: records calls; clone actually creates a real git repo so verification works */
@@ -16,7 +18,7 @@ function fakeExec(calls: string[][]): Exec {
   return (cmd) => {
     calls.push(cmd);
     const joined = cmd.join(" ");
-    if (joined.startsWith("gh repo list")) return { code: 0, stdout: REPO_LIST, stderr: "" };
+    if (joined.startsWith("gh api user/repos")) return { code: 0, stdout: REPO_LIST, stderr: "" };
     if (joined.startsWith("gh repo view")) {
       const nwo = cmd[3]!;
       return { code: 0, stdout: JSON.stringify({ nameWithOwner: nwo, defaultBranchRef: { name: "main" } }), stderr: "" };
@@ -48,9 +50,11 @@ describe("github workspace registration", () => {
     config.repos["howdah-ws"] = { path: join(root, "elsewhere") }; // registered but path mismatch — ignored
 
     const repos = listGithubRepos(config, { exec: fakeExec(calls) });
-    expect(repos.map((r) => r.nameWithOwner)).toEqual(["abhaila/howdah", "abhaila/abstack"]);
-    expect(repos[1]).toMatchObject({ localPath: join(root, "abstack"), registeredAs: null });
+    expect(repos.map((r) => r.nameWithOwner)).toEqual(["abhaila/howdah", "SequenceHQ/sequence-platform-api", "abhaila/abstack"]);
+    expect(repos[2]).toMatchObject({ localPath: join(root, "abstack"), registeredAs: null });
     expect(repos[0]!.localPath).toBeNull();
+    // org repos ride the same listing — the affiliation endpoint is the whole point
+    expect(repos[1]).toMatchObject({ nameWithOwner: "SequenceHQ/sequence-platform-api", isPrivate: true });
   });
 
   test("register reuses a matching clone without cloning", () => {

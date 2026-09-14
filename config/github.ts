@@ -56,15 +56,21 @@ function registeredName(config: HowdahConfig, nameWithOwner: string, localPath: 
 
 export function listGithubRepos(config: HowdahConfig, opts: { query?: string; exec?: Exec } = {}): GhRepo[] {
   const exec = opts.exec ?? ghExec;
-  const fields = "nameWithOwner,name,defaultBranchRef,isPrivate,updatedAt";
   const query = opts.query?.trim();
+  // `gh repo list` only sees repos the USER owns — org repos need the REST affiliation
+  // endpoint, which spans owner + collaborator + organization_member in one call
   const cmd = query?.includes("/")
-    ? ["gh", "repo", "view", query, "--json", fields] // exact owner/name lookup (any accessible repo)
-    : ["gh", "repo", "list", "--json", fields, "--limit", "100"];
+    ? ["gh", "repo", "view", query, "--json", "nameWithOwner,name,defaultBranchRef,isPrivate,updatedAt"]
+    : ["gh", "api", "user/repos?affiliation=owner,collaborator,organization_member&sort=pushed&per_page=100"];
   const r = exec(cmd);
   if (r.code !== 0) throw new Error(`gh failed: ${r.stderr.trim().slice(0, 200) || "is gh logged in? run: gh auth login"}`);
   const parsed = JSON.parse(r.stdout) as any;
-  const rows: any[] = Array.isArray(parsed) ? parsed : [parsed];
+  // normalize REST rows (full_name/default_branch/pushed_at) to the GraphQL field shape
+  const rows: any[] = (Array.isArray(parsed) ? parsed : [parsed]).map((x: any) =>
+    x.full_name
+      ? { nameWithOwner: x.full_name, name: x.name, defaultBranchRef: { name: x.default_branch }, isPrivate: x.private, updatedAt: x.pushed_at }
+      : x,
+  );
   const root = defaultCloneRoot(config);
   return rows
     .map((x): GhRepo => {
