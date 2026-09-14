@@ -1,0 +1,56 @@
+cli/main.ts
+  s_220da8e953793c::t_36740ca72548f6 141
+graphs/implement-ticket.ts
+  s_220da8e953793c::t_36740ca72548f6 41-43
+graphs/write-doc.ts
+  s_220da8e953793c::t_36740ca72548f6 25-27
+engine/executors/claude.ts
+  s_220da8e953793c::t_896461433db5e9 28,88
+graphs/research.ts
+  s_220da8e953793c::t_36740ca72548f6 25-27
+graphs/review-teammate-pr.ts
+  s_220da8e953793c::t_36740ca72548f6 23-25
+log/events.ts
+  s_220da8e953793c::t_36740ca72548f6 43-44
+engine/run.ts
+  s_220da8e953793c::t_36740ca72548f6 129
+  s_220da8e953793c::t_505c4cec59e648 339-342,351
+  s_220da8e953793c::t_3186247178baf1 343-349,352
+graphs/improve-codebase.ts
+  s_220da8e953793c::t_36740ca72548f6 37-39
+engine/config.test.ts
+  s_220da8e953793c::t_505c4cec59e648 128-141,145-146
+  s_220da8e953793c::t_3186247178baf1 142-144
+  s_220da8e953793c::t_f520f1e7426959 113-127
+engine/executors/reply.ts
+  s_220da8e953793c::t_06389246e7842c 13
+  s_220da8e953793c::t_896461433db5e9 1-12,14-15
+graphs/quick-task.ts
+  s_220da8e953793c::t_36740ca72548f6 14-16
+engine/executors/codex.ts
+  s_220da8e953793c::t_896461433db5e9 21,68,85,115,136-139,177-178
+adapter/codex.ts
+  s_220da8e953793c::t_c5deb67c7b3d83 80-85
+engine/executors/reply.test.ts
+  s_220da8e953793c::t_f520f1e7426959 1-16
+cli/new-graph.ts
+  s_220da8e953793c::t_36740ca72548f6 50-52,118-120
+web/app/main.tsx
+  s_220da8e953793c::t_7c96956ea25ae3 691
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "1cb6ced4bf2d0545db4331875fd7b2086a7d24e7",
+  "prompts": {},
+  "sessions": {
+    "s_220da8e953793c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2ba82f1f-e55e-4150-b238-4ff1b96ce382",
+        "model": "claude-fable-5"
+      },
+      "human_author": "areeb.bhaila <areeb.bhaila@gmail.com>"
+    }
+  }
+}
