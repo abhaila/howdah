@@ -17,11 +17,11 @@
  * changes nothing for this run — revisions apply to new runs (OV-2).
  */
 import { copyFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
-import { createHash } from "node:crypto";
 import { join } from "node:path";
 import type { Graph, NodeDef, EdgeDef, AgentConfig } from "../core/graph";
 import { basename } from "node:path";
 import { ContextStore, type Scope } from "../core/context";
+import { operatorInstructionSuffix, renderTemplate, renderedHash, splitFrontMatter } from "../core/template";
 import { EventLog } from "../log/write";
 import { replayState, effectKey } from "./replay";
 import type { PromptId } from "../core/prompt-ids";
@@ -359,27 +359,19 @@ export class Engine {
 
   private renderPrompt(nodeId: string, prompt: PromptId, visit: number, reads: Record<string, unknown>, config?: AgentConfig): string {
     const raw = readFileSync(join(this.pinDir(), `${prompt}.md`), "utf8");
-    const m = raw.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
-    const body = m && m[2] !== undefined ? m[2] : raw;
-    const version = m && m[1] !== undefined ? Number(m[1].match(/^version:\s*(\d+)\s*$/m)?.[1] ?? 1) : 1;
+    const { frontmatter, body } = splitFrontMatter(raw);
+    const version = Number(frontmatter?.match(/^version:\s*(\d+)\s*$/m)?.[1] ?? 1);
 
     let operatorSuffix = "";
     if (this.jumpNote && this.jumpNote.node === nodeId) {
-      operatorSuffix = `\n\n## Operator instruction\nThe operator moved the run to this step with this instruction — it takes precedence:\n${this.jumpNote.message}`;
+      operatorSuffix = operatorInstructionSuffix(this.jumpNote.message);
       this.jumpNote = null; // consumed by this attempt
     }
-    const contextRead: Record<string, unknown> = {};
-    const rendered = body.replace(
-      /\{\{\s*(context|inputs)\.([\w.]+)(?:\s*\|[^}]*)?\s*\}\}/g,
-      (whole, _ns: string, key: string) => {
-        if (key.startsWith("internal.")) return whole; // engine namespace, not context
-        const value = key in reads ? reads[key] : this.ctx.get(key, { node: nodeId, visit });
-        contextRead[key] = value;
-        return typeof value === "string" ? value : JSON.stringify(value);
-      },
+    const { text: rendered, read: contextRead } = renderTemplate(body, (key) =>
+      key in reads ? reads[key] : this.ctx.get(key, { node: nodeId, visit }),
     );
     const finalRendered = rendered + operatorSuffix;
-    const hash = createHash("sha256").update(finalRendered).digest("hex").slice(0, 16);
+    const hash = renderedHash(finalRendered);
     this.lastRender.set(nodeId, hash);
     this.log.append({
       type: "prompt-rendered",

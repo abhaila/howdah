@@ -14,6 +14,7 @@
 import { readFileSync, writeFileSync, readdirSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import type { Graph } from "../core/graph";
+import { templateReads } from "../core/template";
 
 export interface PromptFile {
   id: string;
@@ -53,13 +54,7 @@ export class PromptStore {
 
   /** `{{ context.X }}` and `{{ inputs.X }}` refs in a template (ignoring filters and internal.*). */
   static templateReads(body: string): string[] {
-    const reads = new Set<string>();
-    for (const m of body.matchAll(/\{\{\s*(context|inputs)\.([\w.]+)(?:\s*\|[^}]*)?\s*\}\}/g)) {
-      const key = m[2]!;
-      if (m[1] === "context" && key.startsWith("internal.")) continue; // engine-provided namespace
-      reads.add(key);
-    }
-    return [...reads].sort();
+    return templateReads(body);
   }
 
   /**
