@@ -582,12 +582,32 @@ authoring + visualization, and the remaining screens.
   - Web: Graphs screen (list + SVG DAG render, class lanes); run view gains a Graph tab
     with current node + visit counts highlighted (Orbital / autoresearcherUI parity).
   - Verify: scaffold a new graph, launch it from the form, watch it advance on the Graph tab.
-- [ ] **T21 (P1, human: ~3d / CC: ~2h)** — web — Prompt library + proposal review screens
+- [x] **T21 (P1, human: ~3d / CC: ~2h)** — web — Prompt library + proposal review screens ✅ 2026-09-15: Prompts + Proposals screens, run-view Add feedback, rendered-instance reconstruction (R3.1 completed); 38 new tests, loop driven end-to-end in a browser
   - Prompts screen (3): versions from git, consuming graphs, joined outcomes, attached
     feedback. Proposals screen (4): diff, evidence, eval score, accept/reject wired to
     store.accept (D7 stale-base + OV-3 guards), stale-base → re-draft affordance. Run view
     "Add feedback" writes reviser-format jsonl pre-filled with run/node/visit/rendered_hash.
   - Verify: feedback from a run → reviser proposal → accept in UI → next run pins v+1.
+  - Built: `prompts/library.ts` (read model over prompts/ + git + feedback/ + run logs),
+    `core/template.ts` (ONE render implementation shared by engine, store and library),
+    `listProposals`/`viewProposal`/`stampEval` in prompts/proposals.ts, 8 API routes,
+    two screens + the per-turn feedback card.
+  - 🟡 **R3.1 gap found and closed:** `prompt-rendered` records the hash and context, never
+    the rendered TEXT, so "the rendered prompt is visible" was only half true and feedback
+    pointed at an instance nobody could read. `reconstructRender()` rebuilds it from the
+    run's pinned template + context_read (+ operator-jump suffix) and **re-hashes to prove
+    it**; a mismatch renders as UNVERIFIED rather than as fact. Chosen over storing the text
+    per turn (multi-KB × every visit × fsync-per-append) and verified against logs the real
+    engine wrote.
+  - 🟡 Two bugs found by dogfooding, both fixed: `stale` was computed for accepted proposals
+    (meaningless — an accept is what moves the prompt past its own base); the sidebar's
+    pending count went stale after an accept, which is exactly the live-looking lie the
+    state matrix forbids.
+  - 🟡 `proposals.ts` CLI accepted against a hand-maintained list of 3 graphs, so the OV-3
+    undeclared-read guard silently skipped every prompt used only by write-doc, research or
+    quick-task. Now validates against the whole GRAPHS registry.
+  - Not built: the reviser itself still runs from the CLI; the UI's re-draft button spawns
+    it detached (it spends tokens) and the screen polls for the new proposal.
 - [x] **T22 (P2, human: ~2d / CC: ~1.5h)** — engine+web — Steering + run controls ✅ 2026-09-13: control.json boundary pause/abort, operator-jump w/ prompt-injected instructions + read precheck, UI controls + Graph-tab jump
   - "Message the agent" box on running runs (claude: queued next-turn injection; codex:
     turn/steer). Controls: pause / resume / retry (new visit) / abort, as API + UI,
