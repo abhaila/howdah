@@ -127,6 +127,9 @@ writeFileSync(
 );
 const diff = unifiedDiff(body, revised, proposalPath);
 writeFileSync(join(out, `${id}.v${version + 1}.diff`), diff);
+// the reflection is the model's stated reason for the change — the evidence a human judges
+// the diff against, so it is persisted next to the proposal instead of only printed
+writeFileSync(join(out, `${id}.v${version + 1}.reflection.md`), reflection + "\n");
 
 console.log(`REFLECTION:\n${reflection}\n`);
 console.log(`DIFF (current v${version} → proposed v${version + 1}):\n${diff}`);

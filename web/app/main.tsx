@@ -9,11 +9,14 @@ import { Button, Card, CardContent, CardDescription, CardHeader, CardTitle, Inpu
 import {
   Rows3, Plus, Workflow, Settings as SettingsIcon, Play, Pause, OctagonX, RotateCcw, Send,
   ExternalLink, GitBranch, GitPullRequest, Clock, Coins, Pin, Fingerprint, MessagesSquare,
-  CornerDownRight, FolderGit2, X,
+  CornerDownRight, FolderGit2, X, Library, FileDiff, MessageSquarePlus, ThumbsUp,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { RunDetail, RunSummary, RunStatus } from "../derive";
 import type { CoalescedTurn } from "../../log/coalesce";
+// type-only: erased at bundle time, so the server's node imports never reach the browser
+import type { PromptDetail, PromptSummary, ReconstructedRender } from "../../prompts/library";
+import type { ProposalView } from "../../prompts/proposals";
 import { GraphDag, useGraphShape, type GraphShapeDto, type AgentConfigDto } from "./graph-dag";
 
 // ---- shared bits ---------------------------------------------------------------
@@ -153,9 +156,137 @@ function RunsList() {
 
 // ---- run view ------------------------------------------------------------------
 
-function Turn({ turn, render }: { turn: CoalescedTurn; render?: RunDetail["renders"][number] }) {
+/**
+ * Prompt & context (R3.1) plus Add feedback (R2's loop, T21).
+ *
+ * The log stores the rendered_hash, never the rendered text, so the text is fetched from
+ * the server, which rebuilds it from the run's PINNED template and re-hashes to prove it.
+ * An unproven reconstruction says so — showing a guess as fact is the failure mode here.
+ */
+function PromptAndContext({ runId, render }: { runId: string; render: RunDetail["renders"][number] }) {
   const [open, setOpen] = useState(false);
-  const [showPrompt, setShowPrompt] = useState(false);
+  const [instance, setInstance] = useState<ReconstructedRender | "missing" | null>(null);
+  const [feedback, setFeedback] = useState(false);
+
+  useEffect(() => {
+    if (!open || instance) return;
+    fetch(`/api/runs/${runId}/render/${render.rendered_hash}`)
+      .then((r) => (r.ok ? r.json() : "missing"))
+      .then(setInstance)
+      .catch(() => setInstance("missing"));
+  }, [open, instance, runId, render.rendered_hash]);
+
+  return (
+    <div className="prompt-context">
+      <div className="pc-head">
+        <span className="linkish" onClick={() => setOpen(!open)}>
+          Prompt &amp; context · {render.prompt} v{render.prompt_version} {open ? "▾" : "▸"}
+        </span>
+        <button className="pc-feedback" onClick={() => { setFeedback(!feedback); setOpen(true); }}>
+          <MessageSquarePlus size={12} /> Add feedback
+        </button>
+      </div>
+      {open && (
+        <>
+          {instance === null && <div className="pc-note">rebuilding the rendered prompt…</div>}
+          {instance === "missing" && (
+            <div className="pc-note warn">
+              the rendered prompt cannot be rebuilt — this run's pinned copy of {render.prompt} is gone
+            </div>
+          )}
+          {instance && instance !== "missing" && (
+            <>
+              <div className={`pc-note ${instance.verified ? "" : "warn"}`}>
+                {instance.verified
+                  ? "verified against the recorded rendered_hash — this is exactly what the agent read"
+                  : "UNVERIFIED — the rebuild does not match the recorded hash, so treat it as approximate"}
+              </div>
+              <pre className="pc-rendered">{instance.text}</pre>
+            </>
+          )}
+          <div className="pc-note">context read</div>
+          <pre>{JSON.stringify(render.context_read, null, 2)}</pre>
+        </>
+      )}
+      {feedback && (
+        <FeedbackForm
+          promptId={render.prompt}
+          runId={runId}
+          node={render.node}
+          visit={render.visit}
+          renderedHash={render.rendered_hash}
+          onDone={() => setFeedback(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+/** Writes one reviser-format line, pre-filled with the turn it refers to (A2.2). */
+function FeedbackForm({ promptId, runId, node, visit, renderedHash, onDone }: {
+  promptId: string; runId: string; node: string; visit: number; renderedHash: string; onDone: () => void;
+}) {
+  const [note, setNote] = useState("");
+  const [verdict, setVerdict] = useState<"reject" | "accept">("reject");
+  const [state, setState] = useState<"idle" | "saving" | "saved" | "failed">("idle");
+  const [error, setError] = useState<string | null>(null);
+
+  const send = async () => {
+    setState("saving");
+    setError(null);
+    const res = await fetch(`/api/prompts/${encodeURIComponent(promptId)}/feedback`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ run: runId, node, visit, note, verdict, rendered_hash: renderedHash }),
+    }).catch(() => null);
+    if (!res || !res.ok) {
+      setError(((await res?.json().catch(() => null)) as any)?.error ?? "could not save feedback");
+      setState("failed");
+      return;
+    }
+    setState("saved");
+  };
+
+  if (state === "saved")
+    return (
+      <div className="feedback-card">
+        <div className="pc-note">
+          feedback recorded against {node}@{visit} — nothing changed yet (R2).{" "}
+          <a href={`/prompts/${encodeURIComponent(promptId)}`}>Open {promptId}</a> to draft a revision.
+        </div>
+        <Button variant="ghost" size="sm" onClick={onDone}>Close</Button>
+      </div>
+    );
+
+  return (
+    <div className="feedback-card">
+      <div className="pc-note">
+        feedback on <strong>{promptId}</strong> at {node}@{visit} · hash {renderedHash}
+      </div>
+      <Tabs
+        value={verdict}
+        onValueChange={(v) => setVerdict(v as "reject" | "accept")}
+        items={[{ value: "reject", label: "Needs work" }, { value: "accept", label: "Good" }]}
+      />
+      <Textarea
+        autoFocus
+        placeholder="What should this prompt do differently? Be specific — the reviser reflects on exactly this."
+        value={note}
+        onChange={(e) => setNote(e.target.value)}
+      />
+      {error && <div className="field-error">{error}</div>}
+      <div className="feedback-actions">
+        <Button size="sm" disabled={!note.trim() || state === "saving"} onClick={send}>
+          <Send />{state === "saving" ? "saving…" : "Save feedback"}
+        </Button>
+        <Button variant="ghost" size="sm" onClick={onDone}>Cancel</Button>
+      </div>
+    </div>
+  );
+}
+
+function Turn({ turn, render, runId }: { turn: CoalescedTurn; render?: RunDetail["renders"][number]; runId: string }) {
+  const [open, setOpen] = useState(false);
   const toolParts = turn.parts.filter((p) => p.kind === "tool_call" || p.kind === "tool_result");
   const textParts = turn.parts.filter((p) => p.kind === "text");
   return (
@@ -173,12 +304,7 @@ function Turn({ turn, render }: { turn: CoalescedTurn; render?: RunDetail["rende
           ))}
         </div>
       )}
-      {render && (
-        <div className="prompt-context" onClick={() => setShowPrompt(!showPrompt)}>
-          Prompt &amp; context · {render.prompt} v{render.prompt_version} {showPrompt ? "▾" : "▸"}
-          {showPrompt && <pre>{JSON.stringify(render.context_read, null, 2)}</pre>}
-        </div>
-      )}
+      {render && <PromptAndContext runId={runId} render={render} />}
     </div>
   );
 }
@@ -379,7 +505,7 @@ function RunView({ id }: { id: string }) {
         ) : (
           <>
             {resolvedTurns.map((t) => (
-              <Turn key={`${t.node}@${t.visit}#${t.turn}`} turn={t} render={renderByTurnKey.get(`${t.node}@${t.visit}`)} />
+              <Turn key={`${t.node}@${t.visit}#${t.turn}`} turn={t} render={renderByTurnKey.get(`${t.node}@${t.visit}`)} runId={id} />
             ))}
             {ask && <AskCard runId={id} ask={ask} onResolved={reload} />}
             {!ask && summary.status === "done" && <div className="operator-row">run complete</div>}
@@ -883,6 +1009,297 @@ function Settings() {
   );
 }
 
+// ---- prompt library (screen 3) + proposal review (screen 4) — T21 ----------------
+
+function fmtWhen(iso: string | null): string {
+  return iso ? new Date(iso).toLocaleString() : "—";
+}
+
+/** accept/reject/redraft changed the queue — the sidebar's pending count must follow */
+const PROPOSALS_CHANGED = "howdah:proposals-changed";
+
+/** The prompt as an object with its own history (R1): versions, consumers, outcomes, feedback. */
+function PromptsScreen({ selected }: { selected: string | null }) {
+  const [list, setList] = useState<PromptSummary[] | null>(null);
+  const [detail, setDetail] = useState<PromptDetail | null>(null);
+  const load = useCallback(() => fetch("/api/prompts").then((r) => r.json()).then(setList).catch(() => setList([])), []);
+  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    if (!selected) return void setDetail(null);
+    setDetail(null);
+    fetch(`/api/prompts/${encodeURIComponent(selected)}`).then((r) => (r.ok ? r.json() : null)).then(setDetail).catch(() => setDetail(null));
+  }, [selected]);
+
+  if (!list) return <div className="empty">loading prompts…</div>;
+  if (list.length === 0) return <div className="empty">no prompts in <code>prompts/</code> yet</div>;
+
+  return (
+    <div className="library-layout">
+      <div className="runs">
+        {list.map((p) => (
+          <a key={p.id} className={`run-row ${p.id === selected ? "selected" : ""}`} href={`/prompts/${encodeURIComponent(p.id)}`}>
+            <span className="run-goal">{p.id}</span>
+            <span className="run-meta">
+              v{p.version}
+              {p.proposals.pending > 0 && <Badge variant="attention">{p.proposals.pending} pending</Badge>}
+              {p.feedback.rejects > 0 && <Badge variant="destructive">{p.feedback.rejects} ✗</Badge>}
+              {p.outcomes.renders > 0 && <Badge variant="outline">{p.outcomes.renders} runs</Badge>}
+            </span>
+          </a>
+        ))}
+      </div>
+      {!selected ? (
+        <div className="empty">pick a prompt to see its history, feedback and outcomes</div>
+      ) : !detail ? (
+        <div className="empty">loading {selected}…</div>
+      ) : (
+        <div className="prompt-detail">
+          <div className="topbar">
+            <h1>{detail.id}</h1>
+            <Badge variant="outline">v{detail.version}</Badge>
+            {detail.tags.map((t) => <Badge key={t}>{t}</Badge>)}
+            {detail.proposals.pending > 0 && <a className="linkish" href="/proposals">{detail.proposals.pending} proposal pending →</a>}
+          </div>
+
+          <section className="pd-section">
+            <h2>Outcomes</h2>
+            <div className="kv"><span className="k">rendered in runs</span><span>{detail.outcomes.renders}</span></div>
+            <div className="kv"><span className="k">run succeeded</span><span>{detail.outcomes.success}</span></div>
+            <div className="kv"><span className="k">run failed</span><span>{detail.outcomes.failed}</span></div>
+            <div className="kv"><span className="k">aborted</span><span>{detail.outcomes.aborted}</span></div>
+            <div className="kv"><span className="k">still running</span><span>{detail.outcomes.pending}</span></div>
+            {detail.outcome_rows.length > 0 && (
+              <div className="pd-rows">
+                {detail.outcome_rows.slice(-12).reverse().map((o) => (
+                  <div key={`${o.run}:${o.rendered_hash}:${o.visit}`} className="pd-row">
+                    <a href={`/run/${o.run}`}>{o.run}</a>
+                    <span className="mono-note">{o.node}@{o.visit} · v{o.prompt_version}</span>
+                    <span className="mono-note">{o.verdict_downstream ?? "—"}</span>
+                    <span className={o.terminal_outcome === "failed" ? "allowance-exhausted" : ""}>{o.terminal_outcome ?? "in flight"}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+
+          <section className="pd-section">
+            <h2>Consumers</h2>
+            {detail.consumers.length === 0
+              ? <div className="pd-note">no graph node uses this prompt — it is dead weight or not wired up yet</div>
+              : detail.consumers.map((c) => (
+                  <div key={`${c.graph}/${c.node}`} className="kv">
+                    <span className="k">{c.graph}</span><a href="/graphs">{c.node}</a>
+                  </div>
+                ))}
+          </section>
+
+          <section className="pd-section">
+            <h2>Feedback ({detail.feedback.count})</h2>
+            {detail.feedback_entries.length === 0
+              ? <div className="pd-note">no feedback yet — add it from any turn in a run's thread</div>
+              : detail.feedback_entries.slice().reverse().map((f, i) => (
+                  <div key={i} className="fb-entry">
+                    <div className="fb-head">
+                      <Badge variant={f.verdict === "reject" ? "destructive" : "success"}>{f.verdict}</Badge>
+                      <a href={`/run/${f.run}`}>{f.run}</a>
+                      <span className="mono-note">{f.node}@{f.visit} · {fmtWhen(f.at)}</span>
+                    </div>
+                    <div className="fb-note">{f.note}</div>
+                  </div>
+                ))}
+            {detail.feedback.rejects > 0 && (
+              <div className="pd-note">
+                draft a revision from this feedback: <code>bun reviser/revise.ts {detail.id}</code>
+              </div>
+            )}
+          </section>
+
+          <section className="pd-section">
+            <h2>Version history</h2>
+            {detail.accepted_at && <div className="kv"><span className="k">accepted</span><span>{fmtWhen(detail.accepted_at)}</span></div>}
+            {detail.provenance && <div className="kv"><span className="k">provenance</span><span>{detail.provenance}</span></div>}
+            {detail.history.length === 0
+              ? <div className="pd-note">no commits touch this file yet — git is the version history (A1.1)</div>
+              : detail.history.map((h) => (
+                  <div key={h.sha} className="pd-row">
+                    <span className="mono-note">{h.sha}</span>
+                    <span className="mono-note">{new Date(h.at).toLocaleDateString()}</span>
+                    <span>{h.subject}</span>
+                  </div>
+                ))}
+          </section>
+
+          <section className="pd-section">
+            <h2>Template (v{detail.version})</h2>
+            <pre className="pd-body">{detail.body}</pre>
+          </section>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Unified diff, colour-coded — the thing you actually judge a proposal by. */
+function Diff({ text }: { text: string }) {
+  return (
+    <pre className="diff">
+      {text.split("\n").map((line, i) => {
+        const cls = line.startsWith("+++") || line.startsWith("---") ? "meta"
+          : line.startsWith("@@") ? "hunk"
+          : line.startsWith("+") ? "add"
+          : line.startsWith("-") ? "del"
+          : "ctx";
+        return <span key={i} className={`dl ${cls}`}>{line || " "}{"\n"}</span>;
+      })}
+    </pre>
+  );
+}
+
+/** Screen 4: nothing changes behaviour until you look at the diff and accept it (R2). */
+function ProposalsScreen({ selected }: { selected: string | null }) {
+  const [list, setList] = useState<ProposalView[] | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [rejecting, setRejecting] = useState(false);
+  const [reason, setReason] = useState("");
+  const load = useCallback(() => fetch("/api/proposals").then((r) => r.json()).then(setList).catch(() => setList([])), []);
+  useEffect(() => { load(); }, [load]);
+
+  const act = async (file: string, verb: "accept" | "reject" | "redraft", body?: unknown) => {
+    setBusy(verb);
+    setError(null);
+    setNotice(null);
+    const res = await fetch(`/api/proposals/${encodeURIComponent(file)}/${verb}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    }).catch(() => null);
+    const payload = (await res?.json().catch(() => null)) as any;
+    setBusy(null);
+    if (!res || !res.ok) return setError(payload?.error ?? `${verb} failed`);
+    if (verb === "accept") setNotice(`accepted — the prompt is now v${payload.version}. New runs pin it; runs in flight keep what they started with (OV-2).`);
+    if (verb === "redraft") setNotice(`re-drafting ${payload.drafting} — the reviser is running${payload.stubbed ? " (stubbed)" : ""}. Reload in a minute.`);
+    if (verb === "reject") { setRejecting(false); setReason(""); }
+    load();
+    window.dispatchEvent(new Event(PROPOSALS_CHANGED));
+  };
+
+  if (!list) return <div className="empty">loading proposals…</div>;
+  if (list.length === 0)
+    return <div className="empty">no proposals — add feedback to a prompt, then <code>bun reviser/revise.ts &lt;id&gt;</code></div>;
+
+  const current = list.find((p) => p.file === selected) ?? list[0]!;
+  return (
+    <div className="library-layout">
+      <div className="runs">
+        {list.map((p) => (
+          <a key={p.file} className={`run-row ${p.file === current.file ? "selected" : ""}`} href={`/proposals/${encodeURIComponent(p.file)}`}>
+            <span className="run-goal">{p.id}</span>
+            <span className="run-meta">
+              v{p.base_version}→v{p.proposed_version}
+              <Badge variant={p.status === "pending" ? "attention" : p.status === "accepted" ? "success" : "outline"}>{p.status}</Badge>
+              {p.stale && <Badge variant="destructive">stale</Badge>}
+            </span>
+          </a>
+        ))}
+      </div>
+
+      <div className="prompt-detail">
+        <div className="topbar">
+          <h1>{current.id}</h1>
+          <Badge variant="outline">v{current.base_version} → v{current.proposed_version}</Badge>
+          <Badge variant={current.status === "pending" ? "attention" : current.status === "accepted" ? "success" : "outline"}>{current.status}</Badge>
+          <span className="meta">{current.created ? fmtWhen(current.created) : ""}</span>
+          <a className="linkish" href={`/prompts/${encodeURIComponent(current.id)}`}>open prompt →</a>
+        </div>
+
+        {current.stale && (
+          <div className="banner failed">
+            Stale base — drafted against v{current.base_version}, but {current.id} is now v{current.current_version}.
+            Accepting would silently drop whatever moved it (D7).
+            <Button variant="destructive" size="sm" className="ml-auto" disabled={busy !== null} onClick={() => act(current.file, "redraft")}>
+              <RotateCcw />{busy === "redraft" ? "re-drafting…" : "Re-draft (spends tokens)"}
+            </Button>
+          </div>
+        )}
+        {current.current_version === null && (
+          <div className="banner failed">Orphaned — {current.id} no longer exists in <code>prompts/</code>.</div>
+        )}
+        {error && <div className="banner failed">{error}</div>}
+        {notice && <div className="banner paused">{notice}</div>}
+
+        {current.status === "pending" && !current.stale && current.current_version !== null && (
+          <div className="proposal-actions">
+            <Button size="sm" disabled={busy !== null} onClick={() => act(current.file, "accept")}>
+              <ThumbsUp />{busy === "accept" ? "accepting…" : `Accept → v${current.proposed_version}`}
+            </Button>
+            {rejecting ? (
+              <>
+                <Input autoFocus placeholder="Why? The reviser reads this." value={reason} onChange={(e) => setReason(e.target.value)} />
+                <Button variant="destructive" size="sm" disabled={!reason.trim() || busy !== null} onClick={() => act(current.file, "reject", { reason })}>
+                  Confirm reject
+                </Button>
+                <Button variant="ghost" size="sm" onClick={() => setRejecting(false)}>Cancel</Button>
+              </>
+            ) : (
+              <Button variant="destructive-outline" size="sm" onClick={() => setRejecting(true)}><X />Reject</Button>
+            )}
+          </div>
+        )}
+        {current.status === "rejected" && current.rejection_reason && (
+          <div className="pd-note">rejected {fmtWhen(current.rejected_at)} — “{current.rejection_reason}” (the reviser reads this as feedback)</div>
+        )}
+        {current.status === "accepted" && (
+          <div className="pd-note">accepted {fmtWhen(current.accepted_at)} — applies to new runs only (OV-2)</div>
+        )}
+
+        <section className="pd-section">
+          <h2>Eval</h2>
+          {current.eval.score
+            ? <div className="kv"><span className="k">score</span><span>{current.eval.score} — {current.eval.verdict}</span></div>
+            : current.eval.case
+              ? <div className="pd-note">an eval case exists but has not been run: <code>bun {current.eval.case} --score-only --stamp</code></div>
+              : <div className="pd-note">no eval case for this prompt yet — cases are authored at first feedback (D8), so judge the diff</div>}
+        </section>
+
+        <section className="pd-section">
+          <h2>Evidence — feedback this answers ({current.feedback.length})</h2>
+          {current.feedback.length === 0
+            ? <div className="pd-note">no feedback on file for {current.id}</div>
+            : current.feedback.map((f, i) => (
+                <div key={i} className="fb-entry">
+                  <div className="fb-head">
+                    <Badge variant={f.verdict === "reject" ? "destructive" : "success"}>{f.verdict}</Badge>
+                    <a href={`/run/${f.run}`}>{f.run}</a>
+                    <span className="mono-note">{f.node}@{f.visit}</span>
+                  </div>
+                  <div className="fb-note">{f.note}</div>
+                </div>
+              ))}
+        </section>
+
+        {current.reflection && (
+          <section className="pd-section">
+            <h2>Reviser's reasoning</h2>
+            <div className="fb-note">{current.reflection}</div>
+          </section>
+        )}
+
+        <section className="pd-section">
+          <h2>Diff</h2>
+          {current.diff ? <Diff text={current.diff} /> : <div className="pd-note">no diff on file — compare the revision below by eye</div>}
+        </section>
+
+        <section className="pd-section">
+          <h2>Proposed template (v{current.proposed_version})</h2>
+          <pre className="pd-body">{current.body}</pre>
+        </section>
+      </div>
+    </div>
+  );
+}
+
 // ---- shell + routing ----------------------------------------------------------
 
 function App() {
@@ -911,24 +1328,56 @@ function App() {
   }, [theme]);
 
   const runMatch = path.match(/^\/run\/([^/]+)/);
+  const promptMatch = path.match(/^\/prompts(?:\/(.+))?$/);
+  const proposalMatch = path.match(/^\/proposals(?:\/(.+))?$/);
   const isNew = path === "/new";
   const isSettings = path === "/settings";
   const isGraphs = path === "/graphs";
+  const isRuns = !runMatch && !isNew && !isGraphs && !isSettings && !promptMatch && !proposalMatch;
+
+  // how many drafts are waiting for you to look — R2's whole point is that you look, so a
+  // count that goes stale after an accept is worse than no count: it is a live-looking lie
+  const [pending, setPending] = useState(0);
+  const countPending = useCallback(() => {
+    fetch("/api/proposals")
+      .then((r) => r.json())
+      .then((ps: ProposalView[]) => setPending(ps.filter((p) => p.status === "pending").length))
+      .catch(() => setPending(0));
+  }, []);
+  useEffect(() => {
+    countPending();
+    window.addEventListener(PROPOSALS_CHANGED, countPending);
+    return () => window.removeEventListener(PROPOSALS_CHANGED, countPending);
+  }, [countPending, path]);
+
   return (
     <div className="shell">
       {!splashDone && <Splash onDone={() => setSplashDone(true)} />}
       <nav className="sidebar">
         <a className="mark-btn" title="Replay the splash" onClick={() => setSplashDone(false)}><Mark className="mark" /></a>
-        <a className={`nav ${!runMatch && !isNew && !isGraphs && !isSettings ? "active" : ""}`} href="/"><Rows3 size={15} /><span className="label">Runs</span></a>
+        <a className={`nav ${isRuns ? "active" : ""}`} href="/"><Rows3 size={15} /><span className="label">Runs</span></a>
         <a className={`nav ${isNew ? "active" : ""}`} href="/new"><Plus size={15} /><span className="label">New run</span></a>
         <a className={`nav ${isGraphs ? "active" : ""}`} href="/graphs"><Workflow size={15} /><span className="label">Graphs</span></a>
+        <a className={`nav ${promptMatch ? "active" : ""}`} href="/prompts"><Library size={15} /><span className="label">Prompts</span></a>
+        <a className={`nav ${proposalMatch ? "active" : ""}`} href="/proposals">
+          <FileDiff size={15} /><span className="label">Proposals</span>
+          {pending > 0 && <span className="nav-badge">{pending}</span>}
+        </a>
         <a className={`nav ${isSettings ? "active" : ""}`} href="/settings"><SettingsIcon size={15} /><span className="label">Settings</span></a>
         <div className="spacer" />
         <Button variant="outline" size="sm" onClick={() => setTheme(theme === "dark" ? "light" : theme === "light" ? "system" : "dark")}>
           theme: {theme}
         </Button>
       </nav>
-      <main>{runMatch ? <RunView id={runMatch[1]!} /> : isNew ? <StartRun /> : isSettings ? <Settings /> : isGraphs ? <GraphsList /> : <div className="runs"><RunsList /></div>}</main>
+      <main>
+        {runMatch ? <RunView id={runMatch[1]!} />
+          : isNew ? <StartRun />
+          : isSettings ? <Settings />
+          : isGraphs ? <GraphsList />
+          : promptMatch ? <PromptsScreen selected={promptMatch[1] ? decodeURIComponent(promptMatch[1]) : null} />
+          : proposalMatch ? <ProposalsScreen selected={proposalMatch[1] ? decodeURIComponent(proposalMatch[1]) : null} />
+          : <div className="runs"><RunsList /></div>}
+      </main>
     </div>
   );
 }

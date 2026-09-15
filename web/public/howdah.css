@@ -334,3 +334,97 @@ button.primary:disabled { opacity: 0.5; cursor: default; }
 @media (prefers-reduced-motion: reduce) {
   .dag-edge, .dag-edge-label, .dag-node { animation: none; opacity: 1; stroke-dashoffset: 0; }
 }
+
+/* ---- prompt library + proposal review (T21) ------------------------------------- */
+
+.nav-badge {
+  margin-left: auto; background: var(--attention); color: #1a1408;
+  font-family: var(--font-mono); font-size: 10px; font-weight: 700;
+  border-radius: 9px; padding: 0 6px; line-height: 16px; min-width: 16px; text-align: center;
+}
+
+/* list + detail, wider than the graphs split: prompt ids and v-ranges need the room,
+   and the detail column must not run flush into the viewport edge */
+.library-layout {
+  display: grid; grid-template-columns: 320px minmax(0, 1fr); gap: 18px;
+  align-items: start; padding-right: 28px;
+}
+.library-layout .run-goal { min-width: 0; }
+.library-layout .run-meta { display: inline-flex; align-items: center; gap: 6px; }
+
+.prompt-detail { display: flex; flex-direction: column; gap: 4px; min-width: 0; padding: 28px 0 48px; max-width: 980px; }
+/* .kv is built for the 320px inspector rail; stretched across this column a label and its
+   value stop reading as a pair, so cap the pairing width rather than the column */
+.prompt-detail .kv { max-width: 620px; gap: 16px; }
+.prompt-detail .kv > :last-child { min-width: 0; overflow-wrap: anywhere; text-align: right; }
+.prompt-detail .topbar { position: static; padding: 0 0 10px; background: none; }
+.prompt-detail .topbar h1 { font-size: 17px; }
+.prompt-detail .banner { position: static; margin: 0 0 8px; border-radius: var(--radius-sm); border-bottom: 0; }
+
+.pd-section { border-top: 1px solid var(--border); padding: 12px 0; }
+.pd-section h2 {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em;
+  color: var(--fg-faint); margin: 0 0 8px; font-weight: 600;
+}
+.pd-note { color: var(--fg-muted); font-size: 12px; padding: 2px 0; }
+.pd-note code { background: var(--bg-inset); padding: 1px 5px; border-radius: 4px; font-family: var(--font-mono); }
+.pd-rows { margin-top: 8px; }
+.pd-row {
+  display: grid; grid-template-columns: minmax(120px, 1fr) auto auto auto; gap: 10px;
+  padding: 4px 0; border-bottom: 1px solid var(--border); font-size: 12px; align-items: baseline;
+}
+.pd-row { max-width: 900px; }
+.pd-row > span:last-child, .pd-row > a:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pd-body {
+  background: var(--bg-inset); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 10px 12px; overflow-x: auto; white-space: pre-wrap; font-family: var(--font-mono);
+  font-size: 12px; line-height: 1.55; color: var(--fg-muted); max-height: 460px; overflow-y: auto;
+}
+
+.fb-entry { border-left: 2px solid var(--border-strong); padding: 4px 0 8px 10px; margin-bottom: 8px; }
+.fb-head { display: flex; align-items: center; gap: 8px; font-size: 11px; margin-bottom: 4px; }
+.fb-note { white-space: pre-wrap; font-size: 13px; line-height: 1.55; color: var(--fg); }
+
+.proposal-actions { display: flex; align-items: center; gap: 8px; padding: 8px 0; flex-wrap: wrap; }
+.proposal-actions input { max-width: 320px; }
+
+/* diff: colour carries the meaning, so it also carries a sign in the gutter */
+.diff {
+  background: var(--bg-inset); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 10px 0; overflow-x: auto; font-family: var(--font-mono); font-size: 12px;
+  line-height: 1.5; max-height: 520px; overflow-y: auto;
+}
+.diff .dl { display: block; padding: 0 12px; white-space: pre-wrap; }
+.diff .ctx { color: var(--fg-muted); }
+.diff .meta { color: var(--fg-faint); }
+.diff .hunk { color: var(--status-running); background: color-mix(in srgb, var(--status-running) 8%, transparent); }
+.diff .add { color: var(--status-done); background: color-mix(in srgb, var(--status-done) 10%, transparent); }
+.diff .del { color: var(--status-failed-recoverable); background: color-mix(in srgb, var(--status-failed-recoverable) 10%, transparent); }
+
+/* prompt & context, with the rendered instance and the feedback affordance */
+.prompt-context { cursor: default; }
+.pc-head { display: flex; align-items: center; gap: 10px; }
+.pc-feedback {
+  background: none; border: 0; color: var(--fg-faint); cursor: pointer;
+  font-family: var(--font-display); font-size: 11px; letter-spacing: 0.02em;
+  display: inline-flex; align-items: center; gap: 4px; padding: 0;
+}
+.pc-feedback:hover { color: var(--attention); }
+.pc-note { color: var(--fg-faint); font-size: 11px; margin: 6px 0 2px; }
+.pc-note.warn { color: var(--attention); }
+.pc-rendered {
+  background: var(--bg-inset); border-left: 2px solid var(--primary); border-radius: var(--radius-sm);
+  padding: 8px 10px; overflow-x: auto; white-space: pre-wrap; color: var(--fg-muted);
+  max-height: 340px; overflow-y: auto;
+}
+.feedback-card {
+  background: var(--bg-raised); border: 1px solid var(--border-strong); border-radius: var(--radius);
+  padding: 12px; margin-top: 8px; display: flex; flex-direction: column; gap: 8px;
+  @starting-style { opacity: 0; transform: scale(0.98); }
+  transition: opacity var(--dur-base) var(--ease-out-strong), transform var(--dur-base) var(--ease-out-strong);
+}
+.feedback-actions { display: flex; align-items: center; gap: 8px; }
+
+@media (max-width: 1100px) {
+  .graphs-layout, .library-layout { grid-template-columns: 1fr; }
+}

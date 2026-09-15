@@ -83,12 +83,25 @@ const c = report("GROUND-TRUTH PROXIMITY", proximity);
 
 const total = a + b + c;
 const max = captured.length + preserved.length + proximity.length;
-console.log(`\nSCORE: ${total}/${max}`);
-console.log(
+const verdict =
   total === max
-    ? "VERDICT: proposal matches the hand edit's intent with nothing lost — read the diff and judge."
+    ? "proposal matches the hand edit's intent with nothing lost — read the diff and judge."
     : total >= max - 2
-      ? "VERDICT: close — read the FAILs and the diff; likely accept-with-tweaks."
-      : "VERDICT: reviser is not reproducing the hand edit — the escape hatch question is live.",
-);
+      ? "close — read the FAILs and the diff; likely accept-with-tweaks."
+      : "reviser is not reproducing the hand edit — the escape hatch question is live.";
+console.log(`\nSCORE: ${total}/${max}`);
+console.log(`VERDICT: ${verdict}`);
+
+// --stamp writes the result onto the proposal so the review screen shows a real score
+// instead of an empty field (A3.3). Only a PENDING proposal can be stamped.
+if (process.argv.includes("--stamp")) {
+  const { stampEval } = await import("../../prompts/proposals");
+  const path = join(ROOT, "reviser", "proposals", "delivery.publish.v2.proposal.md");
+  try {
+    stampEval(path, `${total}/${max}`, verdict);
+    console.log(`stamped eval result onto ${path}`);
+  } catch (err) {
+    console.error(`could not stamp: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
 process.exit(total >= max - 2 ? 0 : 1);

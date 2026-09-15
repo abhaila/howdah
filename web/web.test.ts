@@ -1,11 +1,12 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, mkdirSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EventLog, readLog } from "../log/write";
 import { deriveStatus, deriveSummary, deriveDetail, deriveTimeline, sortRuns } from "./derive";
 import { createHowdahServer } from "./server";
 import { AttentionCenter } from "../engine/attention";
+import { renderedHash } from "../core/template";
 
 function fixedClock(startMs = 1757750000000): () => Date {
   let t = 0;
@@ -351,6 +352,230 @@ describe("graph tuning API", () => {
       const after = (await (await fetch(url("/api/graphs/write-doc"))).json()) as any;
       expect(after.tuning).toEqual({});
     } finally {
+      server.stop(true);
+    }
+  });
+});
+
+// ---- prompt library + proposal review (T21) ---------------------------------------
+
+/** a repo-shaped root so these tests never touch the real prompts/ or feedback/ */
+function fixtureRepo(): string {
+  const root = mkdtempSync(join(tmpdir(), "howdah-t21-repo-"));
+  mkdirSync(join(root, "prompts"), { recursive: true });
+  mkdirSync(join(root, "feedback"), { recursive: true });
+  mkdirSync(join(root, "reviser", "proposals"), { recursive: true });
+  // doc.outline is consumed by the real write-doc graph, which declares reads goal + work —
+  // that is what makes the OV-3 undeclared-read guard testable through the API
+  writeFileSync(
+    join(root, "prompts", "doc.outline.md"),
+    `---\nid: doc.outline\nversion: 1\ntags: [doc]\n---\nOutline {{ context.goal }} for {{ context.work }}.\n`,
+  );
+  return root;
+}
+
+function seedProposalFile(root: string, opts: { id: string; base: number; body: string; status?: string }) {
+  const file = `${opts.id}.v${opts.base + 1}.proposal.md`;
+  writeFileSync(
+    join(root, "reviser", "proposals", file),
+    `---\nid: ${opts.id}\nbase_version: ${opts.base}\nproposed_version: ${opts.base + 1}\nstatus: ${opts.status ?? "pending"}\ncreated: 2026-09-15T00:00:00Z\n---\n${opts.body}`,
+  );
+  return file;
+}
+
+describe("prompt library API (T21)", () => {
+  test("list + detail expose consumers, feedback and outcomes; unknown ids 404", async () => {
+    const root = fixtureRepo();
+    const base = mkdtempSync(join(tmpdir(), "howdah-t21-"));
+    const runsDir = join(base, "runs");
+    mkdirSync(runsDir, { recursive: true });
+    process.env.HOWDAH_HOME = base;
+    // a run that rendered doc.outline and finished — the outcome join has something to find
+    const log = new EventLog(join(runsDir, "r-doc", "run.jsonl"), fixedClock());
+    log.append({ type: "run-started", graph: "write-doc", inputs: { goal: "g" }, pinned_prompts: { "doc.outline": 1 } });
+    log.append({ type: "prompt-rendered", node: "doc.outline", visit: 1, prompt: "doc.outline", prompt_version: 1, rendered_hash: "abc123", context_read: { goal: "g", work: "w" } });
+    log.append({ type: "prompt-outcome", rendered_hash: "abc123", node: "doc.outline", visit: 1, terminal_outcome: "success" });
+    log.append({ type: "run-finished", outcome: "success" });
+
+    const server = createHowdahServer({ runsDir, attentionDir: join(base, "attention"), port: 0, repoRoot: root });
+    const url = (p: string) => `http://localhost:${server.port}${p}`;
+    try {
+      const list = (await (await fetch(url("/api/prompts"))).json()) as any[];
+      expect(list).toHaveLength(1);
+      expect(list[0]).toMatchObject({ id: "doc.outline", version: 1, tags: ["doc"] });
+      expect(list[0].consumers).toEqual([{ graph: "write-doc", node: "doc.outline" }]);
+      expect(list[0].outcomes).toMatchObject({ renders: 1, success: 1, pending: 0 });
+
+      const detail = (await (await fetch(url("/api/prompts/doc.outline"))).json()) as any;
+      expect(detail.body).toContain("{{ context.goal }}");
+      expect(detail.outcome_rows[0]).toMatchObject({ run: "r-doc", node: "doc.outline", terminal_outcome: "success" });
+
+      expect((await fetch(url("/api/prompts/nope"))).status).toBe(404);
+      // a traversal attempt is an unknown id, not a file read
+      expect((await fetch(url("/api/prompts/..%2F..%2Fetc%2Fpasswd"))).status).toBe(404);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("feedback POST lands in feedback/<id>.jsonl and shows up in detail; junk is refused", async () => {
+    const root = fixtureRepo();
+    const base = mkdtempSync(join(tmpdir(), "howdah-t21-"));
+    const runsDir = join(base, "runs");
+    mkdirSync(runsDir, { recursive: true });
+    process.env.HOWDAH_HOME = base;
+    const server = createHowdahServer({ runsDir, attentionDir: join(base, "attention"), port: 0, repoRoot: root });
+    const url = (p: string) => `http://localhost:${server.port}${p}`;
+    const post = (body: unknown) =>
+      fetch(url("/api/prompts/doc.outline/feedback"), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    try {
+      const good = { run: "r-doc", node: "doc.outline", visit: 1, note: "outlines are too long", verdict: "reject", rendered_hash: "abc123" };
+      const res = await post(good);
+      expect(res.status).toBe(201);
+      expect(((await res.json()) as any).entry).toMatchObject({ run: "r-doc", verdict: "reject", note: "outlines are too long" });
+
+      const written = readFileSync(join(root, "feedback", "doc.outline.jsonl"), "utf8").trim().split("\n");
+      expect(written).toHaveLength(1);
+      expect(JSON.parse(written[0]!)).toMatchObject({ node: "doc.outline", visit: 1, rendered_hash: "abc123" });
+
+      const detail = (await (await fetch(url("/api/prompts/doc.outline"))).json()) as any;
+      expect(detail.feedback).toMatchObject({ count: 1, rejects: 1 });
+      expect(detail.feedback_entries[0].note).toBe("outlines are too long");
+
+      // the reviser's inputs are validated at the door
+      expect((await post({ ...good, note: "" })).status).toBe(400);
+      expect((await post({ ...good, verdict: "sideways" })).status).toBe(400);
+      expect((await post({ ...good, rendered_hash: "" })).status).toBe(400);
+      expect(readFileSync(join(root, "feedback", "doc.outline.jsonl"), "utf8").trim().split("\n")).toHaveLength(1);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("render endpoint rebuilds a turn's prompt and proves it by re-hashing", async () => {
+    const root = fixtureRepo();
+    const base = mkdtempSync(join(tmpdir(), "howdah-t21-"));
+    const runsDir = join(base, "runs");
+    mkdirSync(join(runsDir, "r-render", "prompts"), { recursive: true });
+    process.env.HOWDAH_HOME = base;
+    // pin the prompt into the run dir exactly as the engine does, and hash the same text
+    writeFileSync(join(runsDir, "r-render", "prompts", "doc.outline.md"), readFileSync(join(root, "prompts", "doc.outline.md"), "utf8"));
+    const text = "Outline ship it for the blog post.\n";
+    const hash = renderedHash(text);
+    const log = new EventLog(join(runsDir, "r-render", "run.jsonl"), fixedClock());
+    log.append({ type: "run-started", graph: "write-doc", inputs: {}, pinned_prompts: { "doc.outline": 1 } });
+    log.append({ type: "prompt-rendered", node: "doc.outline", visit: 1, prompt: "doc.outline", prompt_version: 1, rendered_hash: hash, context_read: { goal: "ship it", work: "the blog post" } });
+
+    const server = createHowdahServer({ runsDir, attentionDir: join(base, "attention"), port: 0, repoRoot: root });
+    const url = (p: string) => `http://localhost:${server.port}${p}`;
+    try {
+      const r = (await (await fetch(url(`/api/runs/r-render/render/${hash}`))).json()) as any;
+      expect(r).toMatchObject({ verified: true, text, prompt: "doc.outline", prompt_version: 1, node: "doc.outline", visit: 1 });
+      expect((await fetch(url("/api/runs/r-render/render/ffffffffffffffff"))).status).toBe(404);
+    } finally {
+      server.stop(true);
+    }
+  });
+});
+
+describe("proposal review API (T21)", () => {
+  function serve(root: string) {
+    const base = mkdtempSync(join(tmpdir(), "howdah-t21-"));
+    const runsDir = join(base, "runs");
+    mkdirSync(runsDir, { recursive: true });
+    process.env.HOWDAH_HOME = base;
+    const server = createHowdahServer({ runsDir, attentionDir: join(base, "attention"), port: 0, repoRoot: root });
+    return { server, url: (p: string) => `http://localhost:${server.port}${p}` };
+  }
+
+  test("accept bumps the prompt to v+1 and marks the proposal accepted", async () => {
+    const root = fixtureRepo();
+    const file = seedProposalFile(root, { id: "doc.outline", base: 1, body: "Outline {{ context.goal }} for {{ context.work }}, tightly.\n" });
+    const { server, url } = serve(root);
+    try {
+      const res = await fetch(url(`/api/proposals/${file}/accept`), { method: "POST" });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ ok: true, version: 2 });
+
+      const prompt = readFileSync(join(root, "prompts", "doc.outline.md"), "utf8");
+      expect(prompt).toContain("version: 2");
+      expect(prompt).toContain("tightly.");
+      expect(prompt).toContain("provenance:");
+
+      const list = (await (await fetch(url("/api/proposals"))).json()) as any[];
+      expect(list[0]).toMatchObject({ id: "doc.outline", status: "accepted", current_version: 2 });
+      // accepting twice is refused — the lifecycle is one-way
+      expect((await fetch(url(`/api/proposals/${file}/accept`), { method: "POST" })).status).toBe(409);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("a stale base is refused with the re-draft reason (D7)", async () => {
+    const root = fixtureRepo();
+    const file = seedProposalFile(root, { id: "doc.outline", base: 0, body: "Outline {{ context.goal }}.\n" }); // prompt is v1
+    const { server, url } = serve(root);
+    try {
+      const list = (await (await fetch(url("/api/proposals"))).json()) as any[];
+      expect(list[0]).toMatchObject({ stale: true, base_version: 0, current_version: 1 });
+
+      const res = await fetch(url(`/api/proposals/${file}/accept`), { method: "POST" });
+      expect(res.status).toBe(409);
+      expect(((await res.json()) as any).error).toMatch(/stale base/);
+      expect(readFileSync(join(root, "prompts", "doc.outline.md"), "utf8")).toContain("version: 1"); // untouched
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("a revision introducing an undeclared read is refused (OV-3)", async () => {
+    const root = fixtureRepo();
+    const file = seedProposalFile(root, { id: "doc.outline", base: 1, body: "Outline {{ context.goal }} using {{ context.secret_plan }}.\n" });
+    const { server, url } = serve(root);
+    try {
+      const res = await fetch(url(`/api/proposals/${file}/accept`), { method: "POST" });
+      expect(res.status).toBe(409);
+      expect(((await res.json()) as any).error).toMatch(/undeclared reads[\s\S]*secret_plan/);
+      expect(readFileSync(join(root, "prompts", "doc.outline.md"), "utf8")).toContain("version: 1");
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("reject requires a reason and records it as reviser input", async () => {
+    const root = fixtureRepo();
+    const file = seedProposalFile(root, { id: "doc.outline", base: 1, body: "whatever\n" });
+    const { server, url } = serve(root);
+    const post = (body?: unknown) =>
+      fetch(url(`/api/proposals/${file}/reject`), { method: "POST", headers: { "content-type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) });
+    try {
+      expect((await post({ reason: "   " })).status).toBe(400);
+      expect((await post()).status).toBe(400); // no body at all
+      expect((await post({ reason: "drops the audience line" })).status).toBe(200);
+      const list = (await (await fetch(url("/api/proposals"))).json()) as any[];
+      expect(list[0]).toMatchObject({ status: "rejected", rejection_reason: "drops the audience line" });
+      expect(readFileSync(join(root, "prompts", "doc.outline.md"), "utf8")).toContain("version: 1"); // rejection changes nothing
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("redraft is accepted for a known proposal and 404s for anything else", async () => {
+    const root = fixtureRepo();
+    const file = seedProposalFile(root, { id: "doc.outline", base: 0, body: "stale one\n" });
+    const { server, url } = serve(root);
+    process.env.HOWDAH_STUB = "1"; // never spawn the real reviser (it spends tokens) in tests
+    try {
+      const res = await fetch(url(`/api/proposals/${file}/redraft`), { method: "POST" });
+      expect(res.status).toBe(202);
+      expect(await res.json()).toMatchObject({ drafting: "doc.outline", stubbed: true });
+
+      expect((await fetch(url("/api/proposals/ghost.v2.proposal.md/redraft"), { method: "POST" })).status).toBe(404);
+      // path traversal and non-proposal names are refused before any file is touched
+      expect((await fetch(url("/api/proposals/..%2F..%2Fprompts%2Fdoc.outline.md/accept"), { method: "POST" })).status).toBe(404);
+      expect((await fetch(url("/api/proposals/notes.md/accept"), { method: "POST" })).status).toBe(404);
+    } finally {
+      delete process.env.HOWDAH_STUB;
       server.stop(true);
     }
   });

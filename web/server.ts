@@ -24,6 +24,12 @@ import { loadTuning, saveTuning, pruneTuning } from "../config/tuning";
 import { writeControl, clearControl } from "../engine/control";
 import { EventLog as ControlLog } from "../log/write";
 import { effectiveCwd } from "../engine/executors/worktree";
+import { PromptStore } from "../prompts/store";
+import {
+  appendFeedback, promptDetail, promptSummaries, reconstructRender, repoRoot,
+  type LibraryPaths,
+} from "../prompts/library";
+import { acceptProposal, listProposals, proposalsDir, rejectProposal, viewProposal } from "../prompts/proposals";
 
 export interface ServerOpts {
   runsDir: string;
@@ -31,9 +37,15 @@ export interface ServerOpts {
   port?: number;
   /** SSE poll interval; small in tests */
   pollMs?: number;
+  /** where prompts/, feedback/ and reviser/proposals/ live — overridable so tests that
+   *  accept proposals and write feedback cannot mutate the real repo */
+  repoRoot?: string;
 }
 
 const logPath = (runsDir: string, id: string) => join(runsDir, id, "run.jsonl");
+
+/** prompts/, feedback/ and reviser/proposals/ come from the repo; runs come from the server's dir */
+const libraryPaths = (opts: ServerOpts): LibraryPaths => ({ root: opts.repoRoot ?? repoRoot(), runsDir: opts.runsDir });
 
 function listRunIds(runsDir: string): string[] {
   if (!existsSync(runsDir)) return [];
@@ -42,6 +54,8 @@ function listRunIds(runsDir: string): string[] {
 
 export function createHowdahServer(opts: ServerOpts) {
   const pollMs = opts.pollMs ?? 500;
+  const root = opts.repoRoot ?? repoRoot();
+  const promptStore = new PromptStore(join(root, "prompts"));
   const spawnResume = (id: string) => {
     // a live runner is already polling the log for the reply — don't double-run
     const pidFile = join(opts.runsDir, id, "runner.pid");
@@ -124,6 +138,74 @@ export function createHowdahServer(opts: ServerOpts) {
           edges: g.def.edges.map((e) => ({ from: e.from, to: e.to, label: e.condition?.label, weight: e.weight })),
         });
       }
+      // ---- prompt library + proposal review (T21) --------------------------------
+      // The prompt is the addressable object (R1) and the proposal is the gate nothing
+      // passes without you (R2), so these are read models over prompts/, feedback/,
+      // reviser/proposals/ and the run logs — plus three writes: feedback, accept, reject.
+
+      if (url.pathname === "/api/prompts") {
+        return json(promptSummaries(libraryPaths(opts), Object.values(GRAPHS), promptStore));
+      }
+      const pm = url.pathname.match(/^\/api\/prompts\/([^/]+)(\/feedback)?$/);
+      if (pm) {
+        const id = decodeURIComponent(pm[1]!);
+        // the id indexes a file path: only ids the store actually lists may be used
+        if (!promptStore.list().includes(id)) return json({ error: "unknown prompt" }, 404);
+        if (pm[2] === "/feedback" && req.method === "POST") {
+          const body = (await req.json()) as Partial<import("../prompts/library").FeedbackInput>;
+          try {
+            const entry = appendFeedback(join(root, "feedback"), id, {
+              run: String(body.run ?? ""),
+              node: String(body.node ?? ""),
+              visit: Number(body.visit),
+              note: String(body.note ?? ""),
+              verdict: body.verdict as "accept" | "reject",
+              rendered_hash: String(body.rendered_hash ?? ""),
+            });
+            return json({ ok: true, entry }, 201);
+          } catch (err) {
+            return json({ error: err instanceof Error ? err.message : String(err) }, 400);
+          }
+        }
+        return json(promptDetail(libraryPaths(opts), Object.values(GRAPHS), id, promptStore));
+      }
+
+      if (url.pathname === "/api/proposals") return json(listProposals(proposalsDir(root), promptStore, root));
+      const prm = url.pathname.match(/^\/api\/proposals\/([^/]+)\/(accept|reject|redraft)$/);
+      if (prm && req.method === "POST") {
+        const file = decodeURIComponent(prm[1]!);
+        const dir = proposalsDir(root);
+        // basename-only, and it must already exist in the proposals dir — no traversal
+        if (file.includes("/") || !file.endsWith(".proposal.md") || !existsSync(join(dir, file)))
+          return json({ error: "unknown proposal" }, 404);
+        const path = join(dir, file);
+        try {
+          if (prm[2] === "accept") {
+            const version = acceptProposal(path, Object.values(GRAPHS), promptStore);
+            return json({ ok: true, version });
+          }
+          if (prm[2] === "reject") {
+            const body = (await req.json().catch(() => ({}))) as { reason?: string };
+            const reason = (body.reason ?? "").trim();
+            // the reason IS reviser input (it feeds the next reflection), so it is required
+            if (!reason) return json({ error: "a rejection reason is required — the reviser reads it" }, 400);
+            rejectProposal(path, reason);
+            return json({ ok: true });
+          }
+          // redraft: the reviser is a real agent call that spends tokens, so it is spawned
+          // detached exactly like a run launch and the screen polls for the new proposal
+          const view = viewProposal(dir, file, promptStore, root);
+          if (process.env.HOWDAH_STUB) return json({ ok: true, drafting: view.id, stubbed: true }, 202);
+          Bun.spawn(["bun", join(import.meta.dir, "..", "reviser", "revise.ts"), view.id], {
+            stdout: "ignore", stderr: "ignore", env: { ...process.env },
+          }).unref();
+          return json({ ok: true, drafting: view.id }, 202);
+        } catch (err) {
+          // stale base and undeclared reads are refusals, not bugs: 409 with the message
+          return json({ error: err instanceof Error ? err.message : String(err) }, 409);
+        }
+      }
+
       if (url.pathname === "/api/settings") {
         if (req.method === "PUT") {
           const body = (await req.json()) as Record<string, unknown>;
@@ -221,6 +303,16 @@ export function createHowdahServer(opts: ServerOpts) {
           stdout: "ignore", stderr: "ignore", env: { ...process.env },
         }).unref();
         return json({ id: runId }, 202);
+      }
+
+      // the rendered prompt for one turn, rebuilt from the pinned template and proven by
+      // re-hashing (T21) — the log stores the hash, never the text, so this is the only
+      // honest way to show what the agent actually read (R3.1)
+      const rm = url.pathname.match(/^\/api\/runs\/([^/]+)\/render\/([0-9a-f]{4,64})$/);
+      if (rm) {
+        const runDir = join(opts.runsDir, rm[1]!);
+        const render = reconstructRender(runDir, rm[2]!);
+        return render ? json(render) : json({ error: "no such render, or its pinned prompt is gone" }, 404);
       }
 
       const m = url.pathname.match(/^\/api\/runs(?:\/([^/]+)(?:\/(events|reply|open-ide|resume|pause|abort|jump))?)?$/);
