@@ -485,6 +485,30 @@ export function runDigest(
   ].filter((l) => l !== "").join("\n");
 }
 
+/**
+ * Chat citations (T24, story 12). An answer is UNTRUSTED model output: a node@visit becomes
+ * a clickable citation only when this run actually has that step, and every part is rendered
+ * as text, never as markup.
+ */
+export interface CitePart {
+  text: string;
+  cite: boolean;
+}
+
+export function citeParts(answer: string, known: Set<string>): CitePart[] {
+  const out: CitePart[] = [];
+  const re = /([a-z_][\w.]*@\d+)/gi;
+  let last = 0;
+  for (const m of answer.matchAll(re)) {
+    const at = m.index ?? 0;
+    if (at > last) out.push({ text: answer.slice(last, at), cite: false });
+    out.push({ text: m[1]!, cite: known.has(m[1]!) });
+    last = at + m[1]!.length;
+  }
+  if (last < answer.length) out.push({ text: answer.slice(last), cite: false });
+  return out;
+}
+
 /** runs list ordering: needs-input first (longest wait first), then running, then terminal */
 export function sortRuns(runs: RunSummary[]): RunSummary[] {
   const rank = (s: RunStatus): number =>

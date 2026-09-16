@@ -660,7 +660,7 @@ run view gets built once inside a system that has been agreed, and T23 is UI-ind
   - Verify: exhaust claude mid-run (fake the event), watch the node re-attempt on codex, the
     thread show the switch, and the run finish.
 
-- [ ] **T24 (P1) — web — Run view: steps by node, detail tab, full context, chat**
+- [x] **T24 (P1) — web — Run view: steps by node, detail tab, full context, chat** ✅ 2026-09-16: Steps (Inngest split + waiting split), Thread transcript, Logs, Context, read-only Chat — all five surfaces shipped
   - (a) thread grouped into node steps rather than a flat turn stream; (b) detailed logs
     behind a tab; (c) a full-context view — every key, current value, writer, visit, scope;
     (d) chat about the run.
@@ -686,6 +686,20 @@ run view gets built once inside a system that has been agreed, and T23 is UI-ind
   - Borrowing: Trigger.dev and Laminar are Apache-2.0 (keep LICENSE/NOTICE with any copied
     code); Langfuse is MIT outside its `ee/` dirs. Look-only: Inngest (SSPL), Phoenix
     (Elastic 2.0), Logfire and LangSmith (closed).
+  - Delivered as 13 single-commit stories (docs/plans/2026-09-16-00001-stories-run-view.md,
+    kept out of the repo per the commit convention). Highlights worth remembering:
+    - The waiting split needed NO new event: it is the overlap of attention-raised →
+      attention-resolved with the attempt's own interval, clamped so a run parked AFTER a
+      step failed is not charged to that step. On the seeded 16h run: 15h 42m of it was a
+      human not looking. That number is R3.3 made visible.
+    - An unresolved ask keeps the Steps axis measuring to now, or the waiting bar freezes at
+      the moment the ask was raised and hours of waiting render as nothing.
+    - deriveLogRows switches exhaustively over the event union with a `never` fallthrough, so
+      a new event type fails the build rather than rendering a blank row.
+    - Context lists declared-but-unwritten keys, which is precisely what Orbital's per-step
+      tab could not do (CUR5 closed).
+    - Chat is read-only and honours HOWDAH_STUB; citations are whitelisted against this run's
+      own steps and rendered as text, because model output is untrusted input.
 
 - [ ] **T25 (P1) — design — Full design consultation**
   - Trigger: "I dont like the design." That is the system, not spacing, so this re-opens the

@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EventLog, readLog } from "../log/write";
-import { deriveStatus, deriveSummary, deriveDetail, deriveTimeline, deriveLogRows, deriveContextTable, runDigest, sortRuns } from "./derive";
+import { deriveStatus, deriveSummary, deriveDetail, deriveTimeline, deriveLogRows, deriveContextTable, runDigest, citeParts, sortRuns } from "./derive";
 import { createHowdahServer } from "./server";
 import { AttentionCenter } from "../engine/attention";
 import { renderedHash } from "../core/template";
@@ -876,5 +876,32 @@ describe("ask about a run (story 11)", () => {
       delete process.env.HOWDAH_STUB;
       server.stop(true);
     }
+  });
+});
+
+// ---- chat citations (story 12) ----------------------------------------------------
+
+describe("citeParts", () => {
+  const known = new Set(["implementation.implement@1", "delivery.address_reviews@1"]);
+
+  test("a step this run has becomes a citation", () => {
+    const parts = citeParts("It died at implementation.implement@1 and retried.", known);
+    expect(parts.find((p) => p.text === "implementation.implement@1")?.cite).toBe(true);
+  });
+
+  test("a step this run does NOT have stays plain text", () => {
+    const parts = citeParts("See totally.invented@9 for details.", known);
+    expect(parts.find((p) => p.text === "totally.invented@9")?.cite).toBe(false);
+  });
+
+  test("model output round-trips as text, so markup can never be markup", () => {
+    const evil = '<img src=x onerror=alert(1)> and implementation.implement@1';
+    const parts = citeParts(evil, known);
+    expect(parts.map((p) => p.text).join("")).toBe(evil);
+    expect(parts.filter((p) => p.cite)).toHaveLength(1);
+  });
+
+  test("an answer with no citations fabricates none", () => {
+    expect(citeParts("Nothing to cite here.", known).every((p) => !p.cite)).toBe(true);
   });
 });

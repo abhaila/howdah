@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { RunDetail, RunSummary, RunStatus, LogRow } from "../derive";
+import { citeParts } from "../derive";
 import type { CoalescedTurn } from "../../log/coalesce";
 // type-only: erased at bundle time, so the server's node imports never reach the browser
 import type { PromptDetail, PromptSummary, ReconstructedRender } from "../../prompts/library";
@@ -890,20 +891,6 @@ function ContextDetail({ entry }: { entry: RunDetail["context"][number] }) {
  * Model output is untrusted input, so citations are matched against a whitelist of this
  * run's own node@visit keys and rendered as TEXT — never as markup.
  */
-function citeParts(answer: string, known: Set<string>): Array<{ text: string; cite: boolean }> {
-  const out: Array<{ text: string; cite: boolean }> = [];
-  const re = /([a-z_][\w.]*@\d+)/gi;
-  let last = 0;
-  for (const m of answer.matchAll(re)) {
-    const at = m.index ?? 0;
-    if (at > last) out.push({ text: answer.slice(last, at), cite: false });
-    out.push({ text: m[1]!, cite: known.has(m[1]!) });
-    last = at + m[1]!.length;
-  }
-  if (last < answer.length) out.push({ text: answer.slice(last), cite: false });
-  return out;
-}
-
 function suggestionsFor(detail: RunDetail, ask: RunDetail["ask"]): string[] {
   const out: string[] = [];
   if (ask) out.push("What is it waiting for?");
