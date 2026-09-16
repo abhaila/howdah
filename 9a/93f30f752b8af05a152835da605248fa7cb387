@@ -1,0 +1,24 @@
+web/app/main.tsx
+  s_220da8e953793c::t_b30da60a59a0d0 1319-1320,1470,1493,1536-1537,1555-1556,1920
+web/public/howdah.css
+  ai_agent 44
+  s_220da8e953793c::t_b30da60a59a0d0 23,25,27-29,31-33,49-52,63,75,77-78,82-83,93,101,139-141,146,151,200,241,316
+web/app/ui.tsx
+  s_220da8e953793c::t_b30da60a59a0d0 54,63
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "9a93f30f752b8af05a152835da605248fa7cb387",
+  "prompts": {},
+  "sessions": {
+    "s_220da8e953793c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2ba82f1f-e55e-4150-b238-4ff1b96ce382",
+        "model": "claude-fable-5"
+      },
+      "human_author": "areeb.bhaila <areeb.bhaila@gmail.com>"
+    }
+  }
+}
