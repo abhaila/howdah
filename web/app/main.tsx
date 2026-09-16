@@ -1354,7 +1354,9 @@ function App() {
     <div className="shell">
       {!splashDone && <Splash onDone={() => setSplashDone(true)} />}
       <nav className="sidebar">
-        <a className="mark-btn" title="Replay the splash" onClick={() => setSplashDone(false)}><Mark className="mark" /></a>
+        {/* the mark goes home like every other logo; it does NOT replay the splash —
+            the boot jingle belongs to an actual load, not to navigating back to Runs */}
+        <a className="mark-btn" href="/" title="Howdah — runs"><Mark className="mark" /></a>
         <a className={`nav ${isRuns ? "active" : ""}`} href="/"><Rows3 size={15} /><span className="label">Runs</span></a>
         <a className={`nav ${isNew ? "active" : ""}`} href="/new"><Plus size={15} /><span className="label">New run</span></a>
         <a className={`nav ${isGraphs ? "active" : ""}`} href="/graphs"><Workflow size={15} /><span className="label">Graphs</span></a>
