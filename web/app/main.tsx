@@ -1604,7 +1604,7 @@ function PromptsScreen({ selected }: { selected: string | null }) {
               v{p.version}
               {p.proposals.pending > 0 && <Badge variant="attention">{p.proposals.pending} pending</Badge>}
               {p.feedback.rejects > 0 && <Badge variant="destructive">{p.feedback.rejects} ✗</Badge>}
-              {p.outcomes.renders > 0 && <Badge variant="outline">{p.outcomes.renders} runs</Badge>}
+              {p.outcomes.renders > 0 && <Badge variant="outline">{p.outcomes.renders} run{p.outcomes.renders === 1 ? "" : "s"}</Badge>}
             </span>
           </a>
         ))}
@@ -1928,7 +1928,7 @@ function App() {
         </a>
         <a className={`nav ${isSettings ? "active" : ""}`} href="/settings"><SettingsIcon size={15} /><span className="label">Settings</span></a>
         <div className="spacer" />
-        <Button variant="outline" size="sm" onClick={() => setTheme(theme === "dark" ? "light" : theme === "light" ? "system" : "dark")}>
+        <Button variant="ghost" size="sm" className="justify-start text-faint" onClick={() => setTheme(theme === "dark" ? "light" : theme === "light" ? "system" : "dark")}>
           theme: {theme}
         </Button>
       </nav>
