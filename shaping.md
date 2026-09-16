@@ -1,4 +1,4 @@
-w---
+---
 shaping: true
 ---
 
@@ -626,6 +626,82 @@ T21 (independent — store + logs exist)     T19, T20 (after T15)
 T16 is the convergence point: (f) unlocks (b,c,d) being real rather than seeded. Suggested
 first slice: T15+T16 together — after them, a real claude-subscription run is visible in the
 viewer end to end, which is the moment Howdah replaces Orbital for one workflow.
+
+## Build Phase 3 — use-driven (opened 2026-09-15)
+
+Five items raised after living with the built thing. Two shipped immediately; three are
+tasks below. Ordered **T25 → T24 → T23**: the design work covers T24's new surfaces, so the
+run view gets built once inside a system that has been agreed, and T23 is UI-independent.
+
+- [x] **P3-a — worktrees grouped by repo** ✅ 2026-09-15: `$HOWDAH_HOME/repos/<repo>/worktrees/<runId>`
+  - The registered workspace name, not the directory basename: two clones of different orgs'
+    `api` would otherwise share one folder. Unregistered `--dir` runs fall back to basename.
+  - No migration: `worktree.json` holds an absolute path, so existing worktrees keep working
+    and clean up from wherever they are. Only new ones use the new shape.
+- [x] **P3-b — the boot jingle belongs to a load, not to navigation** ✅ 2026-09-15
+  - The sidebar mark replayed the splash (and `boot.wav`) on click, so going back to Runs by
+    clicking the logo re-played it. The mark is now a plain home link. The attention chime is
+    a different sound and is untouched.
+
+- [ ] **T23 (P1) — engine — Harness failover on allowance exhaustion**
+  - Today `allowance{state:"exhausted"}` is recorded and rendered and **acted on by nothing**.
+    The CLI exits non-zero, the executor throws, and the run parks with `executor threw: …` —
+    so running out of tokens is indistinguishable from a crash, which is the R3.3 failure the
+    watchdog exists to prevent.
+  - Decision (user, 2026-09-15): **auto-failover and say so.** On exhausted, switch to the
+    next harness, re-attempt the node, write a `harness-fallback` event, and raise a
+    non-blocking notification. Park only when every harness is exhausted, naming the earliest
+    `resets_at`. Rejected: park-and-ask (an overnight run sits dead), silent failover (a run
+    finishing on a weaker model without saying so).
+  - Leans on what exists: `prompt-rendered` already records harness/model/effort per turn, so
+    the record stays honest; `resolveAgentConfig` already drops a model belonging to the other
+    harness; node re-attempt is already first-class. Fallback order belongs in AgentConfig,
+    resolved by the same five-layer precedence.
+  - Verify: exhaust claude mid-run (fake the event), watch the node re-attempt on codex, the
+    thread show the switch, and the run finish.
+
+- [ ] **T24 (P1) — web — Run view: steps by node, detail tab, full context, chat**
+  - (a) thread grouped into node steps rather than a flat turn stream; (b) detailed logs
+    behind a tab; (c) a full-context view — every key, current value, writer, visit, scope;
+    (d) chat about the run.
+  - (c) needs no new event type: `node-finished.writes` carries every published value, so
+    current context and its provenance are derivable from the log like everything else.
+  - Decision (user, 2026-09-15): chat is **read-only Q&A** — an agent seeded with the run's
+    context, thread and rendered prompts that answers "why did it do that?" and cannot edit
+    files or move the run. Rejected: merging it with T22 steering, and a full agent session on
+    the worktree (a second agent mutating a worktree the run is still using).
+  - Sequenced after T25 so it is built inside the agreed design.
+  - Designed 2026-09-16, five surfaces on real run data (24 real steps, the real context keys
+    and scopes from this file's graph): https://claude.ai/artifact/DGdpDEVNbPmUdxiwcCH641
+  - Anchor pattern (user, 2026-09-16): **Inngest's split Steps layout** — timeline left,
+    selected step's detail right, approval card inside that panel rather than floating over
+    the list. The waiting step's bar splits into agent-working vs waiting-on-you, which is
+    derivable from `attention-raised` → `attention-resolved` inside an attempt: no new event.
+  - Thread: Laminar's transcript — one row per event with time · tokens · cost; row types are
+    told apart by icon shape, never hue, so amber keeps meaning only "needs you".
+  - Logs: Logfire's dense list under a level/type filter bar; every type from log/events.ts.
+  - Context: run-level table (key · value · scope · writer · at) with write history and
+    read-by. No tool surveyed has this; Orbital's was per-step and usually empty (CUR5).
+  - Chat: LangSmith Polly's pattern — answers cite the steps they came from.
+  - Borrowing: Trigger.dev and Laminar are Apache-2.0 (keep LICENSE/NOTICE with any copied
+    code); Langfuse is MIT outside its `ee/` dirs. Look-only: Inngest (SSPL), Phoenix
+    (Elastic 2.0), Logfire and LangSmith (closed).
+
+- [ ] **T25 (P1) — design — Full design consultation**
+  - Trigger: "I dont like the design." That is the system, not spacing, so this re-opens the
+    Design section's decisions (palette, type, layout, motion) rather than QA-ing them.
+  - Decision (user, 2026-09-15): `/design-consultation` — research, a complete proposed
+    system, font and colour previews to choose from. Rejected: a designer's-eye QA pass
+    (polishes a system that is not landing) and a variant shotgun.
+  - Brief must include T24's new surfaces so they are designed, not retrofitted.
+  - Decision (user, 2026-09-15): **A + B**. A's restraint with the two things variant B proved:
+    26px rows and an amber rule on the row that needs you, plus a node column wide enough for
+    `implementation.plan_review`. B's structural elephant glyphs are dropped: illegible at 12px.
+    C lost because its green "done" bars pull the eye off the waiting row. Compared as three
+    artboards on real run data: https://claude.ai/artifact/DGdpDEVNbPmUdxiwcCH641
+  - Font note: the canvas used Instrument Sans (General Sans cannot load there). It shares a
+    font host with JetBrains Mono, so it is a candidate to keep; settle it in DESIGN.md.
+  - Remaining: reference research for T24's surfaces, then DESIGN.md.
 
 ## GSTACK REVIEW REPORT
 
