@@ -1316,8 +1316,8 @@ function StartRun() {
   return (
     <div className="runs">
       <h1>Start a run</h1>
-      <Card className="max-w-[560px]">
-        <CardContent className="pt-4">
+      <Card className="max-w-[640px]">
+        <CardContent className="pt-5">
         <Label>
           Graph
           <Select value={graph} onChange={(e) => { setGraph(e.target.value); setInputs({}); }}>
@@ -1467,7 +1467,7 @@ function GraphTuner({ shape, onSaved }: { shape: GraphShapeDto; onSaved: () => v
               </CardContent>
             </>
           ) : (
-            <CardContent className="pt-4"><div className="field-hint">Click an agent node (◆) in the graph to tune it.</div></CardContent>
+            <CardContent className="pt-5"><div className="field-hint">Click an agent node (◆) in the graph to tune it.</div></CardContent>
           )}
         </Card>
       </div>
@@ -1490,7 +1490,7 @@ function GraphsList() {
   useEffect(() => { fetch("/api/graphs").then((r) => r.json()).then(setGraphs).catch(() => {}); }, []);
   const shape = useGraphShape(selected ? `${selected}?v=${reloadKey}` as any : undefined);
   return (
-    <div className="runs" style={{ maxWidth: 1100 }}>
+    <div className="runs">
       <h1>Graphs</h1>
       <div className="graphs-layout">
         <div>
@@ -1533,8 +1533,8 @@ function Settings() {
   return (
     <div className="runs">
       <h1>Settings</h1>
-      <Card className="max-w-[560px]">
-        <CardContent className="pt-4">
+      <Card className="max-w-[640px]">
+        <CardContent className="pt-5">
           <Label>
             Editor command (Open-in-IDE)
             <Input value={s.editorCommand ?? ""} onChange={(e) => setS({ ...s, editorCommand: e.target.value })} placeholder="idea — IntelliJ launcher on PATH (Tools → Create Command-line Launcher)" />
@@ -1552,8 +1552,8 @@ function Settings() {
       </Card>
 
       <h1 style={{ marginTop: 28 }}>Workspaces</h1>
-      <Card className="max-w-[560px]">
-        <CardContent className="pt-4">
+      <Card className="max-w-[640px]">
+        <CardContent className="pt-5">
           {[...ws.repos.map((w) => ({ ...w, kind: "repo" })), ...ws.folders.map((w) => ({ ...w, kind: "plain" }))].map((w) => (
             <div key={w.name} className="ws-row">
               <Badge variant="outline">{w.kind === "repo" ? <GitBranch /> : <FolderGit2 />}{w.kind}</Badge>
@@ -1917,7 +1917,7 @@ function App() {
       <nav className="sidebar">
         {/* the mark goes home like every other logo; it does NOT replay the splash —
             the boot jingle belongs to an actual load, not to navigating back to Runs */}
-        <a className="mark-btn" href="/" title="Howdah — runs"><Mark className="mark" /></a>
+        <a className="mark-btn" href="/" title="Howdah — runs"><Mark className="mark" /><span className="wordmark">Howdah</span></a>
         <a className={`nav ${isRuns ? "active" : ""}`} href="/"><Rows3 size={15} /><span className="label">Runs</span></a>
         <a className={`nav ${isNew ? "active" : ""}`} href="/new"><Plus size={15} /><span className="label">New run</span></a>
         <a className={`nav ${isGraphs ? "active" : ""}`} href="/graphs"><Workflow size={15} /><span className="label">Graphs</span></a>
