@@ -18,14 +18,14 @@ export function cn(...inputs: ClassValue[]) {
 // ---- Button -----------------------------------------------------------------------
 
 const buttonVariants = cva(
-  "inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md text-[13px] tracking-wide transition-[transform,opacity,background,border-color] duration-[var(--dur-fast)] cursor-pointer select-none active:scale-[0.97] disabled:pointer-events-none disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-[var(--ring)] focus-visible:outline-offset-2 [&_svg]:size-3.5 [&_svg]:shrink-0",
+  "inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-[var(--radius)] text-[13px] transition-[transform,opacity,background,border-color] duration-[var(--dur-fast)] cursor-pointer select-none active:scale-[0.97] disabled:pointer-events-none focus-visible:outline-2 focus-visible:outline-[var(--ring)] focus-visible:outline-offset-2 [&_svg]:size-3.5 [&_svg]:shrink-0",
   {
     variants: {
       variant: {
-        default: "bg-primary text-primary-foreground hover:opacity-90",
-        outline: "border border-input bg-transparent text-muted-foreground hover:text-foreground hover:border-faint",
-        ghost: "text-muted-foreground hover:bg-accent hover:text-foreground",
-        destructive: "bg-destructive text-destructive-foreground hover:opacity-90",
+        default: "bg-primary text-primary-foreground hover:opacity-90 disabled:bg-muted disabled:text-faint",
+        outline: "border border-input bg-transparent text-muted-foreground hover:text-foreground hover:border-faint disabled:opacity-50",
+        ghost: "text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-50",
+        destructive: "bg-destructive text-destructive-foreground hover:opacity-90 disabled:opacity-50",
         "destructive-outline": "border border-destructive text-destructive bg-transparent",
       },
       size: {
@@ -48,10 +48,10 @@ Button.displayName = "Button";
 // ---- Card -------------------------------------------------------------------------
 
 export function Card({ className, ...props }: HTMLAttributes<HTMLDivElement>) {
-  return <div className={cn("rounded-lg border border-border bg-card text-card-foreground", className)} {...props} />;
+  return <div className={cn("rounded-[var(--radius)] border border-border bg-card text-card-foreground", className)} {...props} />;
 }
 export function CardHeader({ className, ...props }: HTMLAttributes<HTMLDivElement>) {
-  return <div className={cn("flex flex-col gap-1.5 p-5 pb-2", className)} {...props} />;
+  return <div className={cn("flex flex-col gap-1 p-4 pb-2", className)} {...props} />;
 }
 export function CardTitle({ className, ...props }: HTMLAttributes<HTMLHeadingElement>) {
   return <h3 className={cn("text-sm leading-none", className)} {...props} />;
@@ -60,7 +60,7 @@ export function CardDescription({ className, ...props }: HTMLAttributes<HTMLDivE
   return <div className={cn("text-xs text-muted-foreground", className)} {...props} />;
 }
 export function CardContent({ className, ...props }: HTMLAttributes<HTMLDivElement>) {
-  return <div className={cn("flex flex-col gap-4 p-5 pt-3", className)} {...props} />;
+  return <div className={cn("flex flex-col gap-3 p-4 pt-2", className)} {...props} />;
 }
 
 // ---- form controls ----------------------------------------------------------------
@@ -69,7 +69,7 @@ export const Input = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputE
   <input
     ref={ref}
     className={cn(
-      "h-8 w-full rounded-md border border-border bg-muted px-2.5 font-mono text-[13px] text-foreground placeholder:text-faint focus-visible:outline-2 focus-visible:outline-[var(--ring)] focus-visible:outline-offset-1",
+      "h-8 w-full rounded-[var(--radius-sm)] border border-border bg-muted px-2.5 font-mono text-[13px] text-foreground placeholder:text-faint focus-visible:outline-2 focus-visible:outline-[var(--ring)] focus-visible:outline-offset-1",
       className,
     )}
     {...props}
@@ -81,7 +81,7 @@ export const Textarea = forwardRef<HTMLTextAreaElement, TextareaHTMLAttributes<H
   <textarea
     ref={ref}
     className={cn(
-      "min-h-16 w-full resize-y rounded-md border border-border bg-muted p-2.5 font-mono text-[13px] text-foreground placeholder:text-faint focus-visible:outline-2 focus-visible:outline-[var(--ring)] focus-visible:outline-offset-1",
+      "min-h-16 w-full resize-y rounded-[var(--radius-sm)] border border-border bg-muted p-2.5 font-mono text-[13px] text-foreground placeholder:text-faint focus-visible:outline-2 focus-visible:outline-[var(--ring)] focus-visible:outline-offset-1",
       className,
     )}
     {...props}
@@ -94,7 +94,7 @@ export const Select = forwardRef<HTMLSelectElement, SelectHTMLAttributes<HTMLSel
   <span className={cn("relative block w-full", className)}>
     <select
       ref={ref}
-      className="h-8 w-full appearance-none rounded-md border border-border bg-muted pl-2.5 pr-8 font-mono text-[13px] text-foreground focus-visible:outline-2 focus-visible:outline-[var(--ring)] focus-visible:outline-offset-1"
+      className="h-8 w-full appearance-none rounded-[var(--radius-sm)] border border-border bg-muted pl-2.5 pr-8 font-mono text-[13px] text-foreground focus-visible:outline-2 focus-visible:outline-[var(--ring)] focus-visible:outline-offset-1"
       {...props}
     >
       {children}
@@ -110,7 +110,7 @@ export function Label({ className, ...props }: LabelHTMLAttributes<HTMLLabelElem
 
 // ---- Badge ------------------------------------------------------------------------
 
-const badgeVariants = cva("inline-flex items-center gap-1 rounded-full px-2 py-px text-[11px] font-mono [&_svg]:size-3", {
+const badgeVariants = cva("inline-flex items-center gap-1 rounded-[var(--radius-sm)] px-1.5 py-px text-[11px] font-mono [&_svg]:size-3", {
   variants: {
     variant: {
       default: "bg-muted text-muted-foreground",
@@ -131,7 +131,7 @@ export function Badge({ className, variant, ...props }: HTMLAttributes<HTMLSpanE
 
 export function Tabs({ value, onValueChange, items, className }: { value: string; onValueChange: (v: string) => void; items: Array<{ value: string; label: string; icon?: React.ReactNode }>; className?: string }) {
   return (
-    <div className={cn("inline-flex gap-0.5 rounded-md bg-muted p-0.5", className)} role="tablist">
+    <div className={cn("inline-flex gap-0.5 rounded-[var(--radius)] bg-muted p-0.5", className)} role="tablist">
       {items.map((it) => (
         <button
           key={it.value}
