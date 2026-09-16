@@ -4,7 +4,7 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--fg);
-  font-family: var(--font-display); /* the UI speaks Special Gothic… */
+  font-family: var(--font-display); /* the UI speaks Instrument Sans… */
   font-size: 13.5px;
   line-height: 1.55;
 }

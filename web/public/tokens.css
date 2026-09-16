@@ -1,143 +1,158 @@
 /*
- * Howdah tokens — the single token source (design review: shadcn-style CSS variables,
- * dark + light derived from one set; default follows the system).
+ * Howdah tokens — the single token source (T25, direction A+B).
  *
- * Rules encoded here, not in components:
- *  - Palette: Pigment pair, user-picked 2026-09-13 — SINBAD #94CBC8 (teal) = ACTIONS ·
- *    LAVENDER PURPLE #9675A8 = ACTIVITY · sand-gold #E0CD84 stays as ATTENTION (the pair
- *    has no warm color, and attention must outrank the UI; still never on buttons).
- *    Exact hexes live on dark; light derives deeper shades for contrast. Waiting/paused
- *    moved to neutral slate so it cannot collide with lavender activity.
- *  - Special Gothic (single weight) for headings/prose; JetBrains Mono for ids, costs, diffs, dense rows.
- *  - Motion: --ease-out-strong + three durations. Exits use the shorter duration.
- *  - Status enum has one renderer; these are its only colors.
+ * DARK IS THE DESIGN TARGET. Light still exists and still follows the system, but every
+ * value here was chosen against the near-black ground: this is an instrument you keep open
+ * beside an IDE, not a document.
+ *
+ * The one rule the whole palette exists to serve:
+ *
+ *   COLOUR IS THE ALARM, NOT A TAXONOMY.
+ *
+ * `--attention` is the only saturated colour in the system and it means exactly one thing:
+ * an agent is waiting for you (R3.3). Everything else is greyscale, which is what makes the
+ * amber unmissable. `--status-done` is DELIBERATELY neutral — done is the boring case, and
+ * a list lit up with green "success" is a list where the one waiting row stops winning.
+ * Status is carried by glyph SHAPE first (check / cross / triangle / half-circle) so it
+ * survives colour-blindness and greyscale; hue is the second channel, never the only one.
+ *
+ * Token names are load-bearing: howdah.css and the React app consume them by name. Change a
+ * value here, never a name, unless you are prepared to update every consumer.
+ *
+ * Type: Instrument Sans (UI + prose, real weights so hierarchy can come from weight) +
+ * JetBrains Mono (ids, durations, costs, diffs — anything machine-shaped).
+ * The previous display face shipped a single weight, which is why nothing on screen could
+ * lead; see DESIGN.md.
  */
 
 :root {
-  /* type — Special Gothic ships ONE weight (400): no faux bold, hierarchy comes from
-     size and tracking. JetBrains Mono keeps its real 400/500/600. */
-  --font-display: "Special Gothic", system-ui, sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", monospace;
+  /* type */
+  --font-display: "Instrument Sans", "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
 
-  /* light theme (base set) */
-  --bg: #fafafa;
-  --bg-raised: #ffffff;
-  --bg-inset: #f0f0f2;
-  --fg: #17171c;
-  --fg-muted: #6b6b76;
-  --fg-faint: #a3a3ae;
-  --border: #e3e3e8;
-  --border-strong: #c9c9d2;
+  /* ---- dark: the design target ---------------------------------------------------- */
+  --bg: #0B0C0D;
+  --bg-raised: #141517;
+  --bg-inset: #1B1D1F;
+  --fg: #E8E6E1;          /* warm off-white; a cold white reads as "web app" */
+  --fg-muted: #9A9892;
+  --fg-faint: #605F5B;
+  --border: #232527;      /* hairline — rows are separated, never boxed */
+  --border-strong: #303336;
 
-  /* primary actions — Sinbad, deepened for light bg */
-  --primary: #37827c;
-  --primary-hover: #2c6b66;
-  --primary-fg: #ffffff;
-  --ring: #37827c;
+  /* primary is INK, not a hue: buttons are foreground-on-ground, so the amber stays free */
+  --primary: #E8E6E1;
+  --primary-hover: #FFFFFF;
+  --primary-fg: #0B0C0D;
+  --ring: #7FA0A8;        /* focus is visible without borrowing the alarm */
 
-  /* attention — sand-gold, reserved for "an agent needs you" (darkened for light bg) */
-  --attention: #9c7c1d;
-  --attention-fg: #5c4a10;
-  --attention-bg: #f6efd3;
-  --attention-border: #c9a94a;
+  /* attention — the only saturated colour in the system */
+  --attention: #F2A93B;
+  --attention-fg: #FFD79A;
+  --attention-bg: rgba(242, 169, 59, 0.10);
+  --attention-border: #F2A93B;
 
-  /* status palette (one renderer) */
-  --status-queued: #a3a3ae;
-  --status-running: #7d5c92;  /* Lavender Purple, deepened */
+  /* status (one renderer; shape carries meaning first) */
+  --status-queued: #605F5B;
+  --status-running: #7FA0A8;          /* quiet slate-cyan: activity, not alarm */
   --status-needs-input: var(--attention);
-  --status-waiting: #64748b;  /* slate — lavender now means activity */
-  --status-failed-recoverable: #dc2626;
-  --status-failed-terminal: #991b1b;
-  --status-done: #16a34a;
-  --status-harness-dead: #dc2626;
+  --status-waiting: #6B7A80;
+  --status-failed-recoverable: #D9553F;
+  --status-failed-terminal: #A33322;
+  --status-done: #9A9892;             /* no hue on purpose — done is the boring case */
+  --status-harness-dead: #D9553F;
 
   /* accents (quiet) */
-  --operator: #0e7490;       /* operator rows: cyan */
-  --diff-add: #16a34a;
-  --diff-del: #dc2626;
+  --operator: #7FA0A8;
+  --diff-add: #5E7F63;
+  --diff-del: #D9553F;
 
-  /* motion */
+  /* motion — unchanged from the approved brief */
   --ease-out-strong: cubic-bezier(0.19, 1, 0.22, 1);
   --dur-fast: 120ms;
   --dur-base: 200ms;
   --dur-slow: 350ms;
 
-  /* shape */
-  --radius: 10px;
-  --radius-sm: 6px;
+  /* shape: near-square. Rounded cards are the dashboard look we left behind. */
+  --radius: 3px;
+  --radius-sm: 2px;
 }
 
-/* dark theme: system default… */
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --bg: #101014;
-    --bg-raised: #17171c;
-    --bg-inset: #0a0a0d;
-    --fg: #e8e8ec;
-    --fg-muted: #8f8f9a;
-    --fg-faint: #56565f;
-    --border: #26262c;
-    --border-strong: #3a3a42;
+/* ---- light: supported, not the target ---------------------------------------------
+ * Derived by deepening each hue until it clears 4.5:1 on the light ground. The alarm rule
+ * holds here too: amber is the only saturated colour, done stays neutral.
+ */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --bg: #F7F6F3;
+    --bg-raised: #FFFFFF;
+    --bg-inset: #EEEDE9;
+    --fg: #17171A;
+    --fg-muted: #5F5E5A;
+    --fg-faint: #8C8A85;
+    --border: #E2E0DA;
+    --border-strong: #C9C7C0;
 
-    --primary: #94CBC8;  /* Sinbad, exact */
-    --primary-hover: #7fbcb8;
-    --primary-fg: #10312e;
-    --ring: #94CBC8;
+    --primary: #17171A;
+    --primary-hover: #000000;
+    --primary-fg: #F7F6F3;
+    --ring: #3F6670;
 
-    --attention: #E0CD84;    /* the sand-gold, exact, sings on dark */
-    --attention-fg: #f2e8c4;
-    --attention-bg: #292310;
-    --attention-border: #a38a3e;
+    --attention: #8A6412;
+    --attention-fg: #5C4410;
+    --attention-bg: rgba(242, 169, 59, 0.16);
+    --attention-border: #C9A94A;
 
-    --status-running: #9675A8;  /* Lavender Purple, exact */
-    --status-waiting: #94a3b8;  /* slate, dark */
-    --status-failed-recoverable: #f87171;
-    --status-failed-terminal: #dc2626;
-    --status-done: #4ade80;
+    --status-queued: #8C8A85;
+    --status-running: #3F6670;
+    --status-waiting: #5A6A70;
+    --status-failed-recoverable: #A33322;
+    --status-failed-terminal: #7C2417;
+    --status-done: #5F5E5A;
+    --status-harness-dead: #A33322;
 
-    --operator: #22d3ee;
-    --diff-add: #4ade80;
-    --diff-del: #f87171;
+    --operator: #3F6670;
+    --diff-add: #3F6647;
+    --diff-del: #A33322;
   }
 }
 
-/* …and the explicit toggle wins in both directions */
-:root[data-theme="dark"] {
-  --bg: #101014;
-  --bg-raised: #17171c;
-  --bg-inset: #0a0a0d;
-  --fg: #e8e8ec;
-  --fg-muted: #8f8f9a;
-  --fg-faint: #56565f;
-  --border: #26262c;
-  --border-strong: #3a3a42;
+/* the explicit toggle wins in both directions */
+:root[data-theme="light"] {
+  --bg: #F7F6F3;
+  --bg-raised: #FFFFFF;
+  --bg-inset: #EEEDE9;
+  --fg: #17171A;
+  --fg-muted: #5F5E5A;
+  --fg-faint: #8C8A85;
+  --border: #E2E0DA;
+  --border-strong: #C9C7C0;
 
-  --primary: #94CBC8;  /* Sinbad, exact */
-  --primary-hover: #7fbcb8;
-  --primary-fg: #10312e;
-  --ring: #94CBC8;
+  --primary: #17171A;
+  --primary-hover: #000000;
+  --primary-fg: #F7F6F3;
+  --ring: #3F6670;
 
-  --attention: #E0CD84;
-  --attention-fg: #f2e8c4;
-  --attention-bg: #292310;
-  --attention-border: #a38a3e;
+  --attention: #8A6412;
+  --attention-fg: #5C4410;
+  --attention-bg: rgba(242, 169, 59, 0.16);
+  --attention-border: #C9A94A;
 
-  --status-running: #9675A8;  /* Lavender Purple, exact */
-  --status-waiting: #94a3b8;  /* slate, dark */
-  --status-failed-recoverable: #f87171;
-  --status-failed-terminal: #dc2626;
-  --status-done: #4ade80;
+  --status-queued: #8C8A85;
+  --status-running: #3F6670;
+  --status-waiting: #5A6A70;
+  --status-failed-recoverable: #A33322;
+  --status-failed-terminal: #7C2417;
+  --status-done: #5F5E5A;
+  --status-harness-dead: #A33322;
 
-  --operator: #22d3ee;
-  --diff-add: #4ade80;
-  --diff-del: #f87171;
+  --operator: #3F6670;
+  --diff-add: #3F6647;
+  --diff-del: #A33322;
 }
 
 /* themed browser surfaces */
-/* the display face has no bold — never let the browser invent one */
-h1, h2, h3, .display, button { font-synthesis-weight: none; }
-
-::selection { background: color-mix(in srgb, var(--primary) 30%, transparent); }
+::selection { background: color-mix(in srgb, var(--attention) 26%, transparent); }
 :focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
 * { scrollbar-color: var(--border-strong) transparent; scrollbar-width: thin; }
 
