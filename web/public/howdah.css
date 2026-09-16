@@ -8,7 +8,8 @@ body {
   font-size: 13.5px;
   line-height: 1.55;
 }
-h1, h2, h3, .display { font-weight: 400; letter-spacing: 0.01em; }
+/* Instrument Sans has real weights — hierarchy is weight-led, not size-led (DESIGN.md Type) */
+h1, h2, h3, .display { font-weight: 600; letter-spacing: 0; }
 a { color: inherit; }
 /* …and JetBrains Mono is reserved for DATA: ids, costs, durations, code, tool output */
 code, pre, .run-meta, .wait-timer, .timer, .kv, .tl-row, .tool-cluster, .tool-detail,
@@ -20,17 +21,17 @@ code, pre, .run-meta, .wait-timer, .timer, .kv, .tl-row, .tool-cluster, .tool-de
 
 /* sidebar */
 .sidebar {
-  width: 232px; flex-shrink: 0; padding: 22px 16px;
+  width: 184px; flex-shrink: 0; padding: 18px 10px; /* DESIGN.md Layout: left rail 184px */
   border-right: 1px solid var(--border);
-  display: flex; flex-direction: column; gap: 6px;
+  display: flex; flex-direction: column; gap: 2px;
 }
-.sidebar .mark { width: 36px; height: 36px; color: var(--fg); }
-.mark-btn { display: flex; align-items: center; gap: 10px; margin: 0 8px 22px; text-decoration: none; }
-.mark-btn .wordmark { font-family: var(--font-display); font-size: 15px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--fg); }
+.sidebar .mark { width: 28px; height: 28px; color: var(--fg); }
+.mark-btn { display: flex; align-items: center; gap: 9px; margin: 2px 8px 18px; text-decoration: none; }
+.mark-btn .wordmark { font-family: var(--font-display); font-size: 13px; font-weight: 600; letter-spacing: 0.07em; text-transform: uppercase; color: var(--fg); }
 .sidebar a.nav {
-  display: flex; align-items: center; gap: 10px;
-  padding: 9px 12px; border-radius: var(--radius-sm);
-  text-decoration: none; color: var(--fg-muted); font-size: 13.5px;
+  display: flex; align-items: center; gap: 9px;
+  padding: 7px 10px; border-radius: var(--radius);
+  text-decoration: none; color: var(--fg-muted); font-size: 13px;
   transition: background var(--dur-fast) var(--ease-out-strong), color var(--dur-fast);
 }
 .sidebar a.nav:hover { background: var(--bg-inset); color: var(--fg); }
@@ -48,8 +49,8 @@ main { flex: 1; min-width: 0; }
 /* runs list */
 /* every screen shares this page container: full-width (left-anchored), generous air.
    1480px is the readable ceiling; below it the content owns ALL the whitespace. */
-.runs { max-width: 1480px; margin: 0; padding: 40px 48px 72px; }
-.runs h1 { font-size: 24px; margin: 0 0 26px; letter-spacing: 0.015em; }
+.runs { max-width: 1480px; margin: 0; padding: 28px 32px 64px; }
+.runs h1 { font-size: 16px; font-weight: 600; margin: 0 0 18px; }
 /* rows are rows: a hairline and spacing separate them, never a card (DESIGN.md) */
 .run-row {
   display: flex; align-items: center; gap: 12px;
