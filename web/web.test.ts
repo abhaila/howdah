@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EventLog, readLog } from "../log/write";
-import { deriveStatus, deriveSummary, deriveDetail, deriveTimeline, sortRuns } from "./derive";
+import { deriveStatus, deriveSummary, deriveDetail, deriveTimeline, deriveLogRows, sortRuns } from "./derive";
 import { createHowdahServer } from "./server";
 import { AttentionCenter } from "../engine/attention";
 import { renderedHash } from "../core/template";
@@ -653,5 +653,76 @@ describe("deriveTimeline waiting split", () => {
     log.append({ type: "node-started", node: "a", visit: 1, attempt_id: "a#1" });
     log.append({ type: "node-finished", node: "a", visit: 1, status: "succeeded", writes: {} });
     expect(deriveTimeline(log.read())[0]!.waiting_ms).toBe(0);
+  });
+});
+
+// ---- log rows (story 7) -----------------------------------------------------------
+
+describe("deriveLogRows", () => {
+  test("summarises one row per event and nests tool detail", () => {
+    const dir = mkdtempSync(join(tmpdir(), "howdah-logrows-"));
+    const rows = deriveLogRows(seedParkedRun(dir, "r-logs").read());
+    expect(rows).toHaveLength(9);
+    const byType = Object.fromEntries(rows.map((r) => [r.type, r]));
+    expect(byType["run-started"]!.kind).toBe("engine");
+    expect(byType["prompt-rendered"]!.summary).toContain("doc.draft v1");
+    expect(byType["attention-raised"]!.kind).toBe("attention");
+    expect(byType["chunk"]!.depth).toBe(1);
+    expect(rows.find((r) => r.type === "chunk" && r.kind === "tool")).toBeDefined();
+  });
+
+  test("an exhausted allowance is attention, a healthy one is not", () => {
+    const dir = mkdtempSync(join(tmpdir(), "howdah-logrows-"));
+    const log = new EventLog(join(dir, "r", "run.jsonl"), fixedClock());
+    log.append({ type: "allowance", harness: "claude", state: "ok", remaining: 0.4 });
+    log.append({ type: "allowance", harness: "codex", state: "exhausted", resets_at: "18:00" });
+    const rows = deriveLogRows(log.read());
+    expect(rows[0]!.kind).toBe("engine");
+    expect(rows[1]!.kind).toBe("attention");
+  });
+
+  test("every event type in the union is handled", () => {
+    const dir = mkdtempSync(join(tmpdir(), "howdah-logrows-"));
+    const log = new EventLog(join(dir, "r", "run.jsonl"), fixedClock());
+    log.append({ type: "run-started", graph: "g", inputs: {}, pinned_prompts: {} });
+    log.append({ type: "node-started", node: "a", visit: 1, attempt_id: "a#1" });
+    log.append({ type: "prompt-rendered", node: "a", visit: 1, prompt: "discover" as never, prompt_version: 1, rendered_hash: "h", context_read: {} });
+    log.append({ type: "chunk", node: "a", visit: 1, turn: 1, index: 0, kind: "tool_call", content: "ls", tool_name: "Bash" });
+    log.append({ type: "turn-finalized", node: "a", visit: 1, turn: 1, usage: { input_tokens: 1, output_tokens: 2, cost_usd: 0.1 } });
+    log.append({ type: "prompt-outcome", rendered_hash: "h", node: "a", visit: 1, terminal_outcome: "success" });
+    log.append({ type: "node-finished", node: "a", visit: 1, status: "succeeded", writes: { k: 1 } });
+    log.append({ type: "side-effect-intent", node: "a", visit: 1, attempt_id: "a#1", effect: "create-pr" });
+    log.append({ type: "side-effect-done", node: "a", visit: 1, attempt_id: "a#1", effect: "create-pr" });
+    log.append({ type: "reconciled", node: "a", git: { repo: true, branch: "b", head: "h", uncommitted: 0, unpushed: 0 }, forge: { kind: "no-pr" }, disagreements: [] });
+    log.append({ type: "edge-taken", from: "a", to: "b", label: "ok" });
+    log.append({ type: "attention-raised", node: "a", visit: 1, reason: "needs you" });
+    log.append({ type: "attention-resolved", node: "a", visit: 1, reply: "go" });
+    log.append({ type: "operator-jump", to: "a", message: "focus here" });
+    log.append({ type: "run-paused", by: "operator" });
+    log.append({ type: "run-resumed", by: "operator" });
+    log.append({ type: "allowance", harness: "claude", state: "ok" });
+    log.append({ type: "run-finished", outcome: "success" });
+    const rows = deriveLogRows(log.read());
+    expect(rows).toHaveLength(18);
+    expect(rows.every((r) => r.summary.length > 0)).toBe(true);
+    expect(new Set(rows.map((r) => r.type)).size).toBe(18);
+  });
+});
+
+describe("log rows carry the stored event", () => {
+  test("the raw form is the event as written, not a re-render", () => {
+    const dir = mkdtempSync(join(tmpdir(), "howdah-raw-"));
+    const log = new EventLog(join(dir, "r", "run.jsonl"), fixedClock());
+    log.append({ type: "attention-raised", node: "a", visit: 1, reason: "needs you", ask: { kind: "can_use_tool" } });
+    const stored = log.read()[0]!;
+    const row = deriveLogRows(log.read())[0]!;
+    expect(row.raw).toEqual(stored);
+    expect(JSON.parse(JSON.stringify(row.raw))).toEqual(stored);
+  });
+
+  test("run detail exposes the same rows the Logs tab renders", () => {
+    const dir = mkdtempSync(join(tmpdir(), "howdah-raw-"));
+    const events = seedParkedRun(dir, "r-detail").read();
+    expect(deriveDetail("r-detail", events).log_rows).toEqual(deriveLogRows(events));
   });
 });

@@ -9,10 +9,10 @@ import { Button, Card, CardContent, CardDescription, CardHeader, CardTitle, Inpu
 import {
   Rows3, Plus, Workflow, Settings as SettingsIcon, Play, Pause, OctagonX, RotateCcw, Send,
   ExternalLink, GitBranch, GitPullRequest, Clock, Coins, Pin, Fingerprint, MessagesSquare,
-  CornerDownRight, FolderGit2, X, Library, FileDiff, MessageSquarePlus, ThumbsUp,
+  CornerDownRight, FolderGit2, X, Library, FileDiff, MessageSquarePlus, ThumbsUp, ScrollText,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { RunDetail, RunSummary, RunStatus } from "../derive";
+import type { RunDetail, RunSummary, RunStatus, LogRow } from "../derive";
 import type { CoalescedTurn } from "../../log/coalesce";
 // type-only: erased at bundle time, so the server's node imports never reach the browser
 import type { PromptDetail, PromptSummary, ReconstructedRender } from "../../prompts/library";
@@ -693,9 +693,97 @@ function StepDetail({ runId, row, detail, ask, onResolved }: {
   );
 }
 
+/**
+ * Logs (T24, stories 7 + 8) — Logfire's dense event list under Signal's filter bar.
+ * Every row comes from deriveLogRows, whose switch is exhaustive over the event union, so
+ * a new event type fails the build rather than rendering blank here.
+ */
+function RunLogs({ rows }: { rows: LogRow[] }) {
+  const [kind, setKind] = useState<"all" | LogRow["kind"]>("all");
+  const [q, setQ] = useState("");
+  const [picked, setPicked] = useState<number | null>(null);
+
+  const shown = rows.filter((r) => {
+    if (kind !== "all" && r.kind !== kind) return false;
+    if (!q.trim()) return true;
+    const hay = `${r.type} ${r.node ?? ""} ${r.summary}`.toLowerCase();
+    return hay.includes(q.trim().toLowerCase());
+  });
+  const selected = rows.find((r) => r.seq === picked) ?? shown.at(-1) ?? null;
+  const KINDS: Array<"all" | LogRow["kind"]> = ["all", "agent", "tool", "engine", "operator", "attention"];
+
+  return (
+    <div className="logs-split">
+      <div className="logs-col">
+        <div className="logs-filters">
+          <input className="logs-search" placeholder="Search events…" value={q} onChange={(e) => setQ(e.target.value)} />
+          {KINDS.map((k) => (
+            <span key={k} className={`chip ${kind === k ? "on" : ""} ${k === "attention" ? "attention" : ""}`} onClick={() => setKind(k)}>{k}</span>
+          ))}
+          <span className="m logs-count">{shown.length} of {rows.length}</span>
+        </div>
+        <div className="logs-rows">
+          {shown.length === 0 && <div className="empty">nothing matches</div>}
+          {shown.map((r) => (
+            <div
+              key={r.seq}
+              className={`log-row ${r.kind} depth-${r.depth} ${selected?.seq === r.seq ? "selected" : ""}`}
+              onClick={() => setPicked(r.seq)}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setPicked(r.seq); } }}
+            >
+              <span className="m log-ts">{r.ts.slice(11, 23)}</span>
+              <span className="m log-node">{r.node ?? "—"}{r.visit !== null && <span className="log-visit">@{r.visit}</span>}</span>
+              <span className="pill log-type">{r.type}</span>
+              <span className="log-summary">{r.summary}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+      <EventDetail row={selected} />
+    </div>
+  );
+}
+
+/** Story 8: the selected event with its ids and its exact stored form. */
+function EventDetail({ row }: { row: LogRow | null }) {
+  const [pane, setPane] = useState<"details" | "raw">("details");
+  if (!row) return <div className="step-detail"><div className="empty">pick an event</div></div>;
+  return (
+    <div className="step-detail">
+      <div className="sd-head">
+        <span className="m sd-node">{row.type}</span>
+        <span className="m sd-total">{row.kind}</span>
+      </div>
+      <div className="sd-pills">
+        <span className="pill">seq {row.seq}</span>
+        <span className="pill">{row.ts.slice(11, 23)}</span>
+        {row.node && <span className="pill id">{row.node}{row.visit !== null ? `@${row.visit}` : ""}</span>}
+      </div>
+      <div className="sd-tabs">
+        <span className={`tab ${pane === "details" ? "on" : ""}`} onClick={() => setPane("details")}>Details</span>
+        <span className={`tab ${pane === "raw" ? "on" : ""}`} onClick={() => setPane("raw")}>Raw event</span>
+      </div>
+      <div className="sd-body">
+        {pane === "details" ? (
+          <>
+            <div className="kv"><span className="k">summary</span><span className="v">{row.summary}</span></div>
+            <div className="kv"><span className="k">kind</span><span className="v">{row.kind}</span></div>
+            <div className="kv"><span className="k">seq</span><span className="v">{row.seq}</span></div>
+            <div className="kv"><span className="k">at</span><span className="v">{row.ts}</span></div>
+          </>
+        ) : (
+          <pre className="sd-raw">{JSON.stringify(row.raw, null, 2)}</pre>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function RunView({ id }: { id: string }) {
   const [detail, setDetail] = useState<(RunDetail & { cwd_exists?: boolean; editor_configured?: boolean }) | null>(null);
-  const [tab, setTab] = useState<"steps" | "thread" | "graph">("steps");
+  const [tab, setTab] = useState<"steps" | "thread" | "logs" | "graph">("steps");
   const [picked, setPicked] = useState<string | null>(null);
   const now = useNow();
   const reload = useCallback(() => fetch(`/api/runs/${id}`).then((r) => r.json()).then(setDetail).catch(() => {}), [id]);
@@ -735,10 +823,11 @@ function RunView({ id }: { id: string }) {
           <span className="meta">{summary.graph}</span>
           <Tabs
             value={tab}
-            onValueChange={(v) => setTab(v as "steps" | "thread" | "graph")}
+            onValueChange={(v) => setTab(v as "steps" | "thread" | "logs" | "graph")}
             items={[
               { value: "steps", label: "Steps", icon: <Rows3 /> },
               { value: "thread", label: "Thread", icon: <MessagesSquare /> },
+              { value: "logs", label: "Logs", icon: <ScrollText /> },
               { value: "graph", label: "Graph", icon: <Workflow /> },
             ]}
           />
@@ -773,6 +862,8 @@ function RunView({ id }: { id: string }) {
             <RunSteps timeline={detail.timeline} ask={ask} selected={selectedKey} onSelect={setPicked} />
             <StepDetail runId={id} row={selectedRow} detail={detail} ask={ask} onResolved={reload} />
           </div>
+        ) : tab === "logs" ? (
+          <RunLogs rows={detail.log_rows} />
         ) : tab === "graph" ? (
           <RunGraph runId={id} graph={summary.graph} timeline={detail.timeline} status={summary.status} onJumped={reload} />
         ) : (

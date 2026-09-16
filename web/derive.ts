@@ -74,6 +74,8 @@ export interface RunDetail {
   git: Extract<LoggedEvent, { type: "reconciled" }> | null;
   /** every PR ever observed on this run, deduped by url, latest state wins */
   pull_requests: Array<{ url: string; state: string; observed_at: string }>;
+  /** the Logs tab's rows, derived once here so the view never re-walks the log */
+  log_rows: LogRow[];
   identity: { cwd: string | null; folder_kind: "repo" | "plain" | null };
   events_seq: number;
 }
@@ -246,9 +248,91 @@ export function deriveDetail(id: string, events: LoggedEvent[]): RunDetail {
     pinned_prompts: pinned,
     git,
     pull_requests: [...prs.values()],
+    log_rows: deriveLogRows(events),
     identity,
     events_seq: events.at(-1)?.seq ?? 0,
   };
+}
+
+/**
+ * Logs (T24, story 7) — every event as one dense row, Logfire's shape.
+ *
+ * The switch is EXHAUSTIVE on purpose: the `never` fallthrough means adding a type to
+ * log/events.ts fails the build here rather than rendering a blank row in the UI.
+ */
+export type LogKind = "engine" | "agent" | "tool" | "operator" | "attention";
+
+export interface LogRow {
+  seq: number;
+  ts: string;
+  node: string | null;
+  visit: number | null;
+  type: LoggedEvent["type"];
+  kind: LogKind;
+  summary: string;
+  /** tool calls nest under the turn they belong to */
+  depth: 0 | 1;
+  /** the stored event, verbatim — the Raw tab must be faithful to run.jsonl, not re-rendered */
+  raw: LoggedEvent;
+}
+
+export function deriveLogRows(events: LoggedEvent[]): LogRow[] {
+  return events.map((e): LogRow => {
+    const base = { seq: e.seq, ts: e.ts, type: e.type, raw: e };
+    const at = (n: string, v: number) => ({ node: n, visit: v });
+    switch (e.type) {
+      case "run-started":
+        return { ...base, ...at("", 0), node: null, visit: null, kind: "engine", depth: 0,
+          summary: `graph ${e.graph} · ${e.folder_kind ?? "no folder"}${e.cwd ? ` · ${e.cwd}` : ""}` };
+      case "node-started":
+        return { ...base, ...at(e.node, e.visit), kind: "engine", depth: 0, summary: `attempt ${e.attempt_id}` };
+      case "prompt-rendered":
+        return { ...base, ...at(e.node, e.visit), kind: "agent", depth: 0,
+          summary: `${e.prompt} v${e.prompt_version} · read ${Object.keys(e.context_read).join(", ") || "nothing"} · ${e.rendered_hash}` };
+      case "chunk":
+        return { ...base, ...at(e.node, e.visit), kind: e.kind === "tool_call" || e.kind === "tool_result" ? "tool" : "agent", depth: 1,
+          summary: `${e.kind}${e.tool_name ? ` · ${e.tool_name}` : ""} · ${e.content.slice(0, 120)}` };
+      case "turn-finalized":
+        return { ...base, ...at(e.node, e.visit), kind: "agent", depth: 1,
+          summary: `turn ${e.turn} · in ${e.usage?.input_tokens ?? "—"} · out ${e.usage?.output_tokens ?? "—"}${e.usage?.cost_usd !== undefined ? ` · $${e.usage.cost_usd.toFixed(4)}` : ""}` };
+      case "prompt-outcome":
+        return { ...base, ...at(e.node, e.visit), kind: "agent", depth: 1,
+          summary: [e.verdict_downstream, e.terminal_outcome, e.error].filter(Boolean).join(" · ") || e.rendered_hash };
+      case "node-finished":
+        return { ...base, ...at(e.node, e.visit), kind: "engine", depth: 0,
+          summary: `${e.status}${Object.keys(e.writes).length ? ` · wrote ${Object.keys(e.writes).join(", ")}` : ""}` };
+      case "side-effect-intent":
+        return { ...base, ...at(e.node, e.visit), kind: "engine", depth: 1, summary: `intent · ${e.effect}` };
+      case "side-effect-done":
+        return { ...base, ...at(e.node, e.visit), kind: "engine", depth: 1, summary: `done · ${e.effect}` };
+      case "reconciled": {
+        const forge = e.forge ? (e.forge.kind === "pr" ? `pr ${e.forge.state}` : e.forge.kind) : "no forge probe";
+        return { ...base, node: e.node, visit: null, kind: "engine", depth: 1,
+          summary: `${e.git.branch ?? "detached"} · ${e.git.uncommitted} uncommitted · ${forge}${e.disagreements.length ? ` · ⚠ ${e.disagreements.join("; ")}` : ""}` };
+      }
+      case "edge-taken":
+        return { ...base, node: e.from, visit: null, kind: "engine", depth: 0, summary: `→ ${e.to}${e.label ? ` · ${e.label}` : ""}` };
+      case "attention-raised":
+        return { ...base, ...at(e.node, e.visit), kind: "attention", depth: 0, summary: e.reason };
+      case "attention-resolved":
+        return { ...base, ...at(e.node, e.visit), kind: "attention", depth: 0, summary: `answered${e.reply ? ` · ${e.reply}` : ""}` };
+      case "operator-jump":
+        return { ...base, node: e.to, visit: null, kind: "operator", depth: 0, summary: e.message ?? `jumped to ${e.to}` };
+      case "run-paused":
+        return { ...base, node: null, visit: null, kind: "operator", depth: 0, summary: `paused by ${e.by}` };
+      case "run-resumed":
+        return { ...base, node: null, visit: null, kind: "operator", depth: 0, summary: `resumed by ${e.by}` };
+      case "allowance":
+        return { ...base, node: null, visit: null, kind: e.state === "exhausted" ? "attention" : "engine", depth: 0,
+          summary: `${e.harness} ${e.state}${e.remaining !== undefined ? ` · ${Math.round(e.remaining * 100)}% left` : ""}${e.resets_at ? ` · resets ${e.resets_at}` : ""}` };
+      case "run-finished":
+        return { ...base, node: null, visit: null, kind: "engine", depth: 0, summary: e.outcome };
+      default: {
+        const never: never = e;
+        throw new Error(`unhandled event type in deriveLogRows: ${JSON.stringify(never)}`);
+      }
+    }
+  });
 }
 
 /** runs list ordering: needs-input first (longest wait first), then running, then terminal */
