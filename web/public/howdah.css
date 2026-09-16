@@ -429,3 +429,43 @@ button.primary:disabled { opacity: 0.5; cursor: default; }
 @media (max-width: 1100px) {
   .graphs-layout, .library-layout { grid-template-columns: 1fr; }
 }
+
+/* ---- steps tab (T24, story 3) ---------------------------------------------------
+   Inngest's shape: one row per node visit on a shared axis. Status is carried by the
+   glyph; colour only ever seconds it, and `done` carries no hue at all. */
+.steps { padding-top: 4px; }
+.step-row {
+  display: flex; align-items: center; gap: 10px;
+  height: 26px; padding: 0 4px; border-bottom: 1px solid var(--border);
+}
+.step-row:hover { background: var(--bg-raised); }
+.step-row.needs-input { background: var(--attention-bg); box-shadow: inset 3px 0 0 var(--attention); }
+.step-icon { width: 14px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; }
+.step-glyph.succeeded { color: var(--status-done); }
+.step-glyph.failed { color: var(--status-failed-recoverable); }
+.step-glyph.running { color: var(--status-running); }
+.step-glyph.needs-input { color: var(--attention); }
+.step-node {
+  width: 230px; flex-shrink: 0; font-family: var(--font-mono); font-size: 12px; color: var(--fg-muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.step-row.failed .step-node, .step-row.running .step-node, .step-row.needs-input .step-node { color: var(--fg); }
+.step-visit { color: var(--fg-faint); font-size: 10px; margin-left: 5px; }
+.step-track { flex-grow: 1; height: 3px; background: var(--bg-inset); border-radius: 1.5px; position: relative; }
+.step-bar {
+  position: absolute; top: 0; bottom: 0; min-width: 3px; border-radius: 1.5px;
+  background: var(--border-strong);
+}
+.step-row.failed .step-bar { background: var(--status-failed-recoverable); }
+.step-row.running .step-bar { background: var(--status-running); }
+.step-row.needs-input .step-bar { background: var(--attention); }
+.step-dur {
+  width: 124px; flex-shrink: 0; text-align: right; font-family: var(--font-mono);
+  font-size: 11px; color: var(--fg-faint); font-variant-numeric: tabular-nums;
+}
+
+/* the waiting segment: the only part of a step bar allowed to be loud (story 4) */
+.step-bar.waiting { background: var(--attention); }
+.step-row.needs-input .step-bar:not(.waiting) { background: var(--border-strong); }
+.step-dur { display: flex; gap: 8px; justify-content: flex-end; align-items: baseline; }
+.step-wait { color: var(--attention); font-weight: 500; }

@@ -432,9 +432,95 @@ function AskCard({ runId, ask, onResolved }: { runId: string; ask: NonNullable<R
   );
 }
 
+/** ms → the shortest honest reading: 0.9s / 3m 10s / 1h 04m */
+function fmtDur(ms: number | null): string {
+  if (ms === null) return "…";
+  if (ms < 1000) return `${ms}ms`;
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
+  const m = Math.floor(ms / 60_000);
+  if (m < 60) return `${m}m ${Math.round((ms % 60_000) / 1000)}s`;
+  return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, "0")}m`;
+}
+
+/** Status is a SHAPE first (DESIGN.md): the glyph alone must carry the state. */
+function StepGlyph({ status }: { status: "running" | "succeeded" | "failed" | "needs-input" }) {
+  const stroke = { strokeWidth: 1.8, strokeLinecap: "round" as const, strokeLinejoin: "round" as const, fill: "none" };
+  if (status === "needs-input")
+    return (
+      <svg width="13" height="13" viewBox="0 0 16 16" className="step-glyph needs-input" aria-label="needs you">
+        <path d="M8 2.2 L14.2 13.4 L1.8 13.4 Z" {...stroke} strokeWidth={1.6} />
+        <path d="M8 6.4 L8 9.4" {...stroke} strokeWidth={1.6} />
+        <circle cx="8" cy="11.4" r="0.9" fill="currentColor" />
+      </svg>
+    );
+  if (status === "failed")
+    return (
+      <svg width="12" height="12" viewBox="0 0 16 16" className="step-glyph failed" aria-label="failed">
+        <path d="M4.5 4.5 L11.5 11.5 M11.5 4.5 L4.5 11.5" {...stroke} />
+      </svg>
+    );
+  if (status === "running")
+    return (
+      <svg width="12" height="12" viewBox="0 0 16 16" className="step-glyph running" aria-label="running">
+        <circle cx="8" cy="8" r="5.4" {...stroke} strokeWidth={1.6} />
+        <path d="M8 2.6 A5.4 5.4 0 0 1 8 13.4 Z" fill="currentColor" />
+      </svg>
+    );
+  return (
+    <svg width="12" height="12" viewBox="0 0 16 16" className="step-glyph succeeded" aria-label="succeeded">
+      <path d="M3.5 8.5 L6.5 11.5 L12.5 4.5" {...stroke} />
+    </svg>
+  );
+}
+
+/**
+ * Steps (T24): one row per node visit on a shared time axis — Inngest's layout. Bars are
+ * time-proportional so the shape of the run is legible; a sub-second step still gets 3px,
+ * because an invisible mark is a lie about what happened.
+ */
+function RunSteps({ timeline, ask }: { timeline: RunDetail["timeline"]; ask: RunDetail["ask"] }) {
+  if (timeline.length === 0) return <div className="empty">no steps yet</div>;
+  return (
+    <div className="steps">
+      {timeline.map((t, i) => {
+        const span = t.run_span_ms || 1;
+        const waiting = ask !== null && ask.node === t.node && ask.visit === t.visit;
+        const status = waiting ? "needs-input" : t.status;
+        const total = t.duration_ms ?? span - t.offset_ms;
+        // the split that makes R3.3 visible: agent time, then the part that was me not looking
+        const work = Math.max(0, total - t.waiting_ms);
+        const pct = (ms: number) => (ms / span) * 100;
+        return (
+          <div key={`${t.node}@${t.visit}#${i}`} className={`step-row ${status}`}>
+            <span className="step-icon"><StepGlyph status={status} /></span>
+            <span className="step-node">
+              {t.node}
+              {t.visit > 1 && <span className="step-visit">@{t.visit}</span>}
+            </span>
+            <span className="step-track">
+              <span className="step-bar" style={{ left: `${pct(t.offset_ms)}%`, width: `${pct(work)}%` }} />
+              {t.waiting_ms > 0 && (
+                <span
+                  className="step-bar waiting"
+                  title={`waiting on you ${fmtDur(t.waiting_ms)}`}
+                  style={{ left: `${pct(t.offset_ms + work)}%`, width: `${pct(t.waiting_ms)}%` }}
+                />
+              )}
+            </span>
+            <span className="step-dur">
+              {fmtDur(t.duration_ms ?? total)}
+              {t.waiting_ms > 0 && <span className="step-wait">{fmtDur(t.waiting_ms)}</span>}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function RunView({ id }: { id: string }) {
   const [detail, setDetail] = useState<(RunDetail & { cwd_exists?: boolean; editor_configured?: boolean }) | null>(null);
-  const [tab, setTab] = useState<"thread" | "graph">("thread");
+  const [tab, setTab] = useState<"steps" | "thread" | "graph">("steps");
   const now = useNow();
   const reload = useCallback(() => fetch(`/api/runs/${id}`).then((r) => r.json()).then(setDetail).catch(() => {}), [id]);
   useEffect(() => { reload(); }, [reload]);
@@ -468,8 +554,9 @@ function RunView({ id }: { id: string }) {
           <span className="meta">{summary.graph}</span>
           <Tabs
             value={tab}
-            onValueChange={(v) => setTab(v as "thread" | "graph")}
+            onValueChange={(v) => setTab(v as "steps" | "thread" | "graph")}
             items={[
+              { value: "steps", label: "Steps", icon: <Rows3 /> },
               { value: "thread", label: "Thread", icon: <MessagesSquare /> },
               { value: "graph", label: "Graph", icon: <Workflow /> },
             ]}
@@ -500,7 +587,9 @@ function RunView({ id }: { id: string }) {
             )}
           </div>
         )}
-        {tab === "graph" ? (
+        {tab === "steps" ? (
+          <RunSteps timeline={detail.timeline} ask={ask} />
+        ) : tab === "graph" ? (
           <RunGraph runId={id} graph={summary.graph} timeline={detail.timeline} status={summary.status} onJumped={reload} />
         ) : (
           <>

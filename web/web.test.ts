@@ -580,3 +580,78 @@ describe("proposal review API (T21)", () => {
     }
   });
 });
+
+// ---- steps axis (story 3) ---------------------------------------------------------
+
+describe("deriveTimeline axis", () => {
+  test("rows carry an offset and a shared span", () => {
+    const dir = mkdtempSync(join(tmpdir(), "howdah-axis-"));
+    const log = new EventLog(join(dir, "r", "run.jsonl"), fixedClock());
+    log.append({ type: "node-started", node: "a", visit: 1, attempt_id: "a#1" });   // t+1s
+    log.append({ type: "node-finished", node: "a", visit: 1, status: "succeeded", writes: {} }); // t+2s
+    log.append({ type: "node-started", node: "b", visit: 1, attempt_id: "b#1" });   // t+3s
+    log.append({ type: "node-finished", node: "b", visit: 1, status: "succeeded", writes: {} }); // t+4s
+    const rows = deriveTimeline(log.read());
+    expect(rows.map((r) => r.offset_ms)).toEqual([0, 2000]);
+    expect(rows.every((r) => r.run_span_ms === 3000)).toBe(true);
+  });
+
+  test("a running step stretches the span to the last event, and never divides by zero", () => {
+    const dir = mkdtempSync(join(tmpdir(), "howdah-axis-"));
+    const log = new EventLog(join(dir, "r", "run.jsonl"), fixedClock());
+    log.append({ type: "node-started", node: "a", visit: 1, attempt_id: "a#1" });
+    log.append({ type: "chunk", node: "a", visit: 1, turn: 1, index: 0, kind: "text", content: "…" });
+    const rows = deriveTimeline(log.read());
+    expect(rows[0]!.duration_ms).toBeNull();
+    expect(rows[0]!.run_span_ms).toBeGreaterThan(0);
+  });
+
+  test("an empty log has no rows and no axis", () => {
+    expect(deriveTimeline([])).toEqual([]);
+  });
+});
+
+// ---- the waiting split (story 4) --------------------------------------------------
+
+describe("deriveTimeline waiting split", () => {
+  test("an ask answered mid-attempt is charged to that step, and sums with its work", () => {
+    const dir = mkdtempSync(join(tmpdir(), "howdah-wait-"));
+    const log = new EventLog(join(dir, "r", "run.jsonl"), fixedClock());
+    log.append({ type: "node-started", node: "a", visit: 1, attempt_id: "a#1" });          // +1s
+    log.append({ type: "attention-raised", node: "a", visit: 1, reason: "Bash needs permission" }); // +2s
+    log.append({ type: "attention-resolved", node: "a", visit: 1, reply: "yes" });          // +3s
+    log.append({ type: "node-finished", node: "a", visit: 1, status: "succeeded", writes: {} }); // +4s
+    const row = deriveTimeline(log.read())[0]!;
+    expect(row.duration_ms).toBe(3000);
+    expect(row.waiting_ms).toBe(1000);
+  });
+
+  test("a run parked AFTER a step failed does not charge that wait to the step", () => {
+    const dir = mkdtempSync(join(tmpdir(), "howdah-wait-"));
+    const log = new EventLog(join(dir, "r", "run.jsonl"), fixedClock());
+    log.append({ type: "node-started", node: "a", visit: 1, attempt_id: "a#1" });
+    log.append({ type: "node-finished", node: "a", visit: 1, status: "failed", writes: {} });
+    log.append({ type: "attention-raised", node: "a", visit: 1, reason: "executor threw" });
+    log.append({ type: "attention-resolved", node: "a", visit: 1, reply: "resume" });
+    expect(deriveTimeline(log.read())[0]!.waiting_ms).toBe(0);
+  });
+
+  test("an unanswered ask keeps counting to now", () => {
+    const dir = mkdtempSync(join(tmpdir(), "howdah-wait-"));
+    const log = new EventLog(join(dir, "r", "run.jsonl"), fixedClock());
+    log.append({ type: "node-started", node: "a", visit: 1, attempt_id: "a#1" });
+    log.append({ type: "attention-raised", node: "a", visit: 1, reason: "needs you" });
+    log.append({ type: "chunk", node: "a", visit: 1, turn: 1, index: 0, kind: "text", content: "…" });
+    const row = deriveTimeline(log.read())[0]!;
+    expect(row.waiting_ms).toBeGreaterThan(0);
+    expect(row.finished_at).toBeNull();
+  });
+
+  test("a step that never asked has no waiting time", () => {
+    const dir = mkdtempSync(join(tmpdir(), "howdah-wait-"));
+    const log = new EventLog(join(dir, "r", "run.jsonl"), fixedClock());
+    log.append({ type: "node-started", node: "a", visit: 1, attempt_id: "a#1" });
+    log.append({ type: "node-finished", node: "a", visit: 1, status: "succeeded", writes: {} });
+    expect(deriveTimeline(log.read())[0]!.waiting_ms).toBe(0);
+  });
+});

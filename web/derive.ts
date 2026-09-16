@@ -43,6 +43,18 @@ export interface TimelineRow {
   finished_at: string | null;
   status: "running" | "succeeded" | "failed";
   duration_ms: number | null;
+  /** ms from the run's first step to this one — a bar can be placed without rescanning */
+  offset_ms: number;
+  /** the run's whole span, repeated per row so the view needs no second pass. A step still
+   *  running measures to the last event, which is the only "now" the log knows about. */
+  run_span_ms: number;
+  /**
+   * Of this attempt's duration, how much was spent waiting on a HUMAN (R3.3). Derived by
+   * overlapping each attention-raised → attention-resolved window with the attempt's own
+   * interval, so a run parked AFTER a step failed does not charge that wait to the step.
+   * No new event type: both events already exist.
+   */
+  waiting_ms: number;
 }
 
 export interface RunDetail {
@@ -124,7 +136,7 @@ export function deriveTimeline(events: LoggedEvent[]): TimelineRow[] {
   const open = new Map<string, TimelineRow>();
   for (const e of events) {
     if (e.type === "node-started") {
-      const row: TimelineRow = { node: e.node, visit: e.visit, started_at: e.ts, finished_at: null, status: "running", duration_ms: null };
+      const row: TimelineRow = { node: e.node, visit: e.visit, started_at: e.ts, finished_at: null, status: "running", duration_ms: null, offset_ms: 0, run_span_ms: 0, waiting_ms: 0 };
       rows.push(row);
       open.set(`${e.node}@${e.visit}`, row);
     } else if (e.type === "node-finished") {
@@ -137,6 +149,53 @@ export function deriveTimeline(events: LoggedEvent[]): TimelineRow[] {
       }
     }
   }
+  // second pass: place every row on one shared axis
+  if (rows.length === 0) return rows;
+  const origin = new Date(rows[0]!.started_at).getTime();
+  const lastEventAt = events.at(-1)?.ts;
+  // a run still waiting on a human measures to NOW, not to its last event — otherwise the
+  // waiting bar freezes the moment the ask was raised and the wait looks like nothing
+  const openAsk = (() => {
+    let open = false;
+    for (const e of events) {
+      if (e.type === "attention-raised") open = true;
+      else if (e.type === "attention-resolved" || e.type === "run-finished") open = false;
+    }
+    return open;
+  })();
+  const end = Math.max(
+    ...rows.map((r) => new Date(r.finished_at ?? r.started_at).getTime()),
+    lastEventAt ? new Date(lastEventAt).getTime() : origin,
+    openAsk ? Date.now() : origin,
+  );
+  const span = Math.max(1, end - origin); // never zero: a bar divides by this
+  for (const r of rows) {
+    r.offset_ms = new Date(r.started_at).getTime() - origin;
+    r.run_span_ms = span;
+  }
+
+  // third pass: how much of each attempt was a human not looking
+  const asks = new Map<string, number>(); // node@visit -> raised at
+  const waiting = new Map<string, number>();
+  const charge = (key: string, from: number, to: number) => {
+    const row = rows.find((r) => `${r.node}@${r.visit}` === key);
+    if (!row) return;
+    const rowStart = new Date(row.started_at).getTime();
+    const rowEnd = row.finished_at ? new Date(row.finished_at).getTime() : end;
+    const overlap = Math.min(to, rowEnd) - Math.max(from, rowStart);
+    if (overlap > 0) waiting.set(key, (waiting.get(key) ?? 0) + overlap);
+  };
+  for (const e of events) {
+    if (e.type === "attention-raised") asks.set(`${e.node}@${e.visit}`, new Date(e.ts).getTime());
+    else if (e.type === "attention-resolved") {
+      const key = `${e.node}@${e.visit}`;
+      const from = asks.get(key);
+      if (from !== undefined) { charge(key, from, new Date(e.ts).getTime()); asks.delete(key); }
+    }
+  }
+  for (const [key, from] of asks) charge(key, from, end); // still waiting: measure to now
+  for (const r of rows) r.waiting_ms = waiting.get(`${r.node}@${r.visit}`) ?? 0;
+
   return rows;
 }
 
