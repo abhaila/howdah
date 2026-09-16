@@ -1,0 +1,9 @@
+web/app/main.tsx
+  ai_agent 1607,1931
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "5a37a0fc956865f8d66a88437507a260ceed367a",
+  "prompts": {}
+}
