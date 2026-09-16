@@ -46,15 +46,16 @@ main { flex: 1; min-width: 0; }
 /* runs list */
 .runs { max-width: 880px; margin: 0 auto; padding: 28px 24px; }
 .runs h1 { font-size: 22px; margin: 0 0 18px; letter-spacing: 0.015em; }
+/* rows are rows: a hairline and spacing separate them, never a card (DESIGN.md) */
 .run-row {
   display: flex; align-items: center; gap: 12px;
-  padding: 13px 16px; margin-bottom: 8px;
-  background: var(--bg-raised); border: 1px solid var(--border);
-  border-radius: var(--radius); cursor: pointer; text-decoration: none;
-  transition: border-color var(--dur-fast) var(--ease-out-strong), transform var(--dur-fast) var(--ease-out-strong);
+  height: 26px; padding: 0 10px; cursor: pointer; text-decoration: none;
+  border-bottom: 1px solid var(--border);
+  transition: background var(--dur-fast) var(--ease-out-strong);
 }
-.run-row:hover { border-color: var(--border-strong); }
-.run-row.needs-input { border-color: var(--attention-border); background: var(--attention-bg); }
+.run-row:hover { background: var(--bg-raised); }
+/* the waiting row is marked by a rule, not by a box */
+.run-row.needs-input { background: var(--attention-bg); box-shadow: inset 2px 0 0 var(--attention); }
 .run-goal { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .run-meta { color: var(--fg-muted); font-size: 12px; margin-left: auto; flex-shrink: 0; }
 .wait-timer { color: var(--attention); font-weight: 600; font-variant-numeric: tabular-nums; }
@@ -193,7 +194,7 @@ button.primary:disabled { opacity: 0.5; cursor: default; }
 .dag-node rect.dag-visits { fill: var(--status-running); stroke: none; }
 .dag-visits-text { fill: #fff; font-size: 10px; font-weight: 700; font-family: var(--font-mono); }
 .graphs-layout { display: grid; grid-template-columns: 280px 1fr; gap: 18px; align-items: start; }
-.run-row.selected { border-color: var(--border-strong); background: var(--bg-inset); }
+.run-row.selected { background: var(--bg-inset); box-shadow: inset 2px 0 0 var(--border-strong); }
 .tabs { display: flex; gap: 2px; background: var(--bg-inset); border-radius: var(--radius-sm); padding: 2px; }
 .tab { background: none; border: 0; color: var(--fg-muted); font-family: var(--font-display); font-size: 12px; letter-spacing: 0.02em; padding: 4px 12px; border-radius: 5px; cursor: pointer; }
 .tab.active { background: var(--bg-raised); color: var(--fg); font-weight: 600; }
