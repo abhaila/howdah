@@ -13,9 +13,9 @@
  */
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { EventLog, readLog } from "../log/write";
-import { deriveDetail, deriveSummary, sortRuns } from "./derive";
+import { deriveDetail, deriveSummary, runDigest, sortRuns } from "./derive";
 import { AttentionCenter } from "../engine/attention";
 import { graphCatalog, GRAPHS } from "../graphs/index";
 import { loadConfig, saveConfig } from "../config/config";
@@ -315,7 +315,7 @@ export function createHowdahServer(opts: ServerOpts) {
         return render ? json(render) : json({ error: "no such render, or its pinned prompt is gone" }, 404);
       }
 
-      const m = url.pathname.match(/^\/api\/runs(?:\/([^/]+)(?:\/(events|reply|open-ide|resume|pause|abort|jump))?)?$/);
+      const m = url.pathname.match(/^\/api\/runs(?:\/([^/]+)(?:\/(events|reply|open-ide|resume|pause|abort|jump|ask))?)?$/);
       if (!m) {
         // static: /public assets by name, everything else → the app shell.
         // no-cache: this is a local app whose bundle changes constantly — the browser must
@@ -405,6 +405,48 @@ export function createHowdahServer(opts: ServerOpts) {
         return json({ ok: true }, 202);
       }
 
+      if (sub === "ask" && req.method === "POST") {
+        const body = (await req.json().catch(() => ({}))) as { question?: string };
+        const question = (body.question ?? "").trim();
+        if (!question) return json({ error: "a question is required" }, 400);
+
+        const events = readLog(path);
+        const started = events.find((e) => e.type === "run-started");
+        const graph = started?.type === "run-started" ? GRAPHS[started.graph] : undefined;
+        let declarations = {};
+        try { declarations = graph ? graph.declarations() : {}; } catch { /* still answerable */ }
+        const digest = runDigest(id, events, declarations);
+
+        // HOWDAH_STUB short-circuits every token-spending path in this codebase
+        if (process.env.HOWDAH_STUB) return json({ answer: `[stubbed] ${question}`, stubbed: true, digest_chars: digest.length });
+
+        const prompt = [
+          "You are answering a question about ONE run of an agent harness.",
+          "Answer only from the RUN DIGEST below. If the digest does not say, say so plainly.",
+          "Refer to steps as node@visit so the reader can find them. Be brief: a short paragraph.",
+          "",
+          "RUN DIGEST:",
+          digest,
+          "",
+          `QUESTION: ${question}`,
+        ].join("\n");
+
+        const res = Bun.spawnSync(
+          // no tools, plan mode, and a temp cwd: this must not be able to touch the worktree
+          ["claude", "-p", "--output-format", "json", "--permission-mode", "plan"],
+          { stdin: new TextEncoder().encode(prompt), stdout: "pipe", stderr: "pipe", cwd: tmpdir(), env: { ...process.env }, timeout: 120_000 },
+        );
+        if (res.exitCode !== 0)
+          return json({ error: `claude -p failed: ${new TextDecoder().decode(res.stderr).trim().slice(0, 300)}` }, 502);
+        try {
+          const parsed = JSON.parse(new TextDecoder().decode(res.stdout)) as { result?: unknown; is_error?: boolean; total_cost_usd?: number };
+          if (parsed.is_error) return json({ error: String(parsed.result).slice(0, 300) }, 502);
+          return json({ answer: String(parsed.result ?? ""), cost_usd: parsed.total_cost_usd, digest_chars: digest.length });
+        } catch {
+          return json({ error: "claude -p returned unparseable output" }, 502);
+        }
+      }
+
       if (sub === "events") {
         let since = Number(url.searchParams.get("since") ?? 0);
         let timer: ReturnType<typeof setInterval>;
@@ -433,7 +475,18 @@ export function createHowdahServer(opts: ServerOpts) {
         });
       }
 
-      const detail = deriveDetail(id, readLog(path));
+      const events = readLog(path);
+      // scopes and declared writers come from the graph, not the log: that is what lets the
+      // Context tab list a key no step has reached yet instead of hiding it (CUR5)
+      const started = events.find((e) => e.type === "run-started");
+      const graph = started?.type === "run-started" ? GRAPHS[started.graph] : undefined;
+      let declarations = {};
+      try {
+        declarations = graph ? graph.declarations() : {};
+      } catch {
+        /* a graph with conflicting scopes throws; the rest of the run view still renders */
+      }
+      const detail = deriveDetail(id, events, declarations);
       const target = effectiveCwd(path, detail.identity.cwd ?? undefined);
       return json({
         ...detail,

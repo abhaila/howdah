@@ -7,6 +7,7 @@
  * "failed", because the human is the unblock.
  */
 import type { LoggedEvent } from "../log/events";
+import type { Scope } from "../core/context";
 import { coalesce, outcomesByHash, type CoalescedTurn, type JoinedOutcome } from "../log/coalesce";
 
 export type RunStatus =
@@ -76,6 +77,8 @@ export interface RunDetail {
   pull_requests: Array<{ url: string; state: string; observed_at: string }>;
   /** the Logs tab's rows, derived once here so the view never re-walks the log */
   log_rows: LogRow[];
+  /** the Context tab: every declared key, written or not */
+  context: ContextEntry[];
   identity: { cwd: string | null; folder_kind: "repo" | "plain" | null };
   events_seq: number;
 }
@@ -201,7 +204,7 @@ export function deriveTimeline(events: LoggedEvent[]): TimelineRow[] {
   return rows;
 }
 
-export function deriveDetail(id: string, events: LoggedEvent[]): RunDetail {
+export function deriveDetail(id: string, events: LoggedEvent[], declarations: Declarations = {}): RunDetail {
   const summary = deriveSummary(id, events);
   const usage = { input_tokens: 0, output_tokens: 0, cost_usd: 0 };
   const allowanceByHarness = new Map<string, Extract<LoggedEvent, { type: "allowance" }>>();
@@ -249,6 +252,7 @@ export function deriveDetail(id: string, events: LoggedEvent[]): RunDetail {
     git,
     pull_requests: [...prs.values()],
     log_rows: deriveLogRows(events),
+    context: deriveContextTable(events, declarations),
     identity,
     events_seq: events.at(-1)?.seq ?? 0,
   };
@@ -333,6 +337,152 @@ export function deriveLogRows(events: LoggedEvent[]): LogRow[] {
       }
     }
   });
+}
+
+/**
+ * Context (T24, stories 9 + 10) — the run's whole context, which nothing surveyed in the
+ * research shows. Orbital's was per-step and usually said "this step wrote nothing".
+ *
+ * Derived, never stored: `node-finished.writes` carries every PUBLISHED value in log order,
+ * so publish-on-success is free — a failed attempt's writes never appear because the engine
+ * never logged them. Scopes and declared writers come from the graph, so keys that no step
+ * has reached yet are still listed rather than vanishing.
+ */
+export interface ContextWrite {
+  node: string;
+  visit: number;
+  at: string;
+  replaced: boolean;
+}
+
+export interface ContextEntry {
+  key: string;
+  /** the latest published value, or undefined when nothing has written it yet */
+  value?: unknown;
+  written: boolean;
+  scope: Scope | null;
+  /** every node the graph declares as a writer of this key */
+  declared_writers: string[];
+  /** who actually wrote it, in log order */
+  writes: ContextWrite[];
+  /** prompts that read it, from prompt-rendered.context_read */
+  read_by: string[];
+  /** a cleared key whose writer is mid-attempt is veiled: the old value must not be shown */
+  veiled: boolean;
+}
+
+export type Declarations = Record<string, { scope: Scope; writer: string[] }>;
+
+export function deriveContextTable(events: LoggedEvent[], declarations: Declarations = {}): ContextEntry[] {
+  const entries = new Map<string, ContextEntry>();
+  const entry = (key: string): ContextEntry => {
+    let e = entries.get(key);
+    if (!e) {
+      const d = declarations[key];
+      e = { key, written: false, scope: d?.scope ?? null, declared_writers: d?.writer ?? [], writes: [], read_by: [], veiled: false };
+      entries.set(key, e);
+    }
+    return e;
+  };
+  for (const key of Object.keys(declarations)) entry(key); // declared-but-unwritten still shows
+
+  const openAttempts = new Set<string>();
+  for (const e of events) {
+    if (e.type === "node-started") openAttempts.add(e.node);
+    else if (e.type === "node-finished") {
+      openAttempts.delete(e.node);
+      for (const [key, value] of Object.entries(e.writes)) {
+        const c = entry(key);
+        c.writes.push({ node: e.node, visit: e.visit, at: e.ts, replaced: c.written });
+        c.value = value;
+        c.written = true;
+      }
+    } else if (e.type === "prompt-rendered") {
+      for (const key of Object.keys(e.context_read)) {
+        const c = entry(key);
+        if (!c.read_by.includes(e.prompt)) c.read_by.push(e.prompt);
+      }
+    }
+  }
+
+  // a `cleared` key is veiled while any of its declared writers is mid-attempt
+  for (const c of entries.values()) {
+    if (c.scope === "cleared" && c.declared_writers.some((w) => openAttempts.has(w))) c.veiled = true;
+  }
+  return [...entries.values()];
+}
+
+/**
+ * The run digest (T24, story 11) — what an agent is told when you ask about a run.
+ *
+ * BOUNDED on purpose: a 10,000-event run must not be pasted into a prompt. Steps are
+ * summarised, the transcript is the tail only, and values are truncated. It is built from
+ * the same derivations the screens use, so one fix improves both the view and the answer.
+ *
+ * Carries run events ONLY — never process env, never credentials.
+ */
+export interface DigestLimits {
+  steps: number;
+  transcript: number;
+  valueChars: number;
+}
+const DIGEST_DEFAULTS: DigestLimits = { steps: 60, transcript: 40, valueChars: 300 };
+
+export function runDigest(
+  id: string,
+  events: LoggedEvent[],
+  declarations: Declarations = {},
+  limits: Partial<DigestLimits> = {},
+): string {
+  const lim = { ...DIGEST_DEFAULTS, ...limits };
+  const summary = deriveSummary(id, events);
+  const timeline = deriveTimeline(events);
+  const context = deriveContextTable(events, declarations);
+  const { ask } = deriveStatus(events);
+  const cut = (v: unknown) => {
+    const t = typeof v === "string" ? v : JSON.stringify(v) ?? String(v);
+    return t.length > lim.valueChars ? `${t.slice(0, lim.valueChars)}… (${t.length} chars)` : t;
+  };
+  const dur = (ms: number | null) => (ms === null ? "running" : ms < 1000 ? `${ms}ms` : `${Math.round(ms / 1000)}s`);
+
+  const steps = timeline.slice(-lim.steps).map((t) => {
+    const waited = t.waiting_ms > 0 ? ` · waited on a human ${dur(t.waiting_ms)}` : "";
+    return `  ${t.node}@${t.visit} · ${t.status} · ${dur(t.duration_ms)}${waited}`;
+  });
+
+  const turns = coalesce(events).slice(-lim.transcript).flatMap((turn) =>
+    turn.parts
+      .filter((p) => p.kind === "text" || p.kind === "tool_call")
+      .map((p) => `  ${turn.node}@${turn.visit} · ${p.kind === "tool_call" ? `tool ${p.tool_name ?? ""}` : "said"}: ${cut(p.content)}`),
+  ).slice(-lim.transcript);
+
+  const ctx = context.map((c) =>
+    `  ${c.key} (${c.scope ?? "undeclared"}) = ${c.written ? cut(c.value) : "— not written yet"}` +
+    (c.writes.length ? ` · last written by ${c.writes.at(-1)!.node}@${c.writes.at(-1)!.visit}` : ""));
+
+  const prompts = [...new Map(
+    events.flatMap((e) => (e.type === "prompt-rendered" ? [[`${e.prompt}`, `  ${e.prompt} v${e.prompt_version} (${e.node}@${e.visit})`] as const] : [])),
+  ).values()];
+
+  return [
+    `RUN ${id}`,
+    `graph: ${summary.graph}`,
+    `status: ${summary.status}${summary.outcome ? ` · ${summary.outcome}` : ""}`,
+    summary.goal ? `goal: ${cut(summary.goal)}` : "",
+    ask ? `WAITING ON A HUMAN since ${ask.ts}: ${ask.reason} (at ${ask.node}@${ask.visit})` : "not waiting on a human",
+    "",
+    `STEPS (last ${Math.min(lim.steps, timeline.length)} of ${timeline.length}):`,
+    ...steps,
+    "",
+    "CONTEXT:",
+    ...ctx,
+    "",
+    "PROMPTS RENDERED:",
+    ...prompts,
+    "",
+    `TRANSCRIPT (tail):`,
+    ...turns,
+  ].filter((l) => l !== "").join("\n");
 }
 
 /** runs list ordering: needs-input first (longest wait first), then running, then terminal */

@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EventLog, readLog } from "../log/write";
-import { deriveStatus, deriveSummary, deriveDetail, deriveTimeline, deriveLogRows, sortRuns } from "./derive";
+import { deriveStatus, deriveSummary, deriveDetail, deriveTimeline, deriveLogRows, deriveContextTable, runDigest, sortRuns } from "./derive";
 import { createHowdahServer } from "./server";
 import { AttentionCenter } from "../engine/attention";
 import { renderedHash } from "../core/template";
@@ -724,5 +724,157 @@ describe("log rows carry the stored event", () => {
     const dir = mkdtempSync(join(tmpdir(), "howdah-raw-"));
     const events = seedParkedRun(dir, "r-detail").read();
     expect(deriveDetail("r-detail", events).log_rows).toEqual(deriveLogRows(events));
+  });
+});
+
+// ---- context table (stories 9 + 10) -----------------------------------------------
+
+const DECL = {
+  goal: { scope: "sticky" as const, writer: ["__inputs__"] },
+  implementation_plan: { scope: "sticky" as const, writer: ["plan", "plan_review"] },
+  review_verdict: { scope: "cleared" as const, writer: ["local_review"] },
+  "worktree.clean": { scope: "per-visit" as const, writer: ["cleanup"] },
+};
+
+describe("deriveContextTable", () => {
+  function run(dir: string) {
+    const log = new EventLog(join(dir, "r", "run.jsonl"), fixedClock());
+    log.append({ type: "run-started", graph: "g", inputs: {}, pinned_prompts: {} });
+    log.append({ type: "node-started", node: "plan", visit: 1, attempt_id: "plan#1" });
+    log.append({ type: "prompt-rendered", node: "plan", visit: 1, prompt: "implementation.plan" as never, prompt_version: 1, rendered_hash: "h1", context_read: { goal: "g" } });
+    log.append({ type: "node-finished", node: "plan", visit: 1, status: "succeeded", writes: { implementation_plan: "v1" } });
+    return log;
+  }
+
+  test("lists declared keys that nothing has written yet", () => {
+    const dir = mkdtempSync(join(tmpdir(), "howdah-ctx-"));
+    const table = deriveContextTable(run(dir).read(), DECL);
+    const clean = table.find((c) => c.key === "worktree.clean")!;
+    expect(clean.written).toBe(false);
+    expect(clean.value).toBeUndefined();
+    expect(clean.declared_writers).toEqual(["cleanup"]);
+    expect(clean.scope).toBe("per-visit");
+  });
+
+  test("the latest published value wins and the earlier write is marked replaced", () => {
+    const dir = mkdtempSync(join(tmpdir(), "howdah-ctx-"));
+    const log = run(dir);
+    log.append({ type: "node-started", node: "plan_review", visit: 1, attempt_id: "plan_review#1" });
+    log.append({ type: "node-finished", node: "plan_review", visit: 1, status: "succeeded", writes: { implementation_plan: "v2" } });
+    const plan = deriveContextTable(log.read(), DECL).find((c) => c.key === "implementation_plan")!;
+    expect(plan.value).toBe("v2");
+    expect(plan.writes.map((w) => [w.node, w.replaced])).toEqual([["plan", false], ["plan_review", true]]);
+  });
+
+  test("a failed attempt publishes nothing", () => {
+    const dir = mkdtempSync(join(tmpdir(), "howdah-ctx-"));
+    const log = new EventLog(join(dir, "r", "run.jsonl"), fixedClock());
+    log.append({ type: "node-started", node: "plan", visit: 1, attempt_id: "plan#1" });
+    log.append({ type: "node-finished", node: "plan", visit: 1, status: "failed", writes: {} });
+    const plan = deriveContextTable(log.read(), DECL).find((c) => c.key === "implementation_plan")!;
+    expect(plan.written).toBe(false);
+  });
+
+  test("a cleared key is veiled while its writer is mid-attempt", () => {
+    const dir = mkdtempSync(join(tmpdir(), "howdah-ctx-"));
+    const log = new EventLog(join(dir, "r", "run.jsonl"), fixedClock());
+    log.append({ type: "node-started", node: "local_review", visit: 1, attempt_id: "local_review#1" });
+    log.append({ type: "node-finished", node: "local_review", visit: 1, status: "succeeded", writes: { review_verdict: "pass" } });
+    log.append({ type: "node-started", node: "local_review", visit: 2, attempt_id: "local_review#2" });
+    const verdict = deriveContextTable(log.read(), DECL).find((c) => c.key === "review_verdict")!;
+    expect(verdict.veiled).toBe(true);
+  });
+
+  test("read_by names every prompt that consumed the key, once", () => {
+    const dir = mkdtempSync(join(tmpdir(), "howdah-ctx-"));
+    const log = run(dir);
+    log.append({ type: "prompt-rendered", node: "implement", visit: 1, prompt: "implementation.implement" as never, prompt_version: 1, rendered_hash: "h2", context_read: { goal: "g" } });
+    log.append({ type: "prompt-rendered", node: "implement", visit: 2, prompt: "implementation.implement" as never, prompt_version: 1, rendered_hash: "h3", context_read: { goal: "g" } });
+    const goal = deriveContextTable(log.read(), DECL).find((c) => c.key === "goal")!;
+    expect(goal.read_by).toEqual(["implementation.plan", "implementation.implement"]);
+  });
+
+  test("an empty run still lists every declared key", () => {
+    expect(deriveContextTable([], DECL).map((c) => c.key).sort()).toEqual(Object.keys(DECL).sort());
+  });
+});
+
+// ---- run digest (story 11) --------------------------------------------------------
+
+describe("runDigest", () => {
+  test("names the status, the wait and the steps", () => {
+    const dir = mkdtempSync(join(tmpdir(), "howdah-digest-"));
+    const d = runDigest("r1", seedParkedRun(dir, "r1").read());
+    expect(d).toContain("RUN r1");
+    expect(d).toContain("graph: write-doc");
+    expect(d).toContain("WAITING ON A HUMAN");
+    expect(d).toContain("doc.draft@1");
+    expect(d).toContain("PROMPTS RENDERED");
+  });
+
+  test("is bounded: a huge run does not paste the whole log", () => {
+    const dir = mkdtempSync(join(tmpdir(), "howdah-digest-"));
+    const log = new EventLog(join(dir, "r", "run.jsonl"), fixedClock());
+    log.append({ type: "run-started", graph: "g", inputs: {}, pinned_prompts: {} });
+    for (let i = 0; i < 400; i++) {
+      log.append({ type: "node-started", node: `n${i}`, visit: 1, attempt_id: `n${i}#1` });
+      log.append({ type: "chunk", node: `n${i}`, visit: 1, turn: 1, index: 0, kind: "text", content: "x".repeat(2000) });
+      log.append({ type: "node-finished", node: `n${i}`, visit: 1, status: "succeeded", writes: {} });
+    }
+    const d = runDigest("big", log.read());
+    expect(d.split("\n").filter((l) => l.startsWith("  n")).length).toBeLessThanOrEqual(120);
+    expect(d).toContain("(2000 chars)"); // long values are cut, not carried
+    expect(d.length).toBeLessThan(60_000);
+  });
+
+  test("carries run events only — no environment, no credentials", () => {
+    const dir = mkdtempSync(join(tmpdir(), "howdah-digest-"));
+    process.env.HOWDAH_TEST_SECRET = "sk-should-never-appear";
+    const d = runDigest("r1", seedParkedRun(dir, "r1").read());
+    expect(d).not.toContain("sk-should-never-appear");
+    expect(d).not.toContain("HOWDAH_TEST_SECRET");
+    delete process.env.HOWDAH_TEST_SECRET;
+  });
+
+  test("a run with nothing in it still produces a readable digest", () => {
+    expect(runDigest("empty", [])).toContain("RUN empty");
+  });
+});
+
+describe("ask about a run (story 11)", () => {
+  test("stubbed: answers without spawning an agent, and never writes to the run", async () => {
+    const root = fixtureRepo();
+    const base = mkdtempSync(join(tmpdir(), "howdah-ask-"));
+    const runsDir = join(base, "runs");
+    mkdirSync(runsDir, { recursive: true });
+    process.env.HOWDAH_HOME = base;
+    process.env.HOWDAH_STUB = "1";
+    const log = seedParkedRun(runsDir, "r-ask");
+    const before = readFileSync(join(runsDir, "r-ask", "run.jsonl"), "utf8");
+    const server = createHowdahServer({ runsDir, attentionDir: join(base, "attention"), port: 0, repoRoot: root });
+    const url = (p: string) => `http://localhost:${server.port}${p}`;
+    try {
+      const res = await fetch(url("/api/runs/r-ask/ask"), {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ question: "what is it waiting for?" }),
+      });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as any;
+      expect(body.stubbed).toBe(true);
+      expect(body.digest_chars).toBeGreaterThan(0);
+      // read-only is the whole decision: the log must be byte-identical afterwards
+      expect(readFileSync(join(runsDir, "r-ask", "run.jsonl"), "utf8")).toBe(before);
+      expect(log.read().some((e) => e.type === "attention-resolved")).toBe(false);
+
+      expect((await fetch(url("/api/runs/r-ask/ask"), {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ question: "  " }),
+      })).status).toBe(400);
+      expect((await fetch(url("/api/runs/nope/ask"), {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ question: "x" }),
+      })).status).toBe(404);
+    } finally {
+      delete process.env.HOWDAH_STUB;
+      server.stop(true);
+    }
   });
 });

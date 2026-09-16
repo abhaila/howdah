@@ -781,9 +781,213 @@ function EventDetail({ row }: { row: LogRow | null }) {
   );
 }
 
+const SCOPE_MEANS: Record<string, string> = {
+  sticky: "the last good value stays visible when a writer re-enters, until a newer one lands",
+  cleared: "hidden while its writer re-runs; if that attempt fails, the old answer is restored",
+  "per-visit": "invalidated the moment its writer re-enters — freshness is part of its meaning",
+};
+
+function fmtValue(v: unknown): string {
+  if (typeof v === "string") return v;
+  return JSON.stringify(v) ?? String(v);
+}
+
+/**
+ * Context (T24, stories 9 + 10) — the run's whole context in one table.
+ *
+ * Nothing in the research showed this: trace tools show a span's input and output, and
+ * Orbital's tab was per-step and usually empty (CUR5). Keys no step has reached yet stay
+ * listed, because their absence is exactly what made the old tab useless.
+ */
+function RunContext({ entries }: { entries: RunDetail["context"] }) {
+  const [picked, setPicked] = useState<string | null>(null);
+  if (entries.length === 0) return <div className="empty">this graph declares no context keys</div>;
+  const selected = entries.find((e) => e.key === picked) ?? entries.find((e) => e.written) ?? entries[0]!;
+  return (
+    <div className="ctx-split">
+      <div className="ctx-col">
+        <div className="ctx-row ctx-header">
+          <span className="ctx-key rh">key</span>
+          <span className="ctx-value rh">value</span>
+          <span className="ctx-scope rh">scope</span>
+          <span className="ctx-writer rh">written by</span>
+          <span className="ctx-at rh">at</span>
+        </div>
+        <div className="ctx-rows">
+          {entries.map((e) => {
+            const last = e.writes.at(-1);
+            return (
+              <div
+                key={e.key}
+                className={`ctx-row ${e.written ? "" : "unwritten"} ${selected.key === e.key ? "selected" : ""}`}
+                onClick={() => setPicked(e.key)}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); setPicked(e.key); } }}
+              >
+                <span className="m ctx-key">{e.key}</span>
+                <span className="ctx-value">
+                  {e.veiled ? "veiled — its writer is mid-attempt" : e.written ? fmtValue(e.value) : "— not written yet"}
+                </span>
+                <span className="ctx-scope">{e.scope && <span className={`pill scope-${e.scope}`}>{e.scope}</span>}</span>
+                <span className="m ctx-writer">{last ? `${last.node}@${last.visit}` : e.declared_writers.join(", ") || "—"}</span>
+                <span className="m ctx-at">{last ? last.at.slice(11, 16) : "—"}</span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+      <ContextDetail entry={selected} />
+    </div>
+  );
+}
+
+/** Story 10: one key — its value, who wrote it in what order, and which prompts read it. */
+function ContextDetail({ entry }: { entry: RunDetail["context"][number] }) {
+  return (
+    <div className="step-detail">
+      <div className="sd-head"><span className="m sd-node">{entry.key}</span></div>
+      <div className="sd-pills">
+        {entry.scope && <span className="pill">{entry.scope}</span>}
+        <span className="pill">{entry.written ? `${entry.writes.length} write${entry.writes.length === 1 ? "" : "s"}` : "not written"}</span>
+        {entry.declared_writers.length > 1 && <span className="pill">{entry.declared_writers.length} writers</span>}
+      </div>
+      {entry.scope && <div className="pd-note sd-scope-note">{SCOPE_MEANS[entry.scope]}</div>}
+      <div className="sd-body">
+        <h2 className="rh">Current value</h2>
+        {entry.veiled ? (
+          <div className="pd-note">veiled: its writer is mid-attempt, so the old value must not be read as current</div>
+        ) : entry.written ? (
+          <pre className="sd-raw">{fmtValue(entry.value)}</pre>
+        ) : (
+          <div className="pd-note">nothing has written this yet — {entry.declared_writers.join(", ") || "no declared writer"} would</div>
+        )}
+
+        <h2 className="rh">Write history</h2>
+        {entry.writes.length === 0
+          ? <div className="pd-note">no writes yet</div>
+          : entry.writes.map((w, i) => (
+              <div key={i} className="ctx-write">
+                <span className="m ctx-write-at">{w.at.slice(11, 19)}</span>
+                <span className="m ctx-write-node">{w.node}@{w.visit}</span>
+                <span className="ctx-write-note">{w.replaced ? "replaced" : "first write"}</span>
+              </div>
+            ))}
+
+        <h2 className="rh">Read by</h2>
+        {entry.read_by.length === 0
+          ? <div className="pd-note">no prompt has read this yet</div>
+          : <div className="ctx-readers">{entry.read_by.map((r) => <span key={r} className="pill id">{r}</span>)}</div>}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Chat (T24, stories 11-13) — LangSmith's Polly pattern: ask about THIS run instead of
+ * scrolling it. READ-ONLY by decision: it cannot reply to the agent or move the run.
+ *
+ * Model output is untrusted input, so citations are matched against a whitelist of this
+ * run's own node@visit keys and rendered as TEXT — never as markup.
+ */
+function citeParts(answer: string, known: Set<string>): Array<{ text: string; cite: boolean }> {
+  const out: Array<{ text: string; cite: boolean }> = [];
+  const re = /([a-z_][\w.]*@\d+)/gi;
+  let last = 0;
+  for (const m of answer.matchAll(re)) {
+    const at = m.index ?? 0;
+    if (at > last) out.push({ text: answer.slice(last, at), cite: false });
+    out.push({ text: m[1]!, cite: known.has(m[1]!) });
+    last = at + m[1]!.length;
+  }
+  if (last < answer.length) out.push({ text: answer.slice(last), cite: false });
+  return out;
+}
+
+function suggestionsFor(detail: RunDetail, ask: RunDetail["ask"]): string[] {
+  const out: string[] = [];
+  if (ask) out.push("What is it waiting for?");
+  const failed = detail.timeline.find((t) => t.status === "failed");
+  if (failed) out.push(`Why did ${failed.node}@${failed.visit} fail?`);
+  const rewritten = detail.context.find((c) => c.writes.length > 1);
+  if (rewritten) out.push(`What changed in ${rewritten.key}?`);
+  return out.slice(0, 3);
+}
+
+function RunChat({ runId, detail, ask, onPickStep }: {
+  runId: string;
+  detail: RunDetail;
+  ask: RunDetail["ask"];
+  onPickStep: (key: string) => void;
+}) {
+  const [turns, setTurns] = useState<Array<{ q: string; a: string | null; error?: string; cost?: number }>>([]);
+  const [q, setQ] = useState("");
+  const [busy, setBusy] = useState(false);
+  const known = new Set(detail.timeline.map((t) => `${t.node}@${t.visit}`));
+
+  const send = async (question: string) => {
+    if (!question.trim() || busy) return;
+    setBusy(true);
+    setQ("");
+    setTurns((t) => [...t, { q: question, a: null }]);
+    const res = await fetch(`/api/runs/${runId}/ask`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ question }),
+    }).catch(() => null);
+    const body = (await res?.json().catch(() => null)) as any;
+    setTurns((t) => t.map((turn, i) => (i === t.length - 1
+      ? { ...turn, a: res?.ok ? String(body?.answer ?? "") : null, error: res?.ok ? undefined : (body?.error ?? "could not ask"), cost: body?.cost_usd }
+      : turn)));
+    setBusy(false);
+  };
+
+  return (
+    <div className="chat-panel">
+      <div className="chat-head">
+        <span className="chat-title">Ask about this run</span>
+        <span className="pill">read-only</span>
+      </div>
+      {turns.length === 0 && (
+        <div className="chat-suggestions">
+          {suggestionsFor(detail, ask).map((sug) => (
+            <span key={sug} className="chip" onClick={() => send(sug)}>{sug}</span>
+          ))}
+        </div>
+      )}
+      <div className="chat-log">
+        {turns.map((t, i) => (
+          <div key={i}>
+            <div className="chat-q">{t.q}</div>
+            {t.a === null && !t.error && <div className="chat-a pd-note">thinking…</div>}
+            {t.error && <div className="chat-a chat-error">{t.error}</div>}
+            {t.a !== null && (
+              <div className="chat-a">
+                {citeParts(t.a, known).map((part, j) =>
+                  part.cite
+                    ? <span key={j} className="pill id chat-cite" onClick={() => onPickStep(part.text)}>{part.text}</span>
+                    : <span key={j}>{part.text}</span>)}
+                {t.cost !== undefined && <span className="m chat-cost">${t.cost.toFixed(4)}</span>}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+      <div className="chat-input">
+        <input
+          placeholder="Ask about this run…"
+          value={q}
+          disabled={busy}
+          onChange={(e) => setQ(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") send(q); }}
+        />
+        <div className="chat-note">Reads this run's steps, prompts and context. It cannot reply to the agent or move the run.</div>
+      </div>
+    </div>
+  );
+}
+
 function RunView({ id }: { id: string }) {
   const [detail, setDetail] = useState<(RunDetail & { cwd_exists?: boolean; editor_configured?: boolean }) | null>(null);
-  const [tab, setTab] = useState<"steps" | "thread" | "logs" | "graph">("steps");
+  const [tab, setTab] = useState<"steps" | "thread" | "context" | "logs" | "chat" | "graph">("steps");
   const [picked, setPicked] = useState<string | null>(null);
   const now = useNow();
   const reload = useCallback(() => fetch(`/api/runs/${id}`).then((r) => r.json()).then(setDetail).catch(() => {}), [id]);
@@ -823,11 +1027,13 @@ function RunView({ id }: { id: string }) {
           <span className="meta">{summary.graph}</span>
           <Tabs
             value={tab}
-            onValueChange={(v) => setTab(v as "steps" | "thread" | "logs" | "graph")}
+            onValueChange={(v) => setTab(v as "steps" | "thread" | "context" | "logs" | "chat" | "graph")}
             items={[
               { value: "steps", label: "Steps", icon: <Rows3 /> },
               { value: "thread", label: "Thread", icon: <MessagesSquare /> },
+              { value: "context", label: "Context", icon: <Fingerprint /> },
               { value: "logs", label: "Logs", icon: <ScrollText /> },
+              { value: "chat", label: "Chat", icon: <MessagesSquare /> },
               { value: "graph", label: "Graph", icon: <Workflow /> },
             ]}
           />
@@ -862,6 +1068,10 @@ function RunView({ id }: { id: string }) {
             <RunSteps timeline={detail.timeline} ask={ask} selected={selectedKey} onSelect={setPicked} />
             <StepDetail runId={id} row={selectedRow} detail={detail} ask={ask} onResolved={reload} />
           </div>
+        ) : tab === "context" ? (
+          <RunContext entries={detail.context} />
+        ) : tab === "chat" ? (
+          <RunChat runId={id} detail={detail} ask={ask} onPickStep={(k) => { setPicked(k); setTab("steps"); }} />
         ) : tab === "logs" ? (
           <RunLogs rows={detail.log_rows} />
         ) : tab === "graph" ? (

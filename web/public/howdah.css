@@ -581,3 +581,66 @@ button.primary:disabled { opacity: 0.5; cursor: default; }
   font-family: var(--font-mono); font-size: 11px; line-height: 1.6; color: var(--fg-muted);
   white-space: pre-wrap; overflow-x: auto;
 }
+
+/* ---- context tab (T24, stories 9 + 10) ------------------------------------------
+   The run's whole context. Keys nothing has written stay listed and dimmed: their
+   absence is what made Orbital's per-step tab useless (CUR5). */
+.ctx-split { display: flex; min-height: 0; flex-grow: 1; overflow: hidden; }
+.ctx-col { flex-grow: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
+.ctx-rows { flex-grow: 1; min-height: 0; overflow-y: auto; }
+.ctx-row {
+  display: flex; align-items: center; gap: 10px; height: 28px; padding: 0 4px;
+  border-bottom: 1px solid var(--border); cursor: pointer;
+}
+.ctx-row.ctx-header { height: 24px; cursor: default; }
+.ctx-row.ctx-header .rh { padding: 0; margin: 0; }
+.ctx-row:not(.ctx-header):hover { background: var(--bg-raised); }
+.ctx-row.selected { background: var(--bg-raised); box-shadow: inset 2px 0 0 var(--border-strong); }
+.ctx-row.unwritten .ctx-key, .ctx-row.unwritten .ctx-value, .ctx-row.unwritten .ctx-writer { color: var(--fg-faint); }
+.ctx-key { width: 168px; flex-shrink: 0; font-size: 12px; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ctx-value { flex-grow: 1; flex-basis: 140px; min-width: 0; font-size: 12px; color: var(--fg-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ctx-scope { width: 70px; flex-shrink: 0; }
+/* below the split's width there is no room for five columns AND a value: the two the
+   detail panel already carries stand down rather than starving the value column */
+.ctx-split .ctx-scope, .ctx-split .ctx-at { display: none; }
+.ctx-split .ctx-writer { width: 132px; }
+.ctx-writer { width: 150px; flex-shrink: 0; font-size: 11px; color: var(--fg-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ctx-at { width: 52px; flex-shrink: 0; text-align: right; font-size: 10px; color: var(--fg-faint); }
+.pill.scope-cleared { color: #8C7A4A; }
+.pill.scope-per-visit { color: var(--status-running); }
+
+.sd-scope-note { padding: 0 16px; margin-top: 8px; line-height: 1.5; }
+.ctx-write { display: flex; gap: 10px; padding: 3px 0; font-size: 11px; }
+.ctx-write-at { width: 60px; color: var(--fg-faint); }
+.ctx-write-node { flex-grow: 1; color: var(--fg-muted); }
+.ctx-write-note { color: var(--fg-faint); }
+.ctx-readers { display: flex; flex-wrap: wrap; gap: 5px; }
+
+/* ---- chat (T24, stories 11-13) ---------------------------------------------------
+   Polly's pattern, read-only. Citations are chips only when they match a step this run
+   actually has; anything else stays plain text, because model output is untrusted. */
+.chat-panel { display: flex; flex-direction: column; min-height: 0; flex-grow: 1; max-width: 820px; }
+.chat-head { display: flex; align-items: center; gap: 10px; padding: 12px 4px; border-bottom: 1px solid var(--border); }
+.chat-title { font-size: 13px; color: var(--fg); }
+.chat-head .pill { margin-left: auto; }
+.chat-suggestions { display: flex; flex-wrap: wrap; gap: 6px; padding: 12px 4px; border-bottom: 1px solid var(--border); }
+.chat-suggestions .chip { cursor: pointer; }
+.chat-log { flex-grow: 1; min-height: 0; overflow-y: auto; padding: 4px 0 12px; }
+.chat-q {
+  margin: 14px 0 6px auto; max-width: 70%; width: fit-content;
+  background: var(--bg-raised); border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+  padding: 7px 10px; font-size: 12px; color: var(--fg);
+}
+.chat-a { font-size: 13px; line-height: 1.6; color: var(--fg-muted); padding: 0 4px 6px; }
+.chat-error { color: var(--status-failed-recoverable); }
+.chat-cite { cursor: pointer; margin: 0 3px; }
+.chat-cite:hover { color: var(--fg); border-color: var(--fg-muted); }
+.chat-cost { margin-left: 8px; font-size: 10px; color: var(--fg-faint); }
+.chat-input { border-top: 1px solid var(--border); padding: 11px 4px; }
+.chat-input input {
+  width: 100%; background: var(--bg-inset); color: var(--fg);
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 8px 10px; font-family: var(--font-display); font-size: 12px;
+}
+.chat-input input::placeholder { color: var(--fg-faint); }
+.chat-note { font-size: 10px; color: var(--fg-faint); margin-top: 7px; line-height: 1.5; }
