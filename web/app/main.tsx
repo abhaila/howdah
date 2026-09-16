@@ -285,25 +285,86 @@ function FeedbackForm({ promptId, runId, node, visit, renderedHash, onDone }: {
   );
 }
 
+/** Row kinds in the transcript. Shape carries the kind; colour only seconds it. */
+function RowGlyph({ kind }: { kind: "prompt" | "model" | "tool" | "error" | "operator" }) {
+  const st = { fill: "none", stroke: "currentColor", strokeWidth: 1.5, strokeLinecap: "round" as const, strokeLinejoin: "round" as const };
+  const d = {
+    prompt: "M3 8 H11 M8 5 L11 8 L8 11",
+    model: "M4 5 H12 M4 8 H12 M4 11 H9",
+    tool: "M5 4 L11 4 L11 12 L5 12 Z M7 7 H9",
+    error: "M5 5 L11 11 M11 5 L5 11",
+    operator: "M4 10 L7 7 L4 4 M8 11 H12",
+  }[kind];
+  return (
+    <span className={`tr-icon ${kind}`}>
+      <svg width="11" height="11" viewBox="0 0 16 16" aria-label={kind}><path d={d} {...st} /></svg>
+    </span>
+  );
+}
+
+function TranscriptRow({ kind, name, text, chips }: {
+  kind: "prompt" | "model" | "tool" | "error" | "operator";
+  name: string;
+  text: string;
+  chips: string[];
+}) {
+  return (
+    <div className={`tr-row ${kind}`}>
+      <RowGlyph kind={kind} />
+      <div className="tr-body">
+        <div className="tr-head">
+          <span className="m tr-name">{name}</span>
+          <span className="tr-chips">{chips.map((c, i) => <span key={i} className="m tr-chip">{c}</span>)}</span>
+        </div>
+        <div className="tr-text">{text}</div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Thread (T24, story 6) — Laminar's transcript: one row per thing that happened, with
+ * time, tokens and cost on the right. Replaces the flat delta stream that R3.2 complained
+ * about. A tool result that failed becomes its own row rather than hiding in a cluster.
+ */
 function Turn({ turn, render, runId }: { turn: CoalescedTurn; render?: RunDetail["renders"][number]; runId: string }) {
-  const [open, setOpen] = useState(false);
-  const toolParts = turn.parts.filter((p) => p.kind === "tool_call" || p.kind === "tool_result");
-  const textParts = turn.parts.filter((p) => p.kind === "text");
+  const rows: React.ReactNode[] = [];
+  if (render) {
+    rows.push(
+      <TranscriptRow
+        key="prompt"
+        kind="prompt"
+        name="prompt sent"
+        text={`${render.prompt} v${render.prompt_version} · read ${Object.keys(render.context_read).join(", ") || "nothing"}`}
+        chips={render.model ? [`${render.harness ?? "claude"} · ${render.model}`] : []}
+      />,
+    );
+  }
+  const allText = turn.parts.filter((p) => p.kind === "text").map((p) => p.content).join("");
+  // engine/run.ts appends "[attempt failed: <why>]" as a text chunk when an executor throws
+  const failure = allText.match(/\[attempt failed: ([^\]]+)\]/);
+  const text = allText.replace(/\n?\[attempt failed: [^\]]+\]/, "").trim();
+  if (text) {
+    const u = turn.usage;
+    const chips: string[] = [];
+    if (u?.input_tokens !== undefined) chips.push(`${(u.input_tokens / 1000).toFixed(1)}K in`);
+    if (u?.output_tokens !== undefined) chips.push(`${u.output_tokens} out`);
+    if (u?.cost_usd !== undefined) chips.push(`$${u.cost_usd.toFixed(4)}`);
+    rows.push(<TranscriptRow key="text" kind="model" name={render?.model ?? "agent"} text={text} chips={chips} />);
+  }
+  for (const [i, p] of turn.parts.entries()) {
+    if (p.kind === "tool_call") rows.push(<TranscriptRow key={`t${i}`} kind="tool" name={p.tool_name ?? "tool"} text={p.content} chips={[]} />);
+    else if (p.kind === "tool_result" && /error|failed|exit \d|denied/i.test(p.content))
+      rows.push(<TranscriptRow key={`e${i}`} kind="error" name={`${p.tool_name ?? "tool"} failed`} text={p.content} chips={[]} />);
+  }
+  if (failure) rows.push(<TranscriptRow key="failure" kind="error" name="attempt failed" text={failure[1]!} chips={[]} />);
   return (
     <div className={`turn ${turn.finalized ? "" : "unfinalized"}`}>
-      <div className="who">
-        {turn.node}@{turn.visit} · turn {turn.turn}{turn.finalized ? "" : " · interrupted"}
-        {render?.model && <span className="model-chip">{render.harness ?? "claude"} · {render.model}{render.effort ? ` · ${render.effort}` : ""}</span>}
+      <div className="tr-node m">
+        {turn.node}<span className="tr-visit">@{turn.visit}</span>
+        {!turn.finalized && <span className="tr-interrupted">interrupted</span>}
       </div>
-      {textParts.map((p, i) => <div key={i} className="prose">{p.content}</div>)}
-      {toolParts.length > 0 && (
-        <div className="tool-cluster" onClick={() => setOpen(!open)}>
-          ⚒ {toolParts.filter((p) => p.kind === "tool_call").length} tool calls {open ? "▾" : "▸"}
-          {open && toolParts.map((p, i) => (
-            <div key={i} className="tool-detail">{p.kind === "tool_call" ? `→ ${p.tool_name ?? "tool"}: ` : "← "}{p.content}</div>
-          ))}
-        </div>
-      )}
+      {rows}
       {render && <PromptAndContext runId={runId} render={render} />}
     </div>
   );
@@ -478,7 +539,12 @@ function StepGlyph({ status }: { status: "running" | "succeeded" | "failed" | "n
  * time-proportional so the shape of the run is legible; a sub-second step still gets 3px,
  * because an invisible mark is a lie about what happened.
  */
-function RunSteps({ timeline, ask }: { timeline: RunDetail["timeline"]; ask: RunDetail["ask"] }) {
+function RunSteps({ timeline, ask, selected, onSelect }: {
+  timeline: RunDetail["timeline"];
+  ask: RunDetail["ask"];
+  selected: string | null;
+  onSelect: (key: string) => void;
+}) {
   if (timeline.length === 0) return <div className="empty">no steps yet</div>;
   return (
     <div className="steps">
@@ -490,8 +556,16 @@ function RunSteps({ timeline, ask }: { timeline: RunDetail["timeline"]; ask: Run
         // the split that makes R3.3 visible: agent time, then the part that was me not looking
         const work = Math.max(0, total - t.waiting_ms);
         const pct = (ms: number) => (ms / span) * 100;
+        const key = `${t.node}@${t.visit}`;
         return (
-          <div key={`${t.node}@${t.visit}#${i}`} className={`step-row ${status}`}>
+          <div
+            key={`${key}#${i}`}
+            className={`step-row ${status} ${selected === key ? "selected" : ""}`}
+            onClick={() => onSelect(key)}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelect(key); } }}
+          >
             <span className="step-icon"><StepGlyph status={status} /></span>
             <span className="step-node">
               {t.node}
@@ -518,9 +592,111 @@ function RunSteps({ timeline, ask }: { timeline: RunDetail["timeline"]; ask: Run
   );
 }
 
+/**
+ * Step detail (T24, story 5) — Inngest's right-hand panel. The ask lives HERE rather than
+ * floating in the thread, and the Run toggle keeps the run-level facts one click away.
+ */
+function StepDetail({ runId, row, detail, ask, onResolved }: {
+  runId: string;
+  row: RunDetail["timeline"][number] | null;
+  detail: RunDetail;
+  ask: RunDetail["ask"];
+  onResolved: () => void;
+}) {
+  const [scope, setScope] = useState<"step" | "run">("step");
+  const [pane, setPane] = useState<"ask" | "prompt" | "output">("ask");
+  if (!row) return <div className="step-detail"><div className="empty">pick a step</div></div>;
+
+  const key = `${row.node}@${row.visit}`;
+  const isAsking = ask !== null && ask.node === row.node && ask.visit === row.visit;
+  const render = detail.renders.find((r) => r.node === row.node && r.visit === row.visit);
+  const total = row.duration_ms ?? row.run_span_ms - row.offset_ms;
+  const work = Math.max(0, total - row.waiting_ms);
+  const bar = (label: string, ms: number, of: number, cls: string) => (
+    <div className="sd-seg">
+      <div className="sd-seg-head"><span>{label}</span><span className="m">{fmtDur(ms)}</span></div>
+      <div className="sd-seg-track"><span className={`sd-seg-fill ${cls}`} style={{ width: `${of > 0 ? (ms / of) * 100 : 0}%` }} /></div>
+    </div>
+  );
+
+  return (
+    <div className="step-detail">
+      <div className="sd-scope">
+        <span className={`chip ${scope === "step" ? "on" : ""}`} onClick={() => setScope("step")}>Step</span>
+        <span className={`chip ${scope === "run" ? "on" : ""}`} onClick={() => setScope("run")}>Run</span>
+      </div>
+
+      {scope === "run" ? (
+        <div className="sd-body">
+          <h2 className="rh">Identity</h2>
+          <div className="kv"><span className="k">run</span><span className="v">{runId}</span></div>
+          <div className="kv"><span className="k">graph</span><span className="v">{detail.summary.graph}</span></div>
+          {detail.git?.intended?.branch && <div className="kv"><span className="k">branch</span><span className="v">{detail.git.intended.branch}</span></div>}
+          {detail.git && (
+            <>
+              <h2 className="rh">Git</h2>
+              <div className="kv"><span className="k">uncommitted</span><span className="v">{detail.git.git.uncommitted}</span></div>
+              <div className="kv"><span className="k">unpushed</span><span className="v">{detail.git.git.unpushed ?? "no upstream"}</span></div>
+            </>
+          )}
+          <h2 className="rh">Usage</h2>
+          <div className="kv"><span className="k">input</span><span className="v">{detail.usage.input_tokens.toLocaleString()}</span></div>
+          <div className="kv"><span className="k">output</span><span className="v">{detail.usage.output_tokens.toLocaleString()}</span></div>
+          <div className="kv"><span className="k">cost</span><span className="v">${detail.usage.cost_usd.toFixed(4)}</span></div>
+          {detail.allowance.map((a) => (
+            <div key={a.harness} className="kv">
+              <span className="k">{a.harness}</span>
+              <span className={`v ${a.state === "exhausted" ? "allowance-exhausted" : ""}`}>
+                {a.state === "ok" && a.remaining !== undefined ? `${Math.round(a.remaining * 100)}% left` : a.state}
+              </span>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <>
+          <div className="sd-head">
+            <StepGlyph status={isAsking ? "needs-input" : row.status} />
+            <span className="m sd-node">{row.node}</span>
+            <span className="m sd-visit">@{row.visit}</span>
+            <span className="m sd-total">{fmtDur(total)}</span>
+          </div>
+          <div className="sd-timing">
+            {bar("agent working", work, total, "work")}
+            {row.waiting_ms > 0 && bar("waiting on you", row.waiting_ms, total, "waiting")}
+          </div>
+          <div className="sd-tabs">
+            <span className={`tab ${pane === "ask" ? "on" : ""}`} onClick={() => setPane("ask")}>Ask</span>
+            <span className={`tab ${pane === "prompt" ? "on" : ""}`} onClick={() => setPane("prompt")}>Prompt &amp; context</span>
+            <span className={`tab ${pane === "output" ? "on" : ""}`} onClick={() => setPane("output")}>Output</span>
+          </div>
+          <div className="sd-body">
+            {pane === "ask" && (isAsking
+              ? <AskCard runId={runId} ask={ask!} onResolved={onResolved} />
+              : <div className="pd-note">this step is not waiting on you</div>)}
+            {pane === "prompt" && (render
+              ? <PromptAndContext runId={runId} render={render} />
+              : <div className="pd-note">this step rendered no prompt (it is not an agent step)</div>)}
+            {pane === "output" && (() => {
+              const finished = detail.outcomes.find((o) => o.node === row.node && o.visit === row.visit);
+              return (
+                <>
+                  <div className="kv"><span className="k">status</span><span className="v">{row.status}</span></div>
+                  {finished?.verdict_downstream && <div className="kv"><span className="k">routed</span><span className="v">{finished.verdict_downstream}</span></div>}
+                  {!finished && <div className="pd-note">no outcome recorded for {key} yet</div>}
+                </>
+              );
+            })()}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function RunView({ id }: { id: string }) {
   const [detail, setDetail] = useState<(RunDetail & { cwd_exists?: boolean; editor_configured?: boolean }) | null>(null);
   const [tab, setTab] = useState<"steps" | "thread" | "graph">("steps");
+  const [picked, setPicked] = useState<string | null>(null);
   const now = useNow();
   const reload = useCallback(() => fetch(`/api/runs/${id}`).then((r) => r.json()).then(setDetail).catch(() => {}), [id]);
   useEffect(() => { reload(); }, [reload]);
@@ -542,6 +718,11 @@ function RunView({ id }: { id: string }) {
   if (!detail) return <div className="empty">loading…</div>;
   const { summary, ask } = detail;
   const maxDur = Math.max(1, ...detail.timeline.map((t) => t.duration_ms ?? 0));
+  // the step that needs a human wins the selection; otherwise the newest one
+  const waitingRow = ask ? detail.timeline.find((t) => t.node === ask.node && t.visit === ask.visit) : undefined;
+  const defaultRow = waitingRow ?? detail.timeline.at(-1);
+  const selectedKey = picked ?? (defaultRow ? `${defaultRow.node}@${defaultRow.visit}` : null);
+  const selectedRow = detail.timeline.find((t) => `${t.node}@${t.visit}` === selectedKey) ?? null;
   const resolvedTurns = detail.turns;
 
   return (
@@ -588,7 +769,10 @@ function RunView({ id }: { id: string }) {
           </div>
         )}
         {tab === "steps" ? (
-          <RunSteps timeline={detail.timeline} ask={ask} />
+          <div className="steps-split">
+            <RunSteps timeline={detail.timeline} ask={ask} selected={selectedKey} onSelect={setPicked} />
+            <StepDetail runId={id} row={selectedRow} detail={detail} ask={ask} onResolved={reload} />
+          </div>
         ) : tab === "graph" ? (
           <RunGraph runId={id} graph={summary.graph} timeline={detail.timeline} status={summary.status} onJumped={reload} />
         ) : (

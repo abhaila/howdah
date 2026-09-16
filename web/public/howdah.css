@@ -469,3 +469,70 @@ button.primary:disabled { opacity: 0.5; cursor: default; }
 .step-row.needs-input .step-bar:not(.waiting) { background: var(--border-strong); }
 .step-dur { display: flex; gap: 8px; justify-content: flex-end; align-items: baseline; }
 .step-wait { color: var(--attention); font-weight: 500; }
+
+/* ---- step detail panel (T24, story 5) -------------------------------------------
+   Inngest's split: the list keeps its place while the selected step opens beside it.
+   This panel is the shell Logs and Context reuse — do not grow a second copy. */
+.steps-split { display: flex; min-height: 0; flex-grow: 1; overflow: hidden; }
+.steps-split .steps { flex-grow: 1; min-width: 0; overflow-y: auto; }
+.step-row.selected { background: var(--bg-raised); }
+.step-row.selected.needs-input { background: var(--attention-bg); }
+.step-row:focus-visible { outline-offset: -2px; }
+
+.step-detail {
+  width: 420px; flex-shrink: 0; border-left: 1px solid var(--border);
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.sd-scope { display: flex; gap: 6px; padding: 12px 16px; border-bottom: 1px solid var(--border); }
+.sd-head { display: flex; align-items: center; gap: 8px; padding: 13px 16px 0; }
+.sd-node { font-size: 13px; color: var(--fg); }
+.sd-visit { font-size: 10px; color: var(--fg-faint); }
+.sd-total { margin-left: auto; font-size: 11px; color: var(--fg-muted); }
+.sd-timing { padding: 12px 16px 2px; }
+.sd-seg { margin-bottom: 9px; }
+.sd-seg-head { display: flex; justify-content: space-between; font-size: 11px; color: var(--fg-muted); margin-bottom: 4px; }
+.sd-seg-track { height: 4px; background: var(--bg-inset); border-radius: 2px; }
+.sd-seg-fill { display: block; height: 4px; border-radius: 2px; background: var(--border-strong); }
+.sd-seg-fill.waiting { background: var(--attention); }
+.sd-tabs { display: flex; gap: 16px; padding: 6px 16px 0; border-bottom: 1px solid var(--border); }
+.sd-tabs .tab { cursor: pointer; }
+.sd-body { padding: 14px 16px; overflow-y: auto; }
+.sd-body .rh { padding: 0; margin: 14px 0 7px; }
+.sd-body .rh:first-child { margin-top: 0; }
+.sd-body .kv { padding: 2px 0; }
+.sd-body .ask-card { margin: 0; }
+
+/* On Steps the detail panel's Run toggle already carries identity, git and usage, so the
+   run rail would be a third column competing for the waterfall's width. At 1440 that left
+   the bars unreadable — the rail stands down and Steps gets the room. */
+.runview:has(.steps-split) .rail { display: none; }
+
+/* ---- thread transcript (T24, story 6) -------------------------------------------
+   Laminar's shape: one row per event, machine values right-aligned. Row KIND is carried
+   by the icon's shape — colour only ever seconds it, so amber stays the alarm. */
+.tr-node {
+  display: flex; align-items: center; gap: 6px;
+  padding: 12px 4px 5px; font-size: 11px; color: var(--fg-faint);
+  border-bottom: 1px solid var(--border);
+}
+.tr-visit { color: var(--fg-faint); }
+.tr-interrupted { color: var(--attention); margin-left: auto; }
+.tr-row { display: flex; gap: 10px; padding: 8px 4px; border-bottom: 1px solid var(--border); }
+.tr-row:hover { background: var(--bg-raised); }
+.tr-icon {
+  width: 18px; height: 18px; flex-shrink: 0; margin-top: 1px;
+  border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+  display: flex; align-items: center; justify-content: center; color: var(--fg-muted);
+}
+.tr-icon.error { color: var(--status-failed-recoverable); border-color: var(--status-failed-recoverable); }
+.tr-icon.operator { color: var(--operator); }
+.tr-body { min-width: 0; flex-grow: 1; }
+.tr-head { display: flex; align-items: baseline; gap: 10px; }
+.tr-name { font-size: 11px; color: var(--fg); }
+.tr-row.error .tr-name { color: var(--status-failed-recoverable); }
+.tr-chips { margin-left: auto; display: flex; gap: 10px; white-space: nowrap; }
+.tr-chip { font-size: 10px; color: var(--fg-faint); font-variant-numeric: tabular-nums; }
+.tr-text {
+  font-family: var(--font-display); font-size: 13px; line-height: 1.55;
+  color: var(--fg-muted); margin-top: 2px; white-space: pre-wrap;
+}
