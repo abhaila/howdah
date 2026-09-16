@@ -1,0 +1,19 @@
+web/app/ui.tsx
+  s_220da8e953793c::t_2b481aba815151 21,25-28,51,54,63,72,84,97,113,134
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "d1738acc217378ea477dc0bd5824a3f9b8751aac",
+  "prompts": {},
+  "sessions": {
+    "s_220da8e953793c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2ba82f1f-e55e-4150-b238-4ff1b96ce382",
+        "model": "claude-fable-5"
+      },
+      "human_author": "areeb.bhaila <areeb.bhaila@gmail.com>"
+    }
+  }
+}
