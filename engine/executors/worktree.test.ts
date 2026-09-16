@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { mkdtempSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { execSync } from "node:child_process";
 import { worktreeExecutor, commandExecutor, effectiveCwd, readWorktreeRecord, derivePrState } from "./worktree";
 import { EventLog } from "../../log/write";
@@ -27,18 +27,31 @@ function args(partial: Partial<ExecArgs> & { def: ExecArgs["def"]; log: EventLog
 }
 
 describe("worktree executor (real git)", () => {
+  test("the repoName resolver decides the folder — two clones of one name cannot collide", async () => {
+    const repoDir = repo();
+    const runDir = mkdtempSync(join(tmpdir(), "howdah-wt-run-"));
+    const reposDir = join(runDir, "repos");
+    const log = new EventLog(join(runDir, "run.jsonl"));
+    const exec = worktreeExecutor({ reposDir, repoName: () => "acme-api" });
+
+    await exec(args({ def: { kind: "worktree", action: "create" }, log, cwd: repoDir }));
+    expect(readWorktreeRecord(runDir)!.path).toBe(join(reposDir, "acme-api", "worktrees", "wt-run"));
+  });
+
   test("create → work lands in an isolated branch; remove refuses while dirty; clean remove succeeds", async () => {
     const repoDir = repo();
     const runDir = mkdtempSync(join(tmpdir(), "howdah-wt-run-"));
-    const worktreesDir = join(runDir, "wts");
+    const reposDir = join(runDir, "repos");
     const log = new EventLog(join(runDir, "run.jsonl"));
-    const exec = worktreeExecutor({ worktreesDir });
+    const exec = worktreeExecutor({ reposDir });
 
     // create
     const created = await exec(args({ def: { kind: "worktree", action: "create" }, log, cwd: repoDir }));
     expect(created.status).toBe("succeeded");
     const record = readWorktreeRecord(runDir)!;
     expect(record.branch).toBe("howdah/wt-run");
+    // grouped per repo: <reposDir>/<repo name>/worktrees/<runId>
+    expect(record.path).toBe(join(reposDir, basename(repoDir), "worktrees", "wt-run"));
     expect(existsSync(join(record.path, "README.md"))).toBe(true);
     // executors resolve their cwd through the record from now on
     expect(effectiveCwd(log.path, repoDir)).toBe(record.path);

@@ -7,7 +7,7 @@
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 
 export interface RepoWorkspace {
   path: string;
@@ -57,6 +57,18 @@ export function saveConfig(config: HowdahConfig, base = howdahHome()): void {
 export type WorkspaceRef =
   | { kind: "repo"; name: string; path: string; repo: RepoWorkspace }
   | { kind: "plain"; name: string; path: string };
+
+/**
+ * The name a repo's worktrees live under: `$HOWDAH_HOME/repos/<name>/worktrees/<run>`.
+ *
+ * The registered workspace name wins because it is unique by construction — two clones of
+ * different `api` repos would otherwise share one folder. An unregistered path (a run
+ * launched with --dir) falls back to the directory name.
+ */
+export function repoNameFor(config: HowdahConfig, repoPath: string): string {
+  const registered = Object.entries(config.repos).find(([, r]) => r.path === repoPath);
+  return registered ? registered[0] : basename(repoPath);
+}
 
 /** resolve a workspace by name — repos take precedence on a name clash */
 export function resolveWorkspace(config: HowdahConfig, name: string): WorkspaceRef | null {

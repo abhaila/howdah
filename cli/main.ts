@@ -18,7 +18,7 @@ import { replayState } from "../engine/replay";
 import { Reconciler, readsForgeFacts } from "../engine/reconcile";
 import { effectiveCwd, readWorktreeRecord } from "../engine/executors/worktree";
 import { GRAPHS, graphCatalog } from "../graphs/index";
-import { howdahHome, loadConfig, saveConfig, resolveWorkspace } from "../config/config";
+import { howdahHome, loadConfig, saveConfig, resolveWorkspace, repoNameFor } from "../config/config";
 import { loadTuning } from "../config/tuning";
 import { readControl, writeControl, clearControl } from "../engine/control";
 
@@ -29,7 +29,11 @@ function executors() {
   // HOWDAH_STUB short-circuits real agent spawns — tests and dry runs
   return process.env.HOWDAH_STUB
     ? stubExecutors()
-    : liveExecutors({ attentionDir: join(base, "attention"), worktreesDir: join(base, "worktrees") });
+    : liveExecutors({
+        attentionDir: join(base, "attention"),
+        reposDir: join(base, "repos"),
+        repoName: (repoPath) => repoNameFor(loadConfig(base), repoPath),
+      });
 }
 
 /** git before every node, forge before declared readers; observations land in the log */

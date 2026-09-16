@@ -69,7 +69,7 @@ graphs/<name>.ts  ──▶ Engine (engine/run.ts) ──▶ executor per node k
 ```
 
 State lives on disk only — no database. `$HOWDAH_HOME/{config.json, tuning.json,
-heartbeat.json, attention/, worktrees/, runs/<run-id>/}`; a run dir holds `run.jsonl`
+heartbeat.json, attention/, repos/<repo>/worktrees/<run-id>/, runs/<run-id>/}`; a run dir holds `run.jsonl`
 (append-only event log), `prompts/` (prompts pinned at start), `worktree.json`,
 `control.json`, `runner.pid`.
 
@@ -144,7 +144,8 @@ Break one of these and the design stops working, so check them before changing t
 
 `agent` (prompt through a harness), `command` (`bash -c`, facts from the final JSON line of
 stdout, or the built-in `probe:pr`), `worktree` (`create`/`remove` under
-`$HOWDAH_HOME/worktrees/` on a `howdah/<run-id>` branch; a dirty worktree refuses to die),
+`$HOWDAH_HOME/repos/<repo>/worktrees/` on a `howdah/<run-id>` branch, grouped by the
+registered workspace name; a dirty worktree refuses to die),
 `wait`, `terminal`. `engine/executors/index.ts` maps kind → implementation;
 `liveExecutors()` dispatches `agent` on the resolved harness, `stubExecutors()` throws with
 the gap named. Every executor resolves its cwd through `effectiveCwd()` so a run "moves

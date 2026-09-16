@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execSync } from "node:child_process";
 import { listGithubRepos, registerGithubRepo, cloneMatches, ghExec, type Exec } from "./github";
-import type { HowdahConfig } from "./config";
+import { repoNameFor, type HowdahConfig } from "./config";
 
 // REST /user/repos shape — the affiliation endpoint that includes ORG repos
 const REPO_LIST = JSON.stringify([
@@ -97,5 +97,20 @@ describe("github workspace registration", () => {
     const r = ghExec(["bash", "-c", "echo ${GITHUB_TOKEN:-EMPTY}"]);
     expect(r.stdout.trim()).toBe("EMPTY");
     delete process.env.GITHUB_TOKEN;
+  });
+});
+
+describe("repoNameFor (worktree grouping)", () => {
+  test("registered name wins over the directory name, so same-named clones stay apart", () => {
+    const config: HowdahConfig = {
+      repos: { "acme-api": { path: "/code/acme/api" }, "beta-api": { path: "/code/beta/api" } },
+      folders: {},
+    };
+    expect(repoNameFor(config, "/code/acme/api")).toBe("acme-api");
+    expect(repoNameFor(config, "/code/beta/api")).toBe("beta-api");
+  });
+
+  test("an unregistered path (a --dir run) falls back to the directory name", () => {
+    expect(repoNameFor({ repos: {}, folders: {} }, "/tmp/scratch/howdah")).toBe("howdah");
   });
 });

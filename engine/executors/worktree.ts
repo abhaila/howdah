@@ -1,8 +1,9 @@
 /**
  * Worktree + command executors (T18).
  *
- * WORKTREE: `create` makes an isolated checkout under $HOWDAH_HOME/worktrees/<runId> on a
- * fresh `howdah/<runId>` branch and records it in the run dir (worktree.json) — every
+ * WORKTREE: `create` makes an isolated checkout under
+ * $HOWDAH_HOME/repos/<repo>/worktrees/<runId> on a fresh `howdah/<runId>` branch and
+ * records it in the run dir (worktree.json) — every
  * later executor resolves its effective cwd through that record, so the run "moves into"
  * the worktree without the engine mutating state. `remove` deletes worktree + branch and
  * emits the facts the graphs route on (worktree.clean / outcome). A dirty worktree
@@ -15,7 +16,7 @@
  * THROWS (parks the run) rather than reading as "no PR".
  */
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import type { Executor } from "../run";
 import { probeGit, ghForgeProbe, type ForgeProbe } from "../reconcile";
 
@@ -49,7 +50,14 @@ function sh(cmd: string[], cwd?: string): { code: number; stdout: string; stderr
   return { code: r.exitCode ?? 1, stdout: new TextDecoder().decode(r.stdout), stderr: new TextDecoder().decode(r.stderr) };
 }
 
-export function worktreeExecutor(opts: { worktreesDir: string }): Executor {
+export interface WorktreeExecutorOpts {
+  /** $HOWDAH_HOME/repos — each repo gets `<reposDir>/<name>/worktrees/<runId>` */
+  reposDir: string;
+  /** repo path → the folder name its worktrees live under (default: the directory name) */
+  repoName?: (repoPath: string) => string;
+}
+
+export function worktreeExecutor(opts: WorktreeExecutorOpts): Executor {
   return async ({ def, runId, cwd, log, effects }) => {
     if (def.kind !== "worktree") throw new Error("worktreeExecutor on non-worktree node");
     const runDir = dirname(log.path);
@@ -59,9 +67,12 @@ export function worktreeExecutor(opts: { worktreesDir: string }): Executor {
       if (existing) return { status: "succeeded", writes: {} }; // idempotent re-visit
       if (!cwd) throw new Error("worktree create needs a repo workspace (run has no cwd)");
       const branch = `howdah/${runId}`;
-      const path = join(opts.worktreesDir, runId);
+      // grouped by repo: one repo's runs sit together, and `git worktree list` in that repo
+      // matches one directory instead of a flat pile shared with every other repo
+      const worktreesDir = join(opts.reposDir, (opts.repoName ?? basename)(cwd), "worktrees");
+      const path = join(worktreesDir, runId);
       if (!effects.claim("worktree-create")) {
-        mkdirSync(opts.worktreesDir, { recursive: true });
+        mkdirSync(worktreesDir, { recursive: true });
         const r = sh(["git", "worktree", "add", "-b", branch, path], cwd);
         if (r.code !== 0) throw new Error(`git worktree add failed: ${r.stderr.trim().slice(0, 300)}`);
         effects.done("worktree-create", { path, branch });

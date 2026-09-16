@@ -40,8 +40,10 @@ export function stubExecutors(): EngineOpts["executors"] {
 
 export interface LiveExecutorDeps {
   attentionDir: string;
-  /** where worktrees live — $HOWDAH_HOME/worktrees */
-  worktreesDir?: string;
+  /** where repos keep their worktrees — $HOWDAH_HOME/repos/<name>/worktrees */
+  reposDir?: string;
+  /** repo path → the folder name its worktrees live under (default: the directory name) */
+  repoName?: (repoPath: string) => string;
   viewerBase?: string;
   notifiers?: Notifier[];
   claudeBinary?: string;
@@ -56,6 +58,9 @@ export function liveExecutors(deps: LiveExecutorDeps): EngineOpts["executors"] {
     wait: waitExecutor,
     agent: async (args) => ((args.agentConfig?.harness ?? "claude") === "codex" ? codex : claude)(args),
     command: commandExecutor(),
-    worktree: worktreeExecutor({ worktreesDir: deps.worktreesDir ?? join(deps.attentionDir, "..", "worktrees") }),
+    worktree: worktreeExecutor({
+      reposDir: deps.reposDir ?? join(deps.attentionDir, "..", "repos"),
+      repoName: deps.repoName,
+    }),
   };
 }
