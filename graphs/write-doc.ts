@@ -22,9 +22,8 @@ const cleared = { scope: "cleared" } as const;
 
 export const writeDoc = defineGraph<WriteDocCtx>({
   name: "write-doc",
-  // full autonomy in the worktree: "auto" still routes Bash to the ask card (observed);
-  // bypassPermissions is the mode that actually does not ask
-  defaults: { permissionMode: "bypassPermissions" },
+  // Claude runs in auto mode by default; Codex uses full-access sandboxing in its executor.
+  defaults: { permissionMode: "auto" },
   description: "Outline, draft, and review a document in a plain folder — no repo required",
   entry: "doc.outline",
   inputs: ["goal", "work"],

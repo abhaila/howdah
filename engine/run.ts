@@ -18,7 +18,7 @@
  */
 import { copyFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { Graph, NodeDef, EdgeDef, AgentConfig } from "../core/graph";
+import { resolveAgentConfigLayers, type Graph, type NodeDef, type EdgeDef, type AgentConfig } from "../core/graph";
 import { basename } from "node:path";
 import { ContextStore, type Scope } from "../core/context";
 import { operatorInstructionSuffix, renderTemplate, renderedHash, splitFrontMatter } from "../core/template";
@@ -326,35 +326,17 @@ export class Engine {
 
   /** run override → UI node tuning → TS node → UI graph tuning → TS graph default */
   private resolveAgentConfig(def: Extract<NodeDef<any>, { kind: "agent" }>, nodeId: string): AgentConfig {
-    const defaults = this.graph.def.defaults ?? {};
     const node: AgentConfig = {
       harness: def.harness, model: def.model, effort: def.effort,
       permissionMode: def.permissionMode, maxTurns: def.maxTurns, skills: def.skills,
     };
-    const overrides = this.opts.overrides ?? {};
-    const tunedNode = this.opts.tuning?.nodes?.[nodeId] ?? {};
-    const tunedDefaults = this.opts.tuning?.defaults ?? {};
-    const pick = <K extends keyof AgentConfig>(k: K): AgentConfig[K] =>
-      overrides[k] ?? tunedNode[k] ?? node[k] ?? tunedDefaults[k] ?? defaults[k];
-    const harness = pick("harness") ?? "claude";
-    // model names are HARNESS-SPECIFIC; a lower layer's model must not leak across a
-    // harness override (observed: tuning model "haiku" reached codex → API 400)
-    const model = pick("model");
-    const CLAUDE_LIKE = /claude|opus|sonnet|haiku|fable/i;
-    const CODEX_LIKE = /gpt|codex|terra|^o\d/i;
-    // drop only a model that CLEARLY belongs to the other harness; unknown names pass
-    const conflict =
-      model !== undefined &&
-      ((harness === "codex" && CLAUDE_LIKE.test(model) && !CODEX_LIKE.test(model)) ||
-        (harness === "claude" && CODEX_LIKE.test(model) && !CLAUDE_LIKE.test(model)));
-    return {
-      harness,
-      model: conflict ? undefined : model,
-      effort: pick("effort"),
-      permissionMode: pick("permissionMode"),
-      maxTurns: pick("maxTurns"),
-      skills: pick("skills"),
-    };
+    return resolveAgentConfigLayers([
+      this.opts.overrides,
+      this.opts.tuning?.nodes?.[nodeId],
+      node,
+      this.opts.tuning?.defaults,
+      this.graph.def.defaults,
+    ]);
   }
 
   private renderPrompt(nodeId: string, prompt: PromptId, visit: number, reads: Record<string, unknown>, config?: AgentConfig): string {

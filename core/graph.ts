@@ -44,6 +44,43 @@ export interface AgentConfig {
   skills?: string[];
 }
 
+const CLAUDE_LIKE_MODEL = /claude|opus|sonnet|haiku|fable/i;
+const CODEX_LIKE_MODEL = /gpt|codex|terra|luna|^o\d/i;
+
+export function modelFitsHarness(harness: Harness, model: string): boolean {
+  const claudeLike = CLAUDE_LIKE_MODEL.test(model);
+  const codexLike = CODEX_LIKE_MODEL.test(model);
+  if (harness === "codex") return !claudeLike || codexLike;
+  if (harness === "claude") return !codexLike || claudeLike;
+  return true;
+}
+
+export function resolveAgentConfigLayers(layers: Array<AgentConfig | undefined>): AgentConfig {
+  const pick = <K extends keyof AgentConfig>(k: K): AgentConfig[K] => {
+    for (const layer of layers) {
+      const value = layer?.[k];
+      if (value !== undefined) return value;
+    }
+    return undefined;
+  };
+  const harness = pick("harness") ?? "claude";
+  let model: string | undefined;
+  for (const layer of layers) {
+    if (layer?.model && modelFitsHarness(harness, layer.model)) {
+      model = layer.model;
+      break;
+    }
+  }
+  return {
+    harness,
+    model,
+    effort: pick("effort"),
+    permissionMode: harness === "claude" ? "auto" : pick("permissionMode"),
+    maxTurns: pick("maxTurns"),
+    skills: pick("skills"),
+  };
+}
+
 export interface OutputSpec {
   scope: Scope;
   /** doc string surfaced in the UI and to the reviser */

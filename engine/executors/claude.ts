@@ -3,7 +3,8 @@
  * the user's logged-in subscription, no API key. One spawn per attempt:
  *
  *   claude -p --input-format stream-json --output-format stream-json
- *          --include-partial-messages --permission-prompt-tool stdio --session-id <uuid>
+ *          --include-partial-messages --permission-prompt-tool stdio
+ *          --permission-mode auto --session-id <uuid>
  *
  * Streaming events land in the run log as durable chunks (T6). A `can_use_tool` request
  * becomes a structured ask: attention is raised (durable + notified), the executor POLLS
@@ -30,7 +31,7 @@ import { isAllowReply } from "./reply";
 export interface ClaudeExecutorOpts {
   attentionDir: string;
   binary?: string; // overridable for tests (fake-claude fixture)
-  permissionMode?: string; // default acceptEdits — manual asks on every write otherwise
+  permissionMode?: string; // default auto — full Claude Code autonomy without bypass mode
   model?: string;
   askPollMs?: number;
   notifiers?: Notifier[];
@@ -49,7 +50,7 @@ export function claudeExecutor(opts: ClaudeExecutorOpts): Executor {
     const proc = Bun.spawn(
       [opts.binary ?? "claude", ...claudeArgs({
         sessionId,
-        permissionMode: agentConfig?.permissionMode ?? opts.permissionMode ?? "acceptEdits",
+        permissionMode: agentConfig?.permissionMode ?? opts.permissionMode ?? "auto",
         model: agentConfig?.model ?? opts.model,
         maxTurns: agentConfig?.maxTurns,
       })],

@@ -26,7 +26,7 @@ export interface CodexExecutorOpts {
   binary?: string;
   model?: string;
   effort?: string;
-  sandbox?: string; // default workspace-write: in-workspace writes need no approval
+  sandbox?: string; // default danger-full-access: Howdah-owned Codex runs get full access
   askPollMs?: number;
   notifiers?: Notifier[];
   viewerBase?: string;
@@ -151,7 +151,7 @@ export function codexExecutor(opts: CodexExecutorOpts): Executor {
       const thread = await request("thread/start", {
         cwd: effectiveCwd(log.path, cwd) ?? dirname(log.path),
         approvalPolicy: "on-request",
-        sandbox: opts.sandbox ?? "workspace-write",
+        sandbox: opts.sandbox ?? "danger-full-access",
         ...((agentConfig?.model ?? opts.model) ? { model: agentConfig?.model ?? opts.model } : {}),
       });
       const threadId = thread?.threadId ?? thread?.thread?.id;

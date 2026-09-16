@@ -16,7 +16,7 @@ export function claudeArgs(opts: { sessionId: string; permissionMode?: string; r
     "--output-format", "stream-json",
     "--include-partial-messages",
     "--permission-prompt-tool", "stdio",
-    "--permission-mode", opts.permissionMode ?? "manual",
+    "--permission-mode", opts.permissionMode ?? "auto",
     ...(opts.model ? ["--model", opts.model] : []),
     ...(opts.maxTurns ? ["--max-turns", String(opts.maxTurns)] : []),
     ...(opts.resume ? ["--resume", opts.sessionId] : ["--session-id", opts.sessionId]),

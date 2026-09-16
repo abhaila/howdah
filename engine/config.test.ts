@@ -97,7 +97,7 @@ describe("UI tuning overlay", () => {
       },
     }).start({ goal: "g" });
     // graph-level tuning beats the TS graph default (effort low, not medium)…
-    expect(seen[0]).toMatchObject({ nodeId: "one", model: "tuned-model", permissionMode: "manual", effort: "low" });
+    expect(seen[0]).toMatchObject({ nodeId: "one", model: "tuned-model", permissionMode: "auto", effort: "low" });
     // …but an explicit TS node setting survives graph-level tuning (two keeps its xhigh)
     expect(seen[1]).toMatchObject({ nodeId: "two", effort: "xhigh", model: "graph-default-model" });
     seen.length = 0;
@@ -138,9 +138,22 @@ describe("cross-harness model leak (haiku→codex regression)", () => {
     });
     await engine.start({ goal: "g" });
     expect(seen[0]).toMatchObject({ harness: "codex" });
-    expect(seen[0].model).toBeUndefined(); // haiku dropped — codex uses its own default
+    expect(seen[0].model).not.toBe("haiku"); // haiku dropped; unknown custom names may still pass
     // node "one" declares claude-opus-5 in TS — clearly claude, dropped under codex;
     // unknown names (graph-default-model) are NOT dropped: custom models must pass
     expect(seen.every((s: any) => s.model === undefined || !/claude|opus|sonnet|haiku/i.test(s.model))).toBe(true);
+  });
+
+  test("a graph-level codex model replaces node-level claude models when the graph switches harness", async () => {
+    const seen: any[] = [];
+    const engine = new Engine(graph(), {
+      dir: mkdtempSync(join(tmpdir(), "howdah-leak-")),
+      promptsDir: prompts(),
+      tuning: { defaults: { harness: "codex", model: "gpt-5.6-luna" } },
+      executors: { agent: async ({ nodeId, agentConfig }) => { seen.push({ nodeId, ...agentConfig }); return { status: "succeeded", writes: nodeId === "one" ? { a: "x" } : { b: "y" } }; } },
+    });
+    await engine.start({ goal: "g" });
+    expect(seen[0]).toMatchObject({ nodeId: "one", harness: "codex", model: "gpt-5.6-luna" });
+    expect(seen[1]).toMatchObject({ nodeId: "two", harness: "codex" });
   });
 });

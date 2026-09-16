@@ -1,16 +1,17 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Engine } from "../run";
 import { claudeExecutor } from "./claude";
+import { codexExecutor } from "./codex";
 import { buildOutputInstruction, parseOutputs } from "./outputs";
 import { defineGraph } from "../../core/graph";
 import { EventLog } from "../../log/write";
 import { AttentionCenter } from "../attention";
-import { writeFileSync } from "node:fs";
 
 const FAKE = join(import.meta.dir, "fake-claude.ts");
+const FAKE_CODEX = join(import.meta.dir, "fake-codex.ts");
 
 interface Ctx {
   goal: string;
@@ -141,4 +142,26 @@ describe("claude executor over the fake wire", () => {
     expect(text).toContain("Denied, skipping the write");
     expect(text).toContain("permission denied: no — use the scratch dir instead");
   }, 15000);
+});
+
+describe("codex executor over the fake app-server wire", () => {
+  test("starts codex with a full-access sandbox by default", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "howdah-codex-"));
+    const capture = join(dir, "thread-start.json");
+    chmodSync(FAKE_CODEX, 0o755);
+    process.env.FAKE_CODEX_CAPTURE = capture;
+    const engine = new Engine(miniGraph(), {
+      dir,
+      promptsDir: promptDir(),
+      executors: {
+        agent: codexExecutor({ attentionDir: join(dir, "attn"), binary: FAKE_CODEX, notifiers: [] }),
+      },
+    });
+
+    const result = await engine.start({ goal: "codex sandbox" });
+
+    expect(result).toEqual({ state: "finished", outcome: "success" });
+    expect(JSON.parse(readFileSync(capture, "utf8")).sandbox).toBe("danger-full-access");
+    delete process.env.FAKE_CODEX_CAPTURE;
+  });
 });

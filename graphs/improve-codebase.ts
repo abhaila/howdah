@@ -34,9 +34,8 @@ const perVisit = { scope: "per-visit" } as const;
 
 export const improveCodebase = defineGraph<ImproveCodebaseCtx>({
   name: "improve-codebase",
-  // full autonomy in the worktree: "auto" still routes Bash to the ask card (observed);
-  // bypassPermissions is the mode that actually does not ask
-  defaults: { permissionMode: "bypassPermissions" },
+  // Claude runs in auto mode by default; Codex uses full-access sandboxing in its executor.
+  defaults: { permissionMode: "auto" },
   description: "Continuously discover and deliver one worthwhile codebase improvement at a time",
   entry: "discover",
   inputs: ["goal"],

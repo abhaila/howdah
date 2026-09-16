@@ -30,6 +30,7 @@ import {
   type LibraryPaths,
 } from "../prompts/library";
 import { acceptProposal, listProposals, proposalsDir, rejectProposal, viewProposal } from "../prompts/proposals";
+import { resolveAgentConfigLayers, type AgentConfig } from "../core/graph";
 
 export interface ServerOpts {
   runsDir: string;
@@ -100,14 +101,8 @@ export function createHowdahServer(opts: ServerOpts) {
         const tsDefaults = g.def.defaults ?? {};
         const effectiveOf = (id: string, n: (typeof g.def.nodes)[string]) => {
           if (n.kind !== "agent") return undefined;
-          const base = { harness: n.harness, model: n.model, effort: n.effort, permissionMode: n.permissionMode, maxTurns: n.maxTurns, skills: n.skills };
-          const tn = tuning.nodes?.[id] ?? {};
-          const td = tuning.defaults ?? {};
-          const pick = (k: keyof typeof base) => (tn as any)[k] ?? (base as any)[k] ?? (td as any)[k] ?? (tsDefaults as any)[k];
-          return {
-            harness: pick("harness") ?? "claude", model: pick("model"), effort: pick("effort"),
-            permissionMode: pick("permissionMode"), maxTurns: pick("maxTurns"), skills: pick("skills"),
-          };
+          const base: AgentConfig = { harness: n.harness, model: n.model, effort: n.effort, permissionMode: n.permissionMode, maxTurns: n.maxTurns, skills: n.skills };
+          return resolveAgentConfigLayers([tuning.nodes?.[id], base, tuning.defaults, tsDefaults]);
         };
         return json({
           name: g.def.name,

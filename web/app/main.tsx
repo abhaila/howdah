@@ -1374,7 +1374,7 @@ function StartRun() {
 // ---- graph tuning editor (UI-editable per-node config) ----------------------------
 
 const EFFORTS = ["", "low", "medium", "high", "xhigh"];
-const PERMISSION_MODES = ["", "manual", "acceptEdits", "auto", "bypassPermissions", "dontAsk", "plan"];
+const PERMISSION_MODES = ["", "auto"];
 const MODEL_SUGGESTIONS = ["claude-opus-5", "claude-sonnet-5", "haiku", "gpt-5.6-terra"];
 
 function ConfigFields({ value, baseline, onChange }: { value: AgentConfigDto; baseline?: AgentConfigDto; onChange: (v: AgentConfigDto) => void }) {

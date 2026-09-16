@@ -11,9 +11,8 @@ export interface QuickTaskCtx {
 
 export const quickTask = defineGraph<QuickTaskCtx>({
   name: "quick-task",
-  // full autonomy in the worktree: "auto" still routes Bash to the ask card (observed);
-  // bypassPermissions is the mode that actually does not ask
-  defaults: { permissionMode: "bypassPermissions" },
+  // Claude runs in auto mode by default; Codex uses full-access sandboxing in its executor.
+  defaults: { permissionMode: "auto" },
   description: "TODO: one line on what this graph does",
   entry: "quick-task.work",
   inputs: ["goal"],

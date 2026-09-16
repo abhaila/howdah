@@ -22,9 +22,8 @@ const cleared = { scope: "cleared" } as const;
 
 export const research = defineGraph<ResearchCtx>({
   name: "research",
-  // full autonomy in the worktree: "auto" still routes Bash to the ask card (observed);
-  // bypassPermissions is the mode that actually does not ask
-  defaults: { permissionMode: "bypassPermissions" },
+  // Claude runs in auto mode by default; Codex uses full-access sandboxing in its executor.
+  defaults: { permissionMode: "auto" },
   description: "Plan, investigate, and synthesize a research question into a cited report",
   entry: "research.plan",
   inputs: ["goal"],

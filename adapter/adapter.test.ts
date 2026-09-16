@@ -11,6 +11,12 @@ import type { AgentEvent } from "./events";
 const claudeFixture = readFileSync(join(import.meta.dir, "fixtures", "claude-turn.jsonl"));
 const codexFixture = readFileSync(join(import.meta.dir, "fixtures", "codex-turn.jsonl"));
 
+describe("Claude argv", () => {
+  test("defaults to auto permission mode", () => {
+    expect(claudeArgs({ sessionId: "s" })).toEqual(expect.arrayContaining(["--permission-mode", "auto"]));
+  });
+});
+
 /** run the whole fixture through a parser in slices of the given size */
 function replay(bytes: Uint8Array, sliceSize: number): JsonlRecord[] {
   const parser = new JsonlChunkParser();

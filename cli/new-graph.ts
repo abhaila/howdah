@@ -47,9 +47,8 @@ export interface ${v[0]!.toUpperCase()}${v.slice(1)}Ctx {
 
 export const ${v} = defineGraph<${v[0]!.toUpperCase()}${v.slice(1)}Ctx>({
   name: "${name}",
-  // full autonomy in the worktree: "auto" still routes Bash to the ask card (observed);
-  // bypassPermissions is the mode that actually does not ask
-  defaults: { permissionMode: "bypassPermissions" },
+  // Claude runs in auto mode by default; Codex uses full-access sandboxing in its executor.
+  defaults: { permissionMode: "auto" },
   description: "TODO: one line on what this graph does",
   entry: "${name}.draft",
   inputs: ["goal", "work"],
@@ -115,9 +114,8 @@ export interface ${v[0]!.toUpperCase()}${v.slice(1)}Ctx {
 
 export const ${v} = defineGraph<${v[0]!.toUpperCase()}${v.slice(1)}Ctx>({
   name: "${name}",
-  // full autonomy in the worktree: "auto" still routes Bash to the ask card (observed);
-  // bypassPermissions is the mode that actually does not ask
-  defaults: { permissionMode: "bypassPermissions" },
+  // Claude runs in auto mode by default; Codex uses full-access sandboxing in its executor.
+  defaults: { permissionMode: "auto" },
   description: "TODO: one line on what this graph does",
   entry: "${name}.work",
   inputs: ["goal"],
