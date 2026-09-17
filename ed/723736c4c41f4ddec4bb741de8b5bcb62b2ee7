@@ -1,0 +1,24 @@
+shaping.md
+  s_69c8b11fd4e412::t_6dd883b51b2445 147
+  s_69c8b11fd4e412::t_2daeeeadbc88b5 157-159,194
+plans/operator-cockpit-upgrade.md
+  s_69c8b11fd4e412::t_2af3f22fb7a1bd 1-287
+README.md
+  s_69c8b11fd4e412::t_3b1ceb257fd275 1-236
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "ed723736c4c41f4ddec4bb741de8b5bcb62b2ee7",
+  "prompts": {},
+  "sessions": {
+    "s_69c8b11fd4e412": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0a410-fcd8-73c2-8994-ec3838414328",
+        "model": "gpt-5.5"
+      },
+      "human_author": "areeb.bhaila <areeb.bhaila@gmail.com>"
+    }
+  }
+}
