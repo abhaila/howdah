@@ -80,6 +80,7 @@ export interface RunDetail {
   /** the Context tab: every declared key, written or not */
   context: ContextEntry[];
   identity: { cwd: string | null; folder_kind: "repo" | "plain" | null };
+  persistence?: { home: string; run_dir: string; log_path: string; worktree_path: string | null; runner_alive: boolean };
   events_seq: number;
 }
 
@@ -99,6 +100,7 @@ export function deriveStatus(events: LoggedEvent[]): { status: RunStatus; ask: R
       if (lastFailed && e.node === lastFailed.node && e.visit === lastFailed.visit)
         failure = { node: e.node, visit: e.visit, reason: e.reason, at: e.ts };
     } else if (e.type === "attention-resolved") ask = null;
+    else if (e.type === "operator-jump") ask = null;
     else if (e.type === "run-paused") paused = true;
     else if (e.type === "run-resumed") paused = false;
     else if (e.type === "node-finished") {
@@ -106,7 +108,10 @@ export function deriveStatus(events: LoggedEvent[]): { status: RunStatus; ask: R
         lastFailed = { node: e.node, visit: e.visit, at: e.ts };
         failure = { node: e.node, visit: e.visit, reason: null, at: e.ts }; // reason may follow
       } else lastFailed = null;
-    } else if (e.type === "node-started") lastFailed = null;
+    } else if (e.type === "node-started") {
+      lastFailed = null;
+      if (ask) ask = null;
+    }
   }
   // needs-input outranks everything except a completed run
   if (finished)
@@ -141,9 +146,16 @@ export function deriveTimeline(events: LoggedEvent[]): TimelineRow[] {
   const open = new Map<string, TimelineRow>();
   for (const e of events) {
     if (e.type === "node-started") {
+      for (const previous of open.values()) {
+        previous.finished_at = e.ts;
+        previous.status = "failed";
+        previous.duration_ms = new Date(e.ts).getTime() - new Date(previous.started_at).getTime();
+      }
+      open.clear();
+      const key = `${e.node}@${e.visit}`;
       const row: TimelineRow = { node: e.node, visit: e.visit, started_at: e.ts, finished_at: null, status: "running", duration_ms: null, offset_ms: 0, run_span_ms: 0, waiting_ms: 0 };
       rows.push(row);
-      open.set(`${e.node}@${e.visit}`, row);
+      open.set(key, row);
     } else if (e.type === "node-finished") {
       const row = open.get(`${e.node}@${e.visit}`);
       if (row) {

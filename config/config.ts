@@ -54,6 +54,15 @@ export function saveConfig(config: HowdahConfig, base = howdahHome()): void {
   writeFileSync(configPath(base), JSON.stringify(config, null, 2) + "\n");
 }
 
+export function ensureHowdahHome(base = howdahHome()): HowdahConfig {
+  mkdirSync(base, { recursive: true });
+  mkdirSync(join(base, "runs"), { recursive: true });
+  mkdirSync(join(base, "repos"), { recursive: true });
+  mkdirSync(join(base, "attention"), { recursive: true });
+  if (!existsSync(configPath(base))) saveConfig(structuredClone(DEFAULTS), base);
+  return loadConfig(base);
+}
+
 export type WorkspaceRef =
   | { kind: "repo"; name: string; path: string; repo: RepoWorkspace }
   | { kind: "plain"; name: string; path: string };

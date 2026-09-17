@@ -147,3 +147,13 @@ describe("ported Orbital graphs validate clean", () => {
     }
   });
 });
+
+describe("delivery repair routing", () => {
+  test("repair revisions are published before probing PR state again", () => {
+    for (const graph of [implementTicket, improveCodebase]) {
+      const reviseEdges = graph.def.edges.filter((edge) => edge.from === "delivery.revise_repairs");
+      expect(reviseEdges).toEqual([{ from: "delivery.revise_repairs", to: "delivery.publish" }]);
+      expect(graph.def.edges).toContainEqual({ from: "delivery.publish", to: "delivery.probe_pr" });
+    }
+  });
+});

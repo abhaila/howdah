@@ -100,6 +100,125 @@ describe("engine loop + routing", () => {
     expect(finished.status).toBe("failed");
   });
 
+  test("claude allowance exhaustion retries the same agent node on codex", async () => {
+    const seen: Array<{ node: string; visit: number; harness?: string }> = [];
+    const engine = new Engine(pipelineGraph(), {
+      dir: mkdtempSync(join(tmpdir(), "howdah-run-")),
+      promptsDir: promptFixtures(),
+      executors: {
+        agent: async ({ nodeId, visit, agentConfig, log }) => {
+          seen.push({ node: nodeId, visit, harness: agentConfig?.harness });
+          if (nodeId === "implement" && agentConfig?.harness === "claude") {
+            log.append({ type: "allowance", harness: "claude", state: "exhausted" });
+            return { status: "failed", writes: {} };
+          }
+          return nodeId === "review" ? ok({ verdict: "pass" }) : ok({ summary: "codex did the work" });
+        },
+        command: async () => ok(),
+      },
+    });
+
+    const result = await engine.start({ goal: "g", summary: "" });
+
+    expect(result).toEqual({ state: "finished", outcome: "success" });
+    expect(seen).toEqual([
+      { node: "implement", visit: 1, harness: "claude" },
+      { node: "implement", visit: 2, harness: "codex" },
+      { node: "review", visit: 1, harness: "codex" },
+    ]);
+    const finishes = engine.log.read().filter((e: any) => e.type === "node-finished" && e.node === "implement") as any[];
+    expect(finishes.map((e) => e.status)).toEqual(["failed", "succeeded"]);
+    expect(finishes[1].writes).toEqual({ summary: "codex did the work" });
+  });
+
+  test("claude session-limit text falls back even when allowance says ok", async () => {
+    const seen: Array<{ node: string; visit: number; harness?: string }> = [];
+    const engine = new Engine(pipelineGraph(), {
+      dir: mkdtempSync(join(tmpdir(), "howdah-run-")),
+      promptsDir: promptFixtures(),
+      executors: {
+        agent: async ({ nodeId, visit, agentConfig, log }) => {
+          seen.push({ node: nodeId, visit, harness: agentConfig?.harness });
+          if (nodeId === "implement" && agentConfig?.harness === "claude") {
+            log.append({ type: "allowance", harness: "claude", state: "ok" });
+            log.append({
+              type: "chunk",
+              node: nodeId,
+              visit,
+              turn: 1,
+              index: 0,
+              kind: "text",
+              content: "[turn error: You've hit your session limit · resets 4:10pm]",
+            });
+            return { status: "failed", writes: {} };
+          }
+          return nodeId === "review" ? ok({ verdict: "pass" }) : ok({ summary: "codex recovered" });
+        },
+        command: async () => ok(),
+      },
+    });
+
+    const result = await engine.start({ goal: "g", summary: "" });
+
+    expect(result).toEqual({ state: "finished", outcome: "success" });
+    expect(seen.slice(0, 2)).toEqual([
+      { node: "implement", visit: 1, harness: "claude" },
+      { node: "implement", visit: 2, harness: "codex" },
+    ]);
+  });
+
+  test("codex fallback survives resume before the next agent node", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "howdah-run-"));
+    const seen: Array<{ node: string; visit: number; harness?: string; process: 1 | 2 }> = [];
+    let pauseAtReview = false;
+    const first = new Engine(pipelineGraph(), {
+      dir,
+      promptsDir: promptFixtures(),
+      control: () => pauseAtReview ? "pause" : null,
+      executors: {
+        agent: async ({ nodeId, visit, agentConfig, log }) => {
+          seen.push({ node: nodeId, visit, harness: agentConfig?.harness, process: 1 });
+          if (nodeId === "implement" && agentConfig?.harness === "claude") {
+            log.append({
+              type: "chunk",
+              node: nodeId,
+              visit,
+              turn: 1,
+              index: 0,
+              kind: "text",
+              content: "[turn error: You've hit your session limit]",
+            });
+            return { status: "failed", writes: {} };
+          }
+          pauseAtReview = true;
+          return ok({ summary: "codex did the work" });
+        },
+        command: async () => ok(),
+      },
+    });
+
+    expect(await first.start({ goal: "g", summary: "" })).toEqual({ state: "paused", node: "review" });
+
+    const second = new Engine(pipelineGraph(), {
+      dir,
+      promptsDir: promptFixtures(),
+      executors: {
+        agent: async ({ nodeId, visit, agentConfig }) => {
+          seen.push({ node: nodeId, visit, harness: agentConfig?.harness, process: 2 });
+          return ok({ verdict: "pass" });
+        },
+        command: async () => ok(),
+      },
+    });
+
+    expect(await second.resume()).toEqual({ state: "finished", outcome: "success" });
+    expect(seen).toEqual([
+      { node: "implement", visit: 1, harness: "claude", process: 1 },
+      { node: "implement", visit: 2, harness: "codex", process: 1 },
+      { node: "review", visit: 1, harness: "codex", process: 2 },
+    ]);
+  });
+
   test("prompt-rendered carries context_read and version; outcomes attribute verdict + terminal", async () => {
     const engine = new Engine(pipelineGraph(), {
       dir: mkdtempSync(join(tmpdir(), "howdah-run-")),

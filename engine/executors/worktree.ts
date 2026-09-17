@@ -119,20 +119,51 @@ export function derivePrState(pr: { state: string; mergeable?: string; reviewDec
   if (pr.state === "MERGED") return "MERGED";
   if (pr.state === "CLOSED") return "CLOSED";
   if (pr.mergeable === "CONFLICTING") return "CONFLICTS";
-  if (pr.failedChecks) return "CI_FAILED";
   if (pr.reviewDecision === "CHANGES_REQUESTED") return "CHANGES_REQUIRED";
+  if (pr.failedChecks) return "CI_FAILED";
   return "OPEN";
 }
 
+function isFailedCheck(check: { conclusion?: string | null; state?: string | null; bucket?: string | null }): boolean {
+  const status = (check.conclusion ?? check.state ?? check.bucket ?? "").toUpperCase();
+  return ["FAILURE", "FAILED", "ERROR", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED"].includes(status);
+}
+
+function publicationPrRef(publicationSummary: unknown): string | null {
+  if (!publicationSummary) return null;
+  if (typeof publicationSummary === "string") {
+    const match = publicationSummary.match(/https:\/\/github\.com\/[^\s)]+\/pull\/\d+/);
+    return match?.[0] ?? null;
+  }
+  if (typeof publicationSummary !== "object") return null;
+  const obj = publicationSummary as Record<string, unknown>;
+  for (const key of ["pr_url", "prUrl", "url", "pull_request", "pullRequest"]) {
+    const value = obj[key];
+    if (typeof value === "string" && value.includes("/pull/")) return value;
+  }
+  return null;
+}
+
+function requiredChecksFailed(cwd: string, prRef: string): boolean | null {
+  const r = sh(["gh", "pr", "checks", prRef, "--required", "--json", "name,state,bucket"], cwd);
+  if (r.code !== 0) return null;
+  try {
+    const checks = JSON.parse(r.stdout) as Array<{ state?: string | null; bucket?: string | null }>;
+    return checks.some(isFailedCheck);
+  } catch {
+    return null;
+  }
+}
+
 /** gh probe with the fields routing needs; unreachable THROWS — absence of evidence parks */
-export const ghPrProbe = (cwd: string, branch: string): { state: PrState; url: string } | null => {
-  const r = sh(["gh", "pr", "view", branch, "--json", "state,url,mergeable,reviewDecision,statusCheckRollup"], cwd);
+export const ghPrProbe = (cwd: string, prRef: string): { state: PrState; url: string } | null => {
+  const r = sh(["gh", "pr", "view", prRef, "--json", "state,url,mergeable,reviewDecision,statusCheckRollup"], cwd);
   if (r.code !== 0) {
     if (/no pull requests? found/i.test(r.stderr + r.stdout)) return null;
     throw new Error(`forge unreachable: ${r.stderr.trim().slice(0, 200) || "gh failed"}`);
   }
   const j = JSON.parse(r.stdout) as { state: string; url: string; mergeable?: string; reviewDecision?: string; statusCheckRollup?: Array<{ conclusion?: string; state?: string }> };
-  const failedChecks = (j.statusCheckRollup ?? []).some((c) => (c.conclusion ?? c.state) === "FAILURE");
+  const failedChecks = requiredChecksFailed(cwd, j.url) ?? (j.statusCheckRollup ?? []).some(isFailedCheck);
   return { state: derivePrState({ ...j, failedChecks }), url: j.url };
 };
 
@@ -143,7 +174,7 @@ export interface CommandExecutorOpts {
 }
 
 export function commandExecutor(opts: CommandExecutorOpts = {}): Executor {
-  return async ({ nodeId, def, visit, cwd, log }) => {
+  return async ({ nodeId, def, visit, cwd, log, reads }) => {
     if (def.kind !== "command") throw new Error("commandExecutor on non-command node");
     const workDir = effectiveCwd(log.path, cwd);
     const declared = Object.keys(def.writes ?? {});
@@ -157,9 +188,10 @@ export function commandExecutor(opts: CommandExecutorOpts = {}): Executor {
       const record = readWorktreeRecord(dirname(log.path));
       const branch = record?.branch ?? probeGit(workDir).branch;
       if (!branch) throw new Error("probe:pr: no branch to probe");
-      chunk("tool_call", `gh pr view ${branch}`);
-      const pr = (opts.prProbe ?? ghPrProbe)(record?.repo ?? workDir, branch);
-      if (pr === null) throw new Error(`no PR exists for branch "${branch}" — was publish skipped?`);
+      const prRef = publicationPrRef(reads.publication_summary) ?? branch;
+      chunk("tool_call", `gh pr view ${prRef}`);
+      const pr = (opts.prProbe ?? ghPrProbe)(record?.repo ?? workDir, prRef);
+      if (pr === null) throw new Error(`no PR exists for "${prRef}" — was publish skipped?`);
       chunk("tool_result", `${pr.state} ${pr.url}`);
       log.append({
         type: "reconciled", node: nodeId,

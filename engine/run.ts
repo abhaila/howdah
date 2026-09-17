@@ -106,6 +106,10 @@ export class Engine {
   private lastRender = new Map<string, string>();
   /** operator-jump instruction awaiting the target node's next attempt */
   private jumpNote: { node: string; message: string } | null = null;
+  /** set when Claude fails in a way that should move the rest of this run to Codex */
+  private codexFallbackAfterClaudeLimit = false;
+  /** nodes granted one extra visit for the immediate Claude→Codex fallback retry */
+  private pendingCodexFallbackNodes = new Set<string>();
 
   constructor(graph: Graph<any>, opts: EngineOpts) {
     graph.validateOrThrow();
@@ -212,8 +216,9 @@ export class Engine {
       }
 
       const visit = (this.visits[current] = (this.visits[current] ?? 0) + 1);
+      const fallbackVisit = this.pendingCodexFallbackNodes.delete(current);
       const maxVisits = "maxVisits" in def ? def.maxVisits : undefined;
-      if (maxVisits !== undefined && visit > maxVisits)
+      if (maxVisits !== undefined && visit > maxVisits && !fallbackVisit)
         return this.park(current, visit, `maxVisits exceeded (${visit} > ${maxVisits})`);
 
       if (this.opts.beforeNode) await this.opts.beforeNode(current, def);
@@ -237,7 +242,24 @@ export class Engine {
       this.ctx.endAttempt(result.status);
       this.log.append({ type: "node-finished", node: current, visit, status: result.status, writes: result.writes });
 
-      if (result.status === "failed") return this.park(current, visit, "attempt failed");
+      if (result.status === "failed") {
+        const fallback = def.kind === "agent" && this.shouldFallbackToCodex(current, visit);
+        if (fallback) {
+          this.codexFallbackAfterClaudeLimit = true;
+          this.pendingCodexFallbackNodes.add(current);
+          this.log.append({
+            type: "chunk",
+            node: current,
+            visit,
+            turn: 1,
+            index: 10000,
+            kind: "text",
+            content: "\n[claude allowance exhausted: retrying this node with codex]",
+          });
+          continue;
+        }
+        return this.park(current, visit, "attempt failed");
+      }
 
       const next = this.route(current, visit);
       if (!next) return this.park(current, visit, "no edge matched (conditions exhausted)");
@@ -331,12 +353,58 @@ export class Engine {
       permissionMode: def.permissionMode, maxTurns: def.maxTurns, skills: def.skills,
     };
     return resolveAgentConfigLayers([
+      this.shouldForceCodexFallback() ? { harness: "codex" } : undefined,
       this.opts.overrides,
       this.opts.tuning?.nodes?.[nodeId],
       node,
       this.opts.tuning?.defaults,
       this.graph.def.defaults,
     ]);
+  }
+
+  private shouldForceCodexFallback(): boolean {
+    return (this.codexFallbackAfterClaudeLimit || this.latestAllowanceState("claude") === "exhausted" || this.hasPriorClaudeLimitFailure()) &&
+      this.latestAllowanceState("codex") !== "exhausted";
+  }
+
+  private shouldFallbackToCodex(node: string, visit: number): boolean {
+    const rendered = this.log.read()
+      .filter((e) => e.type === "prompt-rendered" && e.node === node && e.visit === visit)
+      .at(-1);
+    if (!rendered || rendered.type !== "prompt-rendered" || rendered.harness !== "claude") return false;
+    if (this.latestAllowanceState("codex") === "exhausted") return false;
+    return this.latestAllowanceState("claude") === "exhausted" || this.attemptLooksRateLimited(node, visit);
+  }
+
+  private latestAllowanceState(harness: "claude" | "codex"): "ok" | "exhausted" | "unreachable" | "unavailable" | undefined {
+    const event = this.log.read()
+      .filter((e) => e.type === "allowance" && e.harness === harness)
+      .at(-1);
+    return event?.type === "allowance" ? event.state : undefined;
+  }
+
+  private attemptLooksRateLimited(node: string, visit: number): boolean {
+    const text = this.log.read()
+      .filter((e) => e.type === "chunk" && e.node === node && e.visit === visit)
+      .map((e) => e.type === "chunk" ? e.content : "")
+      .join("\n");
+    return /\b(rate.?limit|usage limit|session limit|quota|allowance|exhausted)\b/i.test(text);
+  }
+
+  private hasPriorClaudeLimitFailure(): boolean {
+    const events = this.log.read();
+    const claudeAttempts = events
+      .filter((e) => e.type === "prompt-rendered" && e.harness === "claude")
+      .map((e) => e.type === "prompt-rendered" ? `${e.node}\0${e.visit}` : "");
+    if (claudeAttempts.length === 0) return false;
+    const failed = new Set(events
+      .filter((e) => e.type === "node-finished" && e.status === "failed")
+      .map((e) => e.type === "node-finished" ? `${e.node}\0${e.visit}` : ""));
+    return claudeAttempts.some((key) => {
+      if (!failed.has(key)) return false;
+      const [node, rawVisit] = key.split("\0");
+      return node !== undefined && rawVisit !== undefined && this.attemptLooksRateLimited(node, Number(rawVisit));
+    });
   }
 
   private renderPrompt(nodeId: string, prompt: PromptId, visit: number, reads: Record<string, unknown>, config?: AgentConfig): string {

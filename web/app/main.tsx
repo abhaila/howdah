@@ -10,6 +10,7 @@ import {
   Rows3, Plus, Workflow, Settings as SettingsIcon, Play, Pause, OctagonX, RotateCcw, Send,
   ExternalLink, GitBranch, GitPullRequest, Clock, Coins, Pin, Fingerprint, MessagesSquare,
   CornerDownRight, FolderGit2, X, Library, FileDiff, MessageSquarePlus, ThumbsUp, ScrollText,
+  SlidersHorizontal, RotateCcw as ResetIcon, Loader2, ArrowUp, ArrowDown, FolderOpen, Copy,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { RunDetail, RunSummary, RunStatus, LogRow } from "../derive";
@@ -19,6 +20,16 @@ import type { CoalescedTurn } from "../../log/coalesce";
 import type { PromptDetail, PromptSummary, ReconstructedRender } from "../../prompts/library";
 import type { ProposalView } from "../../prompts/proposals";
 import { GraphDag, useGraphShape, type GraphShapeDto, type AgentConfigDto } from "./graph-dag";
+
+interface AppInfo {
+  home: string;
+  runsDir: string;
+  attentionDir: string;
+  repoRoot: string;
+  configPath: string;
+  source: string;
+  supervisorHeartbeat: string | null;
+}
 
 // ---- shared bits ---------------------------------------------------------------
 
@@ -58,6 +69,65 @@ function Mark({ className }: { className?: string }) {
         stroke="currentColor" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round" />
       <circle cx="21" cy="30" r="3" fill="#cfac3f" />
     </svg>
+  );
+}
+
+function LoadingState({ title = "Loading", detail }: { title?: string; detail?: string }) {
+  return (
+    <Card className="max-w-[520px]">
+      <CardContent className="flex-row items-center gap-3 pt-5">
+        <Loader2 className="size-4 animate-spin text-muted-foreground" />
+        <div>
+          <div className="text-sm">{title}</div>
+          {detail && <div className="text-xs text-muted-foreground">{detail}</div>}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function useBottomPinnedScroll(followKey: unknown) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [atTop, setAtTop] = useState(true);
+  const [atBottom, setAtBottom] = useState(true);
+  const measure = useCallback(() => {
+    const el = ref.current;
+    if (!el) return;
+    setAtTop(el.scrollTop <= 8);
+    setAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight <= 16);
+  }, []);
+  const scrollToTop = useCallback(() => {
+    ref.current?.scrollTo({ top: 0, behavior: "smooth" });
+  }, []);
+  const scrollToBottom = useCallback(() => {
+    const el = ref.current;
+    if (el) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+  }, []);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    if (atBottom) el.scrollTop = el.scrollHeight;
+    measure();
+  }, [followKey, atBottom, measure]);
+  return { ref, atTop, atBottom, measure, scrollToTop, scrollToBottom };
+}
+
+function ScrollShell({ className = "", followKey, children }: {
+  className?: string;
+  followKey: unknown;
+  children: React.ReactNode;
+}) {
+  const { ref, atTop, atBottom, measure, scrollToTop, scrollToBottom } = useBottomPinnedScroll(followKey);
+  return (
+    <div className={`scroll-shell ${className}`}>
+      <div className="scroll-actions">
+        <Button variant="outline" size="sm" disabled={atTop} onClick={scrollToTop}><ArrowUp />Top</Button>
+        {!atBottom && <Button variant="outline" size="sm" onClick={scrollToBottom}><ArrowDown />Bottom</Button>}
+      </div>
+      <div className="scroll-viewport" ref={ref} onScroll={measure}>
+        {children}
+      </div>
+    </div>
   );
 }
 
@@ -120,16 +190,18 @@ function Splash({ onDone }: { onDone: () => void }) {
 
 function RunsList() {
   const [runs, setRuns] = useState<RunSummary[] | null>(null);
+  const [app, setApp] = useState<AppInfo | null>(null);
   const now = useNow();
   useEffect(() => {
     const load = () => fetch("/api/runs").then((r) => r.json()).then(setRuns).catch(() => {});
+    fetch("/api/app").then((r) => r.json()).then(setApp).catch(() => {});
     load();
     const t = setInterval(load, 3000);
     return () => clearInterval(t);
   }, []);
   useAttentionSurfaces(!!runs?.some((r) => r.status === "needs-input"));
 
-  if (!runs) return <div className="empty">loading…</div>;
+  if (!runs) return <LoadingState title="Loading runs" detail="Reading the local run log index." />;
   if (runs.length === 0)
     return (
       <div className="empty">
@@ -140,6 +212,13 @@ function RunsList() {
   return (
     <div>
       <h1>Runs</h1>
+      {app && (
+        <div className="home-strip">
+          <span>Home</span><code title={app.home}>{app.home}</code>
+          <span>Source</span><code title={app.repoRoot}>{app.source}</code>
+          <span>Supervisor</span><Badge variant={app.supervisorHeartbeat ? "success" : "outline"}>{app.supervisorHeartbeat ? "heartbeat" : "not seen"}</Badge>
+        </div>
+      )}
       {runs.map((r) => (
         <a key={r.id} className={`run-row ${r.status === "needs-input" ? "needs-input" : ""}`} href={`/run/${r.id}`}>
           <StatusBadge status={r.status} />
@@ -371,19 +450,66 @@ function Turn({ turn, render, runId }: { turn: CoalescedTurn; render?: RunDetail
   );
 }
 
+function RunThread({
+  turns,
+  renderByTurnKey,
+  runId,
+  ask,
+  detail,
+  onResolved,
+}: {
+  turns: CoalescedTurn[];
+  renderByTurnKey: Map<string, RunDetail["renders"][number]>;
+  runId: string;
+  ask: RunDetail["ask"];
+  detail: RunDetail;
+  onResolved: () => void;
+}) {
+  const followKey = `${turns.length}:${ask?.seq ?? "no-ask"}:${turns.at(-1)?.parts.length ?? 0}`;
+  return (
+    <ScrollShell className="thread-shell" followKey={followKey}>
+      <div className="thread-transcript">
+        {turns.map((t) => (
+          <Turn key={`${t.node}@${t.visit}#${t.turn}`} turn={t} render={renderByTurnKey.get(`${t.node}@${t.visit}`)} runId={runId} />
+        ))}
+        {ask && <AskCard key={`${ask.node}@${ask.visit}#${ask.seq}`} runId={runId} ask={ask} detail={detail} onResolved={onResolved} />}
+        {!ask && detail.summary.status === "done" && <div className="operator-row">run complete</div>}
+      </div>
+    </ScrollShell>
+  );
+}
+
 function RunControls({ runId, summary, onAction }: { runId: string; summary: RunDetail["summary"]; onAction: () => void }) {
   const [confirmAbort, setConfirmAbort] = useState(false);
-  const act = (verb: string) => fetch(`/api/runs/${runId}/${verb}`, { method: "POST" }).then(() => { setConfirmAbort(false); setTimeout(onAction, 300); });
-  const active = ["running", "needs-input", "waiting", "failed-recoverable", "queued"].includes(summary.status);
+  const [pending, setPending] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const act = async (verb: string) => {
+    setPending(verb);
+    setError(null);
+    try {
+      const r = await fetch(`/api/runs/${runId}/${verb}`, { method: "POST" });
+      if (!r.ok) throw new Error(((await r.json().catch(() => null)) as any)?.error ?? `${verb} failed`);
+      setConfirmAbort(false);
+      setTimeout(onAction, 300);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setPending(null);
+    }
+  };
+  const resumable = summary.paused || ["harness-dead", "waiting", "failed-recoverable", "queued"].includes(summary.status);
+  const active = ["running", "needs-input", "waiting", "failed-recoverable", "queued", "harness-dead"].includes(summary.status);
   if (!active) return null;
+  const busy = pending !== null;
   return (
     <span className="run-controls">
-      {summary.paused
-        ? <Button variant="outline" size="sm" onClick={() => act("resume")}><Play />Resume</Button>
-        : summary.status === "running" && <Button variant="outline" size="sm" onClick={() => act("pause")}><Pause />Pause</Button>}
+      {resumable
+        ? <Button variant="outline" size="sm" disabled={busy} onClick={() => act("resume")}>{pending === "resume" ? <Loader2 className="animate-spin" /> : <Play />}{pending === "resume" ? "Resuming…" : "Resume"}</Button>
+        : summary.status === "running" && <Button variant="outline" size="sm" disabled={busy} onClick={() => act("pause")}>{pending === "pause" ? <Loader2 className="animate-spin" /> : <Pause />}{pending === "pause" ? "Pausing…" : "Pause"}</Button>}
       {confirmAbort
-        ? <Button variant="destructive" size="sm" onClick={() => act("abort")}><OctagonX />Really abort?</Button>
-        : <Button variant="outline" size="sm" onClick={() => setConfirmAbort(true)}><OctagonX />Abort</Button>}
+        ? <Button variant="destructive" size="sm" disabled={busy} onClick={() => act("abort")}>{pending === "abort" ? <Loader2 className="animate-spin" /> : <OctagonX />}{pending === "abort" ? "Aborting…" : "Really abort?"}</Button>
+        : <Button variant="outline" size="sm" disabled={busy} onClick={() => setConfirmAbort(true)}><OctagonX />Abort</Button>}
+      {error && <span className="field-error">{error}</span>}
     </span>
   );
 }
@@ -392,9 +518,9 @@ function RunGraph({ runId, graph, timeline, status, onJumped }: { runId: string;
   const shape = useGraphShape(graph);
   const [jumpTo, setJumpTo] = useState<string | null>(null);
   const [message, setMessage] = useState("");
-  const [state, setState] = useState<"idle" | "jumping" | "failed">("idle");
+  const [state, setState] = useState<"idle" | "jumping" | "sent" | "failed">("idle");
   const [error, setError] = useState<string | null>(null);
-  if (!shape) return <div className="empty">loading graph…</div>;
+  if (!shape) return <LoadingState title="Loading graph" detail="Fetching node and edge metadata." />;
   const visits: Record<string, number> = {};
   for (const t of timeline) visits[t.node] = Math.max(visits[t.node] ?? 0, t.visit);
   const running = timeline.findLast((t) => t.status === "running");
@@ -411,10 +537,13 @@ function RunGraph({ runId, graph, timeline, status, onJumped }: { runId: string;
         body: JSON.stringify({ node: jumpTo, message: message || undefined }),
       });
       if (!r.ok) throw new Error(((await r.json()) as any).error);
-      setJumpTo(null);
-      setMessage("");
-      setState("idle");
-      setTimeout(onJumped, 500);
+      setState("sent");
+      setTimeout(onJumped, 300);
+      setTimeout(() => {
+        setJumpTo(null);
+        setMessage("");
+        setState("idle");
+      }, 1400);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setState("failed");
@@ -429,15 +558,26 @@ function RunGraph({ runId, graph, timeline, status, onJumped }: { runId: string;
           <div className="field-hint">Starts a fresh attempt at this node using the current context. Your instruction is injected into its prompt and takes precedence.</div>
           <Textarea autoFocus value={message} onChange={(e) => setMessage(e.target.value)} placeholder="Instructions for this step (optional)…" />
           {error && <div className="field-error">{error}</div>}
+          {state === "sent" && <div className="field-hint">Jump requested. The runner is moving; the graph will refresh on the next log event.</div>}
           <div className="actions">
-            <Button onClick={jump} disabled={state === "jumping"}><CornerDownRight />{state === "jumping" ? "Jumping…" : "Jump here"}</Button>
-            <Button variant="outline" size="sm" onClick={() => { setJumpTo(null); setError(null); }}><X />Cancel</Button>
+            <Button onClick={jump} disabled={state === "jumping" || state === "sent"}>
+              {state === "jumping" ? <Loader2 className="animate-spin" /> : <CornerDownRight />}
+              {state === "jumping" ? "Sending jump…" : state === "sent" ? "Jump sent" : "Jump here"}
+            </Button>
+            <Button variant="outline" size="sm" disabled={state === "jumping" || state === "sent"} onClick={() => { setJumpTo(null); setError(null); }}><X />Cancel</Button>
           </div>
         </div>
       )}
-      {jumpable && !jumpTo && <div className="field-hint" style={{ marginBottom: 8 }}>Click an agent node to jump the run there with instructions.</div>}
+      {jumpable && !jumpTo && <div className="field-hint" style={{ marginBottom: 8 }}>Click a non-terminal node to jump the run there with instructions.</div>}
       {!jumpable && status === "running" && <div className="field-hint" style={{ marginBottom: 8 }}>Pause the run to enable jumping.</div>}
-      <GraphDag shape={shape} current={current} visits={visits} onSelect={jumpable ? setJumpTo : undefined} selected={jumpTo ?? undefined} />
+      <GraphDag
+        shape={shape}
+        current={current}
+        visits={visits}
+        onSelect={jumpable ? setJumpTo : undefined}
+        selected={jumpTo ?? undefined}
+        canSelect={(node) => node.kind !== "terminal"}
+      />
     </div>
   );
 }
@@ -457,11 +597,46 @@ function OpenIdeButton({ runId, detail }: { runId: string; detail: RunDetail & {
   );
 }
 
-function AskCard({ runId, ask, onResolved }: { runId: string; ask: NonNullable<RunDetail["ask"]>; onResolved: () => void }) {
+function RunFolderButton({ runId }: { runId: string }) {
+  return (
+    <Button variant="outline" size="sm" onClick={() => fetch(`/api/runs/${runId}/open-run-folder`, { method: "POST" })}>
+      <FolderOpen />Open run folder
+    </Button>
+  );
+}
+
+function CopyButton({ text, label }: { text: string; label: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <Button variant="outline" size="sm" onClick={async () => {
+      await navigator.clipboard?.writeText(text).catch(() => {});
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1200);
+    }}>
+      <Copy />{copied ? "Copied" : label}
+    </Button>
+  );
+}
+
+function attentionContext(detail: RunDetail, ask: NonNullable<RunDetail["ask"]>): string | null {
+  const turn = detail.turns.findLast((t) => t.node === ask.node && t.visit === ask.visit);
+  if (!turn) return null;
+  const text = turn.parts.filter((p) => p.kind === "text").map((p) => p.content).join("");
+  const markers = [...text.matchAll(/\[(attempt failed|output contract violation): ([^\]]+)\]/g)];
+  const marker = markers.at(-1);
+  if (marker) return `${marker[1]}: ${marker[2]}`;
+  const failedTool = turn.parts.findLast((p) => p.kind === "tool_result" && /error|failed|exit \d|denied|no such file/i.test(p.content));
+  if (failedTool) return failedTool.content.trim().slice(0, 1200);
+  if (!turn.finalized) return "The agent stopped before finalizing its turn.";
+  return null;
+}
+
+function AskCard({ runId, ask, detail, onResolved }: { runId: string; ask: NonNullable<RunDetail["ask"]>; detail: RunDetail; onResolved: () => void }) {
   const [text, setText] = useState("");
   const [state, setState] = useState<"idle" | "sending" | "delivered" | "failed">("idle");
   const ref = useRef<HTMLTextAreaElement>(null);
   useEffect(() => { if (location.hash === "#needs-input") ref.current?.focus(); }, []);
+  const context = attentionContext(detail, ask);
 
   const send = useCallback(async () => {
     setState("sending");
@@ -483,6 +658,14 @@ function AskCard({ runId, ask, onResolved }: { runId: string; ask: NonNullable<R
     <div className={`ask-card ${state === "delivered" ? "collapsing" : ""}`} id="needs-input">
       <h3>Needs you — {ask.node}@{ask.visit}</h3>
       <div>{ask.reason}</div>
+      {context && (
+        <div className="field-error">
+          {context}
+        </div>
+      )}
+      {ask.reason === "attempt failed" && (
+        <div className="field-hint">Reply with instructions to change the retry, or send an empty reply to retry the step as-is.</div>
+      )}
       <Textarea ref={ref} value={text} onChange={(e) => setText(e.target.value)} placeholder="Your reply…" disabled={state === "sending" || state === "delivered"} />
       <div className="actions">
         <Button onClick={send} disabled={state === "sending" || state === "delivered"}>
@@ -502,6 +685,10 @@ function fmtDur(ms: number | null): string {
   const m = Math.floor(ms / 60_000);
   if (m < 60) return `${m}m ${Math.round((ms % 60_000) / 1000)}s`;
   return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, "0")}m`;
+}
+
+function liveDuration(row: Pick<RunDetail["timeline"][number], "duration_ms" | "started_at">, now: number): number {
+  return row.duration_ms ?? Math.max(0, now - new Date(row.started_at).getTime());
 }
 
 /** Status is a SHAPE first (DESIGN.md): the glyph alone must carry the state. */
@@ -540,20 +727,23 @@ function StepGlyph({ status }: { status: "running" | "succeeded" | "failed" | "n
  * time-proportional so the shape of the run is legible; a sub-second step still gets 3px,
  * because an invisible mark is a lie about what happened.
  */
-function RunSteps({ timeline, ask, selected, onSelect }: {
+function RunSteps({ timeline, ask, selected, now, onSelect }: {
   timeline: RunDetail["timeline"];
   ask: RunDetail["ask"];
   selected: string | null;
+  now: number;
   onSelect: (key: string) => void;
 }) {
   if (timeline.length === 0) return <div className="empty">no steps yet</div>;
+  const firstStartedAt = new Date(timeline[0]!.started_at).getTime();
+  const liveSpan = Math.max(1, now - firstStartedAt);
   return (
     <div className="steps">
       {timeline.map((t, i) => {
-        const span = t.run_span_ms || 1;
+        const span = t.finished_at ? t.run_span_ms || 1 : Math.max(t.run_span_ms || 1, liveSpan);
         const waiting = ask !== null && ask.node === t.node && ask.visit === t.visit;
         const status = waiting ? "needs-input" : t.status;
-        const total = t.duration_ms ?? span - t.offset_ms;
+        const total = liveDuration(t, now);
         // the split that makes R3.3 visible: agent time, then the part that was me not looking
         const work = Math.max(0, total - t.waiting_ms);
         const pct = (ms: number) => (ms / span) * 100;
@@ -583,7 +773,7 @@ function RunSteps({ timeline, ask, selected, onSelect }: {
               )}
             </span>
             <span className="step-dur">
-              {fmtDur(t.duration_ms ?? total)}
+              {fmtDur(total)}
               {t.waiting_ms > 0 && <span className="step-wait">{fmtDur(t.waiting_ms)}</span>}
             </span>
           </div>
@@ -597,11 +787,12 @@ function RunSteps({ timeline, ask, selected, onSelect }: {
  * Step detail (T24, story 5) — Inngest's right-hand panel. The ask lives HERE rather than
  * floating in the thread, and the Run toggle keeps the run-level facts one click away.
  */
-function StepDetail({ runId, row, detail, ask, onResolved }: {
+function StepDetail({ runId, row, detail, ask, now, onResolved }: {
   runId: string;
   row: RunDetail["timeline"][number] | null;
   detail: RunDetail;
   ask: RunDetail["ask"];
+  now: number;
   onResolved: () => void;
 }) {
   const [scope, setScope] = useState<"step" | "run">("step");
@@ -611,7 +802,7 @@ function StepDetail({ runId, row, detail, ask, onResolved }: {
   const key = `${row.node}@${row.visit}`;
   const isAsking = ask !== null && ask.node === row.node && ask.visit === row.visit;
   const render = detail.renders.find((r) => r.node === row.node && r.visit === row.visit);
-  const total = row.duration_ms ?? row.run_span_ms - row.offset_ms;
+  const total = liveDuration(row, now);
   const work = Math.max(0, total - row.waiting_ms);
   const bar = (label: string, ms: number, of: number, cls: string) => (
     <div className="sd-seg">
@@ -672,7 +863,7 @@ function StepDetail({ runId, row, detail, ask, onResolved }: {
           </div>
           <div className="sd-body">
             {pane === "ask" && (isAsking
-              ? <AskCard runId={runId} ask={ask!} onResolved={onResolved} />
+              ? <AskCard key={`${ask!.node}@${ask!.visit}#${ask!.seq}`} runId={runId} ask={ask!} detail={detail} onResolved={onResolved} />
               : <div className="pd-note">this step is not waiting on you</div>)}
             {pane === "prompt" && (render
               ? <PromptAndContext runId={runId} render={render} />
@@ -723,24 +914,26 @@ function RunLogs({ rows }: { rows: LogRow[] }) {
           ))}
           <span className="m logs-count">{shown.length} of {rows.length}</span>
         </div>
-        <div className="logs-rows">
-          {shown.length === 0 && <div className="empty">nothing matches</div>}
-          {shown.map((r) => (
-            <div
-              key={r.seq}
-              className={`log-row ${r.kind} depth-${r.depth} ${selected?.seq === r.seq ? "selected" : ""}`}
-              onClick={() => setPicked(r.seq)}
-              role="button"
-              tabIndex={0}
-              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setPicked(r.seq); } }}
-            >
-              <span className="m log-ts">{r.ts.slice(11, 23)}</span>
-              <span className="m log-node">{r.node ?? "—"}{r.visit !== null && <span className="log-visit">@{r.visit}</span>}</span>
-              <span className="pill log-type">{r.type}</span>
-              <span className="log-summary">{r.summary}</span>
-            </div>
-          ))}
-        </div>
+        <ScrollShell className="logs-shell" followKey={`${shown.length}:${shown.at(-1)?.seq ?? "empty"}:${kind}:${q}`}>
+          <div className="logs-rows">
+            {shown.length === 0 && <div className="empty">nothing matches</div>}
+            {shown.map((r) => (
+              <div
+                key={r.seq}
+                className={`log-row ${r.kind} depth-${r.depth} ${selected?.seq === r.seq ? "selected" : ""}`}
+                onClick={() => setPicked(r.seq)}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setPicked(r.seq); } }}
+              >
+                <span className="m log-ts">{r.ts.slice(11, 23)}</span>
+                <span className="m log-node">{r.node ?? "—"}{r.visit !== null && <span className="log-visit">@{r.visit}</span>}</span>
+                <span className="pill log-type">{r.type}</span>
+                <span className="log-summary">{r.summary}</span>
+              </div>
+            ))}
+          </div>
+        </ScrollShell>
       </div>
       <EventDetail row={selected} />
     </div>
@@ -976,9 +1169,42 @@ function RunView({ id }: { id: string }) {
   const [detail, setDetail] = useState<(RunDetail & { cwd_exists?: boolean; editor_configured?: boolean }) | null>(null);
   const [tab, setTab] = useState<"steps" | "thread" | "context" | "logs" | "chat" | "graph">("steps");
   const [picked, setPicked] = useState<string | null>(null);
+  const [bannerAction, setBannerAction] = useState<"resume" | null>(null);
+  const [bannerError, setBannerError] = useState<string | null>(null);
   const now = useNow();
   const reload = useCallback(() => fetch(`/api/runs/${id}`).then((r) => r.json()).then(setDetail).catch(() => {}), [id]);
+  const runAction = useCallback(async (verb: "resume") => {
+    setBannerAction(verb);
+    setBannerError(null);
+    try {
+      const r = await fetch(`/api/runs/${id}/${verb}`, { method: "POST" });
+      if (!r.ok) throw new Error(((await r.json().catch(() => null)) as any)?.error ?? `${verb} failed`);
+      setTimeout(reload, 300);
+    } catch (e) {
+      setBannerError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBannerAction(null);
+    }
+  }, [id, reload]);
   useEffect(() => { reload(); }, [reload]);
+  useEffect(() => {
+    if (!detail) return;
+    const active = ["running", "needs-input", "waiting", "harness-dead", "failed-recoverable"].includes(detail.summary.status);
+    if (!active) return;
+    const t = setInterval(reload, 5000);
+    const onFocus = () => reload();
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onFocus);
+    return () => {
+      clearInterval(t);
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onFocus);
+    };
+  }, [detail?.summary.status, reload]);
+  useEffect(() => {
+    if (detail?.ask || location.hash !== "#needs-input") return;
+    history.replaceState(history.state, "", location.pathname + location.search);
+  }, [detail?.ask]);
   useEffect(() => {
     if (!detail) return;
     const es = new EventSource(`/api/runs/${id}/events?since=${detail.events_seq}`);
@@ -994,9 +1220,12 @@ function RunView({ id }: { id: string }) {
     return m;
   }, [detail]);
 
-  if (!detail) return <div className="empty">loading…</div>;
+  if (!detail) return <LoadingState title="Loading run" detail={`Opening ${id}.`} />;
   const { summary, ask } = detail;
-  const maxDur = Math.max(1, ...detail.timeline.map((t) => t.duration_ms ?? 0));
+  const effectiveTimeline = detail.timeline.map((t) => ({ row: t, duration: liveDuration(t, now) }));
+  const maxDur = Math.max(1, ...effectiveTimeline.map((t) => t.duration));
+  const lastEventAgeMs = summary.last_event_at ? now - new Date(summary.last_event_at).getTime() : 0;
+  const staleRunning = summary.status === "running" && lastEventAgeMs > 5 * 60_000;
   // the step that needs a human wins the selection; otherwise the newest one
   const waitingRow = ask ? detail.timeline.find((t) => t.node === ask.node && t.visit === ask.visit) : undefined;
   const defaultRow = waitingRow ?? detail.timeline.at(-1);
@@ -1026,6 +1255,7 @@ function RunView({ id }: { id: string }) {
           />
           <RunControls runId={id} summary={summary} onAction={reload} />
           <OpenIdeButton runId={id} detail={detail} />
+          <RunFolderButton runId={id} />
         </div>
         {summary.status === "needs-input" && summary.waiting_since && (
           <div className="banner">
@@ -1033,10 +1263,29 @@ function RunView({ id }: { id: string }) {
             <span className="timer">{fmtWait(summary.waiting_since, now)}</span>
           </div>
         )}
+        {staleRunning && (
+          <div className="banner failed">
+            No run events for {fmtDur(lastEventAgeMs)}. The runner may be stuck even though its process is still alive.
+          </div>
+        )}
+        {summary.status === "harness-dead" && (
+          <div className="banner failed">
+            Harness stopped before the current step finished.
+            {bannerError && <span className="field-error ml-auto">{bannerError}</span>}
+            <Button variant="destructive" size="sm" className="ml-auto" disabled={bannerAction === "resume"} onClick={() => runAction("resume")}>
+              {bannerAction === "resume" ? <Loader2 className="animate-spin" /> : <RotateCcw />}
+              {bannerAction === "resume" ? "Resuming…" : "Resume"}
+            </Button>
+          </div>
+        )}
         {summary.paused && (
           <div className="banner paused">
             Paused by you — the run holds at the node boundary.
-            <Button size="sm" className="ml-auto bg-[var(--status-waiting)]" onClick={() => fetch(`/api/runs/${id}/resume`, { method: "POST" }).then(reload)}><Play />Resume</Button>
+            {bannerError && <span className="field-error ml-auto">{bannerError}</span>}
+            <Button size="sm" className="ml-auto bg-[var(--status-waiting)]" disabled={bannerAction === "resume"} onClick={() => runAction("resume")}>
+              {bannerAction === "resume" ? <Loader2 className="animate-spin" /> : <Play />}
+              {bannerAction === "resume" ? "Resuming…" : "Resume"}
+            </Button>
           </div>
         )}
         {summary.outcome === "aborted" && <div className="banner failed">Aborted by you.</div>}
@@ -1046,14 +1295,20 @@ function RunView({ id }: { id: string }) {
               ? <>Failed at {summary.failure.node}@{summary.failure.visit}{summary.failure.reason ? <> — {summary.failure.reason.replace(/^executor threw: /, "")}</> : null}</>
               : <>Run failed — see the last thread entry</>}
             {summary.status === "failed-recoverable" && (
-              <Button variant="destructive" size="sm" className="ml-auto" onClick={() => fetch(`/api/runs/${id}/resume`, { method: "POST" }).then(reload)}><RotateCcw />Retry</Button>
+              <>
+                {bannerError && <span className="field-error ml-auto">{bannerError}</span>}
+                <Button variant="destructive" size="sm" className="ml-auto" disabled={bannerAction === "resume"} onClick={() => runAction("resume")}>
+                  {bannerAction === "resume" ? <Loader2 className="animate-spin" /> : <RotateCcw />}
+                  {bannerAction === "resume" ? "Retrying…" : "Retry"}
+                </Button>
+              </>
             )}
           </div>
         )}
         {tab === "steps" ? (
           <div className="steps-split">
-            <RunSteps timeline={detail.timeline} ask={ask} selected={selectedKey} onSelect={setPicked} />
-            <StepDetail runId={id} row={selectedRow} detail={detail} ask={ask} onResolved={reload} />
+            <RunSteps timeline={detail.timeline} ask={ask} selected={selectedKey} now={now} onSelect={setPicked} />
+            <StepDetail runId={id} row={selectedRow} detail={detail} ask={ask} now={now} onResolved={reload} />
           </div>
         ) : tab === "context" ? (
           <RunContext entries={detail.context} />
@@ -1064,13 +1319,7 @@ function RunView({ id }: { id: string }) {
         ) : tab === "graph" ? (
           <RunGraph runId={id} graph={summary.graph} timeline={detail.timeline} status={summary.status} onJumped={reload} />
         ) : (
-          <>
-            {resolvedTurns.map((t) => (
-              <Turn key={`${t.node}@${t.visit}#${t.turn}`} turn={t} render={renderByTurnKey.get(`${t.node}@${t.visit}`)} runId={id} />
-            ))}
-            {ask && <AskCard runId={id} ask={ask} onResolved={reload} />}
-            {!ask && summary.status === "done" && <div className="operator-row">run complete</div>}
-          </>
+          <RunThread turns={resolvedTurns} renderByTurnKey={renderByTurnKey} runId={id} ask={ask} detail={detail} onResolved={reload} />
         )}
       </div>
 
@@ -1079,9 +1328,22 @@ function RunView({ id }: { id: string }) {
           <h2><Fingerprint size={12} /> Identity</h2>
           <div className="kv"><span className="k">run</span><span>{id}</span></div>
           <div className="kv"><span className="k">graph</span><span>{summary.graph}</span></div>
+          {detail.persistence && <div className="kv"><span className="k">home</span><span className="path" title={detail.persistence.home}>{detail.persistence.home}</span></div>}
           {detail.identity.cwd && <div className="kv"><span className="k">{detail.identity.folder_kind === "repo" ? "repo" : "folder"}</span><span className="path" title={detail.identity.cwd}>{detail.identity.cwd.split("/").slice(-2).join("/")}</span></div>}
           {detail.git?.intended?.branch && <div className="kv"><span className="k">branch</span><span>{detail.git.intended.branch}</span></div>}
         </section>
+        {detail.persistence && (
+          <section>
+            <h2><FolderOpen size={12} /> Persistence</h2>
+            <div className="kv"><span className="k">run dir</span><span className="path" title={detail.persistence.run_dir}>{detail.persistence.run_dir}</span></div>
+            <div className="kv"><span className="k">log</span><span className="path" title={detail.persistence.log_path}>{detail.persistence.log_path.split("/").slice(-3).join("/")}</span></div>
+            {detail.persistence.worktree_path && <div className="kv"><span className="k">worktree</span><span className="path" title={detail.persistence.worktree_path}>{detail.persistence.worktree_path.split("/").slice(-3).join("/")}</span></div>}
+            <div className="kv"><span className="k">runner</span><span>{detail.persistence.runner_alive ? "alive" : "not running"}</span></div>
+            <div className="rail-actions">
+              <CopyButton text={`HOWDAH_HOME=${detail.persistence.home} bun cli/main.ts resume ${id}`} label="Copy resume" />
+            </div>
+          </section>
+        )}
         {detail.identity.folder_kind === "repo" && (
           <section>
             <h2><GitBranch size={12} /> Git</h2>
@@ -1112,11 +1374,11 @@ function RunView({ id }: { id: string }) {
         )}
         <section>
           <h2><Clock size={12} /> Timeline</h2>
-          {detail.timeline.map((t, i) => (
+          {effectiveTimeline.map(({ row: t, duration }, i) => (
             <div key={i} className="tl-row" style={{ ["--status-color" as any]: `var(--status-${t.status === "succeeded" ? "done" : t.status === "failed" ? "failed-recoverable" : "running"})` }}>
               <span className="tl-node">{t.node}@{t.visit}</span>
-              <span className="tl-bar-track"><span className="tl-bar" style={{ width: `${Math.max(4, ((t.duration_ms ?? maxDur) / maxDur) * 100)}%` }} /></span>
-              <span className="tl-dur">{t.duration_ms === null ? "…" : t.duration_ms < 1000 ? `${t.duration_ms}ms` : `${Math.round(t.duration_ms / 1000)}s`}</span>
+              <span className="tl-bar-track"><span className="tl-bar" style={{ width: `${Math.max(4, (duration / maxDur) * 100)}%` }} /></span>
+              <span className="tl-dur">{fmtDur(duration)}</span>
             </div>
           ))}
         </section>
@@ -1305,8 +1567,7 @@ function StartRun() {
       });
       if (!r.ok) throw new Error((await r.json() as any).error ?? "launch failed");
       const { id } = (await r.json()) as { id: string };
-      history.pushState(null, "", `/run/${id}`);
-      dispatchEvent(new PopStateEvent("popstate"));
+      location.assign(`/run/${id}`);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setBusy(false);
@@ -1373,9 +1634,81 @@ function StartRun() {
 
 // ---- graph tuning editor (UI-editable per-node config) ----------------------------
 
+const HARNESSES = ["", "claude", "codex"];
 const EFFORTS = ["", "low", "medium", "high", "xhigh"];
 const PERMISSION_MODES = ["", "auto"];
-const MODEL_SUGGESTIONS = ["claude-opus-5", "claude-sonnet-5", "haiku", "gpt-5.6-terra"];
+const MODEL_SUGGESTIONS = ["claude-opus-5", "claude-sonnet-5", "claude-haiku-5", "gpt-5", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"];
+const BULK_PRESETS: Array<{ id: string; label: string; target: string; cfg: AgentConfigDto }> = [
+  { id: "codex-planning", label: "Planning: GPT-5", target: "role:planning", cfg: { harness: "codex", model: "gpt-5", effort: "high" } },
+  { id: "claude-planning", label: "Planning: Opus 5", target: "role:planning", cfg: { harness: "claude", model: "claude-opus-5", effort: "high", permissionMode: "auto" } },
+  { id: "delivery-cheap", label: "Delivery: cheap Codex", target: "class:delivery", cfg: { harness: "codex", model: "gpt-5.6-luna", effort: "low" } },
+  { id: "delivery-balanced", label: "Delivery: balanced Codex", target: "class:delivery", cfg: { harness: "codex", model: "gpt-5.6-terra", effort: "medium" } },
+];
+
+type GraphTuningDto = { defaults?: AgentConfigDto; nodes?: Record<string, AgentConfigDto> };
+
+function cleanConfig(c: AgentConfigDto | undefined): AgentConfigDto | undefined {
+  if (!c) return undefined;
+  const out: AgentConfigDto = {};
+  for (const [key, raw] of Object.entries(c) as [keyof AgentConfigDto, unknown][]) {
+    if (raw === undefined || raw === null || raw === "") continue;
+    if (Array.isArray(raw) && raw.length === 0) continue;
+    (out as any)[key] = raw;
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
+function mergeConfig(a: AgentConfigDto | undefined, b: AgentConfigDto): AgentConfigDto {
+  return cleanConfig({ ...(a ?? {}), ...cleanConfig(b) }) ?? {};
+}
+
+function modelFitsHarness(harness: string, model: string): boolean {
+  const claudeLike = /claude|opus|sonnet|haiku|fable/i.test(model);
+  const codexLike = /gpt|codex|terra|luna|^o\d/i.test(model);
+  if (harness === "codex") return !claudeLike || codexLike;
+  if (harness === "claude") return !codexLike || claudeLike;
+  return true;
+}
+
+function resolvePreview(layers: Array<AgentConfigDto | undefined>): AgentConfigDto {
+  const pick = (k: keyof AgentConfigDto) => {
+    for (const layer of layers) {
+      const value = layer?.[k];
+      if (value !== undefined) return value;
+    }
+    return undefined;
+  };
+  const harness = String(pick("harness") ?? "claude");
+  let model: string | undefined;
+  for (const layer of layers) {
+    if (layer?.model && modelFitsHarness(harness, layer.model)) {
+      model = layer.model;
+      break;
+    }
+  }
+  return {
+    harness,
+    model,
+    effort: pick("effort") as string | undefined,
+    permissionMode: harness === "claude" ? "auto" : pick("permissionMode") as string | undefined,
+    maxTurns: pick("maxTurns") as number | undefined,
+    skills: pick("skills") as string[] | undefined,
+  };
+}
+
+function previewShape(shape: GraphShapeDto, tuning: GraphTuningDto): GraphShapeDto {
+  const tsDefaults = shape.defaults ?? {};
+  return {
+    ...shape,
+    tuning,
+    nodes: shape.nodes.map((n) => {
+      if (n.kind !== "agent") return n;
+      const nodeTuning = tuning.nodes?.[n.id];
+      const effective = resolvePreview([nodeTuning, n.baseline, tuning.defaults, tsDefaults]);
+      return { ...n, node_tuning: nodeTuning, effective, harness: effective.harness, model: effective.model, effort: effective.effort };
+    }),
+  };
+}
 
 function ConfigFields({ value, baseline, onChange }: { value: AgentConfigDto; baseline?: AgentConfigDto; onChange: (v: AgentConfigDto) => void }) {
   const ph = (k: keyof AgentConfigDto, fallback: string) => {
@@ -1387,9 +1720,7 @@ function ConfigFields({ value, baseline, onChange }: { value: AgentConfigDto; ba
       <Label>
         Harness
         <Select value={value.harness ?? ""} onChange={(e) => onChange({ ...value, harness: (e.target.value || undefined) as any })}>
-          <option value="">{ph("harness", "inherit (claude)")}</option>
-          <option value="claude">claude</option>
-          <option value="codex">codex</option>
+          {HARNESSES.map((x) => <option key={x} value={x}>{x || ph("harness", "inherit (claude)")}</option>)}
         </Select>
       </Label>
       <Label>
@@ -1423,13 +1754,51 @@ function ConfigFields({ value, baseline, onChange }: { value: AgentConfigDto; ba
 
 function GraphTuner({ shape, onSaved }: { shape: GraphShapeDto; onSaved: () => void }) {
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
-  const [tuning, setTuning] = useState<{ defaults?: AgentConfigDto; nodes?: Record<string, AgentConfigDto> }>(shape.tuning ?? {});
+  const [tuning, setTuning] = useState<GraphTuningDto>(shape.tuning ?? {});
+  const [bulkTarget, setBulkTarget] = useState("class:delivery");
+  const [bulkConfig, setBulkConfig] = useState<AgentConfigDto>({ harness: "codex", model: "gpt-5.6-luna", effort: "low" });
   const [dirty, setDirty] = useState(false);
   const [state, setState] = useState<"idle" | "saving" | "saved" | "failed">("idle");
   useEffect(() => { setTuning(shape.tuning ?? {}); setDirty(false); setSelectedNode(null); }, [shape.name]);
 
-  const node = shape.nodes.find((n) => n.id === selectedNode);
-  const setNodeCfg = (id: string, v: AgentConfigDto) => { setTuning({ ...tuning, nodes: { ...tuning.nodes, [id]: v } }); setDirty(true); };
+  const preview = useMemo(() => previewShape(shape, tuning), [shape, tuning]);
+  const agentNodes = preview.nodes.filter((n) => n.kind === "agent");
+  const classes = Array.from(new Set(agentNodes.map((n) => n.class).filter(Boolean) as string[])).sort();
+  const node = preview.nodes.find((n) => n.id === selectedNode);
+  const idsForTarget = (target: string) => agentNodes
+    .filter((n) =>
+      target === "all" ||
+      target === `class:${n.class ?? ""}` ||
+      (target === "role:planning" && /\bplan|planning/i.test(n.id)),
+    )
+    .map((n) => n.id);
+  const selectedIds = idsForTarget(bulkTarget);
+  const setNodeCfg = (id: string, v: AgentConfigDto) => {
+    const cleaned = cleanConfig(v);
+    const nodes = { ...(tuning.nodes ?? {}) };
+    if (cleaned) nodes[id] = cleaned;
+    else delete nodes[id];
+    setTuning({ ...tuning, nodes });
+    setDirty(true);
+  };
+  const clearNodeCfg = (id: string) => {
+    const nodes = { ...(tuning.nodes ?? {}) };
+    delete nodes[id];
+    setTuning({ ...tuning, nodes });
+    setDirty(true);
+  };
+  const applyBulk = (cfg = bulkConfig, target = bulkTarget) => {
+    const nodes = { ...(tuning.nodes ?? {}) };
+    for (const id of idsForTarget(target)) nodes[id] = mergeConfig(nodes[id], cfg);
+    setTuning({ ...tuning, nodes });
+    setDirty(true);
+  };
+  const clearBulk = (target = bulkTarget) => {
+    const nodes = { ...(tuning.nodes ?? {}) };
+    for (const id of idsForTarget(target)) delete nodes[id];
+    setTuning({ ...tuning, nodes });
+    setDirty(true);
+  };
   const save = async () => {
     setState("saving");
     try {
@@ -1444,7 +1813,7 @@ function GraphTuner({ shape, onSaved }: { shape: GraphShapeDto; onSaved: () => v
 
   return (
     <div className="tuner">
-      <GraphDag key={`${shape.name}:${JSON.stringify(shape.tuning ?? {})}`} shape={shape} onSelect={setSelectedNode} selected={selectedNode ?? undefined} />
+      <GraphDag key={`${shape.name}:${JSON.stringify(tuning)}`} shape={preview} onSelect={setSelectedNode} selected={selectedNode ?? undefined} />
       <div className="tuner-panels">
         <Card>
           <CardHeader>
@@ -1456,6 +1825,47 @@ function GraphTuner({ shape, onSaved }: { shape: GraphShapeDto; onSaved: () => v
           </CardContent>
         </Card>
         <Card>
+          <CardHeader>
+            <CardTitle>Bulk update</CardTitle>
+            <CardDescription>Apply a model level to a whole graph slice. Node overrides are saved to tuning.json.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Label>
+              Target
+              <Select value={bulkTarget} onChange={(e) => setBulkTarget(e.target.value)}>
+                <option value="all">all agent nodes</option>
+                <option value="role:planning">planning nodes</option>
+                {classes.map((c) => <option key={c} value={`class:${c}`}>{c} class</option>)}
+              </Select>
+            </Label>
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+              <Label>
+                Harness
+                <Select value={bulkConfig.harness ?? ""} onChange={(e) => setBulkConfig({ ...bulkConfig, harness: e.target.value || undefined })}>
+                  {HARNESSES.map((x) => <option key={x} value={x}>{x || "keep current"}</option>)}
+                </Select>
+              </Label>
+              <Label>
+                Model
+                <Input list="model-suggestions" value={bulkConfig.model ?? ""} placeholder="keep current" onChange={(e) => setBulkConfig({ ...bulkConfig, model: e.target.value || undefined })} />
+              </Label>
+              <Label>
+                Effort
+                <Select value={bulkConfig.effort ?? ""} onChange={(e) => setBulkConfig({ ...bulkConfig, effort: e.target.value || undefined })}>
+                  {EFFORTS.map((x) => <option key={x} value={x}>{x || "keep current"}</option>)}
+                </Select>
+              </Label>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button size="sm" onClick={() => applyBulk()}><SlidersHorizontal />Apply to {selectedIds.length}</Button>
+              {BULK_PRESETS.map((p) => (
+                <Button key={p.id} variant="outline" size="sm" onClick={() => { setBulkTarget(p.target); setBulkConfig(p.cfg); applyBulk(p.cfg, p.target); }}>{p.label}</Button>
+              ))}
+              <Button variant="ghost" size="sm" onClick={() => clearBulk()}><ResetIcon />Clear target overrides</Button>
+            </div>
+          </CardContent>
+        </Card>
+        <Card>
           {node?.kind === "agent" ? (
             <>
               <CardHeader>
@@ -1464,6 +1874,7 @@ function GraphTuner({ shape, onSaved }: { shape: GraphShapeDto; onSaved: () => v
               </CardHeader>
               <CardContent>
                 <ConfigFields value={tuning.nodes?.[node.id] ?? {}} baseline={node.baseline} onChange={(v) => setNodeCfg(node.id, v)} />
+                <Button variant="ghost" size="sm" className="self-start" onClick={() => clearNodeCfg(node.id)}><ResetIcon />Clear node override</Button>
               </CardContent>
             </>
           ) : (
@@ -1471,6 +1882,40 @@ function GraphTuner({ shape, onSaved }: { shape: GraphShapeDto; onSaved: () => v
           )}
         </Card>
       </div>
+      <Card>
+        <CardHeader>
+          <CardTitle>Agent nodes</CardTitle>
+          <CardDescription>Scan the effective routing model and jump straight to a node override.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="overflow-x-auto">
+            <table className="w-full border-collapse text-left text-[13px]">
+              <thead className="text-[11px] uppercase text-muted-foreground">
+                <tr>
+                  <th className="border-b border-border py-1.5 pr-3 font-normal">Node</th>
+                  <th className="border-b border-border py-1.5 pr-3 font-normal">Class</th>
+                  <th className="border-b border-border py-1.5 pr-3 font-normal">Harness</th>
+                  <th className="border-b border-border py-1.5 pr-3 font-normal">Model</th>
+                  <th className="border-b border-border py-1.5 pr-3 font-normal">Effort</th>
+                  <th className="border-b border-border py-1.5 pr-3 font-normal">Override</th>
+                </tr>
+              </thead>
+              <tbody>
+                {agentNodes.map((n) => (
+                  <tr key={n.id} className={`cursor-pointer hover:bg-muted ${selectedNode === n.id ? "bg-muted" : ""}`} onClick={() => setSelectedNode(n.id)}>
+                    <td className="border-b border-border py-2 pr-3 font-mono">{n.id}</td>
+                    <td className="border-b border-border py-2 pr-3">{n.class ?? "—"}</td>
+                    <td className="border-b border-border py-2 pr-3 font-mono">{n.effective?.harness ?? "claude"}</td>
+                    <td className="border-b border-border py-2 pr-3 font-mono">{n.effective?.model ?? "default"}</td>
+                    <td className="border-b border-border py-2 pr-3 font-mono">{n.effective?.effort ?? "—"}</td>
+                    <td className="border-b border-border py-2 pr-3">{n.node_tuning ? <Badge variant="attention">node</Badge> : <Badge variant="outline">inherit</Badge>}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </CardContent>
+      </Card>
       <div className="tuner-save">
         <Button onClick={save} disabled={!dirty || state === "saving"}>
           {state === "saving" ? "Saving…" : state === "saved" ? "Saved — applies to new runs" : state === "failed" ? "Failed — retry" : "Save tuning"}
@@ -1524,7 +1969,7 @@ function Settings() {
     loadWs();
   };
   useEffect(() => { fetch("/api/settings").then((r) => r.json()).then(setS).catch(() => {}); loadWs(); }, []);
-  if (!s) return <div className="empty">loading…</div>;
+  if (!s) return <LoadingState title="Loading settings" />;
   const save = async () => {
     await fetch("/api/settings", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(s) });
     setSaved(true);
@@ -1591,7 +2036,7 @@ function PromptsScreen({ selected }: { selected: string | null }) {
     fetch(`/api/prompts/${encodeURIComponent(selected)}`).then((r) => (r.ok ? r.json() : null)).then(setDetail).catch(() => setDetail(null));
   }, [selected]);
 
-  if (!list) return <div className="empty">loading prompts…</div>;
+  if (!list) return <LoadingState title="Loading prompts" detail="Reading prompt history and outcomes." />;
   if (list.length === 0) return <div className="empty">no prompts in <code>prompts/</code> yet</div>;
 
   return (
@@ -1612,7 +2057,7 @@ function PromptsScreen({ selected }: { selected: string | null }) {
       {!selected ? (
         <div className="empty">pick a prompt to see its history, feedback and outcomes</div>
       ) : !detail ? (
-        <div className="empty">loading {selected}…</div>
+        <LoadingState title={`Loading ${selected}`} />
       ) : (
         <div className="prompt-detail">
           <div className="topbar">
@@ -1746,7 +2191,7 @@ function ProposalsScreen({ selected }: { selected: string | null }) {
     window.dispatchEvent(new Event(PROPOSALS_CHANGED));
   };
 
-  if (!list) return <div className="empty">loading proposals…</div>;
+  if (!list) return <LoadingState title="Loading proposals" detail="Reading pending prompt revisions." />;
   if (list.length === 0)
     return <div className="empty">no proposals — add feedback to a prompt, then <code>bun reviser/revise.ts &lt;id&gt;</code></div>;
 

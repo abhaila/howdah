@@ -47,6 +47,23 @@ describe("executors registry", () => {
 });
 
 describe("howdah run (CLI)", () => {
+  test("setup creates the default local app home layout", async () => {
+    const base = mkdtempSync(join(tmpdir(), "howdah-setup-"));
+    const proc = Bun.spawn(["bun", join(import.meta.dir, "main.ts"), "setup"], {
+      env: { ...process.env, HOWDAH_HOME: base },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    await proc.exited;
+    expect(proc.exitCode).toBe(0);
+    const out = await new Response(proc.stdout).text();
+    expect(out).toContain(`home: ${base}`);
+    expect(existsSync(join(base, "config.json"))).toBe(true);
+    expect(existsSync(join(base, "runs"))).toBe(true);
+    expect(existsSync(join(base, "repos"))).toBe(true);
+    expect(existsSync(join(base, "attention"))).toBe(true);
+  });
+
   test("launches a run whose run-started carries cwd + folder_kind; stub executor parks it", async () => {
     const base = mkdtempSync(join(tmpdir(), "howdah-cli-"));
     const notes = join(base, "notes");

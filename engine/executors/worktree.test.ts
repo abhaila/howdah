@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, writeFileSync, existsSync } from "node:fs";
+import { chmodSync, mkdtempSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { execSync } from "node:child_process";
-import { worktreeExecutor, commandExecutor, effectiveCwd, readWorktreeRecord, derivePrState } from "./worktree";
+import { worktreeExecutor, commandExecutor, effectiveCwd, readWorktreeRecord, derivePrState, ghPrProbe } from "./worktree";
 import { EventLog } from "../../log/write";
 import type { ExecArgs } from "../run";
 
@@ -116,6 +116,7 @@ describe("probe:pr", () => {
     expect(derivePrState({ state: "OPEN", mergeable: "CONFLICTING" })).toBe("CONFLICTS");
     expect(derivePrState({ state: "OPEN", failedChecks: true })).toBe("CI_FAILED");
     expect(derivePrState({ state: "OPEN", reviewDecision: "CHANGES_REQUESTED" })).toBe("CHANGES_REQUIRED");
+    expect(derivePrState({ state: "OPEN", reviewDecision: "CHANGES_REQUESTED", failedChecks: true })).toBe("CHANGES_REQUIRED");
     expect(derivePrState({ state: "OPEN" })).toBe("OPEN");
   });
 
@@ -128,6 +129,54 @@ describe("probe:pr", () => {
     expect(r).toEqual({ status: "succeeded", writes: { "pr.state": "CHANGES_REQUIRED" } });
     const rec: any = log.read().find((e) => e.type === "reconciled");
     expect(rec.forge).toEqual({ kind: "pr", state: "CHANGES_REQUIRED", url: "https://github.com/areeb/x/pull/7" });
+  });
+
+  test("prefers the published PR URL over branch rediscovery", async () => {
+    const repoDir = repo();
+    const runDir = mkdtempSync(join(tmpdir(), "howdah-pr-"));
+    const log = new EventLog(join(runDir, "run.jsonl"));
+    let observedRef = "";
+    const exec = commandExecutor({
+      prProbe: (_cwd, ref) => {
+        observedRef = ref;
+        return { state: "OPEN", url: "https://github.com/areeb/x/pull/7" };
+      },
+    });
+    await exec(args({
+      def: { ...prDef, reads: ["publication_summary"] },
+      log,
+      cwd: repoDir,
+      reads: { publication_summary: { pr_url: "https://github.com/areeb/x/pull/7" } },
+    }));
+    expect(observedRef).toBe("https://github.com/areeb/x/pull/7");
+  });
+
+  test("required checks decide CI_FAILED, not optional failures in the rollup", () => {
+    const repoDir = repo();
+    const binDir = mkdtempSync(join(tmpdir(), "howdah-gh-"));
+    const gh = join(binDir, "gh");
+    writeFileSync(gh, `#!/usr/bin/env bash
+if [[ "$1 $2" == "pr view" ]]; then
+  printf '%s\\n' '{"state":"OPEN","url":"https://github.com/areeb/x/pull/7","mergeable":"MERGEABLE","reviewDecision":"REVIEW_REQUIRED","statusCheckRollup":[{"conclusion":"FAILURE","state":"COMPLETED"}]}'
+  exit 0
+fi
+if [[ "$1 $2" == "pr checks" ]]; then
+  printf '%s\\n' '[{"name":"required","state":"SUCCESS","bucket":"pass"}]'
+  exit 0
+fi
+exit 1
+`);
+    chmodSync(gh, 0o755);
+    const priorPath = process.env.PATH;
+    process.env.PATH = `${binDir}:${priorPath ?? ""}`;
+    try {
+      expect(ghPrProbe(repoDir, "https://github.com/areeb/x/pull/7")).toEqual({
+        state: "OPEN",
+        url: "https://github.com/areeb/x/pull/7",
+      });
+    } finally {
+      process.env.PATH = priorPath;
+    }
   });
 
   test("no PR is a THROWN error (parks), and so is forge-unreachable — never a silent state", async () => {

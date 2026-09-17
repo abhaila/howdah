@@ -12,18 +12,18 @@
  * Run layout: <runsDir>/<run-id>/run.jsonl (the engine's dir option).
  */
 import { existsSync, readFileSync, readdirSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { EventLog, readLog } from "../log/write";
-import { deriveDetail, deriveSummary, runDigest, sortRuns } from "./derive";
+import { deriveDetail, deriveSummary, deriveTimeline, runDigest, sortRuns, type RunSummary } from "./derive";
 import { AttentionCenter } from "../engine/attention";
 import { graphCatalog, GRAPHS } from "../graphs/index";
-import { loadConfig, saveConfig } from "../config/config";
+import { ensureHowdahHome, loadConfig, saveConfig } from "../config/config";
 import { listGithubRepos, registerGithubRepo } from "../config/github";
 import { loadTuning, saveTuning, pruneTuning } from "../config/tuning";
-import { writeControl, clearControl } from "../engine/control";
+import { writeControl, clearControl, interruptRunner } from "../engine/control";
 import { EventLog as ControlLog } from "../log/write";
-import { effectiveCwd } from "../engine/executors/worktree";
+import { effectiveCwd, readWorktreeRecord } from "../engine/executors/worktree";
 import { PromptStore } from "../prompts/store";
 import {
   appendFeedback, promptDetail, promptSummaries, reconstructRender, repoRoot,
@@ -53,9 +53,30 @@ function listRunIds(runsDir: string): string[] {
   return readdirSync(runsDir).filter((d) => existsSync(logPath(runsDir, d)));
 }
 
+function runnerAlive(runDir: string): boolean {
+  const pidFile = join(runDir, "runner.pid");
+  if (!existsSync(pidFile)) return false;
+  const pid = Number(readFileSync(pidFile, "utf8").trim());
+  if (!Number.isFinite(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function withRunnerLiveness<T extends { status: RunSummary["status"] }>(summary: T, events: ReturnType<typeof readLog>, runDir: string): T {
+  if (summary.status !== "running") return summary;
+  const hasOpenNode = deriveTimeline(events).some((row) => row.status === "running");
+  return hasOpenNode && !runnerAlive(runDir) ? { ...summary, status: "harness-dead" } : summary;
+}
+
 export function createHowdahServer(opts: ServerOpts) {
   const pollMs = opts.pollMs ?? 500;
   const root = opts.repoRoot ?? repoRoot();
+  const home = dirname(opts.runsDir);
+  ensureHowdahHome(home);
   const promptStore = new PromptStore(join(root, "prompts"));
   const spawnResume = (id: string) => {
     // a live runner is already polling the log for the reply — don't double-run
@@ -71,13 +92,25 @@ export function createHowdahServer(opts: ServerOpts) {
     }).unref();
   };
   const json = (body: unknown, status = 200) =>
-    new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+    new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", "cache-control": "no-store" } });
 
   return Bun.serve({
     port: opts.port ?? 4711,
     idleTimeout: 0,
     async fetch(req) {
       const url = new URL(req.url);
+
+      if (url.pathname === "/api/app") {
+        return json({
+          home,
+          runsDir: opts.runsDir,
+          attentionDir: opts.attentionDir,
+          repoRoot: root,
+          configPath: join(home, "config.json"),
+          source: root === repoRoot() ? "repo checkout" : "custom repo root",
+          supervisorHeartbeat: existsSync(join(home, "heartbeat.json")) ? join(home, "heartbeat.json") : null,
+        });
+      }
 
       if (url.pathname === "/api/graphs") return json(graphCatalog());
       const gm = url.pathname.match(/^\/api\/graphs\/([^/]+)(\/tuning)?$/);
@@ -310,7 +343,7 @@ export function createHowdahServer(opts: ServerOpts) {
         return render ? json(render) : json({ error: "no such render, or its pinned prompt is gone" }, 404);
       }
 
-      const m = url.pathname.match(/^\/api\/runs(?:\/([^/]+)(?:\/(events|reply|open-ide|resume|pause|abort|jump|ask))?)?$/);
+      const m = url.pathname.match(/^\/api\/runs(?:\/([^/]+)(?:\/(events|reply|open-ide|open-run-folder|resume|pause|abort|jump|ask))?)?$/);
       if (!m) {
         // static: /public assets by name, everything else → the app shell.
         // no-cache: this is a local app whose bundle changes constantly — the browser must
@@ -324,7 +357,10 @@ export function createHowdahServer(opts: ServerOpts) {
       const [, id, sub] = m;
 
       if (!id) {
-        const runs = listRunIds(opts.runsDir).map((rid) => deriveSummary(rid, readLog(logPath(opts.runsDir, rid))));
+        const runs = listRunIds(opts.runsDir).map((rid) => {
+          const events = readLog(logPath(opts.runsDir, rid));
+          return withRunnerLiveness(deriveSummary(rid, events), events, join(opts.runsDir, rid));
+        });
         return json(sortRuns(runs));
       }
       const path = logPath(opts.runsDir, id);
@@ -342,12 +378,19 @@ export function createHowdahServer(opts: ServerOpts) {
         return json({ ok: true, opened: target });
       }
 
+      if (sub === "open-run-folder" && req.method === "POST") {
+        const runDir = join(opts.runsDir, id);
+        if (!existsSync(runDir)) return json({ error: "run folder is gone" }, 410);
+        const opener = process.platform === "darwin" ? "open" : process.platform === "win32" ? "explorer" : "xdg-open";
+        Bun.spawn([opener, runDir], { stdout: "ignore", stderr: "ignore" }).unref();
+        return json({ ok: true, opened: runDir });
+      }
+
       if (sub === "reply" && req.method === "POST") {
         const body = (await req.json()) as { text?: string };
         const events = readLog(path);
-        const ask = events.findLast((e) => e.type === "attention-raised");
-        const resolved = events.some((e) => e.type === "attention-resolved" && ask && e.seq > ask.seq);
-        if (!ask || resolved) return json({ error: "nothing awaiting a reply" }, 409);
+        const ask = deriveSummary(id, events).status === "needs-input" ? deriveDetail(id, events).ask : null;
+        if (!ask) return json({ error: "nothing awaiting a reply" }, 409);
         new EventLog(path).append({ type: "attention-resolved", node: ask.node, visit: ask.visit, reply: body.text ?? "" });
         new AttentionCenter(opts.attentionDir, []).resolve(`${id}:${ask.node}:${ask.visit}`);
         spawnResume(id); // the reply must MOVE the run, not just record the answer
@@ -361,29 +404,21 @@ export function createHowdahServer(opts: ServerOpts) {
       }
 
       if (sub === "pause" && req.method === "POST") {
-        writeControl(join(opts.runsDir, id), "pause");
-        return json({ ok: true, note: "pause lands at the next node boundary" }, 202);
+        const runDir = join(opts.runsDir, id);
+        writeControl(runDir, "pause");
+        const events = readLog(path);
+        const paused = events.findLast((e) => e.type === "run-paused" || e.type === "run-resumed");
+        if (!events.some((e) => e.type === "run-finished") && paused?.type !== "run-paused")
+          new ControlLog(path).append({ type: "run-paused", by: "operator" });
+        const interrupted = await interruptRunner(runDir);
+        return json({ ok: true, interrupted, note: interrupted ? "paused and interrupted the live runner" : "pause recorded" }, 202);
       }
 
       if (sub === "abort" && req.method === "POST") {
         const runDir = join(opts.runsDir, id);
         writeControl(runDir, "abort");
         // a live runner aborts at the boundary; a hung/mid-turn one is killed with its agents
-        const pidFile = join(runDir, "runner.pid");
-        if (existsSync(pidFile)) {
-          const pid = Number(readFileSync(pidFile, "utf8").trim());
-          if (pid > 0) {
-            try { process.kill(pid, 0); } catch { pid_dead: {
-              // dead already — fall through to sealing the log
-            } }
-            try {
-              Bun.spawnSync(["pkill", "-TERM", "-P", String(pid)]); // the claude/codex child too
-              process.kill(pid, "SIGTERM");
-              await Bun.sleep(500);
-              try { process.kill(pid, 0); process.kill(pid, "SIGKILL"); } catch { /* gone */ }
-            } catch { /* already dead */ }
-          }
-        }
+        await interruptRunner(runDir);
         const events = readLog(path);
         if (!events.some((e) => e.type === "run-finished"))
           new ControlLog(path).append({ type: "run-finished", outcome: "aborted" });
@@ -393,10 +428,15 @@ export function createHowdahServer(opts: ServerOpts) {
       if (sub === "jump" && req.method === "POST") {
         const body = (await req.json()) as { node?: string; message?: string };
         if (!body.node) return json({ error: "node required" }, 400);
+        const events = readLog(path);
+        const started = events.find((e) => e.type === "run-started");
+        const graph = started?.type === "run-started" ? GRAPHS[started.graph] : undefined;
+        const node = graph?.def.nodes[body.node];
+        if (!node) return json({ error: `unknown node "${body.node}"` }, 400);
+        if (node.kind === "terminal") return json({ error: "cannot jump to a terminal node" }, 400);
         const cli = join(import.meta.dir, "..", "cli", "main.ts");
         const args = ["bun", cli, "jump", id, body.node, ...(body.message ? [body.message] : [])];
-        const r = Bun.spawnSync(args, { stdout: "pipe", stderr: "pipe", env: { ...process.env } });
-        if (r.exitCode !== 0) return json({ error: new TextDecoder().decode(r.stderr).trim().slice(0, 300) }, 400);
+        Bun.spawn(args, { stdout: "ignore", stderr: "ignore", env: { ...process.env } }).unref();
         return json({ ok: true }, 202);
       }
 
@@ -482,7 +522,17 @@ export function createHowdahServer(opts: ServerOpts) {
         /* a graph with conflicting scopes throws; the rest of the run view still renders */
       }
       const detail = deriveDetail(id, events, declarations);
+      detail.summary = withRunnerLiveness(detail.summary, events, join(opts.runsDir, id));
       const target = effectiveCwd(path, detail.identity.cwd ?? undefined);
+      const runDir = join(opts.runsDir, id);
+      const wt = readWorktreeRecord(runDir);
+      detail.persistence = {
+        home,
+        run_dir: runDir,
+        log_path: path,
+        worktree_path: wt?.path ?? null,
+        runner_alive: runnerAlive(runDir),
+      };
       return json({
         ...detail,
         cwd_exists: target ? existsSync(target) : false,
@@ -508,6 +558,7 @@ export async function buildApp(): Promise<void> {
 if (import.meta.main) {
   await buildApp();
   const base = process.env.HOWDAH_HOME ?? join(homedir(), ".howdah");
-  const server = createHowdahServer({ runsDir: join(base, "runs"), attentionDir: join(base, "attention") });
+  const port = process.env.HOWDAH_PORT ? Number(process.env.HOWDAH_PORT) : undefined;
+  const server = createHowdahServer({ runsDir: join(base, "runs"), attentionDir: join(base, "attention"), port });
   console.log(`howdah viewer: http://localhost:${server.port}`);
 }

@@ -18,9 +18,9 @@ import { replayState } from "../engine/replay";
 import { Reconciler, readsForgeFacts } from "../engine/reconcile";
 import { effectiveCwd, readWorktreeRecord } from "../engine/executors/worktree";
 import { GRAPHS, graphCatalog } from "../graphs/index";
-import { howdahHome, loadConfig, saveConfig, resolveWorkspace, repoNameFor } from "../config/config";
+import { howdahHome, loadConfig, saveConfig, resolveWorkspace, repoNameFor, ensureHowdahHome } from "../config/config";
 import { loadTuning } from "../config/tuning";
-import { readControl, writeControl, clearControl } from "../engine/control";
+import { readControl, writeControl, clearControl, interruptRunner } from "../engine/control";
 
 const base = howdahHome();
 const runsDir = join(base, "runs");
@@ -65,6 +65,15 @@ function runnerAlive(runDir: string): boolean {
   if (!existsSync(p)) return false;
   const pid = Number(readFileSync(p, "utf8").trim());
   return Number.isFinite(pid) && pid > 0 && pidAlive(pid);
+}
+
+function markPaused(runDir: string): void {
+  const path = join(runDir, "run.jsonl");
+  if (!existsSync(path)) return;
+  const events = readLog(path);
+  const paused = events.findLast((e) => e.type === "run-paused" || e.type === "run-resumed");
+  if (!events.some((e) => e.type === "run-finished") && paused?.type !== "run-paused")
+    new EventLog(path).append({ type: "run-paused", by: "operator" });
 }
 
 function parseRunArgs(argv: string[]) {
@@ -256,6 +265,9 @@ export async function doctorCommand(): Promise<boolean> {
   const git = probe(["git", "--version"]);
   checks.push(["git", git !== null, git ?? "not on PATH"]);
   const config = loadConfig(base);
+  checks.push(["HOWDAH_HOME", true, base]);
+  checks.push(["config", existsSync(join(base, "config.json")), join(base, "config.json")]);
+  checks.push(["runs dir", existsSync(runsDir), runsDir]);
   for (const [name, r] of Object.entries(config.repos))
     checks.push([`repo ${name}`, existsSync(r.path), r.path]);
   for (const [name, f] of Object.entries(config.folders))
@@ -269,6 +281,20 @@ export async function doctorCommand(): Promise<boolean> {
     console.log(`${pass ? "✓" : "✗"} ${name.padEnd(24)} ${detail}`);
   }
   return ok;
+}
+
+export function setupCommand(): void {
+  ensureHowdahHome(base);
+  console.log("Howdah setup complete");
+  console.log(`home: ${base}`);
+  console.log(`config: ${join(base, "config.json")}`);
+  console.log(`runs: ${runsDir}`);
+  console.log(`repos: ${join(base, "repos")}`);
+  console.log("");
+  console.log("Next:");
+  console.log("  howdah doctor");
+  console.log("  howdah workspace add <name> <path>");
+  console.log("  howdah up");
 }
 
 function replyCommand(runId: string, text: string): void {
@@ -296,10 +322,19 @@ if (import.meta.main) {
       console.log(JSON.stringify(ids));
     } else if (verb === "reply") replyCommand(rest[0] ?? "", rest.slice(1).join(" "));
     else if (verb === "resume") { clearControl(join(runsDir, rest[0] ?? "")); await resumeCommand(rest[0] ?? ""); }
-    else if (verb === "pause") { writeControl(join(runsDir, rest[0] ?? ""), "pause"); console.log("pause requested — lands at the next node boundary"); }
+    else if (verb === "pause") {
+      const runDir = join(runsDir, rest[0] ?? "");
+      if (!existsSync(join(runDir, "run.jsonl")))
+        throw new Error(`unknown run: ${rest[0] ?? ""} (checked ${runsDir}; set HOWDAH_HOME to the home used by the web server)`);
+      writeControl(runDir, "pause");
+      markPaused(runDir);
+      const interrupted = await interruptRunner(runDir);
+      console.log(interrupted ? "pause requested — interrupted live runner" : "pause requested");
+    }
     else if (verb === "abort") { writeControl(join(runsDir, rest[0] ?? ""), "abort"); console.log("abort requested — lands at the next node boundary"); }
     else if (verb === "jump") await jumpCommand(rest[0] ?? "", rest[1] ?? "", rest.slice(2).join(" ") || undefined);
     else if (verb === "up") await upCommand({ once: rest.includes("--once") });
+    else if (verb === "setup") setupCommand();
     else if (verb === "doctor") process.exit((await doctorCommand()) ? 0 : 1);
     else if (verb === "graphs") console.log(JSON.stringify(graphCatalog(), null, 2));
     else if (verb === "workspace") {
@@ -338,7 +373,7 @@ if (import.meta.main) {
       console.log(`scaffolded ${await newGraph(rest[0] ?? "", kind)}`);
     }
     else {
-      console.error("usage: howdah run|resume|pause|abort|jump|reply|runs|graphs|new-graph|workspace|up|doctor");
+      console.error("usage: howdah setup|run|resume|pause|abort|jump|reply|runs|graphs|new-graph|workspace|up|doctor");
       process.exit(1);
     }
   } catch (err) {

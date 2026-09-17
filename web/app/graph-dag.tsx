@@ -60,7 +60,21 @@ function layout(shape: GraphShapeDto): Map<string, { x: number; y: number }> {
   return pos;
 }
 
-export function GraphDag({ shape, current, visits, onSelect, selected }: { shape: GraphShapeDto; current?: string; visits?: Record<string, number>; onSelect?: (id: string) => void; selected?: string }) {
+export function GraphDag({
+  shape,
+  current,
+  visits,
+  onSelect,
+  selected,
+  canSelect = (node) => node.kind === "agent",
+}: {
+  shape: GraphShapeDto;
+  current?: string;
+  visits?: Record<string, number>;
+  onSelect?: (id: string) => void;
+  selected?: string;
+  canSelect?: (node: GraphShapeDto["nodes"][number]) => boolean;
+}) {
   const pos = layout(shape);
   const width = Math.max(...[...pos.values()].map((p) => p.x)) + 230;
   const height = Math.max(...[...pos.values()].map((p) => p.y)) + 90;
@@ -102,13 +116,14 @@ export function GraphDag({ shape, current, visits, onSelect, selected }: { shape
           const p = pos.get(n.id)!;
           const isCurrent = n.id === current;
           const v = visits?.[n.id];
+          const selectable = !!onSelect && canSelect(n);
           return (
             <g
               key={n.id}
               transform={`translate(${p.x}, ${p.y})`}
-              className={`dag-node ${isCurrent ? "current" : ""} ${selected === n.id ? "selected" : ""} ${onSelect && n.kind === "agent" ? "clickable" : ""} kind-${n.kind}`}
+              className={`dag-node ${isCurrent ? "current" : ""} ${selected === n.id ? "selected" : ""} ${selectable ? "clickable" : ""} kind-${n.kind}`}
               style={{ animationDelay: `${(p.y / 92) * 55}ms` }}
-              onClick={() => n.kind === "agent" && onSelect?.(n.id)}
+              onClick={() => selectable && onSelect?.(n.id)}
             >
               <rect width="180" height="52" rx="9" />
               <text x="12" y="21" className="dag-title">

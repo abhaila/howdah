@@ -8,7 +8,8 @@
  *   create_worktree → plan → implement → local_review ─┬─reject─▶ plan_review → implement_review ─┐
  *            ▲                              ▲          └─pass───▶ publish → probe_pr ─┬─ MERGED ─▶ complete_ticket → cleanup_merged ─▶ complete
  *            │                              └──────────────────────────────┘(loop)    ├─ CLOSED ─▶ cleanup_closed ─▶ closed
- *                                                                                     ├─ CONFLICTS/CI/CHANGES ─▶ repairs → review_repairs ⇄ revise
+ *                                                                                     ├─ CONFLICTS/CI/CHANGES ─▶ repairs → review_repairs ─┬─pass─▶ publish
+ *                                                                                     │                                      └─reject─▶ revise ─▶ publish
  *                                                                                     └─ (fallback) wait 5m ─▶ probe_pr
  */
 import { defineGraph } from "../core/graph";
@@ -89,18 +90,18 @@ export const implementTicket = defineGraph<ImplementTicketCtx>({
       writes: { publication_summary: sticky },
       class: "delivery",
     },
-    "delivery.probe_pr": { kind: "command", run: "probe:pr", writes: { "pr.state": perVisit }, class: "delivery" },
+    "delivery.probe_pr": { kind: "command", run: "probe:pr", reads: ["publication_summary"], writes: { "pr.state": perVisit }, class: "delivery" },
     "delivery.address_reviews": {
       kind: "agent",
       prompt: "delivery.address_reviews",
-      reads: ["goal", "work", "publication_summary"],
+      reads: ["goal", "work", "publication_summary", "review_verdict", "review_findings"],
       writes: { repair_summary: sticky },
       class: "delivery",
     },
     "delivery.fix_ci": {
       kind: "agent",
       prompt: "delivery.fix_ci",
-      reads: ["goal", "work", "publication_summary"],
+      reads: ["goal", "work", "publication_summary", "review_verdict", "review_findings"],
       writes: { repair_summary: sticky },
       class: "delivery",
     },
@@ -180,14 +181,14 @@ export const implementTicket = defineGraph<ImplementTicketCtx>({
     },
     {
       from: "delivery.probe_pr",
-      to: "delivery.fix_ci",
-      condition: { reads: ["pr.state"], test: (v) => v["pr.state"] === "CI_FAILED", label: "pr.state == 'CI_FAILED'" },
+      to: "delivery.address_reviews",
+      condition: { reads: ["pr.state"], test: (v) => v["pr.state"] === "CHANGES_REQUIRED", label: "pr.state == 'CHANGES_REQUIRED'" },
       weight: 3,
     },
     {
       from: "delivery.probe_pr",
-      to: "delivery.address_reviews",
-      condition: { reads: ["pr.state"], test: (v) => v["pr.state"] === "CHANGES_REQUIRED", label: "pr.state == 'CHANGES_REQUIRED'" },
+      to: "delivery.fix_ci",
+      condition: { reads: ["pr.state"], test: (v) => v["pr.state"] === "CI_FAILED", label: "pr.state == 'CI_FAILED'" },
       weight: 2,
     },
     { from: "delivery.probe_pr", to: "delivery.wait" },
@@ -207,7 +208,7 @@ export const implementTicket = defineGraph<ImplementTicketCtx>({
       condition: { reads: ["review_verdict"], test: (v) => v.review_verdict === "pass", label: "review_verdict == 'pass'" },
       weight: 1,
     },
-    { from: "delivery.revise_repairs", to: "delivery.review_repairs" },
+    { from: "delivery.revise_repairs", to: "delivery.publish" },
     { from: "delivery.wait", to: "delivery.probe_pr" },
 
     { from: "complete_ticket", to: "cleanup_merged" },

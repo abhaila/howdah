@@ -39,6 +39,22 @@ describe("derive", () => {
     expect(deriveStatus(log.read()).status).toBe("done");
   });
 
+  test("later progress makes an unresolved ask stale", () => {
+    const dir = mkdtempSync(join(tmpdir(), "howdah-web-"));
+    const log = new EventLog(join(dir, "r1", "run.jsonl"), fixedClock());
+    log.append({ type: "run-started", graph: "write-doc", inputs: { goal: "g" }, pinned_prompts: {} });
+    log.append({ type: "node-started", node: "probe", visit: 1, attempt_id: "probe#1" });
+    log.append({ type: "node-finished", node: "probe", visit: 1, status: "failed", writes: {} });
+    log.append({ type: "attention-raised", node: "probe", visit: 1, reason: "forge unreachable" });
+    expect(deriveStatus(log.read()).status).toBe("needs-input");
+
+    log.append({ type: "operator-jump", to: "fix_ci", message: "move on" });
+    log.append({ type: "node-started", node: "fix_ci", visit: 1, attempt_id: "fix_ci#1" });
+    const status = deriveStatus(log.read());
+    expect(status.status).toBe("running");
+    expect(status.ask).toBeNull();
+  });
+
   test("summary carries goal, wait-since, and reason", () => {
     const dir = mkdtempSync(join(tmpdir(), "howdah-web-"));
     const log = seedParkedRun(dir, "r1");
@@ -106,6 +122,18 @@ describe("server API", () => {
     expect((await fetch(url("/api/runs/nope"))).status).toBe(404);
   });
 
+  test("an unfinished node with no live runner is reported as harness-dead", async () => {
+    const id = "dead-runner";
+    const log = new EventLog(join(runsDir, id, "run.jsonl"), fixedClock());
+    log.append({ type: "run-started", graph: "write-doc", inputs: { goal: "g" }, pinned_prompts: {} });
+    log.append({ type: "node-started", node: "doc.draft", visit: 1, attempt_id: "doc.draft#1" });
+
+    const d = (await (await fetch(url(`/api/runs/${id}`))).json()) as any;
+    expect(d.summary.status).toBe("harness-dead");
+    const runs = (await (await fetch(url("/api/runs"))).json()) as any[];
+    expect(runs.find((r) => r.id === id).status).toBe("harness-dead");
+  });
+
   test("reply round-trips: POST resolves the ask in the log AND the attention record", async () => {
     // durable attention record exists alongside the log, as the engine would leave it
     const center = new AttentionCenter(attentionDir, []);
@@ -131,6 +159,22 @@ describe("server API", () => {
     // a second reply has nothing to answer
     const again = await fetch(url("/api/runs/run-a/reply"), { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
     expect(again.status).toBe(409);
+  });
+
+  test("pause records a paused state and interrupts a live runner", async () => {
+    const id = "pause-live";
+    const log = new EventLog(join(runsDir, id, "run.jsonl"), fixedClock());
+    log.append({ type: "run-started", graph: "write-doc", inputs: { goal: "pause me" }, pinned_prompts: { "doc.draft": 1 } });
+    log.append({ type: "node-started", node: "doc.draft", visit: 1, attempt_id: "doc.draft#1" });
+    const child = Bun.spawn(["sh", "-c", "sleep 30"], { stdout: "ignore", stderr: "ignore" });
+    writeFileSync(join(runsDir, id, "runner.pid"), String(child.pid));
+
+    const res = await fetch(url(`/api/runs/${id}/pause`), { method: "POST" });
+    expect(res.status).toBe(202);
+    expect((await res.json()) as any).toMatchObject({ ok: true, interrupted: true });
+    expect(readLog(join(runsDir, id, "run.jsonl")).some((e) => e.type === "run-paused")).toBe(true);
+    await Bun.sleep(50);
+    expect(() => process.kill(child.pid, 0)).toThrow();
   });
 
   test("SSE streams events appended after connect", async () => {
@@ -172,6 +216,8 @@ describe("settings + open-ide (T19)", () => {
   test("settings round-trip via the API", async () => {
     process.env.HOWDAH_HOME = base2;
     server2 = createHowdahServer({ runsDir: runsDir2, attentionDir: join(base2, "attention"), port: 0 });
+    const app = (await (await fetch(url2("/api/app"))).json()) as any;
+    expect(app).toMatchObject({ home: base2, runsDir: runsDir2, configPath: join(base2, "config.json") });
     expect(((await (await fetch(url2("/api/settings"))).json()) as any).editorCommand).toBeUndefined();
     await fetch(url2("/api/settings"), { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ editorCommand: "idea", chime: false }) });
     const s = (await (await fetch(url2("/api/settings"))).json()) as any;
@@ -194,6 +240,12 @@ describe("settings + open-ide (T19)", () => {
 
     const detail = (await (await fetch(url2("/api/runs/with-folder"))).json()) as any;
     expect(detail).toMatchObject({ cwd_exists: true, editor_configured: true });
+    expect(detail.persistence).toMatchObject({
+      home: base2,
+      run_dir: join(runsDir2, "with-folder"),
+      log_path: join(runsDir2, "with-folder", "run.jsonl"),
+      runner_alive: false,
+    });
 
     expect((await fetch(url2("/api/runs/no-folder/open-ide"), { method: "POST" })).status).toBe(404);
     expect((await fetch(url2("/api/runs/gone-folder/open-ide"), { method: "POST" })).status).toBe(410);
@@ -604,6 +656,29 @@ describe("deriveTimeline axis", () => {
     const rows = deriveTimeline(log.read());
     expect(rows[0]!.duration_ms).toBeNull();
     expect(rows[0]!.run_span_ms).toBeGreaterThan(0);
+  });
+
+  test("a repeated start for the same visit closes the abandoned attempt", () => {
+    const dir = mkdtempSync(join(tmpdir(), "howdah-axis-"));
+    const log = new EventLog(join(dir, "r", "run.jsonl"), fixedClock());
+    log.append({ type: "node-started", node: "repair", visit: 2, attempt_id: "repair#2" });
+    log.append({ type: "chunk", node: "repair", visit: 2, turn: 1, index: 0, kind: "text", content: "stale" });
+    log.append({ type: "node-started", node: "repair", visit: 2, attempt_id: "repair#2b" });
+    const rows = deriveTimeline(log.read());
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toMatchObject({ node: "repair", visit: 2, status: "failed", duration_ms: 2000 });
+    expect(rows[1]).toMatchObject({ node: "repair", visit: 2, status: "running", duration_ms: null });
+  });
+
+  test("a jump to another node closes the prior unfinished row", () => {
+    const dir = mkdtempSync(join(tmpdir(), "howdah-axis-"));
+    const log = new EventLog(join(dir, "r", "run.jsonl"), fixedClock());
+    log.append({ type: "node-started", node: "fix_ci", visit: 1, attempt_id: "fix_ci#1" });
+    log.append({ type: "chunk", node: "fix_ci", visit: 1, turn: 1, index: 0, kind: "text", content: "working" });
+    log.append({ type: "node-started", node: "revise_repairs", visit: 2, attempt_id: "revise_repairs#2" });
+    const rows = deriveTimeline(log.read());
+    expect(rows[0]).toMatchObject({ node: "fix_ci", status: "failed", duration_ms: 2000 });
+    expect(rows[1]).toMatchObject({ node: "revise_repairs", status: "running", duration_ms: null });
   });
 
   test("an empty log has no rows and no axis", () => {
