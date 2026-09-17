@@ -144,6 +144,7 @@ the reviser script as the first artifact — which restores differentiator-first
 | A9.1 | 🟡 Bun server + React + shadcn, serving the run view over the same on-disk files/JSONL (storage unchanged). Carried from mockup rounds: the step timeline as a first-class element; line-level tool detail collapsed by default, expandable on tap | |
 | A9.2 | 🟡 Thin CLI survives for scripting only (`harness reply`, `harness runs --json`); notification click-through opens the web view. The CLI is no longer a designed surface | |
 | A9.3 | 🟡 History: D13 originally chose CLI + files with the web UI behind a trigger. Reversed after two rounds of terminal mockups were rejected ("far too much like the terminal... slick modern UI that uses shadcn"). Decision made with renderings in hand | |
+| A9.4 | 🟡 **Operator Cockpit Upgrade** — Effort: L. Risk: Medium. Make the UI the primary control surface: graph templates/editor, run recovery panel, native artifact/document review, terminal spawn from a run/worktree, and stronger chat-to-run steering. Pros: directly addresses the operator pain and turns Howdah from an engine into a product. Cons: larger surface area and careful UX decisions needed so the cockpit stays legible under long-running, failing, or multi-run work. Implementation plan: `plans/operator-cockpit-upgrade.md` | ⚠️ |
 
 ## B: Engine first, DOT-compatible, prompts inline
 
@@ -153,7 +154,9 @@ Rebuild Orbital's model properly, then add the prompt loop.
 |------|-----------|:----:|
 | B1 | DOT parser and static validator, Orbital-compatible subset so existing graphs import | |
 | B2 | Full runner: agent, command, worktree, fan-out/join, wait, terminal | ⚠️ |
-| B3 | Event log and web UI covering R3.1-R3.5 | |
+| B3 | **SQLite-backed run store** as the primary persistence/query/control plane, following Orbital's durable-db direction: `runs`, `events`, `node_attempts`, `attention`, `artifacts`, `worktrees`, `controls`, and `runner_heartbeats` are queryable without replaying every file | |
+| B3.1 | Append-only semantics stay intact: every meaningful change is still an event, and per-run JSONL remains available as export/audit/recovery while the UI and operator actions read indexed SQLite state | |
+| B3.2 | Event log and web UI covering R3.1-R3.5 are built on the SQLite index first, so run lists, graph status, attention, cost/model history, probes, and resume state are visible without custom replay in every endpoint | |
 | B4 | Prompts inline in DOT node attributes, as Orbital does | |
 | B5 | Prompt improvement added later as tooling over the DOT files | ⚠️ |
 | B6 | Reconciler and attention as in A6/A7 | |
@@ -188,7 +191,7 @@ Rebuild Orbital's model properly, then add the prompt loop.
 - 🟡 **R2 flipped to ✅ for A at eng review:** the reviser mechanism is now concrete — GEPA-method reflective revision (ICLR 2026, published and benchmarked), defined inputs (prompt + feedback + rendered instances + PromptOutcome), a diff-based accept flow with a stale-base guard, and a scoreable ground-truth eval (the hand-edited `implement-ticket-areeb` fork). The eval is the first build task; a failed eval reopens this row.
 - **B fails R1:** prompts inline in DOT reproduces the fork-per-tweak problem that R1 exists to kill. B5 proposes tooling over it later, which is unresolved.
 - **D fails R0, R3, R4 and R6:** code work stays on Orbital, so for the largest share of the work nothing improves — the same unsurfaced prompts, the same branch drift, the same inability to fix it. D4 also depends on a closed pre-1.0 API.
-- **A and B both pass everything else.** A's remaining risk is A4.2 (own engine, deferred node types); B's is B2 (full engine up front).
+- **A and B both pass everything else.** A's remaining risk is A4.2 (own engine, deferred node types); B's is B2 (full engine up front) plus the SQLite migration boundary. The database choice improves B's operator trust story, but it must preserve append-only event semantics rather than becoming mutable status rows with no audit trail.
 
 🟡 **Selected: A**, as reviewed. The ground-truth eval (first task) is the escape hatch: if
 GEPA-method revisions don't approach the quality of your hand edit, the reviser design
