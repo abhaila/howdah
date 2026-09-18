@@ -18,6 +18,22 @@ export function buildOutputInstruction(keys: string[]): string {
   );
 }
 
+/**
+ * Asked as a follow-up turn when the final message arrived without the contract. Observed
+ * on long tool-heavy turns (codex, delivery.review_repairs: 3 of 6 attempts ended in prose
+ * after 40+ tool calls). The thread still holds all the work, so this costs one short turn
+ * instead of re-running the node.
+ */
+export function buildRepairInstruction(keys: string[]): string {
+  return (
+    `Your previous message did not end with the required outputs object, so this step cannot complete.\n` +
+    `Do not redo any work and do not use any tools — the analysis you just finished is what I need recorded.\n` +
+    `Reply with ONLY this JSON object and nothing else:\n` +
+    `{"outputs": {${keys.map((k) => `"${k}": <value>`).join(", ")}}}\n` +
+    `containing exactly these keys: ${keys.join(", ")}.`
+  );
+}
+
 export interface ParsedOutputs {
   ok: boolean;
   writes: Record<string, unknown>;

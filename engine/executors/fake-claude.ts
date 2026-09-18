@@ -64,15 +64,28 @@ if (process.env.FAKE_CLAUDE_RATELIMIT === "1")
   out({ type: "rate_limit_event", rate_limit: { status: "allowed", remaining: 0.31, resetsAt: "2026-09-13T18:00:00Z" } });
 
 // derive the demanded output keys from the appended contract so tests exercise parsing
-const keys = [...promptText.matchAll(/"(\w+)": <value>/g)].map((m) => m[1]!);
-const outputs = Object.fromEntries(keys.map((k) => [k, k === "review_verdict" ? (process.env.FAKE_CLAUDE_VERDICT ?? "pass") : `fake ${k}`]));
-const finalText = `All done.\n{"outputs": ${JSON.stringify(outputs)}}`;
+function emitTurn(text: string): boolean {
+  const keys = [...text.matchAll(/"(\w+)": <value>/g)].map((m) => m[1]!);
+  const outputs = Object.fromEntries(keys.map((k) => [k, k === "review_verdict" ? (process.env.FAKE_CLAUDE_VERDICT ?? "pass") : `fake ${k}`]));
+  const isRepair = /did not end with the required outputs object/.test(text);
+  // FAKE_CLAUDE_DROP_OUTPUTS=1 reproduces the live failure: a long turn ending in prose with
+  // no contract. The repair turn, which names itself, complies.
+  const drop = process.env.FAKE_CLAUDE_DROP_OUTPUTS === "1" && !isRepair;
+  out({
+    type: "result", subtype: "success", is_error: false,
+    usage: { input_tokens: 321, output_tokens: 45 }, total_cost_usd: 0.0042,
+    result: drop
+      ? "Verified the shared renderer and the affected integration cases. No files modified."
+      : `All done.\n{"outputs": ${JSON.stringify(outputs)}}`,
+  });
+  return drop;
+}
 
-out({
-  type: "result", subtype: "success", is_error: false,
-  usage: { input_tokens: 321, output_tokens: 45 }, total_cost_usd: 0.0042,
-  result: finalText,
-});
+if (emitTurn(promptText)) {
+  // the real CLI stays open for more stdin turns — answer the repair the same way
+  const repair = JSON.parse(await nextLine()) as { message: { content: Array<{ text?: string }> } };
+  emitTurn(repair.message.content[0]?.text ?? "");
+}
 process.exit(0);
 
 export {};

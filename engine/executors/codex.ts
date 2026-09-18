@@ -15,7 +15,7 @@ import { dirname, join } from "node:path";
 import type { Executor } from "../run";
 import { JsonlChunkParser } from "../../adapter/parse";
 import { mapCodexEvent, buildCodexApprovalResponse } from "../../adapter/codex";
-import { buildOutputInstruction, parseOutputs } from "./outputs";
+import { buildOutputInstruction, buildRepairInstruction, parseOutputs } from "./outputs";
 import { AttentionCenter, osNotifier, type Notifier } from "../attention";
 import { readLog } from "../../log/write";
 import { isAllowReply } from "./reply";
@@ -157,13 +157,26 @@ export function codexExecutor(opts: CodexExecutorOpts): Executor {
       const threadId = thread?.threadId ?? thread?.thread?.id;
       if (!threadId) throw new Error(`thread/start gave no threadId: ${JSON.stringify(thread).slice(0, 200)}`);
 
-      const done = new Promise<void>((r) => (turnDone = r));
-      await request("turn/start", {
-        threadId,
-        input: [{ type: "text", text: prompt }],
-        ...((agentConfig?.effort ?? opts.effort) ? { effort: agentConfig?.effort ?? opts.effort } : {}),
-      });
-      await done;
+      const runTurn = async (text: string): Promise<void> => {
+        const done = new Promise<void>((r) => (turnDone = r));
+        await request("turn/start", {
+          threadId,
+          input: [{ type: "text", text }],
+          ...((agentConfig?.effort ?? opts.effort) ? { effort: agentConfig?.effort ?? opts.effort } : {}),
+        });
+        await done;
+      };
+
+      await runTurn(prompt);
+
+      // one repair turn on the SAME thread when the contract is missing — the work is
+      // already done there, so this is far cheaper than parking and re-running the node
+      if (turnCompleted && writeKeys.length && !parseOutputs(finalMessage ?? accumulated, writeKeys).ok) {
+        chunk("text", "\n[outputs object missing — asking for it]");
+        finalMessage = undefined;
+        accumulated = "";
+        await runTurn(buildRepairInstruction(writeKeys));
+      }
     } finally {
       proc.kill();
       await proc.exited.catch(() => {});

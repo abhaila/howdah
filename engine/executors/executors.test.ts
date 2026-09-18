@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Engine } from "../run";
 import { claudeExecutor } from "./claude";
 import { codexExecutor } from "./codex";
-import { buildOutputInstruction, parseOutputs } from "./outputs";
+import { buildOutputInstruction, buildRepairInstruction, parseOutputs } from "./outputs";
 import { defineGraph } from "../../core/graph";
 import { EventLog } from "../../log/write";
 import { AttentionCenter } from "../attention";
@@ -129,6 +129,29 @@ describe("claude executor over the fake wire", () => {
     expect(text).toContain("Permission granted");
   }, 15000);
 
+  // Live failure: delivery.review_repairs on codex ended in prose after 40+ tool calls on
+  // 3 of 6 attempts, failing the node and parking a run that had done all the work.
+  test("a turn that ends in prose is repaired in-session instead of failing the node", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "howdah-repair-"));
+    const engine = engineWith({ FAKE_CLAUDE_ASK: "0", FAKE_CLAUDE_DROP_OUTPUTS: "1", FAKE_CLAUDE_VERDICT: "pass" }, join(dir, "attn"), dir);
+    const result = await engine.start({ goal: "repair me" });
+    expect(result).toEqual({ state: "finished", outcome: "success" });
+
+    const events = engine.log.read();
+    // the miss is visible in the thread, and the node still published its writes
+    const text = events.filter((e: any) => e.type === "chunk" && e.kind === "text").map((e: any) => e.content).join("");
+    expect(text).toContain("outputs object missing — asking for it");
+    expect(text).not.toContain("output contract violation");
+    const draft: any = events.find((e: any) => e.type === "node-finished" && e.node === "draft");
+    expect(draft.status).toBe("succeeded");
+    expect(draft.writes).toEqual({ doc_summary: "fake doc_summary" });
+  }, 20000);
+
+  test("the repair is asked once per attempt, not looped", () => {
+    expect(buildRepairInstruction(["a", "b"])).toContain('{"outputs": {"a": <value>, "b": <value>}}');
+    expect(buildRepairInstruction(["a"])).toContain("Do not redo any work");
+  });
+
   test("denial travels too: a non-allow reply becomes a deny on the wire", async () => {
     const dir = mkdtempSync(join(tmpdir(), "howdah-exec-"));
     const attentionDir = join(dir, "attn");
@@ -165,3 +188,4 @@ describe("codex executor over the fake app-server wire", () => {
     delete process.env.FAKE_CODEX_CAPTURE;
   });
 });
+

@@ -22,7 +22,7 @@ import { dirname, join } from "node:path";
 import type { Executor } from "../run";
 import { JsonlChunkParser } from "../../adapter/parse";
 import { mapClaudeEvent, buildClaudePermissionResponse, buildClaudeUserTurn, claudeArgs } from "../../adapter/claude";
-import { buildOutputInstruction, parseOutputs } from "./outputs";
+import { buildOutputInstruction, buildRepairInstruction, parseOutputs } from "./outputs";
 import { AttentionCenter, osNotifier, type Notifier } from "../attention";
 import { readLog } from "../../log/write";
 import { effectiveCwd } from "./worktree";
@@ -98,6 +98,7 @@ export function claudeExecutor(opts: ClaudeExecutorOpts): Executor {
     };
 
     let turnEnded = false;
+    let repairSent = false;
     readLoop: for await (const bytes of proc.stdout) {
       for (const record of parser.push(bytes)) {
         if (!record.ok) continue; // non-JSON noise is not fatal
@@ -134,8 +135,22 @@ export function claudeExecutor(opts: ClaudeExecutorOpts): Executor {
           }
         }
       }
-      // the CLI stays open for more stdin turns; one attempt = one turn, so leave on result
-      if (turnEnded) break readLoop;
+      if (turnEnded) {
+        // one repair turn before giving up: the session still holds the work, so asking for
+        // the missing contract costs a short turn instead of re-running the whole node
+        if (!repairSent && !turnError && writeKeys.length && !parseOutputs(resultText ?? accumulated, writeKeys).ok) {
+          repairSent = true;
+          turnEnded = false;
+          resultText = undefined;
+          accumulated = "";
+          chunk("text", "\n[outputs object missing — asking for it]");
+          proc.stdin.write(buildClaudeUserTurn(buildRepairInstruction(writeKeys)));
+          proc.stdin.flush();
+          continue;
+        }
+        // the CLI stays open for more stdin turns; one attempt = one turn, so leave on result
+        break readLoop;
+      }
     }
     parser.flush();
     try { proc.stdin.end(); } catch {}
