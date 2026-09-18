@@ -1,0 +1,29 @@
+engine/executors/outputs.ts
+  s_220da8e953793c::t_ded2d42e909f41 21-36
+engine/executors/executors.test.ts
+  s_220da8e953793c::t_4023df24e91394 8,191
+  s_220da8e953793c::t_0a999df8d0b0ba 132-154
+engine/executors/codex.ts
+  s_220da8e953793c::t_ded2d42e909f41 18,160-179
+engine/executors/fake-claude.ts
+  s_220da8e953793c::t_0a999df8d0b0ba 67-82,84-87
+  s_220da8e953793c::t_3ff1044aec8f97 88
+engine/executors/claude.ts
+  s_220da8e953793c::t_cd729a187e0942 25,101,138-153
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "6a3148609684946abed5cf360589e28fd1504612",
+  "prompts": {},
+  "sessions": {
+    "s_220da8e953793c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2ba82f1f-e55e-4150-b238-4ff1b96ce382",
+        "model": "claude-opus-5"
+      },
+      "human_author": "areeb.bhaila <areeb.bhaila@gmail.com>"
+    }
+  }
+}
