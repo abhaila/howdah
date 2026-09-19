@@ -20,7 +20,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Query } from "web-tree-sitter";
-import { Collector, field, hash16, kids, kotlinStringValue, line, endLine, named, short, sha256, tsStringValue, type N } from "./ast";
+import { Collector, contentHash, field, kids, kotlinStringValue, line, endLine, named, short, sha256, tsStringValue, type N } from "./ast";
 import { HTTP_METHODS, joinPaths, normTemplate } from "./keys";
 import type { AdapterInfo, CoverageFact, HandlerRef, Language, OwnerRef, RefSite, RouteFact, UrlFact } from "./types";
 import { cmpStr } from "./util";
@@ -410,7 +410,7 @@ export const http4kAdapter: Adapter = {
         ...(root.note !== undefined ? { rootNote: root.note } : {}),
         handler: handlerNode === undefined ? { kind: "expression", text: "", name: null } : handlerOf(handlerNode),
         enclosing: c.enclosingAt(parent),
-        contentHash: hash16(parent.text),
+        contentHash: contentHash(parent, c.facts.language),
       });
     }
     c.facts.groups = [...groups.values()].sort((x, y) => x.line - y.line || cmpStr(x.name, y.name));
@@ -550,7 +550,7 @@ export const fetchAdapter: Adapter = {
     if (fetchQ === null || clientQ === null) return cov.fact();
 
     const record = (call: N, via: "fetch" | "client", method: string, url: UrlFact): void => {
-      c.facts.fetches.push({ line: line(call), endLine: endLine(call), via, method, url, enclosing: c.enclosingAt(call), contentHash: hash16(call.text) });
+      c.facts.fetches.push({ line: line(call), endLine: endLine(call), via, method, url, enclosing: c.enclosingAt(call), contentHash: contentHash(call, c.facts.language) });
     };
 
     for (const m of mayFetch ? fetchQ.matches(ctx.root) : []) {

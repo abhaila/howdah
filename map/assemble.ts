@@ -36,7 +36,7 @@ import { edgeKey, fetchSiteKey, joinPaths, jvmBlockKey, jvmFunctionKey, normTemp
 import { familyOf } from "./languages";
 import { gradleBuilds, jvmModuleOf, projectInfos, tsPackageDirOf } from "./modules";
 import { manifestHash, type MapStore } from "./store";
-import type { AssembledFile, AssembledMap, Block, DeclFact, Edge, EdgeKind, Entity, FileCoverage, FileFacts, HandlerRef, Join, Manifest, MountFact, NotCheckedFile, OwnerRef, RefSite, RouteFact } from "./types";
+import type { AssembledFile, AssembledMap, Block, DeclFact, Declaration, Edge, EdgeKind, Entity, FileCoverage, FileFacts, HandlerRef, Join, Manifest, MountFact, NotCheckedFile, OwnerRef, RefSite, RouteFact } from "./types";
 import { byPath, cmpStr } from "./util";
 
 const TS_EXTS = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"];
@@ -259,6 +259,8 @@ class MountResolver {
       this.hiddenNames.set(f.project, hidden);
       for (const d of f.facts.decls) {
         if (d.kind !== "function" && d.kind !== "property" && !CLASSIFIER_KINDS.has(d.kind)) continue;
+        // Java fields are recorded for drift's near matches only: never routes owners, never candidates (U14)
+        if (d.kind === "property" && f.file.language === "java") continue;
         const fqn = [pkg, ...d.container, d.name].filter((x) => x !== "").join(".");
         const row: DeclRow = {
           id: declId(f.file.path, d.line, d.name),
@@ -885,8 +887,10 @@ export function assemble(manifest: Manifest, store: MapStore): AssembledMap {
   const unparsed: AssembledMap["unparsed"] = [];
   const casts: AssembledMap["casts"] = [];
   const names: AssembledMap["names"] = [];
+  const declarations: Declaration[] = [];
   for (const f of ctxs) {
     const { path } = f.file;
+    for (const d of f.facts.decls) if (d.kind !== "function") declarations.push({ file: path, name: d.name, kind: d.kind, container: d.container, line: d.line, evidence: ev(path, d.line) });
     for (const c of f.facts.coverage) {
       const extra = extraCoverage.get(`${path}\0${c.adapter}`) ?? [];
       const reasons = [...c.unresolved, ...extra].sort((a, b) => a.line - b.line || cmpStr(a.reason, b.reason)).map((u) => ({ ...u, evidence: ev(path, u.line) }));
@@ -917,5 +921,6 @@ export function assemble(manifest: Manifest, store: MapStore): AssembledMap {
     skipped: manifest.skipped,
     notChecked: notChecked.sort(byPath),
     adapters: adapterInfo(),
+    declarations,
   };
 }

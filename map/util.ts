@@ -10,3 +10,11 @@ export function cmpStr(a: string, b: string): number {
 export function byPath<T extends { path: string }>(a: T, b: T): number {
   return cmpStr(a.path, b.path);
 }
+
+/** SM-D4 tier order, strongest first: observed > resolved > syntactic > evidence-checked > unresolved. */
+export const TIER_ORDER = ["observed", "resolved", "syntactic", "evidence-checked", "unresolved"] as const;
+
+/** Is `tier` at least as strong as `floor`? (drift only verifies at ≥ syntactic.) */
+export function tierAtLeast(tier: (typeof TIER_ORDER)[number], floor: (typeof TIER_ORDER)[number]): boolean {
+  return TIER_ORDER.indexOf(tier) <= TIER_ORDER.indexOf(floor);
+}
