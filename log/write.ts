@@ -23,29 +23,19 @@
  *   3. stamps seq = tail + 1, appends, fsyncs, releases.
  * `appendIf(build)` runs `build` over the whole log inside the same critical section, so a
  * decision that depends on what the log already holds is atomic across processes.
+ * `appendAllIf(build)` is the same for several events that must land together (system-map
+ * 1a: a redesign request and its jump) — one lock, one write, one fsync.
+ * The lockfile primitives live in log/lockfile.ts (shared with the engine's runner lock).
  *
  * A torn tail is repaired under the lock before appending: its bytes are cut (they were
  * never an event — readLog already drops them), or a complete final line that only lost its
  * "\n" is terminated. Without this the next event fuses onto the torn bytes and turns a
  * legal torn tail into mid-file corruption that readLog rejects forever.
  */
-import {
-  appendFileSync,
-  closeSync,
-  existsSync,
-  fstatSync,
-  fsyncSync,
-  ftruncateSync,
-  mkdirSync,
-  openSync,
-  readFileSync,
-  readSync,
-  statSync,
-  unlinkSync,
-  writeSync,
-} from "node:fs";
+import { appendFileSync, closeSync, existsSync, fstatSync, fsyncSync, ftruncateSync, mkdirSync, openSync, readFileSync, readSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import type { LoggedEvent, RunEvent } from "./events";
+import { acquireLock, held, releaseLock } from "./lockfile";
 
 export interface EventLogOptions {
   /** How long a writer waits on a live lock holder before throwing. Default 5s. */
@@ -56,13 +46,10 @@ export interface EventLogOptions {
 
 const DEFAULT_LOCK_TIMEOUT_MS = 5_000;
 const DEFAULT_STALE_LOCK_MS = 2_000;
-const MAX_BACKOFF_MS = 20;
 /** First tail window; doubles until it holds a complete line. Most events are well under this. */
 const TAIL_WINDOW = 16 * 1024;
 const NL = 0x0a;
 
-/** Lock paths this process holds right now — catches a write from inside appendIf's build. */
-const held = new Set<string>();
 
 export class EventLog {
   private readonly lockPath: string;
@@ -99,6 +86,18 @@ export class EventLog {
     });
   }
 
+  /**
+   * appendIf for several events: all of them or none, stamped consecutively, written with a
+   * single write + fsync so no other writer can interleave and no crash can split them
+   * between two appends. Returns the stamped events ([] if `build` declined).
+   */
+  appendAllIf(build: (events: LoggedEvent[]) => RunEvent[]): LoggedEvent[] {
+    return this.withLock(() => {
+      const next = build(readLog(this.path));
+      return next.length === 0 ? [] : this.appendLockedAll(next);
+    });
+  }
+
   read(): LoggedEvent[] {
     return readLog(this.path);
   }
@@ -126,12 +125,17 @@ export class EventLog {
 
   /** The one write path. Caller holds the lock. */
   private appendLocked(event: RunEvent): LoggedEvent {
+    return this.appendLockedAll([event])[0]!;
+  }
+
+  private appendLockedAll(events: RunEvent[]): LoggedEvent[] {
     const fd = openSync(this.path, "a+");
     try {
       const tail = scanTail(fd, this.path);
       if (tail.truncateTo !== undefined) ftruncateSync(fd, tail.truncateTo);
-      const stamped: LoggedEvent = { ...event, seq: tail.seq + 1, ts: this.clock().toISOString() };
-      appendFileSync(fd, (tail.unterminated ? "\n" : "") + JSON.stringify(stamped) + "\n");
+      const ts = this.clock().toISOString();
+      const stamped = events.map((e, i): LoggedEvent => ({ ...e, seq: tail.seq + 1 + i, ts }));
+      appendFileSync(fd, (tail.unterminated ? "\n" : "") + stamped.map((e) => JSON.stringify(e) + "\n").join(""));
       fsyncSync(fd);
       return stamped;
     } finally {
@@ -223,130 +227,4 @@ function parseSeq(line: Buffer, path: string, offset: number): number | undefine
   const seq = typeof parsed === "object" && parsed !== null ? (parsed as { seq?: unknown }).seq : undefined;
   if (typeof seq === "number" && Number.isInteger(seq)) return seq;
   throw new Error(`${path}: event line at byte ${offset} has no integer seq`);
-}
-
-// ---------------------------------------------------------------------------------------
-// lockfile
-
-function errCode(err: unknown): string | undefined {
-  return typeof err === "object" && err !== null && "code" in err ? String(err.code) : undefined;
-}
-
-/** Create `lockPath` exclusively, holding our PID. Returns false if it already exists. */
-function tryCreate(lockPath: string): boolean {
-  let fd: number;
-  try {
-    fd = openSync(lockPath, "wx");
-  } catch (err) {
-    if (errCode(err) === "EEXIST") return false;
-    throw err;
-  }
-  try {
-    writeSync(fd, String(process.pid));
-  } catch (err) {
-    closeSync(fd);
-    unlinkQuiet(lockPath); // never leave an empty lock behind on our own failure
-    throw err;
-  }
-  closeSync(fd);
-  return true;
-}
-
-function unlinkQuiet(p: string): void {
-  try {
-    unlinkSync(p);
-  } catch (err) {
-    if (errCode(err) !== "ENOENT") throw err;
-  }
-}
-
-function pidAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (err) {
-    return errCode(err) !== "ESRCH"; // EPERM = exists under another user: alive
-  }
-}
-
-type LockState = { kind: "gone" } | { kind: "held"; pid: number | undefined; stale: boolean };
-
-function inspectLock(lockPath: string, staleMs: number): LockState {
-  let content: string;
-  let mtimeMs: number;
-  try {
-    content = readFileSync(lockPath, "utf8").trim();
-    mtimeMs = statSync(lockPath).mtimeMs;
-  } catch (err) {
-    if (errCode(err) === "ENOENT") return { kind: "gone" };
-    throw err;
-  }
-  const pid = /^\d+$/.test(content) ? Number(content) : undefined;
-  if (pid === undefined) {
-    // empty/garbled: a holder between open("wx") and writing its PID, or one that died there
-    return { kind: "held", pid, stale: Date.now() - mtimeMs > staleMs };
-  }
-  // our own PID on a lock we do not hold (withLock checked) can only be a leftover
-  const stale = pid === process.pid ? !held.has(lockPath) : !pidAlive(pid);
-  return { kind: "held", pid, stale };
-}
-
-/**
- * Break a stale lock. Guarded by `<lock>.break` so two waiters that both judged the same
- * lock stale cannot race: the second re-inspects under the guard, finds the first one's
- * fresh (live) lock, and leaves it alone. Returns false when another live process is mid-
- * break, so the caller backs off instead of spinning.
- */
-function breakStaleLock(lockPath: string, staleMs: number): boolean {
-  const guard = `${lockPath}.break`;
-  if (!tryCreate(guard)) {
-    const g = inspectLock(guard, staleMs);
-    if (g.kind === "held" && g.stale) {
-      unlinkQuiet(guard); // a breaker died mid-break
-      return true;
-    }
-    return g.kind === "gone"; // a live breaker is on it — back off like any other wait
-  }
-  try {
-    const again = inspectLock(lockPath, staleMs);
-    if (again.kind === "held" && again.stale) unlinkQuiet(lockPath);
-    return true;
-  } finally {
-    unlinkQuiet(guard);
-  }
-}
-
-function acquireLock(lockPath: string, timeoutMs: number, staleMs: number): void {
-  const deadline = Date.now() + timeoutMs;
-  let backoff = 1;
-  for (;;) {
-    if (tryCreate(lockPath)) return;
-    const state = inspectLock(lockPath, staleMs);
-    if (state.kind === "gone") continue; // released between our create and our read
-    if (state.stale && breakStaleLock(lockPath, staleMs)) continue;
-    const remaining = deadline - Date.now();
-    if (remaining <= 0) {
-      throw new Error(
-        `timed out after ${timeoutMs}ms waiting for log lock ${lockPath} (held by pid ${state.pid ?? "unknown — lock file has no PID yet"})`,
-      );
-    }
-    Bun.sleepSync(Math.min(backoff, remaining));
-    backoff = Math.min(backoff * 2, MAX_BACKOFF_MS);
-  }
-}
-
-/**
- * Release only a lock that is still ours. If a waiter wrongly judged ours stale and took
- * the lock (a frozen holder past staleLockMs, or PID reuse), unlinking by path would delete
- * THEIR live lock and let a third writer in — the loss of exclusion would cascade. Reading
- * then unlinking is itself check-then-act, but it bounds the damage to one overlapping pair.
- */
-function releaseLock(lockPath: string): void {
-  let holder: string;
-  try {
-    holder = readFileSync(lockPath, "utf8").trim();
-  } catch {
-    return; // already gone
-  }
-  if (holder === String(process.pid)) unlinkQuiet(lockPath);
 }

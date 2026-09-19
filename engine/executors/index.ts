@@ -3,11 +3,19 @@
  * T15 lands `wait` for real and honest stubs for the rest; T16 fills `agent`, T18 fills
  * `command` and `worktree`. A stubbed node PARKS the run with a reason naming the gap —
  * never a silent no-op.
+ *
+ * `approval` (system-map 1a) is the same real executor in both registries: it spawns no
+ * agent and spends no tokens, it only reads the log and probes the worktree.
+ *
+ * Read-only agent nodes (system-map 1a, D6/5A) resolve to permissionMode "plan"
+ * (Engine.resolveAgentConfig). Claude honours that flag directly; codex ignores permission
+ * modes, so a plan-mode codex turn runs in codex's read-only sandbox instead.
  */
 import type { Executor, EngineOpts } from "../run";
 import { claudeExecutor } from "./claude";
 import { codexExecutor } from "./codex";
 import { commandExecutor, worktreeExecutor } from "./worktree";
+import { approvalExecutor } from "./approval";
 import type { Notifier } from "../attention";
 import { join } from "node:path";
 
@@ -35,6 +43,7 @@ export function stubExecutors(): EngineOpts["executors"] {
     agent: notYet("agent", "stub registry"),
     command: notYet("command", "T18"),
     worktree: notYet("worktree", "T18"),
+    approval: approvalExecutor,
   };
 }
 
@@ -53,10 +62,16 @@ export interface LiveExecutorDeps {
 /** the real registry: agent nodes dispatch on their declared harness (default claude) */
 export function liveExecutors(deps: LiveExecutorDeps): EngineOpts["executors"] {
   const claude = claudeExecutor({ attentionDir: deps.attentionDir, viewerBase: deps.viewerBase, notifiers: deps.notifiers, binary: deps.claudeBinary });
-  const codex = codexExecutor({ attentionDir: deps.attentionDir, viewerBase: deps.viewerBase, notifiers: deps.notifiers, binary: deps.codexBinary });
+  const codexDeps = { attentionDir: deps.attentionDir, viewerBase: deps.viewerBase, notifiers: deps.notifiers, binary: deps.codexBinary };
+  const codex = codexExecutor(codexDeps);
+  const codexReadOnly = codexExecutor({ ...codexDeps, sandbox: "read-only" });
   return {
     wait: waitExecutor,
-    agent: async (args) => ((args.agentConfig?.harness ?? "claude") === "codex" ? codex : claude)(args),
+    approval: approvalExecutor,
+    agent: async (args) => {
+      if ((args.agentConfig?.harness ?? "claude") !== "codex") return claude(args);
+      return (args.agentConfig?.permissionMode === "plan" ? codexReadOnly : codex)(args);
+    },
     command: commandExecutor(),
     worktree: worktreeExecutor({
       reposDir: deps.reposDir ?? join(deps.attentionDir, "..", "repos"),

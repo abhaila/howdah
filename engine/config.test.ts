@@ -144,3 +144,58 @@ describe("cross-harness model leak (haiku→codex regression)", () => {
     expect(seen.every((s: any) => s.model === undefined || !/claude|opus|sonnet|haiku/i.test(s.model))).toBe(true);
   });
 });
+
+describe("read-only nodes (system-map 1a, D6/5A)", () => {
+  const roGraph = () =>
+    defineGraph<Ctx>({
+      name: "ro",
+      defaults: { permissionMode: "bypassPermissions" },
+      entry: "one",
+      inputs: ["goal"],
+      nodes: {
+        one: { kind: "agent", prompt: "doc.draft", readOnly: true, permissionMode: "acceptEdits", reads: ["goal"], writes: { a: { scope: "sticky" } } },
+        two: { kind: "agent", prompt: "doc.draft", reads: ["goal"], writes: { b: { scope: "sticky" } } },
+        done: { kind: "terminal", outcome: "success" },
+      },
+      edges: [
+        { from: "one", to: "two" },
+        { from: "two", to: "done" },
+      ],
+    });
+
+  test("readOnly resolves to plan even over a bypassPermissions run override, UI tuning and graph default", async () => {
+    const seen: Record<string, string | undefined> = {};
+    const engine = new Engine(roGraph(), {
+      dir: mkdtempSync(join(tmpdir(), "howdah-cfg-ro-")),
+      promptsDir: prompts(),
+      overrides: { permissionMode: "bypassPermissions" },
+      tuning: { defaults: { permissionMode: "dontAsk" }, nodes: { one: { permissionMode: "bypassPermissions" } } },
+      executors: {
+        agent: async ({ nodeId, agentConfig }) => {
+          seen[nodeId] = agentConfig?.permissionMode;
+          return { status: "succeeded", writes: nodeId === "one" ? { a: "x" } : { b: "y" } };
+        },
+      },
+    });
+    await engine.start({ goal: "g" });
+    expect(seen["one"]).toBe("plan");
+    // everything else keeps the ordinary resolution order
+    expect(seen["two"]).toBe("bypassPermissions");
+  });
+
+  test("with no overrides at all, readOnly still beats the node's own permissionMode", async () => {
+    let mode: string | undefined;
+    const engine = new Engine(roGraph(), {
+      dir: mkdtempSync(join(tmpdir(), "howdah-cfg-ro-")),
+      promptsDir: prompts(),
+      executors: {
+        agent: async ({ nodeId, agentConfig }) => {
+          if (nodeId === "one") mode = agentConfig?.permissionMode;
+          return { status: "succeeded", writes: nodeId === "one" ? { a: "x" } : { b: "y" } };
+        },
+      },
+    });
+    await engine.start({ goal: "g" });
+    expect(mode).toBe("plan");
+  });
+});

@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, writeFileSync, appendFileSync, existsSync, u
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EventLog, readLog } from "./write";
+import { processStart } from "./lockfile";
 import { coalesce, outcomesByHash } from "./coalesce";
 import type { LoggedEvent } from "./events";
 
@@ -184,7 +185,9 @@ describe("EventLog locked append (system-map 0.5)", () => {
     const path = join(dir(), "run.jsonl");
     const holder = Bun.spawn(["sleep", "30"]);
     try {
-      writeFileSync(`${path}.lock`, String(holder.pid));
+      // what a real holder writes: its identity, pid + start time (log/lockfile.ts)
+      const identity = `${holder.pid} ${processStart(holder.pid)}`;
+      writeFileSync(`${path}.lock`, identity);
       const log = new EventLog(path, fixedClock(), { lockTimeoutMs: 150 });
       const t0 = Date.now();
       let err: unknown;
@@ -196,7 +199,7 @@ describe("EventLog locked append (system-map 0.5)", () => {
       expect(Date.now() - t0).toBeGreaterThanOrEqual(150);
       expect(String(err)).toContain(`${path}.lock`);
       expect(String(err)).toContain(String(holder.pid));
-      expect(readFileSync(`${path}.lock`, "utf8")).toBe(String(holder.pid)); // left intact
+      expect(readFileSync(`${path}.lock`, "utf8")).toBe(identity); // left intact
       expect(readLog(path)).toHaveLength(0);
     } finally {
       holder.kill(9);
@@ -368,5 +371,88 @@ describe("prompt-outcome attribution", () => {
     const joined = outcomesByHash(log.read()).get("h1")!;
     expect(joined.verdict_downstream).toBe("pass");
     expect(joined.terminal_outcome).toBe("success");
+  });
+});
+
+describe("lock holder identity (system-map 1a review: PID reuse)", () => {
+  const chunkAt = (i: number) => ({ type: "chunk" as const, node: "n", visit: 1, turn: 1, index: i, kind: "text" as const, content: "x" });
+  const fresh = () => join(mkdtempSync(join(tmpdir(), "howdah-ident-")), "run.jsonl");
+
+  test("a lock records pid + start time", () => {
+    const path = fresh();
+    new EventLog(path).appendIf(() => {
+      expect(readFileSync(`${path}.lock`, "utf8")).toBe(`${process.pid} ${processStart(process.pid)}`);
+      return null;
+    });
+  });
+
+  test("a lock whose PID now belongs to a DIFFERENT process (start time differs) is broken", async () => {
+    const path = fresh();
+    const other = Bun.spawn(["sleep", "30"]);
+    try {
+      writeFileSync(`${path}.lock`, `${other.pid} Thu Jan  1 00:00:00 1970`); // the PID was reused
+      expect(new EventLog(path, undefined, { lockTimeoutMs: 1000 }).append(chunkAt(0)).seq).toBe(1);
+    } finally {
+      other.kill(9);
+      await other.exited;
+    }
+  });
+
+  test("a legacy PID-only lock naming a live NON-bun process is broken; one naming a bun process is waited on", async () => {
+    const path = fresh();
+    const other = Bun.spawn(["sleep", "30"]);
+    const bun = Bun.spawn(["bun", "-e", "await Bun.sleep(30000)"]);
+    try {
+      writeFileSync(`${path}.lock`, String(other.pid));
+      expect(new EventLog(path, undefined, { lockTimeoutMs: 1000 }).append(chunkAt(0)).seq).toBe(1);
+      await Bun.sleep(100); // bun is up
+      writeFileSync(`${path}.lock`, String(bun.pid));
+      expect(() => new EventLog(path, undefined, { lockTimeoutMs: 150 }).append(chunkAt(1))).toThrow(/timed out/);
+    } finally {
+      other.kill(9);
+      bun.kill(9);
+      await Promise.all([other.exited, bun.exited]);
+    }
+  });
+});
+
+describe("EventLog.appendAllIf (system-map 1a)", () => {
+  const fresh = () => join(mkdtempSync(join(tmpdir(), "howdah-all-")), "run.jsonl");
+  const jump = (to: string) => ({ type: "operator-jump" as const, to });
+
+  test("all of them, consecutively stamped with one timestamp, in one write", () => {
+    const path = fresh();
+    const log = new EventLog(path);
+    log.append({ type: "run-started", graph: "g", inputs: {}, pinned_prompts: {} });
+    const out = log.appendAllIf((events) => (events.length === 1 ? [jump("a"), jump("b"), jump("c")] : []));
+    expect(out.map((e) => e.seq)).toEqual([2, 3, 4]);
+    expect(new Set(out.map((e) => e.ts)).size).toBe(1);
+    expect(readLog(path).map((e) => e.seq)).toEqual([1, 2, 3, 4]);
+    expect(existsSync(`${path}.lock`)).toBe(false);
+  });
+
+  test("or none: a declining build writes nothing and releases the lock", () => {
+    const path = fresh();
+    const log = new EventLog(path);
+    log.append({ type: "run-started", graph: "g", inputs: {}, pinned_prompts: {} });
+    const before = readFileSync(path, "utf8");
+    expect(log.appendAllIf(() => [])).toEqual([]);
+    expect(readFileSync(path, "utf8")).toBe(before);
+    expect(existsSync(`${path}.lock`)).toBe(false);
+  });
+
+  test("a torn tail is repaired first: the batch continues from the last complete seq", () => {
+    const path = fresh();
+    writeFileSync(path, '{"type":"run-finished","outcome":"success","seq":1,"ts":"t"}\n{"type":"chunk","seq":2,"ts');
+    const out = new EventLog(path).appendAllIf(() => [jump("a"), jump("b")]);
+    expect(out.map((e) => e.seq)).toEqual([2, 3]);
+    expect(readLog(path).map((e) => e.seq)).toEqual([1, 2, 3]);
+  });
+
+  test("a build that writes to the log itself is refused (re-entrant), nothing lands", () => {
+    const path = fresh();
+    const log = new EventLog(path);
+    expect(() => log.appendAllIf(() => [log.append(jump("x")) as never])).toThrow(/re-entrant/);
+    expect(readLog(path)).toHaveLength(0);
   });
 });

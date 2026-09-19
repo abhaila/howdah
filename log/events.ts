@@ -49,6 +49,19 @@ export type ParkCode =
 
 export type ResolutionSource = "operator" | "resume";
 
+/**
+ * system-map 1a (D18): the worktree identity a proposal was drawn against. Computed by
+ * engine/reconcile.ts fingerprint(); defined here because events carry it.
+ *   head       HEAD commit (null: no commit yet)
+ *   tracked    hash of `git status --porcelain` (tracked only) + worktree diff + staged diff
+ *   untracked  hash of the untracked, non-ignored files' NAMES AND CONTENTS
+ */
+export interface Fingerprint {
+  head: string | null;
+  tracked: string;
+  untracked: string;
+}
+
 /** Who resolved an ask. Legacy events carry no source: resume() always wrote reply "resume". */
 export function resolutionSource(e: { reply?: string; source?: ResolutionSource }): ResolutionSource {
   return e.source ?? (e.reply === "resume" ? "resume" : "operator");
@@ -214,6 +227,56 @@ export type RunEvent =
       resets_at?: string;
       /** raw payload (claude rate_limit_event / codex account/rateLimits/updated) */
       raw?: unknown;
+    }
+  /*
+   * system-map 1a — proposal rounds and the decisions on them (engine/slice-decision.ts is
+   * the only reader that answers "what is the current proposal, and what was decided?").
+   */
+  | {
+      /**
+       * A proposal ROUND opened: `node` wrote `approval`'s proposal key and the graph's
+       * validateProposal accepted it. `proposal_id` is this event's own seq, so an identical
+       * redraw is a new, decidable round. Named for 1c's ghosts; 1a treats `proposal` as opaque.
+       */
+      type: "ghost-proposed";
+      node: string;
+      /** the approval node that decides this round */
+      approval: string;
+      proposal_id: number;
+      proposal_hash: string;
+      /** the base snapshot's manifest_hash when the round opened — decisions bind to it */
+      manifest_hash: string | null;
+      /** the live worktree fingerprint when the round opened: tells "changed during the proposer" from "changed since" */
+      fingerprint: Fingerprint | null;
+      proposal: unknown;
+    }
+  | {
+      /** an operator comment pinned to an entity of the CURRENT round; sent with its feedback */
+      type: "comment-pinned";
+      id: string;
+      entity_id: string;
+      proposal_id: number;
+      text: string;
+    }
+  | {
+      type: "slice-feedback-sent";
+      proposal_id: number;
+      proposal_hash: string;
+      manifest_hash: string | null;
+      /** the round's comment-pinned ids, in pin order */
+      comment_ids: string[];
+    }
+  | { type: "slice-approved"; proposal_id: number; proposal_hash: string; manifest_hash: string | null }
+  | {
+      /**
+       * `redesign <run> <msg>`: written in ONE append with its operator-jump (reset_budgets)
+       * to `approval`'s redesignTo. Consumed when that redesignTo node next succeeds (it
+       * seeds the approval's feedback key), which is how the message reaches the proposer once.
+       */
+      type: "slice-redesign-requested";
+      /** the approval node whose proposer this message is for */
+      approval: string;
+      message: string;
     }
   | { type: "run-finished"; outcome: RunOutcome };
 
