@@ -17,18 +17,22 @@
  * reconstructRender() answers the question the log deliberately does not store: what did
  * the agent ACTUALLY read? The rendered text is recomputed from the pinned template plus
  * the recorded context, then PROVEN by re-hashing to the recorded rendered_hash. An
- * unverified reconstruction is reported as unverified rather than shown as fact.
+ * unverified reconstruction is reported as unverified rather than shown as fact. Since
+ * system-map 0.1 the hash covers the prompt as SENT (skill hint + outputs contract), and
+ * reconstruction rebuilds those from the logged suffix inputs with versioned builders.
  */
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import type { Graph } from "../core/graph";
 import {
+  assemblePrompt,
   frontMatterField,
   operatorInstructionSuffix,
   renderTemplate,
   renderedHash,
   splitFrontMatter,
+  suffixBuilders,
 } from "../core/template";
 import type { LoggedEvent } from "../log/events";
 import { outcomesByHash } from "../log/coalesce";
@@ -371,10 +375,17 @@ export interface ReconstructedRender {
  * Rebuild the rendered prompt for one turn from the run's PINNED template plus the
  * context it recorded reading, and prove it by re-hashing.
  *
- * Two legal shapes are tried, because the engine appends an operator instruction to the
- * next render after a jump: plain, then plain + the suffix of each operator-jump that
- * preceded this render on this node. Anything else comes back `verified: false` — the
- * text is still the best available reconstruction, and the caller must say so.
+ * Legal shapes are tried, because the engine appends an operator instruction to the next
+ * render after a jump: no jump, then each operator-jump that preceded this render on this
+ * node (most recent first). Anything else comes back `verified: false` — the text is still
+ * the best available reconstruction, and the caller must say so.
+ *
+ * system-map 0.1: an event carrying `suffix_version` was hashed over the prompt AS SENT,
+ * so each candidate is rebuilt through the same assemblePrompt() the engine used, with
+ * that version's builders and the logged skills / output_keys. An event WITHOUT the field
+ * predates 0.1 — its hash covered template (+ jump suffix) only — and is rebuilt exactly
+ * that way, so old runs stay VERIFIED. A version this code has no builders for is never
+ * guessed at: unverified, plain template text.
  */
 export function reconstructRender(runDir: string, renderedHashWanted: string): ReconstructedRender | null {
   const logPath = join(runDir, "run.jsonl");
@@ -394,8 +405,26 @@ export function reconstructRender(runDir: string, renderedHashWanted: string): R
     .filter((e) => e.type === "operator-jump" && e.to === render.node && e.seq < render.seq && e.message)
     .map((e) => (e as Extract<LoggedEvent, { type: "operator-jump" }>).message!)
     .reverse(); // most recent jump first — that is the one the engine would have consumed
+  const jumpOptions: (string | undefined)[] = [undefined, ...jumpMessages];
 
-  const candidates = [plain, ...jumpMessages.map((m) => plain + operatorInstructionSuffix(m))];
+  let candidates: string[];
+  if (render.suffix_version === undefined) {
+    // pre-0.1 event: the hash never covered the skill hint or outputs contract
+    candidates = jumpOptions.map((m) => (m === undefined ? plain : plain + operatorInstructionSuffix(m)));
+  } else if (suffixBuilders(render.suffix_version)) {
+    const suffixVersion = render.suffix_version;
+    candidates = jumpOptions.map((jumpMessage) =>
+      assemblePrompt({
+        body: plain,
+        jumpMessage,
+        skills: render.skills ?? [],
+        outputKeys: render.output_keys ?? [],
+        suffixVersion,
+      }),
+    );
+  } else {
+    candidates = []; // a suffix version this code never had — do not guess
+  }
   const verifiedText = candidates.find((c) => renderedHash(c) === renderedHashWanted);
 
   return {
@@ -404,7 +433,7 @@ export function reconstructRender(runDir: string, renderedHashWanted: string): R
     node: render.node,
     visit: render.visit,
     rendered_hash: render.rendered_hash,
-    text: verifiedText ?? plain,
+    text: verifiedText ?? candidates[0] ?? plain,
     verified: verifiedText !== undefined,
     context_read: render.context_read,
   };

@@ -7,6 +7,7 @@ import { Engine, type Executor, type AttemptResult } from "./run";
 import { replayState } from "./replay";
 import { PromptStore } from "../prompts/store";
 import { readLog } from "../log/write";
+import { buildOutputInstruction, renderedHash } from "../core/template";
 
 interface Ctx {
   goal: string;
@@ -212,6 +213,39 @@ describe("run pinning (OV-2)", () => {
     expect(renders.every((r) => r.prompt_version === 1)).toBe(true);
     expect(renders.every((r) => !String(r.rendered_hash).includes("REVISED"))).toBe(true);
   });
+});
+
+describe("render proof covers every suffix (system-map 0.1)", () => {
+  const skilled = (harness: "claude" | "codex" | "opencode") =>
+    defineGraph<Ctx>({
+      name: "mini-skilled",
+      entry: "implement",
+      inputs: ["goal", "summary"],
+      defaults: { harness },
+      nodes: {
+        implement: { kind: "agent", prompt: "implementation.implement", reads: ["goal", "summary"], writes: { summary: { scope: "sticky" } }, skills: ["review"] },
+        done: { kind: "terminal", outcome: "success" },
+      },
+      edges: [{ from: "implement", to: "done" }],
+    });
+
+  for (const harness of ["claude", "opencode", "codex"] as const) {
+    test(`${harness}: the prompt handed to the executor is exactly the hashed text`, async () => {
+      let handed = "";
+      const engine = new Engine(skilled(harness), {
+        dir: mkdtempSync(join(tmpdir(), "howdah-run-")),
+        promptsDir: promptFixtures(),
+        executors: { agent: async ({ renderedPrompt }) => ((handed = renderedPrompt!), ok({ summary: "s" })) },
+      });
+      await engine.start({ goal: "g", summary: "p" });
+      const render: any = engine.log.read().find((e) => e.type === "prompt-rendered");
+      expect(renderedHash(handed)).toBe(render.rendered_hash);
+      expect(handed.startsWith("Implement per g. Prior: p\n")).toBe(true);
+      expect(handed.endsWith(buildOutputInstruction(["summary"]))).toBe(true);
+      expect(handed.includes("/review")).toBe(harness !== "codex");
+      expect(render).toMatchObject({ skills: harness === "codex" ? [] : ["review"], output_keys: ["summary"], suffix_version: 1 });
+    });
+  }
 });
 
 describe("resume-by-replay (R7)", () => {

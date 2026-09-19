@@ -4,7 +4,12 @@
  * (verified shapes from agent-deck spikes) without spending tokens. Reads the user turn
  * from stdin, streams deltas, optionally demands a permission (FAKE_CLAUDE_ASK=1) and
  * honours the control_response, then emits the outputs contract and a result event.
+ *
+ * FAKE_CAPTURE=<file> appends the exact prompt text received on stdin (one JSON string
+ * per line) so tests can prove rendered_hash covers the bytes sent (system-map 0.1).
  */
+import { appendFileSync } from "node:fs";
+
 const out = (o: unknown) => process.stdout.write(JSON.stringify(o) + "\n");
 
 const decoder = new TextDecoder();
@@ -34,6 +39,7 @@ async function nextLine(): Promise<string> {
 
 const userTurn = JSON.parse(await nextLine()) as { message: { content: Array<{ text: string }> } };
 const promptText = userTurn.message.content[0]?.text ?? "";
+if (process.env.FAKE_CAPTURE) appendFileSync(process.env.FAKE_CAPTURE, JSON.stringify(promptText) + "\n");
 
 out({ type: "system", subtype: "init", session_id: "fake-session-0001" });
 out({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: "Working on it — " } } });
@@ -75,4 +81,3 @@ out({
 });
 process.exit(0);
 
-export {};

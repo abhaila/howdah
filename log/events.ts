@@ -52,7 +52,7 @@ export type RunEvent =
       visit: number;
       prompt: PromptId;
       prompt_version: number;
-      /** hash of the fully rendered text — the join key for prompt-outcome */
+      /** hash of the full prompt as sent (suffixes included since system-map 0.1) — the join key for prompt-outcome */
       rendered_hash: string;
       /** exactly the context the template read, at render time (A5.1) */
       context_read: Record<string, unknown>;
@@ -60,6 +60,16 @@ export type RunEvent =
       harness?: Harness;
       model?: string;
       effort?: string;
+      /**
+       * system-map 0.1 — the suffix inputs, so reconstruction can rebuild the prompt AS SENT.
+       * Absent on pre-0.1 events, whose hash covered the template (+ jump suffix) only.
+       * `skills` is what the hint actually named (codex: always []).
+       */
+      skills?: string[];
+      /** the node's declared write keys, in order — the outputs contract's input */
+      output_keys?: string[];
+      /** which core/template.ts suffix builders produced the skill hint + outputs contract */
+      suffix_version?: number;
     }
   | {
       type: "chunk";

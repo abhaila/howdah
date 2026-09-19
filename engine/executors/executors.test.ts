@@ -8,9 +8,13 @@ import { buildOutputInstruction, parseOutputs } from "./outputs";
 import { defineGraph } from "../../core/graph";
 import { EventLog } from "../../log/write";
 import { AttentionCenter } from "../attention";
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
+import { liveExecutors } from "./index";
+import { renderedHash } from "../../core/template";
+import type { Harness } from "../../core/graph";
 
 const FAKE = join(import.meta.dir, "fake-claude.ts");
+const FAKE_CODEX = join(import.meta.dir, "fake-codex.ts");
 
 interface Ctx {
   goal: string;
@@ -141,4 +145,71 @@ describe("claude executor over the fake wire", () => {
     expect(text).toContain("Denied, skipping the write");
     expect(text).toContain("permission denied: no — use the scratch dir instead");
   }, 15000);
+});
+
+// system-map 0.1: rendered_hash must cover the bytes the CLI actually receives — the skill
+// hint and outputs contract included — for every harness the live registry dispatches.
+describe("the prompt proof covers what is sent (system-map 0.1)", () => {
+  const skilledGraph = (harness: Harness) =>
+    defineGraph<Ctx>({
+      name: "mini-doc-skilled",
+      entry: "draft",
+      inputs: ["goal"],
+      defaults: { harness },
+      nodes: {
+        draft: { kind: "agent", prompt: "doc.draft", reads: ["goal"], writes: { doc_summary: { scope: "sticky" } }, skills: ["review", "qa"] },
+        review: { kind: "agent", prompt: "doc.review", reads: ["doc_summary"], writes: { review_verdict: { scope: "cleared" } } },
+        done: { kind: "terminal", outcome: "success" },
+      },
+      edges: [
+        { from: "draft", to: "review" },
+        { from: "review", to: "done", condition: { reads: ["review_verdict"], test: (v) => v.review_verdict === "pass", label: "pass" }, weight: 1 },
+      ],
+    });
+
+  async function runCapturing(harness: Harness) {
+    const dir = mkdtempSync(join(tmpdir(), "howdah-proof-"));
+    const capture = join(dir, "sent.jsonl");
+    writeFileSync(capture, "");
+    Object.assign(process.env, { FAKE_CAPTURE: capture, FAKE_CLAUDE_ASK: "0", FAKE_CLAUDE_RATELIMIT: "0", FAKE_CLAUDE_VERDICT: "pass" });
+    try {
+      const engine = new Engine(skilledGraph(harness), {
+        dir,
+        promptsDir: promptDir(),
+        executors: liveExecutors({ attentionDir: join(dir, "attn"), notifiers: [], claudeBinary: FAKE, codexBinary: FAKE_CODEX }),
+      });
+      const result = await engine.start({ goal: "prove the hash" });
+      const sent = readFileSync(capture, "utf8").trim().split("\n").map((l) => JSON.parse(l) as string);
+      const renders = engine.log.read().filter((e) => e.type === "prompt-rendered") as Extract<ReturnType<typeof engine.log.read>[number], { type: "prompt-rendered" }>[];
+      return { result, sent, renders };
+    } finally {
+      for (const k of ["FAKE_CAPTURE", "FAKE_CLAUDE_ASK", "FAKE_CLAUDE_RATELIMIT", "FAKE_CLAUDE_VERDICT"]) delete process.env[k];
+    }
+  }
+
+  for (const harness of ["claude", "opencode", "codex"] as const) {
+    test(`${harness}: hash(bytes sent to the CLI) === logged rendered_hash, every turn`, async () => {
+      const { result, sent, renders } = await runCapturing(harness);
+      expect(result).toEqual({ state: "finished", outcome: "success" });
+      expect(sent).toHaveLength(2);
+      expect(renders).toHaveLength(2);
+      sent.forEach((text, i) => expect(renderedHash(text)).toBe(renders[i]!.rendered_hash));
+      // the contract is inside the proof, not bolted on afterwards
+      expect(sent[0]).toContain(buildOutputInstruction(["doc_summary"]));
+      expect(renders[0]).toMatchObject({ output_keys: ["doc_summary"], suffix_version: 1, harness });
+    }, 15000);
+  }
+
+  test("codex gets no skill hint; claude and opencode do (behaviour preserved)", async () => {
+    const hint = "Relevant installed skills for this task: /review, /qa";
+    for (const harness of ["claude", "opencode"] as const) {
+      const { sent, renders } = await runCapturing(harness);
+      expect(sent[0]).toContain(hint);
+      expect(renders[0]!.skills).toEqual(["review", "qa"]);
+      expect(sent[1]).not.toContain("Relevant installed skills"); // review declares none
+    }
+    const { sent, renders } = await runCapturing("codex");
+    expect(sent[0]).not.toContain("Relevant installed skills");
+    expect(renders[0]!.skills).toEqual([]);
+  }, 30000);
 });

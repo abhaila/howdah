@@ -9,13 +9,16 @@
  * durable ask, human replies in the web card, executor answers the wire.
  *
  * PIN NOTE: the protocol is a moving target (S3-Q4). `howdah doctor` asserts the version.
+ *
+ * The prompt is sent UNCHANGED: the engine already appended the outputs contract before
+ * hashing (system-map 0.1), and codex gets no skill hint (core/template.ts skillsForHarness).
  */
 import { writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { Executor } from "../run";
 import { JsonlChunkParser } from "../../adapter/parse";
 import { mapCodexEvent, buildCodexApprovalResponse } from "../../adapter/codex";
-import { buildOutputInstruction, parseOutputs } from "./outputs";
+import { parseOutputs } from "./outputs";
 import { AttentionCenter, osNotifier, type Notifier } from "../attention";
 import { readLog } from "../../log/write";
 import { isAllowReply } from "./reply";
@@ -36,7 +39,7 @@ export function codexExecutor(opts: CodexExecutorOpts): Executor {
   return async ({ nodeId, def, visit, runId, cwd, log, renderedPrompt, agentConfig }) => {
     if (def.kind !== "agent") throw new Error("codexExecutor on non-agent node");
     const writeKeys = Object.keys(def.writes ?? {});
-    const prompt = (renderedPrompt ?? "") + buildOutputInstruction(writeKeys);
+    const prompt = renderedPrompt ?? ""; // exactly what rendered_hash covers (system-map 0.1)
 
     const proc = Bun.spawn([opts.binary ?? "codex", "app-server"], {
       cwd: effectiveCwd(log.path, cwd) ?? dirname(log.path),
