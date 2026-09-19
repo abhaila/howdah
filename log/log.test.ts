@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, writeFileSync, appendFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync, appendFileSync, existsSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EventLog, readLog } from "./write";
@@ -77,6 +77,232 @@ describe("EventLog", () => {
     const turns = coalesce(events);
     expect(turns).toHaveLength(1);
     expect(turns[0]!.finalized).toBe(false); // the death is visible in the record
+  });
+});
+
+describe("EventLog locked append (system-map 0.5)", () => {
+  const fixture = join(import.meta.dir, "fixtures", "appender.ts");
+  const chunk = (index: number, content = "x") =>
+    ({ type: "chunk", node: "n", visit: 1, turn: 1, index, kind: "text", content }) as const;
+
+  async function runWriters(path: string, mode: "append" | "decide", count: number): Promise<void> {
+    const startAt = Date.now() + 400; // both processes past bun startup before either writes
+    const procs = [0, 1].map(() =>
+      Bun.spawn(["bun", fixture, path, mode, String(count), String(startAt)], { stderr: "pipe" }),
+    );
+    const codes = await Promise.all(procs.map((p) => p.exited));
+    for (const [i, code] of codes.entries()) {
+      if (code !== 0) throw new Error(`writer ${i} exited ${code}: ${await new Response(procs[i]!.stderr).text()}`);
+    }
+  }
+
+  async function deadPid(): Promise<number> {
+    const p = Bun.spawn(["true"]);
+    await p.exited;
+    return p.pid;
+  }
+
+  test("two OS processes appending concurrently stamp unique, strictly increasing seqs", async () => {
+    const path = join(dir(), "run.jsonl");
+    await runWriters(path, "append", 200);
+    const events = readLog(path);
+    expect(events).toHaveLength(400);
+    expect(events.map((e) => e.seq)).toEqual(events.map((_, i) => i + 1));
+    expect(existsSync(`${path}.lock`)).toBe(false);
+  }, 30_000);
+
+  test("two processes racing to break the same stale lock still stamp unique seqs", async () => {
+    const path = join(dir(), "run.jsonl");
+    writeFileSync(`${path}.lock`, String(await deadPid())); // both writers find it stale at once
+    await runWriters(path, "append", 200);
+    const events = readLog(path);
+    expect(events).toHaveLength(400);
+    expect(events.map((e) => e.seq)).toEqual(events.map((_, i) => i + 1));
+    expect(existsSync(`${path}.lock`)).toBe(false);
+    expect(existsSync(`${path}.lock.break`)).toBe(false);
+  }, 30_000);
+
+  test("release leaves a lock that another process now holds", () => {
+    const path = join(dir(), "run.jsonl");
+    const log = new EventLog(path, fixedClock());
+    // someone else took the lock while we believed we held it: our release must not delete it
+    log.appendIf(() => {
+      writeFileSync(`${path}.lock`, "999999");
+      return null;
+    });
+    expect(readFileSync(`${path}.lock`, "utf8")).toBe("999999");
+  });
+
+  test("concurrent appendIf across two processes lands exactly one decision", async () => {
+    const path = join(dir(), "run.jsonl");
+    await runWriters(path, "decide", 50);
+    const events = readLog(path);
+    expect(events.filter((e) => e.type === "operator-jump")).toHaveLength(1);
+    expect(events).toHaveLength(101);
+    expect(events.map((e) => e.seq)).toEqual(events.map((_, i) => i + 1));
+  }, 30_000);
+
+  test("an instance built before another writer appended still stamps the next seq", () => {
+    const path = join(dir(), "run.jsonl");
+    const runner = new EventLog(path, fixedClock());
+    runner.append({ type: "run-started", graph: "g", inputs: {}, pinned_prompts: {} });
+    // the web/CLI pattern: a fresh instance appends a reply while the runner's is alive
+    new EventLog(path).append({ type: "attention-resolved", node: "n", visit: 1, reply: "hi" });
+    const e = runner.append({ type: "run-finished", outcome: "success" });
+    expect(e.seq).toBe(3);
+    expect(readLog(path).map((x) => x.seq)).toEqual([1, 2, 3]);
+  });
+
+  test("a stale lock left by a dead process is recovered and released", async () => {
+    const path = join(dir(), "run.jsonl");
+    const log = new EventLog(path, fixedClock());
+    writeFileSync(`${path}.lock`, String(await deadPid()));
+    expect(log.append(chunk(0)).seq).toBe(1);
+    expect(existsSync(`${path}.lock`)).toBe(false);
+  });
+
+  test("an empty lock older than the stale threshold is recovered", () => {
+    const path = join(dir(), "run.jsonl");
+    const log = new EventLog(path, fixedClock(), { lockTimeoutMs: 2000, staleLockMs: 100 });
+    writeFileSync(`${path}.lock`, "");
+    const old = new Date(Date.now() - 10_000);
+    utimesSync(`${path}.lock`, old, old);
+    expect(log.append(chunk(0)).seq).toBe(1);
+    expect(existsSync(`${path}.lock`)).toBe(false);
+  });
+
+  test("a fresh empty lock (holder mid-create) is waited on, not broken", () => {
+    const path = join(dir(), "run.jsonl");
+    const log = new EventLog(path, fixedClock(), { lockTimeoutMs: 150, staleLockMs: 60_000 });
+    writeFileSync(`${path}.lock`, "");
+    expect(() => log.append(chunk(0))).toThrow(/lock/);
+    expect(existsSync(`${path}.lock`)).toBe(true); // not ours to remove
+    expect(readLog(path)).toHaveLength(0);
+  });
+
+  test("a live foreign lock that never releases times out naming the path and holder", async () => {
+    const path = join(dir(), "run.jsonl");
+    const holder = Bun.spawn(["sleep", "30"]);
+    try {
+      writeFileSync(`${path}.lock`, String(holder.pid));
+      const log = new EventLog(path, fixedClock(), { lockTimeoutMs: 150 });
+      const t0 = Date.now();
+      let err: unknown;
+      try {
+        log.append(chunk(0));
+      } catch (e) {
+        err = e;
+      }
+      expect(Date.now() - t0).toBeGreaterThanOrEqual(150);
+      expect(String(err)).toContain(`${path}.lock`);
+      expect(String(err)).toContain(String(holder.pid));
+      expect(readFileSync(`${path}.lock`, "utf8")).toBe(String(holder.pid)); // left intact
+      expect(readLog(path)).toHaveLength(0);
+    } finally {
+      holder.kill(9);
+      await holder.exited;
+    }
+  });
+
+  test("the lock is released when the append itself throws", () => {
+    const path = join(dir(), "run.jsonl");
+    const log = new EventLog(path, () => { throw new Error("clock broke"); });
+    expect(() => log.append(chunk(0))).toThrow(/clock broke/);
+    expect(existsSync(`${path}.lock`)).toBe(false);
+  });
+
+  test("tail seq skips a torn final line and the torn bytes are cut before appending", () => {
+    const path = join(dir(), "run.jsonl");
+    const log = new EventLog(path, fixedClock());
+    log.append(chunk(0));
+    log.append(chunk(1));
+    appendFileSync(path, '{"type":"chunk","node":"n","vi'); // torn write from a killed writer
+    const e = new EventLog(path, fixedClock()).append(chunk(2));
+    expect(e.seq).toBe(3);
+    // the log stays readable: the next event did not fuse onto the torn bytes
+    expect(readLog(path).map((x) => x.seq)).toEqual([1, 2, 3]);
+    expect(readFileSync(path, "utf8").endsWith("\n")).toBe(true);
+  });
+
+  test("a complete final line missing only its newline is kept and terminated", () => {
+    const path = join(dir(), "run.jsonl");
+    const log = new EventLog(path, fixedClock());
+    log.append(chunk(0));
+    appendFileSync(path, JSON.stringify({ ...chunk(1), seq: 2, ts: "t" })); // killed before "\n"
+    expect(log.append(chunk(2)).seq).toBe(3);
+    expect(readLog(path).map((x) => x.seq)).toEqual([1, 2, 3]);
+  });
+
+  test("a final line that is valid JSON without a seq is refused, never truncated", () => {
+    const path = join(dir(), "run.jsonl");
+    const log = new EventLog(path, fixedClock());
+    log.append(chunk(0));
+    appendFileSync(path, '{"type":"chunk"}\n');
+    const before = readFileSync(path, "utf8");
+    expect(() => log.append(chunk(1))).toThrow(/no integer seq/);
+    expect(readFileSync(path, "utf8")).toBe(before);
+    expect(existsSync(`${path}.lock`)).toBe(false);
+  });
+
+  test("the tail scan validates only the tail, not the whole file", () => {
+    const path = join(dir(), "run.jsonl");
+    writeFileSync(path, 'garbage\n{"type":"run-finished","outcome":"success","seq":2,"ts":"t"}\nalso-torn');
+    // the torn tail is fine and the line under it parses, so this appends; older corruption
+    // is readLog's to report (it throws), not the append path's
+    expect(new EventLog(path, fixedClock()).append(chunk(0)).seq).toBe(3);
+  });
+
+  test("corruption directly under a torn tail is refused, not appended past", () => {
+    const path = join(dir(), "run.jsonl");
+    writeFileSync(path, '{"type":"run-finished","outcome":"success","seq":1,"ts":"t"}\ngarbage\ntorn');
+    expect(() => new EventLog(path, fixedClock()).append(chunk(0))).toThrow(/corrupt event line/);
+  });
+
+  test("tail read grows past its first window for an event larger than the window", () => {
+    const path = join(dir(), "run.jsonl");
+    const log = new EventLog(path, fixedClock());
+    log.append(chunk(0));
+    log.append(chunk(1, "y".repeat(300_000)));
+    expect(new EventLog(path, fixedClock()).append(chunk(2)).seq).toBe(3);
+  });
+
+  test("appendIf appends when build returns an event and skips when it returns null", () => {
+    const path = join(dir(), "run.jsonl");
+    const log = new EventLog(path, fixedClock());
+    log.append({ type: "run-started", graph: "g", inputs: {}, pinned_prompts: {} });
+    const decide = (events: LoggedEvent[]) =>
+      events.some((e) => e.type === "operator-jump") ? null : ({ type: "operator-jump", to: "x" } as const);
+    const first = log.appendIf((events) => {
+      expect(events.map((e) => e.seq)).toEqual([1]); // build sees the file, not a cache
+      return decide(events);
+    });
+    expect(first?.seq).toBe(2);
+    expect(first?.type).toBe("operator-jump");
+    expect(log.appendIf(decide)).toBeNull();
+    expect(readLog(path)).toHaveLength(2);
+    expect(existsSync(`${path}.lock`)).toBe(false);
+  });
+
+  test("appendIf releases the lock when build throws", () => {
+    const path = join(dir(), "run.jsonl");
+    const log = new EventLog(path, fixedClock());
+    expect(() => log.appendIf(() => { throw new Error("bad predicate"); })).toThrow(/bad predicate/);
+    expect(existsSync(`${path}.lock`)).toBe(false);
+    expect(log.append(chunk(0)).seq).toBe(1);
+  });
+
+  test("appending from inside an appendIf build is refused, not deadlocked", () => {
+    const path = join(dir(), "run.jsonl");
+    const log = new EventLog(path, fixedClock(), { lockTimeoutMs: 5000 });
+    const t0 = Date.now();
+    expect(() =>
+      log.appendIf(() => {
+        log.append(chunk(0));
+        return null;
+      }),
+    ).toThrow(/re-entrant/);
+    expect(Date.now() - t0).toBeLessThan(1000);
+    expect(existsSync(`${path}.lock`)).toBe(false);
   });
 });
 
