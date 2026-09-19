@@ -31,6 +31,29 @@ export type ChunkKind = "text" | "thinking" | "tool_call" | "tool_result";
 
 export type AllowanceState = "ok" | "exhausted" | "unreachable" | "unavailable";
 
+/**
+ * system-map 0.2 — why a run parked. Each code has exactly one reply rule
+ * (engine/control.ts REPLY_RULES). The last three are raised by slice 1's approval flow;
+ * they are defined now so their refusal text exists before the first event carries them.
+ */
+export type ParkCode =
+  | "attempt-failed"
+  | "executor-threw"
+  | "max-visits"
+  | "no-edge"
+  | "max-steps"
+  | "ambiguous-effect"
+  | "awaiting-approval"
+  | "approval-missing"
+  | "stale-base";
+
+export type ResolutionSource = "operator" | "resume";
+
+/** Who resolved an ask. Legacy events carry no source: resume() always wrote reply "resume". */
+export function resolutionSource(e: { reply?: string; source?: ResolutionSource }): ResolutionSource {
+  return e.source ?? (e.reply === "resume" ? "resume" : "operator");
+}
+
 /** everything the engine and adapters may append — the closed union the viewer renders */
 export type RunEvent =
   | {
@@ -156,8 +179,32 @@ export type RunEvent =
        */
       reset_budgets?: boolean;
     }
-  | { type: "attention-raised"; node: string; visit: number; reason: string; ask?: unknown }
-  | { type: "attention-resolved"; node: string; visit: number; reply?: string }
+  | {
+      type: "attention-raised";
+      node: string;
+      visit: number;
+      /** human-readable; kept as free text so the thread reads the same as before 0.2 */
+      reason: string;
+      /**
+       * system-map 0.2: WHY the run parked, machine-readable — it decides what a reply may
+       * do (engine/control.ts resolveReply). Absent on legacy events and on mid-node
+       * harness permission asks, which keep their live reply path (executors/reply.ts).
+       */
+      code?: ParkCode;
+      ask?: unknown;
+    }
+  | {
+      type: "attention-resolved";
+      node: string;
+      visit: number;
+      reply?: string;
+      /**
+       * system-map 0.2: who resolved it. Only an `operator` reply can reach a prompt;
+       * resume()'s own resolution is bookkeeping. Absent on legacy events — read those
+       * through resolutionSource(), which treats `reply: "resume"` as resume.
+       */
+      source?: ResolutionSource;
+    }
   | {
       type: "allowance";
       harness: Harness;

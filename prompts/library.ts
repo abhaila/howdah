@@ -35,6 +35,7 @@ import {
   suffixBuilders,
 } from "../core/template";
 import type { LoggedEvent } from "../log/events";
+import { rendersReply } from "../engine/replay";
 import { outcomesByHash } from "../log/coalesce";
 import { readLog } from "../log/write";
 import { PromptStore, PromptStoreError } from "./store";
@@ -386,6 +387,13 @@ export interface ReconstructedRender {
  * predates 0.1 — its hash covered template (+ jump suffix) only — and is rebuilt exactly
  * that way, so old runs stay VERIFIED. A version this code has no builders for is never
  * guessed at: unverified, plain template text.
+ *
+ * system-map 0.2: a v2+ render may also carry an operator reply suffix, so each reply on
+ * this node that preceded the render AND that rendersReply() accepts for the ask it
+ * answered is a candidate too. resume()'s own resolutions and replies to non-renderable
+ * parks never are — the engine never renders them.
+ * Only versions with a reply builder get reply candidates; v1 and legacy events are
+ * rebuilt exactly as before.
  */
 export function reconstructRender(runDir: string, renderedHashWanted: string): ReconstructedRender | null {
   const logPath = join(runDir, "run.jsonl");
@@ -407,21 +415,36 @@ export function reconstructRender(runDir: string, renderedHashWanted: string): R
     .reverse(); // most recent jump first — that is the one the engine would have consumed
   const jumpOptions: (string | undefined)[] = [undefined, ...jumpMessages];
 
+  // system-map 0.2: a reply renders only by rendersReply(ask, resolution) — the same rule
+  // replay applies — so each resolution is paired with the ask it answered
+  const replyMessages: string[] = [];
+  let ask: Extract<LoggedEvent, { type: "attention-raised" }> | null = null;
+  for (const e of events) {
+    if (e.seq >= render.seq) break;
+    if (e.type === "attention-raised") ask = e;
+    else if (e.type === "operator-jump") ask = null;
+    else if (e.type === "attention-resolved") {
+      const message = e.node === render.node ? rendersReply(ask, e) : null;
+      if (message !== null) replyMessages.unshift(message); // most recent first, as with jumps
+      ask = null;
+    }
+  }
+
   let candidates: string[];
+  const builders = render.suffix_version === undefined ? undefined : suffixBuilders(render.suffix_version);
   if (render.suffix_version === undefined) {
     // pre-0.1 event: the hash never covered the skill hint or outputs contract
     candidates = jumpOptions.map((m) => (m === undefined ? plain : plain + operatorInstructionSuffix(m)));
-  } else if (suffixBuilders(render.suffix_version)) {
+  } else if (builders) {
     const suffixVersion = render.suffix_version;
-    candidates = jumpOptions.map((jumpMessage) =>
-      assemblePrompt({
-        body: plain,
-        jumpMessage,
-        skills: render.skills ?? [],
-        outputKeys: render.output_keys ?? [],
-        suffixVersion,
-      }),
-    );
+    const assemble = (jumpMessage?: string, replyMessage?: string) =>
+      assemblePrompt({ body: plain, jumpMessage, replyMessage, skills: render.skills ?? [], outputKeys: render.output_keys ?? [], suffixVersion });
+    // [plain, ...jumps, ...replies] — never both: a jump clears any pending reply (replay.ts),
+    // and v1 has no reply builder, so a v1 render cannot have carried one
+    candidates = [
+      ...jumpOptions.map((m) => assemble(m)),
+      ...(builders.replyInstruction ? replyMessages.map((m) => assemble(undefined, m)) : []),
+    ];
   } else {
     candidates = []; // a suffix version this code never had — do not guess
   }

@@ -3,9 +3,10 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { defineGraph } from "../core/graph";
-import { renderTemplate, renderedHash, templateReads, operatorInstructionSuffix, buildOutputInstruction } from "../core/template";
+import { renderTemplate, renderedHash, templateReads, operatorInstructionSuffix, buildOutputInstruction, suffixBuilders } from "../core/template";
+import { resolveReply } from "../engine/control";
 import { Engine, type AttemptResult } from "../engine/run";
-import { EventLog } from "../log/write";
+import { EventLog, readLog } from "../log/write";
 import { PromptStore, PromptStoreError } from "./store";
 import {
   appendFeedback, outcomeRows, promptDetail, promptHistory, promptSummaries,
@@ -272,7 +273,7 @@ describe("reconstructRender — proven against what the engine actually wrote", 
     expect(r.verified).toBe(true);
     // system-map 0.1: the outputs contract is part of what the agent read, so part of the proof
     expect(r.text).toBe("Do ship the thing given nothing yet.\n" + buildOutputInstruction(["summary"]));
-    expect(render).toMatchObject({ skills: [], output_keys: ["summary"], suffix_version: 1 });
+    expect(render).toMatchObject({ skills: [], output_keys: ["summary"], suffix_version: 2 });
     expect(r).toMatchObject({ prompt: "work", prompt_version: 3, node: "work", visit: 1 });
     expect(r.context_read).toEqual({ goal: "ship the thing", summary: "nothing yet" });
   });
@@ -423,6 +424,84 @@ describe("reconstructRender — proven against what the engine actually wrote", 
     const r = reconstructRender(runDir, hash)!;
     expect(r.verified).toBe(true);
     expect(r.text).toBe(text);
+  });
+
+  // ---- system-map 0.2: operator reply suffix -------------------------------------------
+
+  const replyV2 = (m: string) => suffixBuilders(2)!.replyInstruction!(m);
+  const parkAndReply = (reply: string, source?: string) => [
+    { type: "attention-raised", node: "work", visit: 1, reason: "attempt failed", code: "attempt-failed" },
+    { type: "attention-resolved", node: "work", visit: 1, reply, ...(source ? { source } : {}) },
+  ];
+
+  test("a retried turn carrying an operator reply verifies (engine-written, suffix_version 2)", async () => {
+    const root = fakeRepo();
+    const runsDir = mkdtempSync(join(tmpdir(), "howdah-runs-"));
+    const runDir = join(runsDir, "run-reply");
+    let attempt = 0;
+    let sent = "";
+    const engine = () =>
+      new Engine(miniGraph(), {
+        dir: runDir,
+        promptsDir: join(root, "prompts"),
+        executors: {
+          agent: async ({ nodeId, renderedPrompt }) => {
+            if (nodeId === "check") return ok({ verdict: "pass" });
+            if (++attempt === 1) return { status: "failed", writes: {} } as AttemptResult;
+            sent = renderedPrompt!;
+            return ok({ summary: "s" });
+          },
+        },
+      });
+    await engine().start({ goal: "g", summary: "s" });
+    expect(resolveReply(runDir, "mind the null case", { graphs: { mini: miniGraph() } })).toMatchObject({ ok: true, rendered: true });
+    await engine().resume();
+
+    const render: any = readLog(join(runDir, "run.jsonl")).find((e) => e.type === "prompt-rendered" && e.node === "work" && e.visit === 2);
+    expect(render.suffix_version).toBe(2);
+    const r = reconstructRender(runDir, render.rendered_hash)!;
+    expect(r.verified).toBe(true);
+    expect(r.text).toBe("Do g given s.\n" + replyV2("mind the null case") + buildOutputInstruction(["summary"]));
+    expect(r.text).toBe(sent);
+  });
+
+  test("a reply render verifies when jumps and older replies also preceded it", () => {
+    const text = "Do g given s.\n" + replyV2("newer hint") + buildOutputInstruction(["summary"]);
+    const { runDir, hash } = handWrittenRender({ skills: [], output_keys: ["summary"], suffix_version: 2 }, text, [
+      { type: "operator-jump", to: "work", message: "go back" },
+      ...parkAndReply("older hint", "operator"),
+      ...parkAndReply("newer hint", "operator"),
+    ]);
+    expect(reconstructRender(runDir, hash)!).toMatchObject({ verified: true, text });
+  });
+
+  test("a reply to a non-renderable park is never a candidate — the same rule replay applies", () => {
+    const text = "Do g given s.\n" + replyV2("be lenient") + buildOutputInstruction(["summary"]);
+    const { runDir, hash } = handWrittenRender({ skills: [], output_keys: ["summary"], suffix_version: 2 }, text, [
+      { type: "attention-raised", node: "work", visit: 1, reason: "maxVisits exceeded", code: "max-visits" },
+      { type: "attention-resolved", node: "work", visit: 1, reply: "be lenient", source: "operator" },
+    ]);
+    expect(reconstructRender(runDir, hash)!.verified).toBe(false);
+  });
+
+  test("resume's own resolution is never a reply candidate (source, or legacy reply \"resume\")", () => {
+    for (const source of ["resume", undefined]) {
+      const text = "Do g given s.\n" + replyV2("resume") + buildOutputInstruction(["summary"]);
+      const { runDir, hash } = handWrittenRender({ skills: [], output_keys: ["summary"], suffix_version: 2 }, text, parkAndReply("resume", source));
+      expect(reconstructRender(runDir, hash)!.verified).toBe(false);
+    }
+  });
+
+  test("a v2 render without a reply still verifies when replies preceded it", () => {
+    const text = "Do g given s.\n" + buildOutputInstruction(["summary"]);
+    const { runDir, hash } = handWrittenRender({ skills: [], output_keys: ["summary"], suffix_version: 2 }, text, parkAndReply("hint", "operator"));
+    expect(reconstructRender(runDir, hash)!).toMatchObject({ verified: true, text });
+  });
+
+  test("a v1 render is rebuilt without reply candidates even when a reply preceded it (regression)", () => {
+    const text = "Do g given s.\n" + buildOutputInstruction(["summary"]);
+    const { runDir, hash } = handWrittenRender({ skills: [], output_keys: ["summary"], suffix_version: 1 }, text, parkAndReply("hint", "operator"));
+    expect(reconstructRender(runDir, hash)!).toMatchObject({ verified: true, text });
   });
 
   test("an unknown suffix_version reports unverified rather than guessing", () => {

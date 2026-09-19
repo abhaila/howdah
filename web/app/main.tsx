@@ -459,7 +459,10 @@ function OpenIdeButton({ runId, detail }: { runId: string; detail: RunDetail & {
 
 function AskCard({ runId, ask, onResolved }: { runId: string; ask: NonNullable<RunDetail["ask"]>; onResolved: () => void }) {
   const [text, setText] = useState("");
-  const [state, setState] = useState<"idle" | "sending" | "delivered" | "failed">("idle");
+  const [state, setState] = useState<"idle" | "sending" | "delivered" | "failed" | "refused">("idle");
+  // a refusal (409) names the verb that WILL work for this park (system-map 0.2) — show it,
+  // never collapse it into a generic "failed"
+  const [refusal, setRefusal] = useState<string | null>(null);
   const ref = useRef<HTMLTextAreaElement>(null);
   useEffect(() => { if (location.hash === "#needs-input") ref.current?.focus(); }, []);
 
@@ -471,6 +474,12 @@ function AskCard({ runId, ask, onResolved }: { runId: string; ask: NonNullable<R
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ text }),
       });
+      if (r.status === 409) {
+        const body = (await r.json().catch(() => ({}))) as { error?: string };
+        setRefusal(body.error ?? "This park can't take a reply.");
+        setState("refused");
+        return;
+      }
       if (!r.ok) throw new Error(await r.text());
       setState("delivered");
       setTimeout(onResolved, 420); // the collapse plays, then the thread takes over — the motion moment
@@ -490,6 +499,7 @@ function AskCard({ runId, ask, onResolved }: { runId: string; ask: NonNullable<R
         </Button>
         {state === "failed" && <span className="send-state">failed — <a onClick={send} style={{ cursor: "pointer", textDecoration: "underline" }}>retry</a></span>}
       </div>
+      {state === "refused" && refusal && <div className="send-state" role="alert">{refusal}</div>}
     </div>
   );
 }
