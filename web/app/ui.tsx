@@ -154,3 +154,41 @@ export function Tabs({ value, onValueChange, items, className }: { value: string
 export function Separator({ className }: { className?: string }) {
   return <div className={cn("h-px w-full bg-border", className)} />;
 }
+
+// ---- PanelTabs (the detail panel's pane switcher) ---------------------------------
+
+/**
+ * The detail panel's tabs (`.sd-tabs`): real tabs for assistive tech and the keyboard —
+ * role="tab", focusable, Enter/Space select — so every pane (Ask, Approval, Drift, Map,
+ * Prompt, Output, Raw) is reachable without a mouse.
+ */
+export function PanelTabs<T extends string>({ value, onValueChange, items, className = "sd-tabs", itemClassName = "tab" }: {
+  value: T;
+  onValueChange: (v: T) => void;
+  items: ReadonlyArray<{ value: T; label: string }>;
+  className?: string;
+  itemClassName?: string;
+}) {
+  return (
+    <div className={className} role="tablist">
+      {items.map((it) => (
+        <span
+          key={it.value}
+          role="tab"
+          tabIndex={0}
+          aria-selected={value === it.value}
+          className={cn(itemClassName, value === it.value && "on")}
+          onClick={() => onValueChange(it.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              onValueChange(it.value);
+            }
+          }}
+        >
+          {it.label}
+        </span>
+      ))}
+    </div>
+  );
+}
