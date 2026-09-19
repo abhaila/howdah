@@ -18,7 +18,7 @@ React + Tailwind for the viewer.
 
 ```bash
 bun install                      # required on a fresh clone (node_modules/ is gitignored)
-bun test                         # whole suite (209 tests, ~9s) — bun:test, no extra runner
+bun test                         # whole suite (996 tests, ~2 min) — bun:test, happy-dom preloaded via bunfig.toml
 bun test engine/engine.test.ts   # one file
 bun test -t "resume"             # one test by name
 bun run check                    # tsc --noEmit + prompt-id codegen staleness gate
@@ -40,21 +40,30 @@ CLI (there is no installed `howdah` binary — invoke the entrypoint):
 
 ```bash
 bun cli/main.ts run <graph> -i goal=... -i work=... --workspace <name> [--model/--harness/--effort/...]
+bun cli/main.ts setup                        # create $HOWDAH_HOME's layout (config.json, runs/, repos/, attention/)
 bun cli/main.ts runs | graphs | doctor
 bun cli/main.ts reply <run-id> <text>        # answers the current ask, resumes if the runner died
-bun cli/main.ts resume|pause|abort <run-id>
+bun cli/main.ts resume|pause|abort <run-id>  # pause/abort also interrupt a PROVEN live runner mid-turn
 bun cli/main.ts jump <run-id> <node> [msg]   # move a dead run to a node, injecting an instruction
 bun cli/main.ts up                           # supervisor: heartbeat + resume dead runs
 bun cli/main.ts workspace add|add-github|remove|list
 bun cli/main.ts new-graph <name> --kind doc|research|code|custom
+bun cli/main.ts resume <run-id> --force      # break a runner lock whose holder is NOT this run's runner
+bun cli/main.ts approve|send-feedback <run-id> [--proposal <id>]      # decide the current slice round
+bun cli/main.ts comment <run-id> [--proposal <id>] <entity-id> <text> # pin a comment on a ghost
+bun cli/main.ts redesign <run-id> <msg>      # re-extract and re-propose; msg also seeds the map
+bun cli/main.ts map <dir> [--json]           # extract a system map standalone (map/cli.ts)
+bun cli/main.ts metrics [--json]             # implement-slice vs implement-ticket value metrics
 bun reviser/revise.ts <prompt-id>            # GEPA-style revision proposal → reviser/proposals/
+bun reviser/revise.ts <_partial> --evidence-from <includer>      # partials need an includer's evidence
 bun prompts/proposals.ts accept|reject <path> [reason]   # same guards the UI uses
 bun reviser/eval/delivery-publish.eval.ts --score-only --stamp   # stamp an eval score onto the proposal
+bun reviser/eval/slice-propose.eval.ts --score-only              # proposer eval (spends tokens; no baseline yet)
 ```
 
 Env: `HOWDAH_HOME` (state root, default `~/.howdah`), `HOWDAH_STUB=1` (executors park
 instead of spawning real agents — how tests and dry runs avoid spending tokens),
-`HOWDAH_MODEL` (run-level model default).
+`HOWDAH_MODEL` (run-level model default), `HOWDAH_PORT` (viewer port, default 4711).
 
 ## Architecture
 
@@ -99,6 +108,9 @@ Break one of these and the design stops working, so check them before changing t
   store and library all go through it. Change the substitution rules there, not in a copy.
 - **Runs pin their prompts at start.** `Engine.pinPrompts()` copies each consumed prompt into
   the run dir and renders only from there; accepted revisions affect new runs only.
+  `{{> id }}` includes are expanded at pin time, so the pinned file is the text that is hashed
+  and reconstructed; `run-started.pinned_includes` records every included prompt's version,
+  and the library, proposals (stale-base) and reviser are include-aware.
 - **Context writes publish on success.** `ContextStore` buffers writes during an attempt and
   publishes on `endAttempt("succeeded")`. Scope is declared per output and decides what a
   re-visit does: `sticky` (old value stays visible), `cleared` (veiled during the attempt,
@@ -118,21 +130,50 @@ Break one of these and the design stops working, so check them before changing t
 - **Attention is durable before it is delivered.** `engine/attention.ts` writes the record,
   then notifies; `watchdog/check.ts` runs outside the process (launchd, 60s) so `kill -9`
   with an ask pending still rings, and a stale heartbeat is itself an attention event.
-- **Agent config resolves in one place.** `Engine.resolveAgentConfig`: run override → UI node
-  tuning (`tuning.json`) → TS node setting → UI graph tuning → TS graph default. It also
-  drops a model that clearly belongs to the other harness, because model names are
-  harness-specific and a leaked one is an API 400.
+- **Human gates read decision events, never `attention-resolved`.** `resume()` auto-resolves
+  every standing park, so an approval that trusted `attention-resolved` would let any resume
+  through. `engine/slice-decision.ts` is the only place that answers "what is the current
+  proposal round, and what was decided" — the approval executor, the `requires` gate, replay
+  and the routes all call it. Decisions are round-keyed (`proposal_id`), idempotent and
+  appended with `EventLog.appendIf` under the log lock.
+- **Visit numbers are identity; budgets are floors.** `${node}#${visit}` attempt ids,
+  side-effect attempt ids and the viewer's `node@visit` rows rely on visits only climbing.
+  A `reset_budgets` operator-jump sets per-node floors; `maxVisits` counts above the floor.
+- **One writer at a time, one runner per run.** Log appends take an O_EXCL lockfile and read
+  the tail seq from the file (`log/write.ts`, `log/lockfile.ts`); `runner.pid` is an
+  identity lock (`<pid> <start>`), broken only when the holder is provably dead or reused,
+  and pause/abort signal only a proven runner (`engine/control.ts` interruptRunner). Nothing
+  reads `runner.pid` as a bare PID.
+- **The map never presents a guess as fact.** `map/` is the syntactic tier: every entity and
+  edge carries its tier and file:line evidence; duplicate identity keys are ambiguous and
+  never verify; route mounts resolve only through a unique, same-project Kotlin reference
+  (MountResolver rules U1–U16); anything unproven is `unresolved` / `not-checked` with a
+  reason. Drift (`map/drift.ts`) says `verified` only with proof and `missing` only after a
+  fully covered search with no near match; snapshots from different extractor versions or
+  uncommitted changes are never judged. Cross-project resolution is left to SCIP (slice 2).
+- **Agent config resolves in one place.** `resolveAgentConfig` (`engine/run.ts`, also what
+  the viewer's graph API shows) over `core/graph.ts` resolveAgentConfigLayers: Claude→Codex
+  fallback → run override → UI node tuning (`tuning.json`) → TS node setting → UI graph
+  tuning → TS graph default. The model is the first one that fits the resolved harness (model
+  names are harness-specific and a leaked one is an API 400); Claude always runs in `auto`
+  permission mode, Codex in a full-access sandbox. `readOnly: true` is applied last and beats
+  everything, the fallback included: `plan` for Claude, a read-only sandbox for Codex.
+- **A harness fallback is a new visit, rendered for the harness that runs it.** When Claude's
+  allowance is exhausted (or the attempt reads as rate-limited) the engine retries the node on
+  Codex as a fresh visit — not charged to `maxVisits` — so its `prompt-rendered` carries the
+  Codex harness and no skill hint, and reconstructs VERIFIED.
 
 ### Module map
 
 | Path | Role |
 |---|---|
 | `core/` | graph schema (`graph.ts`), path validator (`validate.ts`), context store, template/render contract (`template.ts`), generated `prompt-ids.ts` |
-| `graphs/` | the runnable graphs + `index.ts` registry; `implement-ticket`, `improve-codebase`, `review-teammate-pr`, `write-doc`, `research`, `quick-task` |
+| `graphs/` | the runnable graphs + `index.ts` registry; `implement-ticket`, `implement-slice` (design on the map → approve → build → drift), `improve-codebase`, `review-teammate-pr`, `write-doc`, `research`, `quick-task`; `delivery.ts` shared publish/repair half |
+| `map/` | the code-derived system map (syntactic tier): tree-sitter extraction (`extract.ts`, `facts.ts`, `adapters.ts` + `queries/`), content-addressed store, `assemble.ts` (identity keys, MountResolver), `ghosts.ts` (GhostSet validator), `drift.ts`, `neighbourhood.ts` |
 | `prompts/` | one `.md` per prompt (front-matter `id`/`version`), codegen, `store.ts` (load/list/accept with stale-base + undeclared-read guards), `proposals.ts` (lifecycle + review view), `library.ts` (read model: consumers, feedback, outcome join, render reconstruction) |
 | `log/` | event union (`events.ts`), durable JSONL writer, view-time `coalesce.ts` |
 | `adapter/` | pure harness → `AgentEvent` mappers (`claude.ts`, `codex.ts`, `opencode.ts`), chunk-safe `parse.ts`, `capabilities.ts` matrix |
-| `engine/` | `run.ts` (loop, routing, pinning, effects, attribution), `replay.ts`, `reconcile.ts`, `attention.ts`, `control.ts`, `executors/` |
+| `engine/` | `run.ts` (loop, routing, pinning, effects, attribution), `replay.ts`, `reconcile.ts` (git probes + worktree fingerprint), `attention.ts`, `control.ts` (replies, decisions, runner lock), `slice-decision.ts`, `slice-map.ts`, `executors/` |
 | `cli/` | `main.ts` verbs, `new-graph.ts` scaffolder |
 | `config/` | `config.json` workspaces + settings, `tuning.json` overlay, GitHub repo registration |
 | `web/` | Bun server (read model + reply/launch/control writes, SSE), `derive.ts` read model, React app in `app/` |
@@ -151,10 +192,20 @@ registered workspace name; a dirty worktree refuses to die),
 the gap named. Every executor resolves its cwd through `effectiveCwd()` so a run "moves
 into" its worktree without the engine mutating state.
 
-Agent nodes get an **outputs contract** appended to the rendered prompt
-(`executors/outputs.ts`): the final line must be `{"outputs": {...}}` with exactly the
-node's declared writes. Generated from the graph declaration — don't hand-write it in a
-prompt.
+Agent nodes get an **outputs contract** on the rendered prompt: the final line must be
+`{"outputs": {...}}` with exactly the node's declared writes. It is generated from the graph
+declaration and assembled with every other suffix (jump, reply, refusal, skill hint) in
+`core/template.ts` *before* hashing, by versioned builders (`SUFFIX_VERSION`) — executors
+send the prompt unchanged. Don't hand-write it in a prompt. If the final message still lacks
+the contract, the claude and codex executors ask ONCE more on the same session/thread
+(`executors/outputs.ts` buildRepairInstruction, same keys); that follow-up turn is outside
+`rendered_hash` by design — the hash covers the first turn.
+
+`approval` nodes (slice 1a) park `awaiting-approval` without consuming a visit and resolve
+from decision events; agent nodes may declare `requires: { approvalOf }` (a pre-start gate
+that also re-checks the live worktree fingerprint) and `readOnly: true` (plan mode that no
+override can raise). Command built-ins beside `probe:pr`: `map:extract`, `map:reextract`,
+`map:drift` (`engine/executors/map.ts`).
 
 Routing: highest-weight passing condition wins; an unconditional edge is the weight-0
 fallback; no matching edge parks the run (Orbital semantics), so exhaustive conditional sets
@@ -163,7 +214,11 @@ with no fallback are legal.
 ### Web app
 
 `web/server.ts` is a read model over the same run logs plus a few writes (reply, launch,
-pause/abort/resume/jump, open-in-IDE, settings, tuning, feedback, proposal accept/reject).
+pause/abort/resume/jump, open-in-IDE, open-run-folder, settings, tuning, feedback, proposal
+accept/reject, slice comments/approval/redesign). Jump is spawned detached (it resumes the
+run), so the route refuses in-process first with the CLI's own precheck (`jumpRefusal`). It binds 127.0.0.1 and `guardRequest()` runs before every
+route: a foreign Host is refused (DNS rebinding), a foreign Origin on a write is refused
+(CSRF), and a write body must be JSON.
 `ServerOpts.repoRoot` overrides where `prompts/`, `feedback/` and `reviser/proposals/` are
 read and written — tests must pass a temp root, or accepting a proposal mutates the repo. It never owns an engine loop —
 launching spawns `cli/main.ts` detached. Live updates are SSE polling the log file. The
