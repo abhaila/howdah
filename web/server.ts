@@ -32,13 +32,17 @@
  * change cannot lock the UI out of its own writes.
  */
 import { existsSync, readFileSync, readdirSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { readLog } from "../log/write";
-import { deriveDetail, deriveSummary, deriveTimeline, runDigest, sortRuns, type RunSummary } from "./derive";
+import { deriveDetail, deriveSummary, deriveTimeline, runDigest, snapshotIndex, sortRuns, type RunSummary, type SnapshotIndex } from "./derive";
+import { currentProposal } from "../engine/slice-decision";
+import { loadSnapshot } from "../engine/slice-map";
+import { MapStore, defaultStoreDir } from "../map/store";
+import type { AssembledMap } from "../map/types";
 import { AttentionCenter } from "../engine/attention";
 import { graphCatalog, GRAPHS } from "../graphs/index";
-import { ensureHowdahHome, loadConfig, saveConfig } from "../config/config";
+import { ensureHowdahHome, howdahHome, loadConfig, saveConfig } from "../config/config";
 import { listGithubRepos, registerGithubRepo } from "../config/github";
 import { loadTuning, saveTuning, pruneTuning } from "../config/tuning";
 import {
@@ -55,6 +59,8 @@ import {
   type LibraryPaths,
 } from "../prompts/library";
 import { acceptProposal, listProposals, proposalsDir, rejectProposal, viewProposal } from "../prompts/proposals";
+import { evidenceSource } from "../reviser/revise";
+import { isPartialId } from "../core/template";
 
 export interface ServerOpts {
   runsDir: string;
@@ -72,7 +78,15 @@ export interface ServerOpts {
    * a recorder: the real one spawns an engine that may spend tokens.
    */
   resumeRun?: (id: string) => void;
+  /**
+   * starts the reviser detached with this argv (default: Bun.spawn, unref'd). Tests inject a
+   * recorder: the real reviser is an agent call that spends tokens.
+   */
+  spawnReviser?: (argv: string[]) => void;
 }
+
+/** A prompt id as the library names files (`prompts/<id>.md`) — no separators, no traversal. */
+const PROMPT_ID = /^[A-Za-z0-9_][A-Za-z0-9_-]*(\.[A-Za-z0-9_][A-Za-z0-9_-]*)*$/;
 
 type EngineTuning = NonNullable<Parameters<typeof resolveAgentConfig>[3]>["tuning"];
 
@@ -292,11 +306,23 @@ export function createHowdahServer(opts: ServerOpts) {
           // redraft: the reviser is a real agent call that spends tokens, so it is spawned
           // detached exactly like a run launch and the screen polls for the new proposal
           const view = viewProposal(dir, file, promptStore, root);
-          if (process.env.HOWDAH_STUB) return json({ ok: true, drafting: view.id, stubbed: true }, 202);
-          Bun.spawn(["bun", join(import.meta.dir, "..", "reviser", "revise.ts"), view.id], {
-            stdout: "ignore", stderr: "ignore", env: { ...process.env },
-          }).unref();
-          return json({ ok: true, drafting: view.id }, 202);
+          // A partial has no feedback of its own: revise.ts refuses it without --evidence-from
+          // <includer>. That refusal would happen in a detached child (exit 1, unseen) while the
+          // screen polls forever — so the rule is applied HERE, with revise.ts's own check.
+          const body = (await req.json().catch(() => ({}))) as { evidence_from?: unknown };
+          const evidenceFrom = body?.evidence_from;
+          if (evidenceFrom !== undefined && (typeof evidenceFrom !== "string" || !PROMPT_ID.test(evidenceFrom)))
+            return json({ error: "evidence_from must be a prompt id" }, 400);
+          if (isPartialId(view.id) && evidenceFrom === undefined)
+            return json({
+              error: `${view.id} is a partial; re-draft it from an includer: bun reviser/revise.ts ${view.id} --evidence-from <includer> (or POST {"evidence_from": "<includer>"})`,
+            }, 409);
+          evidenceSource(view.id, evidenceFrom, root); // throws (→ 409) when the includer does not include it
+          const argv = [process.execPath, join(import.meta.dir, "..", "reviser", "revise.ts"), view.id, ...(evidenceFrom ? ["--evidence-from", evidenceFrom] : [])];
+          if (opts.spawnReviser) opts.spawnReviser(argv);
+          else if (process.env.HOWDAH_STUB) return json({ ok: true, drafting: view.id, stubbed: true }, 202);
+          else Bun.spawn(argv, { stdout: "ignore", stderr: "ignore", env: { ...process.env } }).unref();
+          return json({ ok: true, drafting: view.id, ...(evidenceFrom ? { evidence_from: evidenceFrom } : {}) }, 202);
         } catch (err) {
           // stale base and undeclared reads are refusals, not bugs: 409 with the message
           return json({ error: err instanceof Error ? err.message : String(err) }, 409);
@@ -635,7 +661,7 @@ export function createHowdahServer(opts: ServerOpts) {
       } catch {
         /* a graph with conflicting scopes throws; the rest of the run view still renders */
       }
-      const detail = deriveDetail(id, events, declarations);
+      const detail = deriveDetail(id, events, declarations, { snapshot: baseIndex(join(opts.runsDir, id), events) });
       detail.summary = withRunnerLiveness(detail.summary, events, join(opts.runsDir, id));
       const target = effectiveCwd(path, detail.identity.cwd ?? undefined);
       const runDir = join(opts.runsDir, id);
@@ -654,6 +680,57 @@ export function createHowdahServer(opts: ServerOpts) {
       });
     },
   });
+}
+
+/**
+ * system-map 1d: the base snapshot of the current proposal round, indexed for tier glyphs.
+ *
+ * Everything here comes from the run log, so it is treated as untrusted before it touches the
+ * disk: the manifest hash must be a sha256 hex, and the object store (the store the round's
+ * `map-extracted` event names — taken from the events already read, so a GET never re-reads
+ * run.jsonl) must be the default store or inside $HOWDAH_HOME.
+ *
+ * Cost on the live-polling path: loadSnapshot keeps an LRU of assembled maps (manifests are
+ * immutable, content-addressed), the index is memoised per assembled map, and a snapshot that
+ * cannot be read is remembered as unreadable for UNREADABLE_TTL_MS (bounded), so a broken one is
+ * not retried per SSE tick yet a transient failure recovers without a viewer restart.
+ * Unreadable → null: the card says tiers are unknown rather than failing the run view.
+ */
+const MANIFEST_HASH = /^[0-9a-f]{64}$/;
+const indexes = new WeakMap<AssembledMap, SnapshotIndex>();
+/** key → when the "unreadable" verdict expires (ms since epoch) */
+const unreadable = new Map<string, number>();
+const UNREADABLE_MAX = 256;
+export const UNREADABLE_TTL_MS = 60_000;
+
+function allowedStore(dir: string): boolean {
+  const home = resolve(howdahHome());
+  return dir === resolve(defaultStoreDir()) || dir.startsWith(home + sep);
+}
+
+export function baseIndex(runDir: string, events: ReturnType<typeof readLog>, now: () => number = Date.now): SnapshotIndex | null {
+  const manifest = currentProposal(events)?.manifest_hash;
+  if (!manifest || !MANIFEST_HASH.test(manifest)) return null;
+  const extracted = events.findLast((e) => e.type === "map-extracted" && e.manifest_hash === manifest);
+  const recorded = extracted?.type === "map-extracted" && typeof extracted.store === "string" && extracted.store !== "" ? extracted.store : null;
+  const storeDir = resolve(recorded ?? defaultStoreDir());
+  if (!allowedStore(storeDir)) return null;
+  const key = `${resolve(runDir)}\0${storeDir}\0${manifest}`;
+  const until = unreadable.get(key);
+  if (until !== undefined) {
+    if (now() < until) return null;
+    unreadable.delete(key); // expired: try again
+  }
+  try {
+    const map = loadSnapshot(runDir, manifest, new MapStore(storeDir));
+    let index = indexes.get(map);
+    if (!index) indexes.set(map, (index = snapshotIndex(map)));
+    return index;
+  } catch {
+    if (unreadable.size >= UNREADABLE_MAX) unreadable.delete(unreadable.keys().next().value!);
+    unreadable.set(key, now() + UNREADABLE_TTL_MS);
+    return null;
+  }
 }
 
 /** bundle the React app (with Tailwind) to public/app.js + public/app.css artifacts */

@@ -182,11 +182,8 @@ export function readBase(value: unknown, key: string): BaseSnapshot {
   return { manifest_hash: manifest, fingerprint: fp, commit: typeof v.commit === "string" ? v.commit : null };
 }
 
-/** "14:02" in local time — how a refusal names when the earlier decision landed. */
-export function clockTime(iso: string): string {
-  const d = new Date(iso);
-  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-}
+/** "14:02" in local time — how a refusal names when the earlier decision landed (shared with the UI). */
+export { clockTime } from "../core/clock-time";
 
 /**
  * The seq the NEXT append will be stamped with, computed inside EventLog.appendIf's build

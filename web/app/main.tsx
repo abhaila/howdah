@@ -5,7 +5,7 @@
  */
 import "./globals.css";
 import { createRoot } from "react-dom/client";
-import { Button, Card, CardContent, CardDescription, CardHeader, CardTitle, Input, Label, Select, Tabs, Textarea, Badge } from "./ui";
+import { Button, Card, CardContent, CardDescription, CardHeader, CardTitle, Input, Label, PanelTabs, Select, Tabs, Textarea, Badge } from "./ui";
 import {
   Rows3, Plus, Workflow, Settings as SettingsIcon, Play, Pause, OctagonX, RotateCcw, Send,
   ExternalLink, GitBranch, GitPullRequest, Clock, Coins, Pin, Fingerprint, MessagesSquare,
@@ -13,13 +13,15 @@ import {
   SlidersHorizontal, RotateCcw as ResetIcon, Loader2, ArrowUp, ArrowDown, FolderOpen, Copy,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { RunDetail, RunSummary, RunStatus, LogRow } from "../derive";
-import { citeParts } from "../derive";
+import type { RunDetail, RunSummary, LogRow } from "../derive";
+import { citeParts } from "../cite";
 import type { CoalescedTurn } from "../../log/coalesce";
 // type-only: erased at bundle time, so the server's node imports never reach the browser
 import type { PromptDetail, PromptSummary, ReconstructedRender } from "../../prompts/library";
 import type { ProposalView } from "../../prompts/proposals";
 import { GraphDag, useGraphShape, type GraphShapeDto, type AgentConfigDto } from "./graph-dag";
+import { StatusBadge, askRowKey } from "./status";
+import { slicePanes, SlicePane, MapProgressLine, type SlicePaneId } from "./slice";
 
 interface AppInfo {
   home: string;
@@ -32,19 +34,6 @@ interface AppInfo {
 }
 
 // ---- shared bits ---------------------------------------------------------------
-
-const STATUS_LABEL: Record<RunStatus, string> = {
-  queued: "queued", running: "running", "needs-input": "needs input", waiting: "waiting",
-  "failed-recoverable": "failed", "failed-terminal": "failed", done: "done", "harness-dead": "harness dead",
-};
-
-function StatusBadge({ status }: { status: RunStatus }) {
-  return (
-    <span className={`status ${status}`} style={{ ["--status-color" as any]: `var(--status-${status})` }}>
-      <span className="dot" /> {STATUS_LABEL[status]}
-    </span>
-  );
-}
 
 function useNow(tickMs = 1000): number {
   const [now, setNow] = useState(Date.now());
@@ -457,6 +446,7 @@ function RunThread({
   ask,
   detail,
   onResolved,
+  onReviewDesign,
 }: {
   turns: CoalescedTurn[];
   renderByTurnKey: Map<string, RunDetail["renders"][number]>;
@@ -464,6 +454,8 @@ function RunThread({
   ask: RunDetail["ask"];
   detail: RunDetail;
   onResolved: () => void;
+  /** system-map 1d: open the approval card in the Steps panel */
+  onReviewDesign: () => void;
 }) {
   const followKey = `${turns.length}:${ask?.seq ?? "no-ask"}:${turns.at(-1)?.parts.length ?? 0}`;
   return (
@@ -472,7 +464,16 @@ function RunThread({
         {turns.map((t) => (
           <Turn key={`${t.node}@${t.visit}#${t.turn}`} turn={t} render={renderByTurnKey.get(`${t.node}@${t.visit}`)} runId={runId} />
         ))}
-        {ask && <AskCard key={`${ask.node}@${ask.visit}#${ask.seq}`} runId={runId} ask={ask} detail={detail} onResolved={onResolved} />}
+        {ask && (ask.code === "awaiting-approval" && detail.slice?.approval === ask.node && detail.slice.proposal ? (
+          // system-map 1d: an approval is decided on the card in the Steps panel, not by a reply
+          <div className="ask-card" id="needs-input">
+            <h3>Needs you — {ask.node}@{ask.visit}</h3>
+            <div>{ask.reason}</div>
+            <div className="actions">
+              <Button onClick={onReviewDesign}>Review the design</Button>
+            </div>
+          </div>
+        ) : <AskCard key={`${ask.node}@${ask.visit}#${ask.seq}`} runId={runId} ask={ask} detail={detail} onResolved={onResolved} />)}
         {!ask && detail.summary.status === "done" && <div className="operator-row">run complete</div>}
       </div>
     </ScrollShell>
@@ -672,7 +673,7 @@ function AskCard({ runId, ask, detail, onResolved }: { runId: string; ask: NonNu
           {context}
         </div>
       )}
-      {ask.reason === "attempt failed" && (
+      {(ask.code === "attempt-failed" || ask.reason === "attempt failed") && (
         <div className="field-hint">Reply with instructions to change the retry, or send an empty reply to retry the step as-is.</div>
       )}
       <Textarea ref={ref} value={text} onChange={(e) => setText(e.target.value)} placeholder="Your reply…" disabled={state === "sending" || state === "delivered"} />
@@ -737,21 +738,24 @@ function StepGlyph({ status }: { status: "running" | "succeeded" | "failed" | "n
  * time-proportional so the shape of the run is legible; a sub-second step still gets 3px,
  * because an invisible mark is a lie about what happened.
  */
-function RunSteps({ timeline, ask, selected, now, onSelect }: {
+function RunSteps({ timeline, ask, selected, now, onSelect, mapping }: {
   timeline: RunDetail["timeline"];
   ask: RunDetail["ask"];
   selected: string | null;
   now: number;
   onSelect: (key: string) => void;
+  /** system-map 1d: an extraction in progress shows "mapping files done/total" on its row */
+  mapping?: NonNullable<RunDetail["slice"]>["mapping"];
 }) {
   if (timeline.length === 0) return <div className="empty">no steps yet</div>;
+  const askKey = askRowKey(timeline, ask);
   const firstStartedAt = new Date(timeline[0]!.started_at).getTime();
   const liveSpan = Math.max(1, now - firstStartedAt);
   return (
     <div className="steps">
       {timeline.map((t, i) => {
         const span = t.finished_at ? t.run_span_ms || 1 : Math.max(t.run_span_ms || 1, liveSpan);
-        const waiting = ask !== null && ask.node === t.node && ask.visit === t.visit;
+        const waiting = askKey === `${t.node}@${t.visit}`;
         const status = waiting ? "needs-input" : t.status;
         const total = liveDuration(t, now);
         // the split that makes R3.3 visible: agent time, then the part that was me not looking
@@ -782,6 +786,7 @@ function RunSteps({ timeline, ask, selected, now, onSelect }: {
                 />
               )}
             </span>
+            {mapping && mapping.node === t.node && mapping.visit === t.visit && t.status === "running" && <MapProgressLine progress={mapping} />}
             <span className="step-dur">
               {fmtDur(total)}
               {t.waiting_ms > 0 && <span className="step-wait">{fmtDur(t.waiting_ms)}</span>}
@@ -797,7 +802,8 @@ function RunSteps({ timeline, ask, selected, now, onSelect }: {
  * Step detail (T24, story 5) — Inngest's right-hand panel. The ask lives HERE rather than
  * floating in the thread, and the Run toggle keeps the run-level facts one click away.
  */
-function StepDetail({ runId, row, detail, ask, now, onResolved }: {
+/** Exported for component tests (web/app/steps.test.tsx): the pane routing lives here. */
+export function StepDetail({ runId, row, detail, ask, now, onResolved }: {
   runId: string;
   row: RunDetail["timeline"][number] | null;
   detail: RunDetail;
@@ -806,11 +812,36 @@ function StepDetail({ runId, row, detail, ask, now, onResolved }: {
   onResolved: () => void;
 }) {
   const [scope, setScope] = useState<"step" | "run">("step");
-  const [pane, setPane] = useState<"ask" | "prompt" | "output">("ask");
-  if (!row) return <div className="step-detail"><div className="empty">pick a step</div></div>;
+  const [pane, setPane] = useState<"ask" | "prompt" | "output" | SlicePaneId | null>(null);
+  // an ask on a node that has no step row at all (e.g. approval-missing after a jump to a node
+  // that never ran): no row can carry it, so the panel carries it — the operator is never left
+  // with a needs-you banner and nothing to answer
+  const rowlessAsk = ask !== null && askRowKey(detail.timeline, ask) === null ? ask : null;
+  const rowlessAskCard = rowlessAsk && (
+    <div className="sd-body sd-rowless-ask" data-testid="rowless-ask">
+      <div className="pd-note">{rowlessAsk.node} has no step yet — it parked before its first attempt started</div>
+      <AskCard key={`${rowlessAsk.node}@${rowlessAsk.visit}#${rowlessAsk.seq}`} runId={runId} ask={rowlessAsk} detail={detail} onResolved={onResolved} />
+    </div>
+  );
+  if (!row) return <div className="step-detail">{rowlessAskCard ?? <div className="empty">pick a step</div>}</div>;
 
   const key = `${row.node}@${row.visit}`;
-  const isAsking = ask !== null && ask.node === row.node && ask.visit === row.visit;
+  const isAsking = ask !== null && askRowKey(detail.timeline, ask) === key;
+  // system-map 1d: the slice panes (approval card, drift, map) live in THIS panel's slot.
+  // Only an awaiting-approval ask IS the approval card (Ask is hidden then); any other park on
+  // the step (attempt-failed, max-visits, …) is answered by a reply, so Ask stays and leads.
+  const slicePaneList = slicePanes(detail.slice, row);
+  const decidedOnCard = isAsking && ask!.code === "awaiting-approval" && slicePaneList.some((p) => p.value === "approval");
+  const askFirst = isAsking && !decidedOnCard;
+  const askPane = { value: "ask" as const, label: "Ask" };
+  const panes: Array<{ value: NonNullable<typeof pane>; label: string }> = [
+    ...(askFirst ? [askPane] : []),
+    ...slicePaneList,
+    ...(askFirst || decidedOnCard ? [] : [askPane]),
+    { value: "prompt", label: "Prompt & context" },
+    { value: "output", label: "Output" },
+  ];
+  const shown = panes.find((p) => p.value === pane)?.value ?? panes[0]!.value;
   const render = detail.renders.find((r) => r.node === row.node && r.visit === row.visit);
   const total = liveDuration(row, now);
   const work = Math.max(0, total - row.waiting_ms);
@@ -823,10 +854,8 @@ function StepDetail({ runId, row, detail, ask, now, onResolved }: {
 
   return (
     <div className="step-detail">
-      <div className="sd-scope">
-        <span className={`chip ${scope === "step" ? "on" : ""}`} onClick={() => setScope("step")}>Step</span>
-        <span className={`chip ${scope === "run" ? "on" : ""}`} onClick={() => setScope("run")}>Run</span>
-      </div>
+      <PanelTabs className="sd-scope" itemClassName="chip" value={scope} onValueChange={setScope} items={[{ value: "step", label: "Step" }, { value: "run", label: "Run" }]} />
+      {rowlessAskCard}
 
       {scope === "run" ? (
         <div className="sd-body">
@@ -866,19 +895,18 @@ function StepDetail({ runId, row, detail, ask, now, onResolved }: {
             {bar("agent working", work, total, "work")}
             {row.waiting_ms > 0 && bar("waiting on you", row.waiting_ms, total, "waiting")}
           </div>
-          <div className="sd-tabs">
-            <span className={`tab ${pane === "ask" ? "on" : ""}`} onClick={() => setPane("ask")}>Ask</span>
-            <span className={`tab ${pane === "prompt" ? "on" : ""}`} onClick={() => setPane("prompt")}>Prompt &amp; context</span>
-            <span className={`tab ${pane === "output" ? "on" : ""}`} onClick={() => setPane("output")}>Output</span>
-          </div>
+          <PanelTabs value={shown} onValueChange={setPane} items={panes} />
           <div className="sd-body">
-            {pane === "ask" && (isAsking
+            {(shown === "approval" || shown === "drift" || shown === "map") && detail.slice && (
+              <SlicePane pane={shown} runId={runId} slice={detail.slice} row={row} onChanged={onResolved} />
+            )}
+            {shown === "ask" && (isAsking
               ? <AskCard key={`${ask!.node}@${ask!.visit}#${ask!.seq}`} runId={runId} ask={ask!} detail={detail} onResolved={onResolved} />
               : <div className="pd-note">this step is not waiting on you</div>)}
-            {pane === "prompt" && (render
+            {shown === "prompt" && (render
               ? <PromptAndContext runId={runId} render={render} />
               : <div className="pd-note">this step rendered no prompt (it is not an agent step)</div>)}
-            {pane === "output" && (() => {
+            {shown === "output" && (() => {
               const finished = detail.outcomes.find((o) => o.node === row.node && o.visit === row.visit);
               return (
                 <>
@@ -965,10 +993,7 @@ function EventDetail({ row }: { row: LogRow | null }) {
         <span className="pill">{row.ts.slice(11, 23)}</span>
         {row.node && <span className="pill id">{row.node}{row.visit !== null ? `@${row.visit}` : ""}</span>}
       </div>
-      <div className="sd-tabs">
-        <span className={`tab ${pane === "details" ? "on" : ""}`} onClick={() => setPane("details")}>Details</span>
-        <span className={`tab ${pane === "raw" ? "on" : ""}`} onClick={() => setPane("raw")}>Raw event</span>
-      </div>
+      <PanelTabs value={pane} onValueChange={setPane} items={[{ value: "details", label: "Details" }, { value: "raw", label: "Raw event" }]} />
       <div className="sd-body">
         {pane === "details" ? (
           <>
@@ -1237,7 +1262,8 @@ function RunView({ id }: { id: string }) {
   const lastEventAgeMs = summary.last_event_at ? now - new Date(summary.last_event_at).getTime() : 0;
   const staleRunning = summary.status === "running" && lastEventAgeMs > 5 * 60_000;
   // the step that needs a human wins the selection; otherwise the newest one
-  const waitingRow = ask ? detail.timeline.find((t) => t.node === ask.node && t.visit === ask.visit) : undefined;
+  const askKey = askRowKey(detail.timeline, ask);
+  const waitingRow = askKey ? detail.timeline.find((t) => `${t.node}@${t.visit}` === askKey) : undefined;
   const defaultRow = waitingRow ?? detail.timeline.at(-1);
   const selectedKey = picked ?? (defaultRow ? `${defaultRow.node}@${defaultRow.visit}` : null);
   const selectedRow = detail.timeline.find((t) => `${t.node}@${t.visit}` === selectedKey) ?? null;
@@ -1317,7 +1343,7 @@ function RunView({ id }: { id: string }) {
         )}
         {tab === "steps" ? (
           <div className="steps-split">
-            <RunSteps timeline={detail.timeline} ask={ask} selected={selectedKey} now={now} onSelect={setPicked} />
+            <RunSteps timeline={detail.timeline} ask={ask} selected={selectedKey} now={now} onSelect={setPicked} mapping={detail.slice?.mapping} />
             <StepDetail runId={id} row={selectedRow} detail={detail} ask={ask} now={now} onResolved={reload} />
           </div>
         ) : tab === "context" ? (
@@ -1329,7 +1355,15 @@ function RunView({ id }: { id: string }) {
         ) : tab === "graph" ? (
           <RunGraph runId={id} graph={summary.graph} timeline={detail.timeline} status={summary.status} onJumped={reload} />
         ) : (
-          <RunThread turns={resolvedTurns} renderByTurnKey={renderByTurnKey} runId={id} ask={ask} detail={detail} onResolved={reload} />
+          <RunThread
+            turns={resolvedTurns}
+            renderByTurnKey={renderByTurnKey}
+            runId={id}
+            ask={ask}
+            detail={detail}
+            onResolved={reload}
+            onReviewDesign={() => { setPicked(askKey); setTab("steps"); }}
+          />
         )}
       </div>
 
@@ -2400,4 +2434,6 @@ function App() {
   );
 }
 
-createRoot(document.getElementById("root")!).render(<App />);
+// guarded: component tests import this module (StepDetail) into a DOM with no #root
+const mount = document.getElementById("root");
+if (mount) createRoot(mount).render(<App />);
