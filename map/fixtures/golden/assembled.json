@@ -53,7 +53,7 @@
       "endLine": 19,
       "tier": "syntactic",
       "evidence": "api/src/main/kotlin/com/example/api/App.kt:19",
-      "contentHash": "3e8daf4f60b3b3ed",
+      "contentHash": "cfcae30a4e7c2b78",
       "route": {
         "method": "DELETE",
         "template": "/api/v1/orders/{*}",
@@ -71,7 +71,7 @@
       "endLine": 16,
       "tier": "syntactic",
       "evidence": "api/src/main/kotlin/com/example/api/App.kt:16",
-      "contentHash": "f4374c6097667998",
+      "contentHash": "c27a7a1e3c6981fe",
       "route": {
         "method": "GET",
         "template": "/api/users/{*}",
@@ -89,7 +89,7 @@
       "endLine": 14,
       "tier": "syntactic",
       "evidence": "api/src/main/kotlin/com/example/api/App.kt:14",
-      "contentHash": "5524f70c5691c339",
+      "contentHash": "2964da012e012966",
       "route": {
         "method": "GET",
         "template": "/health",
@@ -107,7 +107,7 @@
       "endLine": 13,
       "tier": "syntactic",
       "evidence": "api/src/main/kotlin/com/example/api/Orders.kt:13",
-      "contentHash": "ea4c4cd1c60dc2c8",
+      "contentHash": "65a20ab0a953f5be",
       "route": {
         "method": "GET",
         "template": "/shop/orders",
@@ -125,7 +125,7 @@
       "endLine": 17,
       "tier": "syntactic",
       "evidence": "api/src/main/kotlin/com/example/api/App.kt:17",
-      "contentHash": "c8efc712fc06686b",
+      "contentHash": "cf258f5ca86f56d8",
       "route": {
         "method": "POST",
         "template": "/api/users",
@@ -143,7 +143,7 @@
       "endLine": 33,
       "tier": "syntactic",
       "evidence": "api/src/main/kotlin/com/example/api/Handlers.kt:33",
-      "contentHash": "6258e5c5e931af60",
+      "contentHash": "3a38972599e7bcaa",
       "function": {
         "language": "kotlin",
         "container": [],
@@ -161,7 +161,7 @@
       "endLine": 28,
       "tier": "syntactic",
       "evidence": "api/src/main/kotlin/com/example/api/App.kt:26",
-      "contentHash": "a6c49ee361c578ff",
+      "contentHash": "f51c144e8c3a6006",
       "function": {
         "language": "kotlin",
         "container": [],
@@ -178,7 +178,7 @@
       "endLine": 24,
       "tier": "syntactic",
       "evidence": "api/src/main/kotlin/com/example/api/App.kt:13",
-      "contentHash": "bfcf1ad9fe9679ac",
+      "contentHash": "f73f8de9795a400f",
       "function": {
         "language": "kotlin",
         "container": [],
@@ -197,7 +197,7 @@
       "endLine": 40,
       "tier": "syntactic",
       "evidence": "api/src/main/kotlin/com/example/api/App.kt:40",
-      "contentHash": "4512a58f827ac4cb",
+      "contentHash": "00a573f717e081e2",
       "function": {
         "language": "kotlin",
         "container": [],
@@ -216,7 +216,7 @@
       "endLine": 30,
       "tier": "syntactic",
       "evidence": "api/src/main/kotlin/com/example/api/App.kt:30",
-      "contentHash": "a7ed28e51938897b",
+      "contentHash": "53b9ef32295fc54e",
       "function": {
         "language": "kotlin",
         "container": [],
@@ -235,7 +235,7 @@
       "endLine": 45,
       "tier": "syntactic",
       "evidence": "api/src/main/kotlin/com/example/api/App.kt:42",
-      "contentHash": "1400dbf233a370d0",
+      "contentHash": "6f34fb79e8e50c69",
       "function": {
         "language": "kotlin",
         "container": [],
@@ -254,7 +254,7 @@
       "endLine": 38,
       "tier": "syntactic",
       "evidence": "api/src/main/kotlin/com/example/api/App.kt:34",
-      "contentHash": "1714e5e9cdf973cd",
+      "contentHash": "94cb52ec4d1bbd74",
       "function": {
         "language": "kotlin",
         "container": [],
@@ -273,7 +273,7 @@
       "endLine": 40,
       "tier": "syntactic",
       "evidence": "api/src/main/kotlin/com/example/api/Handlers.kt:35",
-      "contentHash": "9b1fba35763c4290",
+      "contentHash": "04cd0ac663026dcb",
       "function": {
         "language": "kotlin",
         "container": [],
@@ -292,7 +292,7 @@
       "endLine": 32,
       "tier": "syntactic",
       "evidence": "api/src/main/kotlin/com/example/api/App.kt:32",
-      "contentHash": "b1aae393035f3356",
+      "contentHash": "85c650607e8c948b",
       "function": {
         "language": "kotlin",
         "container": [],
@@ -312,7 +312,7 @@
       "endLine": 42,
       "tier": "syntactic",
       "evidence": "api/src/main/kotlin/com/example/api/Handlers.kt:42",
-      "contentHash": "1684fc4605bc50ba",
+      "contentHash": "febb12378f83bd02",
       "function": {
         "language": "kotlin",
         "container": [],
@@ -332,7 +332,7 @@
       "endLine": 16,
       "tier": "syntactic",
       "evidence": "api/src/main/kotlin/com/example/api/Orders.kt:16",
-      "contentHash": "6161a31998322ecb",
+      "contentHash": "a446c35242873875",
       "function": {
         "language": "kotlin",
         "container": [],
@@ -351,7 +351,7 @@
       "endLine": 9,
       "tier": "syntactic",
       "evidence": "api/src/main/kotlin/com/example/api/Main.kt:7",
-      "contentHash": "f8b13156af9048c5",
+      "contentHash": "9528b2b6a9738c5d",
       "function": {
         "language": "kotlin",
         "container": [],
@@ -368,7 +368,7 @@
       "endLine": 14,
       "tier": "syntactic",
       "evidence": "api/src/main/kotlin/com/example/api/Orders.kt:12",
-      "contentHash": "8203dda37d828bcd",
+      "contentHash": "80e71ca7f1ce2350",
       "function": {
         "language": "kotlin",
         "container": [],
@@ -385,7 +385,7 @@
       "endLine": 4,
       "tier": "syntactic",
       "evidence": "api/src/main/kotlin/com/example/api/Audit.kt:4",
-      "contentHash": "56435ba088bf19e0",
+      "contentHash": "bed54fcbab510f1a",
       "function": {
         "language": "kotlin",
         "container": [
@@ -406,7 +406,7 @@
       "endLine": 30,
       "tier": "syntactic",
       "evidence": "api/src/main/kotlin/com/example/api/Handlers.kt:30",
-      "contentHash": "3e58526bad7d4165",
+      "contentHash": "01c07437c7d0ceb8",
       "function": {
         "language": "kotlin",
         "container": [
@@ -427,7 +427,7 @@
       "endLine": 25,
       "tier": "syntactic",
       "evidence": "api/src/main/kotlin/com/example/api/Handlers.kt:25",
-      "contentHash": "d67fe0300af2ab43",
+      "contentHash": "4b90eceab87d383f",
       "function": {
         "language": "kotlin",
         "container": [
@@ -447,7 +447,7 @@
       "endLine": 21,
       "tier": "syntactic",
       "evidence": "api/src/main/kotlin/com/example/api/Handlers.kt:18",
-      "contentHash": "1d93a0169ccd2f62",
+      "contentHash": "5c92b6c27774a23e",
       "function": {
         "language": "kotlin",
         "container": [
@@ -469,7 +469,7 @@
       "endLine": 15,
       "tier": "syntactic",
       "evidence": "api/src/main/kotlin/com/example/api/Handlers.kt:15",
-      "contentHash": "8d80b0b4fff3be44",
+      "contentHash": "f35abefb6a7c8886",
       "function": {
         "language": "kotlin",
         "container": [
@@ -491,7 +491,7 @@
       "endLine": 13,
       "tier": "syntactic",
       "evidence": "api/src/main/kotlin/com/example/api/Handlers.kt:13",
-      "contentHash": "93df5193c15e61df",
+      "contentHash": "156a79c11bac47ce",
       "function": {
         "language": "kotlin",
         "container": [
@@ -512,7 +512,7 @@
       "endLine": 11,
       "tier": "syntactic",
       "evidence": "api/src/main/kotlin/com/example/api/Handlers.kt:11",
-      "contentHash": "e6b3d1590a374c36",
+      "contentHash": "9b68de6f2444ecfc",
       "function": {
         "language": "kotlin",
         "container": [
@@ -533,7 +533,7 @@
       "endLine": 11,
       "tier": "syntactic",
       "evidence": "shared/core/src/main/java/com/example/core/Greeter.java:9",
-      "contentHash": "5ac3fcfc493db1a6",
+      "contentHash": "819e3041a3261ab9",
       "function": {
         "language": "java",
         "container": [
@@ -554,7 +554,7 @@
       "endLine": 31,
       "tier": "syntactic",
       "evidence": "shared/core/src/main/java/com/example/core/Greeter.java:28",
-      "contentHash": "df269905ae64a047",
+      "contentHash": "748e35d2f3f6e473",
       "function": {
         "language": "java",
         "container": [
@@ -576,7 +576,7 @@
       "endLine": 25,
       "tier": "syntactic",
       "evidence": "shared/core/src/main/java/com/example/core/Greeter.java:23",
-      "contentHash": "b35211fee759069f",
+      "contentHash": "83eb5ea38746f087",
       "function": {
         "language": "java",
         "container": [
@@ -598,7 +598,7 @@
       "endLine": 21,
       "tier": "syntactic",
       "evidence": "shared/core/src/main/java/com/example/core/Greeter.java:18",
-      "contentHash": "e68d7d3534eca30d",
+      "contentHash": "9502545a35dac5aa",
       "function": {
         "language": "java",
         "container": [
@@ -620,7 +620,7 @@
       "endLine": 16,
       "tier": "syntactic",
       "evidence": "shared/core/src/main/java/com/example/core/Greeter.java:13",
-      "contentHash": "0912d2d4cdabd816",
+      "contentHash": "4c9e16e87db6ecbb",
       "function": {
         "language": "java",
         "container": [
@@ -641,7 +641,7 @@
       "endLine": 16,
       "tier": "syntactic",
       "evidence": "web/src/Users.tsx:4",
-      "contentHash": "d97e6e8eb82a0a00",
+      "contentHash": "4f28e92a51971653",
       "function": {
         "language": "tsx",
         "container": [],
@@ -661,7 +661,7 @@
       "endLine": 20,
       "tier": "syntactic",
       "evidence": "web/src/Users.tsx:18",
-      "contentHash": "fffb50596ec5175a",
+      "contentHash": "464e54024970a452",
       "function": {
         "language": "tsx",
         "container": [],
@@ -679,7 +679,7 @@
       "endLine": 31,
       "tier": "syntactic",
       "evidence": "web/src/api.ts:31",
-      "contentHash": "9226812487c77165",
+      "contentHash": "9e7cdd0f58189341",
       "function": {
         "language": "typescript",
         "container": [
@@ -700,7 +700,7 @@
       "endLine": 35,
       "tier": "syntactic",
       "evidence": "web/src/api.ts:33",
-      "contentHash": "60eeee5a38452938",
+      "contentHash": "cbad8e9d0b21247b",
       "function": {
         "language": "typescript",
         "container": [
@@ -719,7 +719,7 @@
       "endLine": 34,
       "tier": "syntactic",
       "evidence": "web/src/api.ts:34",
-      "contentHash": "e49118230792f1db",
+      "contentHash": "733cb794c4fc8c15",
       "fetch": {
         "method": "GET",
         "template": "/health",
@@ -739,7 +739,7 @@
       "endLine": 16,
       "tier": "syntactic",
       "evidence": "web/src/api.ts:14",
-      "contentHash": "54dd8d060a4e9181",
+      "contentHash": "80a661482baaed6f",
       "function": {
         "language": "typescript",
         "container": [],
@@ -759,7 +759,7 @@
       "endLine": 15,
       "tier": "syntactic",
       "evidence": "web/src/api.ts:15",
-      "contentHash": "ddbc361d6314dc6c",
+      "contentHash": "9b0b3ae95c57c037",
       "fetch": {
         "method": "POST",
         "template": "/api/users",
@@ -779,7 +779,7 @@
       "endLine": 20,
       "tier": "syntactic",
       "evidence": "web/src/api.ts:18",
-      "contentHash": "db81f828dc710c15",
+      "contentHash": "9c069420596b6d07",
       "function": {
         "language": "typescript",
         "container": [],
@@ -799,7 +799,7 @@
       "endLine": 19,
       "tier": "syntactic",
       "evidence": "web/src/api.ts:19",
-      "contentHash": "b988bef6c2c2bf74",
+      "contentHash": "f2565d721b9c5d82",
       "fetch": {
         "method": "DELETE",
         "template": "{*}/orders/{*}",
@@ -820,7 +820,7 @@
       "endLine": 28,
       "tier": "syntactic",
       "evidence": "web/src/api.ts:26",
-      "contentHash": "aee8b7cbd5f6aa0d",
+      "contentHash": "98ea052525b37199",
       "function": {
         "language": "typescript",
         "container": [],
@@ -840,7 +840,7 @@
       "endLine": 27,
       "tier": "syntactic",
       "evidence": "web/src/api.ts:27",
-      "contentHash": "02080ee9df202934",
+      "contentHash": "b0a20948f7b2032c",
       "fetch": {
         "method": "GET",
         "template": "{*}",
@@ -861,7 +861,7 @@
       "endLine": 12,
       "tier": "syntactic",
       "evidence": "web/src/api.ts:9",
-      "contentHash": "777da575c3870abb",
+      "contentHash": "fd3013dbfaa025fd",
       "function": {
         "language": "typescript",
         "container": [],
@@ -881,7 +881,7 @@
       "endLine": 10,
       "tier": "syntactic",
       "evidence": "web/src/api.ts:10",
-      "contentHash": "a784e7f2b860844f",
+      "contentHash": "1fbf14ff4c2a013e",
       "fetch": {
         "method": "GET",
         "template": "/api/users/{*}",
@@ -901,7 +901,7 @@
       "endLine": 24,
       "tier": "syntactic",
       "evidence": "web/src/api.ts:22",
-      "contentHash": "130614ddc967c580",
+      "contentHash": "a69bd16685cbaae8",
       "function": {
         "language": "typescript",
         "container": [],
@@ -921,7 +921,7 @@
       "endLine": 23,
       "tier": "syntactic",
       "evidence": "web/src/api.ts:23",
-      "contentHash": "c937b0bd3e33de56",
+      "contentHash": "9c07f9c7526c3882",
       "fetch": {
         "method": "GET",
         "template": "/api/{*}/list",
@@ -941,7 +941,7 @@
       "endLine": 42,
       "tier": "syntactic",
       "evidence": "web/src/api.ts:38",
-      "contentHash": "9e3831fc7a5395e0",
+      "contentHash": "85127e4cf1fe3cc1",
       "function": {
         "language": "typescript",
         "container": [],
@@ -961,7 +961,7 @@
       "endLine": 8,
       "tier": "syntactic",
       "evidence": "web/src/legacy.ts:5",
-      "contentHash": "90bed7165a6f7f07",
+      "contentHash": "9114d94fdf549683",
       "function": {
         "language": "typescript",
         "container": [],
@@ -1544,6 +1544,136 @@
       "queries": [
         "react-query.scm"
       ]
+    }
+  ],
+  "declarations": [
+    {
+      "file": "api/src/main/kotlin/com/example/api/Audit.kt",
+      "name": "Logger",
+      "kind": "interface",
+      "container": [],
+      "line": 3,
+      "evidence": "api/src/main/kotlin/com/example/api/Audit.kt:3"
+    },
+    {
+      "file": "api/src/main/kotlin/com/example/api/Handlers.kt",
+      "name": "User",
+      "kind": "class",
+      "container": [],
+      "line": 7,
+      "evidence": "api/src/main/kotlin/com/example/api/Handlers.kt:7"
+    },
+    {
+      "file": "api/src/main/kotlin/com/example/api/Handlers.kt",
+      "name": "Order",
+      "kind": "class",
+      "container": [],
+      "line": 8,
+      "evidence": "api/src/main/kotlin/com/example/api/Handlers.kt:8"
+    },
+    {
+      "file": "api/src/main/kotlin/com/example/api/Handlers.kt",
+      "name": "Renderer",
+      "kind": "class",
+      "container": [],
+      "line": 10,
+      "evidence": "api/src/main/kotlin/com/example/api/Handlers.kt:10"
+    },
+    {
+      "file": "api/src/main/kotlin/com/example/api/Handlers.kt",
+      "name": "Inner",
+      "kind": "class",
+      "container": [
+        "Renderer"
+      ],
+      "line": 17,
+      "evidence": "api/src/main/kotlin/com/example/api/Handlers.kt:17"
+    },
+    {
+      "file": "api/src/main/kotlin/com/example/api/Handlers.kt",
+      "name": "Companion",
+      "kind": "object",
+      "container": [
+        "Renderer"
+      ],
+      "line": 24,
+      "evidence": "api/src/main/kotlin/com/example/api/Handlers.kt:24"
+    },
+    {
+      "file": "api/src/main/kotlin/com/example/api/Handlers.kt",
+      "name": "Registry",
+      "kind": "object",
+      "container": [],
+      "line": 29,
+      "evidence": "api/src/main/kotlin/com/example/api/Handlers.kt:29"
+    },
+    {
+      "file": "shared/core/src/main/java/com/example/core/Greeter.java",
+      "name": "Greeter",
+      "kind": "class",
+      "container": [],
+      "line": 6,
+      "evidence": "shared/core/src/main/java/com/example/core/Greeter.java:6"
+    },
+    {
+      "file": "shared/core/src/main/java/com/example/core/Greeter.java",
+      "name": "prefix",
+      "kind": "property",
+      "container": [
+        "Greeter"
+      ],
+      "line": 7,
+      "evidence": "shared/core/src/main/java/com/example/core/Greeter.java:7"
+    },
+    {
+      "file": "shared/core/src/main/java/com/example/core/Greeter.java",
+      "name": "Nested",
+      "kind": "class",
+      "container": [
+        "Greeter"
+      ],
+      "line": 27,
+      "evidence": "shared/core/src/main/java/com/example/core/Greeter.java:27"
+    },
+    {
+      "file": "web/src/api.ts",
+      "name": "API",
+      "kind": "property",
+      "container": [],
+      "line": 3,
+      "evidence": "web/src/api.ts:3"
+    },
+    {
+      "file": "web/src/api.ts",
+      "name": "User",
+      "kind": "interface",
+      "container": [],
+      "line": 5,
+      "evidence": "web/src/api.ts:5"
+    },
+    {
+      "file": "web/src/api.ts",
+      "name": "ApiClient",
+      "kind": "class",
+      "container": [],
+      "line": 30,
+      "evidence": "web/src/api.ts:30"
+    },
+    {
+      "file": "web/src/config.ts",
+      "name": "BASE_URL",
+      "kind": "property",
+      "container": [],
+      "line": 1,
+      "evidence": "web/src/config.ts:1"
+    },
+    {
+      "file": "web/src/legacy.ts",
+      "name": "Box",
+      "kind": "interface",
+      "container": [],
+      "line": 1,
+      "evidence": "web/src/legacy.ts:1"
     }
   ],
   "files": [

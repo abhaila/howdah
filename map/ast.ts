@@ -43,6 +43,118 @@ export function hash16(text: string): string {
   return sha256(text).slice(0, 16);
 }
 
+const COMMENT = /comment/;
+/** Node types whose inner text is data (string contents): gaps and whitespace inside are kept verbatim. */
+const VERBATIM = /string|template|heredoc/;
+/** Marks a newline the normaliser must keep because it changes meaning (Kotlin, see below). */
+const NEWLINE = "\u23ce";
+
+/** JSX text the way JSX itself reads it: whitespace runs that contain a newline collapse away. */
+function jsxText(t: string): string {
+  if (!/[\r\n]/.test(t)) return t;
+  const lines = t.split(/\r\n|\n|\r/);
+  return lines
+    .map((l, i) => {
+      let s = l;
+      if (i > 0) s = s.replace(/^[ \t]+/, "");
+      if (i < lines.length - 1) s = s.replace(/[ \t]+$/, "");
+      return s;
+    })
+    .filter((s) => s !== "")
+    .join(" ");
+}
+
+const CLOSERS = new Set([")", "]", "}", ">"]);
+const OPENERS = new Set(["(", "[", "{", "<", ","]);
+/**
+ * A trailing comma (`f(a, b,)`, `[a,]`) — formatter churn with no meaning, so it is not hashed.
+ * Not when an opener or another comma precedes it: `[,]` and `[a,,]` have holes, so there the
+ * comma counts.
+ */
+function trailingComma(parent: N, i: number): boolean {
+  const ch = parent.child(i);
+  if (ch === null || ch.type !== "," || ch.childCount !== 0) return false;
+  /** Nearest non-comment sibling in direction `d`. */
+  const sib = (d: 1 | -1): N | null => {
+    for (let j = i + d; j >= 0 && j < parent.childCount; j += d) {
+      const x = parent.child(j);
+      if (x !== null && !COMMENT.test(x.type)) return x;
+    }
+    return null;
+  };
+  const next = sib(1);
+  const prev = sib(-1);
+  return next !== null && CLOSERS.has(next.type) && prev !== null && !OPENERS.has(prev.type);
+}
+
+/**
+ * Kotlin newlines that change meaning, so a newline in the gap before them is kept as a marker:
+ *   - a binary `+` / `-` operator token: `return a⏎- b` returns `a` (the grammar mis-joins it);
+ *   - a trailing lambda: `g()⏎{ x }` is a call plus a separate lambda, not `g() { x }`.
+ * ktlint never starts a line with a binary operator or a trailing lambda, so formatting churn does
+ * not trip it; a unary `-1` argument on its own line is a prefix expression, not this token.
+ */
+function kotlinSignificantNewline(parent: N, ch: N): boolean {
+  if (ch.childCount === 0 && (ch.type === "+" || ch.type === "-")) return parent.type === "binary_expression" || parent.type === "additive_expression";
+  return ch.type === "annotated_lambda" || (ch.type === "lambda_literal" && parent.type === "call_suffix");
+}
+
+/**
+ * Drift's "content changed" hash (1c, D19): the node's NORMALISED TOKEN STREAM, not its raw
+ * text — every named node's type as structure markers, every token's text, comments dropped,
+ * whitespace between tokens dropped. So re-indenting, re-wrapping or editing a comment leaves the
+ * hash unchanged (`modify` stays `unchanged`, `keep` stays `verified`), while any token, any
+ * string content (whitespace inside a literal included), or any change in how the code parses
+ * changes it. Deliberate exceptions and limits:
+ *   - JSX text is compared as JSX renders it (whitespace runs containing a newline collapse), so
+ *     re-flowing `<p>Hello world</p>` over several lines is not a change;
+ *   - ADDED OR REMOVED PARENTHESES ARE A CHANGE (they are nodes; prettier wrapping multi-line JSX in
+ *     `( … )` changes the hash) — parentheses can change meaning (`(a?.b).c` vs `a?.b.c`), and the
+ *     hash never guesses which ones do not;
+ *   - a trailing comma before a closing bracket is formatter churn and is not hashed (`trailingComma`);
+ *   - Kotlin keeps the newlines that change meaning (`kotlinSignificantNewline`).
+ * Offsets are UTF-16 code units, the same as JS string indices, so gap slices are exact for
+ * non-ASCII source.
+ */
+export function contentHash(node: N, language?: Language): string {
+  const kotlin = language === "kotlin";
+  const parts: string[] = [];
+  const walk = (n: N): void => {
+    if (COMMENT.test(n.type)) return;
+    const count = n.childCount;
+    if (count === 0) {
+      const t = n.type === "jsx_text" ? jsxText(n.text) : n.text;
+      // named leaves (identifiers, string_content, …) are data even when they are only spaces
+      if (n.isNamed && n.type !== "jsx_text" ? t !== "" : t.trim() !== "") parts.push(t);
+      return;
+    }
+    const verbatim = VERBATIM.test(n.type);
+    const text = n.text;
+    const gap = (g: string) => {
+      if (verbatim ? g !== "" : g.trim() !== "") parts.push(verbatim ? g : g.trim());
+    };
+    if (n.isNamed) parts.push(`(${n.type}`);
+    let pos = n.startIndex;
+    for (let i = 0; i < count; i++) {
+      const ch = n.child(i);
+      if (ch === null) continue;
+      const g = text.slice(pos - n.startIndex, ch.startIndex - n.startIndex);
+      gap(g);
+      if (!verbatim && trailingComma(n, i)) {
+        pos = ch.endIndex;
+        continue;
+      }
+      if (kotlin && !verbatim && /[\r\n]/.test(g) && kotlinSignificantNewline(n, ch)) parts.push(NEWLINE);
+      walk(ch);
+      pos = ch.endIndex;
+    }
+    gap(text.slice(pos - n.startIndex));
+    if (n.isNamed) parts.push(")");
+  };
+  walk(node);
+  return hash16(parts.join("\u0001"));
+}
+
 /** Collapse whitespace and cap length — for receiver/handler/reason text in facts. */
 export function short(text: string, max = 80): string {
   const s = text.replace(/\s+/g, " ").trim();
@@ -143,7 +255,7 @@ export class Collector {
 
   addDecl(node: N, d: Omit<DeclFact, "line" | "endLine" | "contentHash">): number {
     const idx = this.facts.decls.length;
-    this.facts.decls.push({ ...d, line: line(node), endLine: endLine(node), contentHash: hash16(node.text) });
+    this.facts.decls.push({ ...d, line: line(node), endLine: endLine(node), contentHash: contentHash(node, this.facts.language) });
     if (d.kind === "function") this.fnRanges.push({ start: node.startIndex, end: node.endIndex, idx });
     return idx;
   }

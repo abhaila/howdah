@@ -295,9 +295,14 @@ const visitJava: Visitor = (n, ctx, c) => {
       return visitChildren(n, { ...ctx, inBody: true }, c, visitJava);
     case "field_declaration":
       if (!ctx.inBody) {
-        // Field initializers are code, but the field names are not locals.
+        // Field initializers are code; field names are not locals. Each field is a `property`
+        // decl — for drift's near matches (`Runnable handler = () -> …` may be the "missing"
+        // handler); the mount resolver skips Java properties, so its candidates are unchanged.
         for (const d of named(n)) {
-          const v = d.type === "variable_declarator" ? field(d, "value") : null;
+          if (d.type !== "variable_declarator") continue;
+          const nm = field(d, "name")?.text ?? "";
+          if (nm !== "") c.addDecl(d, { kind: "property", name: nm, container: ctx.container, topLevel: false });
+          const v = field(d, "value");
           if (v !== null && !v.isError) visitJava(v, { ...ctx, inBody: true }, c);
         }
         return;
@@ -319,7 +324,11 @@ const visitJava: Visitor = (n, ctx, c) => {
     case "method_declaration":
     case "constructor_declaration":
     case "compact_constructor_declaration": {
-      if (ctx.inBody) break;
+      if (ctx.inBody) {
+        // an anonymous-class member (`new Runnable() { public void run() … }`): a name, not an entity
+        if (n.type === "method_declaration") c.local(field(n, "name")?.text ?? "", n, ctx.enclosing);
+        break;
+      }
       const name = n.type === "method_declaration" ? (field(n, "name")?.text ?? "") : "<init>";
       const { types, names } = javaParams(n);
       const varargs = types.at(-1)?.endsWith("...") === true;
@@ -454,9 +463,57 @@ function tsClass(n: N, exportName: string | undefined, ctx: Ctx, c: Collector): 
     } else if (m.type === "public_field_definition") {
       const fn = tsFunctionValue(field(m, "value"));
       if (fn !== null) tsDeclareFunction(m, field(m, "name")?.text ?? "", undefined, fn, inner, c);
-      else visitTs(m, inner, c);
+      else {
+        // `handler = debounce(fn)` — a field holding a value: recorded by name only
+        const nm = field(m, "name")?.text ?? "";
+        if (nm !== "") c.addDecl(m, { kind: "property", name: nm, container: inner.container, topLevel: false });
+        visitTs(m, inner, c);
+      }
     } else if (m.type !== "method_signature" && m.type !== "abstract_method_signature") visitTs(m, inner, c);
   }
+}
+
+/**
+ * A top-level non-function binding (`export const api = { getThing() {…} }`): a `property` decl —
+ * never an entity — plus one per member of an object-literal initializer (container = the
+ * binding). Drift (1c) needs these names so a function written in a form the map does not model
+ * is a "possible match", never proof that the function is missing.
+ */
+function tsValueDecl(d: N, name: string, exportName: string | undefined, value: N | null, c: Collector): void {
+  c.addDecl(d, { kind: "property", name, container: [], topLevel: true, ...(exportName !== undefined ? { exported: true, exportName: name } : {}) });
+  if (value?.type !== "object") return;
+  for (const m of named(value)) {
+    const key = m.type === "method_definition" ? field(m, "name") : m.type === "pair" ? field(m, "key") : m.type === "shorthand_property_identifier" ? m : null;
+    if (key === null) continue;
+    const member = key.type === "string" ? tsStringValue(key) : /^(property_identifier|identifier|shorthand_property_identifier)$/.test(key.type) ? key.text : null;
+    if (member !== null && member !== "") c.addDecl(m, { kind: "property", name: member, container: [name], topLevel: false });
+  }
+}
+
+/**
+ * `namespace N { export function handler() {} }`: NOT modelled as entities (a key would need the
+ * namespace path), so nothing inside becomes a top-level entity; the namespace and each member
+ * it declares are recorded as `property` names (container = the namespace) for drift's near
+ * matches, and the body is read as code (its declarations are locals).
+ */
+function tsNamespace(n: N, exportName: string | undefined, ctx: Ctx, c: Collector): void {
+  const name = field(n, "name")?.text ?? "";
+  if (name !== "") c.addDecl(n, { kind: "property", name, container: [], topLevel: true, ...(exportName !== undefined ? { exported: true, exportName: name } : {}) });
+  const body = field(n, "body");
+  if (body === null) return;
+  for (const st of named(body)) {
+    const d = st.type === "export_statement" ? field(st, "declaration") : st;
+    if (d === null) continue;
+    const members: N[] = [];
+    if (d.type === "lexical_declaration" || d.type === "variable_declaration") {
+      for (const v of named(d)) if (v.type === "variable_declarator") patternNames(field(v, "name") ?? v, members);
+    } else {
+      const nm = field(d, "name");
+      if (nm !== null) members.push(nm);
+    }
+    for (const m of members) c.addDecl(m, { kind: "property", name: m.text, container: name === "" ? [] : [name], topLevel: false });
+  }
+  visitChildren(body, { ...ctx, inBody: true }, c, visitTs);
 }
 
 /** A top-level declaration (possibly under `export`). */
@@ -488,6 +545,13 @@ function tsTopDecl(n: N, exportName: string | undefined, isDefault: boolean, ctx
           tsDeclareFunction(d, nameNode.text, exportName !== undefined ? nameNode.text : undefined, fn, ctx, c);
           continue;
         }
+        if (nameNode?.type === "identifier") tsValueDecl(d, nameNode.text, exportName, value, c);
+        else if (nameNode !== null) {
+          // `export const { handler } = make()` — each bound name is a top-level binding
+          const out: N[] = [];
+          patternNames(nameNode, out);
+          for (const id of out) c.addDecl(id, { kind: "property", name: id.text, container: [], topLevel: true, ...(exportName !== undefined ? { exported: true, exportName: id.text } : {}) });
+        }
         if (isConst && nameNode?.type === "identifier" && value !== null) {
           const s = tsStringValue(value);
           if (s !== null) c.consts.set(nameNode.text, s);
@@ -508,6 +572,10 @@ function tsTopDecl(n: N, exportName: string | undefined, isDefault: boolean, ctx
     }
     case "function_signature":
       return true; // overload / `declare function` — the implementation carries the key
+    case "internal_module":
+    case "module":
+      tsNamespace(n, exportName, ctx, c);
+      return true;
   }
   return false;
 }
@@ -542,6 +610,8 @@ const visitTs: Visitor = (n, ctx, c) => {
       tsImport(n, c, false);
       return;
     case "export_statement": {
+      // `export` inside a namespace body (or any body): code, not a top-level declaration
+      if (ctx.inBody) break;
       if (field(n, "source") !== null) {
         tsImport(n, c, true);
         return;
@@ -558,7 +628,11 @@ const visitTs: Visitor = (n, ctx, c) => {
         if (fn !== null) tsDeclareFunction(n, "default", "default", fn, ctx, c);
         else if (value.type === "identifier") c.exportsInfo.aliases.set(value.text, "default");
         else if (value.type === "class") tsClass(value, "default", ctx, c);
-        else visitTs(value, ctx, c);
+        else {
+          // `export default compose(…)` — a value, not a modelled function: recorded by name only
+          c.addDecl(n, { kind: "property", name: "default", container: [], topLevel: true, exported: true, exportName: "default" });
+          visitTs(value, ctx, c);
+        }
         return;
       }
       for (const spec of n.descendantsOfType("export_specifier")) {

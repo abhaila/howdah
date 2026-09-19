@@ -117,8 +117,11 @@ describe("Java declarations", () => {
     ]);
     expect(f.locals.map((l) => l.name)).toEqual(["name", "total", "g"]);
     expect(f.imports.map((i) => i.path)).toEqual(["java.util.List", "java.util.Map"]);
-    expect(f.calls.find((c) => c.callee === "format")).toEqual({ line: 20, callee: "format", receiver: null, enclosing: 3 });
-    expect(f.decls[3]?.params).toEqual(["Map<String,List<Integer>>", "int"]);
+    const greet2 = f.decls.findIndex((d) => d.kind === "function" && d.name === "greet" && d.params?.length === 2);
+    expect(f.calls.find((c) => c.callee === "format")).toEqual({ line: 20, callee: "format", receiver: null, enclosing: greet2 });
+    // fields are `property` decls (drift's near matches), never locals
+    expect(f.decls.filter((d) => d.kind === "property").map((d) => [...d.container, d.name].join("."))).toEqual(["Greeter.prefix"]);
+    expect(f.decls[greet2]?.params).toEqual(["Map<String,List<Integer>>", "int"]);
   });
 });
 
@@ -574,5 +577,72 @@ describe("round 5: facts for U15/U16", () => {
       ["/b", true, null],
       ["/c", false, null],
     ]);
+  });
+});
+
+describe("content hash (1c drift): the normalised token stream", () => {
+  const hashOf = async (src: string, lang: Language, name = "f") => {
+    const f = await facts(src, lang);
+    expect(f.unparsed).toEqual([]);
+    const d = f.decls.find((x) => x.name === name && x.kind === "function");
+    if (d === undefined) throw new Error(`no function ${name}`);
+    return d.contentHash;
+  };
+  const same = async (a: string, b: string, lang: Language) => expect(await hashOf(b, lang)).toBe(await hashOf(a, lang));
+  const differ = async (a: string, b: string, lang: Language) => expect(await hashOf(b, lang)).not.toBe(await hashOf(a, lang));
+
+  test("whitespace, comments and trailing commas are not changes", async () => {
+    await same("export function f(a: number) { return g(a, 1); }", "export function f(a: number) {\n  // why\n  return g(\n    a,\n    1,\n  );\n}", "typescript");
+    await same("fun f() = listOf(-1, 2)\n", "/** doc */\nfun f() = listOf(\n    -1,\n    2, // two\n)\n", "kotlin");
+    await same("class C { int f() { return g(1); } }", "class C {\n  /* c */ int f() {\n    return g( 1 );\n  }\n}", "java");
+  });
+
+  test("a comma that makes a hole still counts: [a,,] vs [a,], [,] vs []", async () => {
+    await differ("export function f() { return [a,,]; }", "export function f() { return [a,]; }", "typescript");
+    await differ("export function f() { return [,]; }", "export function f() { return []; }", "typescript");
+    await same("export function f() { return [a]; }", "export function f() { return [a,]; }", "typescript");
+  });
+
+  test("string contents are data: whitespace inside a literal is a change", async () => {
+    await differ("export function f() { return 'a b'; }", "export function f() { return 'a  b'; }", "typescript");
+    await differ('fun f(): String = "a b"\n', 'fun f(): String = "a  b"\n', "kotlin");
+  });
+
+  test("Kotlin: a newline before a binary +/- or a trailing lambda changes meaning, so it counts", async () => {
+    await differ("fun f(a: Int, b: Int): Int {\n  return a - b\n}\n", "fun f(a: Int, b: Int): Int {\n  return a\n  - b\n}\n", "kotlin");
+    await differ("fun f() { g() { x } }\n", "fun f() { g()\n{ x } }\n", "kotlin");
+    // …but wrapping after the operator, or a chain, or a unary argument on its own line does not
+    await same("fun f(a: Int, b: Int): Int {\n  return a + b\n}\n", "fun f(a: Int, b: Int): Int {\n  return a +\n    b\n}\n", "kotlin");
+    await same("fun f() = xs.map { it }.filter { it > 0 }\n", "fun f() = xs\n    .map { it }\n    .filter { it > 0 }\n", "kotlin");
+  });
+
+  test("JSX text is compared as JSX reads it; added parentheses count (by design)", async () => {
+    await same("export function f() { return <p>Hello world</p>; }", "export function f() { return <p>\n      Hello world\n    </p>; }", "tsx");
+    await differ("export function f() { return <p>Hello world</p>; }", "export function f() { return <p>Hello  world</p>; }", "tsx");
+    await differ("export function f() { return <p>Hello world</p>; }", "export function f() {\n  return (\n    <p>Hello world</p>\n  );\n}", "tsx");
+  });
+});
+
+describe("names recorded for drift's near matches (never entities)", () => {
+  const props = (f: FileFacts) => f.decls.filter((d) => d.kind === "property").map((d) => [...d.container, d.name].join("."));
+  const fns = (f: FileFacts) => f.decls.filter((d) => d.kind === "function").map((d) => [...d.container, d.name].join("."));
+
+  test("TS class fields holding values, default-exported expressions, destructured exports", async () => {
+    const f = await facts("export class Api { handler = debounce(() => 1); ok = () => 2; }\nexport default compose(() => 1);\nexport const { load, b: save } = make();\n", "typescript");
+    expect(props(f)).toEqual(["Api.handler", "default", "load", "save"]);
+    expect(fns(f)).toEqual(["Api.ok"]);
+  });
+
+  test("TS namespaces: the namespace and its members are names; nothing inside becomes a top-level entity", async () => {
+    const f = await facts("export namespace N { export function handler() {} export const x = 1; }\nnamespace M { function y() {} }\n", "typescript");
+    expect(props(f)).toEqual(["N", "N.handler", "N.x", "M", "M.y"]);
+    expect(fns(f)).toEqual([]);
+  });
+
+  test("Java fields are property decls; anonymous-class methods are locals", async () => {
+    const f = await facts("class C { Runnable handler = () -> {}; void m() { new Thread(new Runnable() { public void run() {} }); } }", "java");
+    expect(props(f)).toEqual(["C.handler"]);
+    expect(fns(f)).toEqual(["C.m"]);
+    expect(f.locals.map((l) => l.name)).toContain("run");
   });
 });

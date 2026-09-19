@@ -24,7 +24,12 @@ export type EdgeKind = "import" | "call" | "route-handler" | "fe-be";
 // ── per-file facts (object store) ────────────────────────────────────────────
 
 export interface DeclFact {
-  /** `property`: Kotlin top-level/member properties (never entities; needed to resolve names). */
+  /**
+   * `property`: Kotlin top-level/member properties, Java fields, and TS value bindings — top-level
+   * consts (incl. destructured), their object-literal members, class fields holding non-function
+   * values, namespaces and their members, `export default <expression>` (as `default`). Never
+   * entities; used to resolve names (Kotlin only) and by drift's near matches.
+   */
   kind: "class" | "interface" | "object" | "enum" | "type" | "function" | "property";
   name: string;
   /** Enclosing class/object chain, outermost first (`["Renderer", "Inner"]`). */
@@ -52,7 +57,7 @@ export interface DeclFact {
   minArgs?: number;
   /** Functions: most arguments a call can pass; null = unbounded (vararg). */
   maxArgs?: number | null;
-  /** sha256 of the declaration's source text (first 16 hex) — drift's "content changed". */
+  /** Normalised token-stream hash of the declaration (`contentHash()` in ast.ts: comments and inter-token whitespace ignored) — drift's "content changed". */
   contentHash: string;
 }
 
@@ -381,6 +386,22 @@ export interface AssembledMap {
   skipped: SkippedFile[];
   notChecked: NotCheckedFile[];
   adapters: AdapterInfo[];
+  /**
+   * Every NON-function declaration (classes, objects, properties, types, TS consts and their
+   * object-literal members), by file — not entities. Drift (1c) reads it to refuse to call a
+   * function `missing` when something of that name exists in a form the map does not model.
+   * Optional so hand-built maps stay valid; `assemble()` always sets it.
+   */
+  declarations?: Declaration[];
+}
+
+export interface Declaration {
+  file: string;
+  name: string;
+  kind: Exclude<DeclFact["kind"], "function">;
+  container: string[];
+  line: number;
+  evidence: string;
 }
 
 export interface Progress {
