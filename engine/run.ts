@@ -28,17 +28,50 @@
  * alongside its free-text reason; engine/control.ts decides per code what an operator
  * reply may do. A reply to a failed agent attempt reaches the retried prompt through the
  * replay-derived replyNote, assembled after the jump suffix (core/template.ts).
+ *
+ * Approval (system-map 1a):
+ *   - Proposal rounds (D15): when a node's successful write lands on an approval node's
+ *     `proposal` key, the graph's validateProposal hook checks it (a refusal fails the
+ *     attempt with the validator's message), then `ghost-proposed` is appended BEFORE that
+ *     node's node-finished, with proposal_id = the event's own seq.
+ *   - Awaiting (D4/3A): an approval executor returns `awaiting` while nobody has decided.
+ *     The attempt ends "failed" in the ContextStore (veiled cleared keys come back), NO
+ *     node-finished is logged, and the run parks `awaiting-approval`. Replay therefore keeps
+ *     the node mid-flight and resume re-attempts the same visit — logging node-finished here
+ *     would let a restart route onward on the previous visit's decision.
+ *   - The `requires` gate (D3/2A, D18) is a pre-start check beside maxVisits: before
+ *     node-started, so a refusal consumes no visit. `jump` can move a stopped run straight
+ *     past the approval node; this is what stops it. It reads decision EVENTS only
+ *     (engine/slice-decision.ts), never attention-resolved, because resume() auto-resolves.
+ *   - Redesign seeding (D22): when an approval node's `redesignTo` node succeeds, the engine
+ *     sets that approval's feedback key to the unconsumed redesign messages (else []). The
+ *     key is engine-owned on that node — a value the executor wrote for it is replaced.
+ *   - readOnly (D6/5A) is a hard constraint in resolveAgentConfig: always "plan".
+ *   - One runner per run: start()/resume() hold `runner.pid` as a lockfile for the whole
+ *     loop (engine/control.ts claimRunner) and return `busy` if another live runner has it —
+ *     `up`, a decision route and a manual resume racing on one run start exactly one loop.
+ *   - A graph with an approval node only runs in a git work tree: the fingerprint is what
+ *     an approval binds to, and "no fingerprint" must never compare equal.
  */
 import { copyFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { resolveAgentConfigLayers, type Graph, type NodeDef, type EdgeDef, type AgentConfig } from "../core/graph";
+import { nodeReads, resolveAgentConfigLayers, type Graph, type NodeDef, type EdgeDef, type AgentConfig, type ApprovalNodeDef, type Harness } from "../core/graph";
 import { basename } from "node:path";
 import { ContextStore, type Scope } from "../core/context";
 import { SUFFIX_VERSION, assemblePrompt, renderTemplate, renderedHash, skillsForHarness, splitFrontMatter } from "../core/template";
 import { EventLog } from "../log/write";
-import type { ParkCode } from "../log/events";
+import type { LoggedEvent, ParkCode } from "../log/events";
 import { replayState, effectKey } from "./replay";
 import type { PromptId } from "../core/prompt-ids";
+import { proposalHash } from "../core/proposal";
+import { describeFingerprintChange, fingerprint, type Fingerprint } from "./reconcile";
+import { effectiveCwd } from "./executors/worktree";
+import { currentProposal, findDecision, isApproved, nextSeq, pendingRedesigns, readBase } from "./slice-decision";
+import { claimRunner, releaseRunner, type RunnerHolder } from "./control";
+
+/** thread chunks the engine writes itself sort after an attempt's own output */
+const ENGINE_NOTE_INDEX = 9998;
+const ENGINE_FAILURE_INDEX = 9999;
 
 export interface EffectsHandle {
   /** record intent; returns true if this effect is already proven done (skip it) */
@@ -70,8 +103,11 @@ export interface ExecArgs {
 }
 
 export interface AttemptResult {
-  status: "succeeded" | "failed";
+  /** "awaiting" (approval nodes only, system-map 1a): undecided — park without finishing */
+  status: "succeeded" | "failed" | "awaiting";
   writes: Record<string, unknown>;
+  /** why: the park reason for failed/awaiting, a thread note for a succeeded stale outcome */
+  reason?: string;
 }
 
 export type Executor = (args: ExecArgs) => Promise<AttemptResult>;
@@ -81,7 +117,7 @@ export type ProbeVerdict = "happened" | "not-happened" | "unknown";
 export interface EngineOpts {
   /** run directory: run.jsonl + pinned prompts/ live here */
   dir: string;
-  executors: Partial<Record<"agent" | "command" | "worktree" | "wait", Executor>>;
+  executors: Partial<Record<"agent" | "command" | "worktree" | "wait" | "approval", Executor>>;
   /** source prompt dir to pin from (defaults to repo prompts/) */
   promptsDir?: string;
   /** resolve an ambiguous side effect on resume: did it actually happen? */
@@ -100,14 +136,75 @@ export interface EngineOpts {
   tuning?: { defaults?: AgentConfig; nodes?: Record<string, AgentConfig> };
   /** operator control, read at every node boundary — pause/abort land between attempts */
   control?: () => "pause" | "abort" | null;
+  /**
+   * runs with the loop's result while the runner lock is STILL held (system-map 1a review) —
+   * where the CLI raises a park's durable attention, so a runner that starts right after
+   * this one (a decision's wake) always sees, and can clear, that attention
+   */
+  whileHeld?: (result: RunState) => Promise<void>;
 }
 
 export type RunState =
   | { state: "finished"; outcome: "success" | "failed" | "aborted" }
   | { state: "parked"; node: string; reason: string; code: ParkCode }
-  | { state: "paused"; node: string };
+  | { state: "paused"; node: string }
+  /** another live runner holds this run (engine/control.ts claimRunner): nothing was done */
+  | { state: "busy"; holder: RunnerHolder };
 
 export class EngineError extends Error {}
+
+/** a proposal a node just wrote, validated, waiting to be logged as a round */
+interface ProposalRound {
+  approvalId: string;
+  approval: ApprovalNodeDef<any>;
+  proposal: unknown;
+  manifestHash: string | null;
+  fingerprint: Fingerprint;
+}
+
+/**
+ * THE agent-config resolution — run override → UI node tuning → TS node → UI graph tuning →
+ * TS graph default — shared by the engine and the viewer's graph API (which passes no run
+ * override), so the effective config the UI shows is the one a run gets. The layering itself
+ * is core/graph.ts resolveAgentConfigLayers (first set value wins; the model is the first
+ * one that fits the resolved harness; claude runs in auto). On top of it:
+ *   - `fallbackHarness` is the engine's Claude→Codex fallback (f8c8d96): it outranks every
+ *     layer, because the run has observed Claude's allowance is gone;
+ *   - `readOnly` (system-map 1a, D6/5A) is a hard constraint applied LAST: no layer, and no
+ *     fallback, can raise it above "plan" (the codex executor maps plan to its read-only
+ *     sandbox, so a readOnly node stays read-only after a fallback to codex).
+ */
+export function resolveAgentConfig(
+  graph: Graph<any>,
+  def: Extract<NodeDef<any>, { kind: "agent" }>,
+  nodeId: string,
+  layers: { overrides?: AgentConfig; tuning?: EngineOpts["tuning"]; fallbackHarness?: Harness } = {},
+): AgentConfig {
+  const node: AgentConfig = {
+    harness: def.harness, model: def.model, effort: def.effort,
+    permissionMode: def.permissionMode, maxTurns: def.maxTurns, skills: def.skills,
+  };
+  const resolved = resolveAgentConfigLayers([
+    layers.fallbackHarness ? { harness: layers.fallbackHarness } : undefined,
+    layers.overrides,
+    layers.tuning?.nodes?.[nodeId],
+    node,
+    layers.tuning?.defaults,
+    graph.def.defaults,
+  ]);
+  // system-map 1a (D6/5A): a hard constraint — no layer above the node can raise it
+  return def.readOnly ? { ...resolved, permissionMode: "plan" } : resolved;
+}
+
+/** did the run arrive at `node`'s current visit through an operator-jump (not graph routing)? */
+function enteredByJump(events: readonly LoggedEvent[], node: string): boolean {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const e = events[i]!;
+    if (e.type === "operator-jump") return e.to === node;
+    if (e.type === "edge-taken") return false;
+  }
+  return false;
+}
 
 const INPUTS_NODE = "__inputs__";
 
@@ -146,6 +243,36 @@ export class Engine {
   // ---- lifecycle -------------------------------------------------------------
 
   async start(inputs: Record<string, unknown>): Promise<RunState> {
+    return this.asRunner(() => this.startOwned(inputs));
+  }
+
+  /** Rebuild state from the log, probe ambiguous side effects, continue. */
+  async resume(): Promise<RunState> {
+    return this.asRunner(() => this.resumeOwned());
+  }
+
+  /** hold the run's runner lock for the whole loop; a live holder elsewhere → busy */
+  private async asRunner(body: () => Promise<RunState>): Promise<RunState> {
+    const busy = claimRunner(this.opts.dir);
+    if (busy) return { state: "busy", holder: busy };
+    try {
+      const result = await body();
+      // still holding the lock: a park's attention lands before any other runner can start
+      // (and before a decision's wake can clear it), so it never outlives a decided round
+      await this.opts.whileHeld?.(result);
+      return result;
+    } finally {
+      releaseRunner(this.opts.dir);
+    }
+  }
+
+  private async startOwned(inputs: Record<string, unknown>): Promise<RunState> {
+    // an approval binds to a git fingerprint: refuse before anything is logged
+    if (this.graph.approvalNodes().length > 0 && (await fingerprint(this.workCwd())) === null)
+      throw new EngineError(
+        `graph "${this.graph.def.name}" has an approval step, which binds the design to a git fingerprint — ` +
+          `${this.opts.cwd ?? "(no folder)"} is not a git work tree`,
+      );
     this.inputs = inputs;
     const pinned = this.pinPrompts();
     this.log.append({
@@ -162,8 +289,7 @@ export class Engine {
     return this.loop(this.graph.def.entry);
   }
 
-  /** Rebuild state from the log, probe ambiguous side effects, continue. */
-  async resume(): Promise<RunState> {
+  private async resumeOwned(): Promise<RunState> {
     const replayed = replayState(this.log.read());
     if (!replayed.started) throw new EngineError("resume() before start(): empty log");
     if (replayed.finished) return { state: "finished", outcome: replayed.finished.outcome };
@@ -211,12 +337,13 @@ export class Engine {
     // its replyNote is adopted; if not, resume's own resolution goes in atomically — source
     // "resume", bookkeeping that never renders into a prompt.
     let replyNote = replayed.replyNote;
+    // system-map 1a (D17): a decided awaiting-approval park is closed here too, in case the
+    // route that decided died before resolving it — the log then reads as answered
     this.log.appendIf((events) => {
       const now = replayState(events);
       replyNote = now.replyNote;
-      return now.parked
-        ? { type: "attention-resolved", node: now.parked.node, visit: now.parked.visit, reply: "resume", source: "resume" }
-        : null;
+      const open = now.parked ?? now.awaitingDecided;
+      return open ? { type: "attention-resolved", node: open.node, visit: open.visit, reply: "resume", source: "resume" } : null;
     });
     this.replyNote = replyNote;
 
@@ -269,25 +396,48 @@ export class Engine {
             : `maxVisits exceeded (${visit} > ${maxVisits})`,
         );
 
+      // system-map 1a: pre-start, like maxVisits — a refusal logs no node-started, consumes no visit
+      const gate = await this.requiresGate(current, def, visit);
+      if (gate) return this.park(current, visit, gate.code, gate.reason);
+
       if (this.opts.beforeNode) await this.opts.beforeNode(current, def);
       const attemptId = `${current}#${visit}`;
       this.log.append({ type: "node-started", node: current, visit, attempt_id: attemptId });
       this.ctx.beginAttempt(current, visit);
 
       let result: AttemptResult;
+      let rounds: ProposalRound[] = [];
       try {
         result = await this.execute(current, def, visit, attemptId);
+        if (result.status === "awaiting" && def.kind !== "approval")
+          throw new EngineError(`a ${def.kind} executor returned "awaiting" — only approval nodes wait for a decision`);
+        if (result.status === "succeeded") {
+          const checked = await this.checkProposals(current, visit, result);
+          result = checked.result;
+          rounds = checked.rounds;
+        }
+        if (result.status === "succeeded") result = this.seedRedesignFeedback(current, result);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         this.ctx.endAttempt("failed");
         // the reason must be readable in the thread, not only in the (resolvable) ask
-        this.log.append({ type: "chunk", node: current, visit, turn: 1, index: 9999, kind: "text", content: `\n[attempt failed: ${message}]` });
+        this.log.append({ type: "chunk", node: current, visit, turn: 1, index: ENGINE_FAILURE_INDEX, kind: "text", content: `\n[attempt failed: ${message}]` });
         this.log.append({ type: "node-finished", node: current, visit, status: "failed", writes: {} });
         return this.park(current, visit, "executor-threw", `executor threw: ${message}`);
       }
 
+      if (result.status === "awaiting") {
+        // D4/3A: no node-finished — replay keeps this node mid-flight and resume re-attempts
+        // the SAME visit; the failed end restores any cleared keys this attempt veiled
+        this.ctx.endAttempt("failed");
+        return this.park(current, visit, "awaiting-approval", result.reason ?? "awaiting a decision");
+      }
+      if (result.reason)
+        this.log.append({ type: "chunk", node: current, visit, turn: 1, index: ENGINE_NOTE_INDEX, kind: "text", content: `\n[${result.status}: ${result.reason}]` });
+
       for (const [k, v] of Object.entries(result.writes)) this.ctx.set(k, v);
       this.ctx.endAttempt(result.status);
+      for (const round of rounds) this.openRound(current, round);
       this.log.append({ type: "node-finished", node: current, visit, status: result.status, writes: result.writes });
 
       if (result.status === "failed") {
@@ -306,7 +456,7 @@ export class Engine {
           });
           continue;
         }
-        return this.park(current, visit, "attempt-failed", "attempt failed");
+        return this.park(current, visit, "attempt-failed", result.reason ?? "attempt failed");
       }
 
       const next = this.route(current, visit);
@@ -323,7 +473,7 @@ export class Engine {
     if (!executor) throw new EngineError(`no executor for kind "${def.kind}"`);
 
     const reads: Record<string, unknown> = {};
-    if ("reads" in def && def.reads) for (const k of def.reads) reads[k] = this.ctx.get(k, { node: nodeId, visit });
+    for (const k of nodeReads(def)) reads[k] = this.ctx.get(k, { node: nodeId, visit });
 
     let renderedPrompt: string | undefined;
     let agentConfig: AgentConfig | undefined;
@@ -352,6 +502,127 @@ export class Engine {
       log: this.log,
       reads, renderedPrompt, agentConfig, effects,
     });
+  }
+
+  // ---- approval (system-map 1a) -------------------------------------------------
+
+  /** where the run works now: its worktree once one exists, else the run cwd */
+  private workCwd(): string | undefined {
+    return effectiveCwd(this.log.path, this.opts.cwd);
+  }
+
+  /**
+   * The `requires` gate (D3/2A, D18). Passes only while the approval node's CURRENT round is
+   * approved for the proposal and base now in context, and — on the first attempt of this
+   * node after that approval — the live worktree still matches the fingerprint recorded for
+   * the APPROVED ROUND (ghost-proposed). Later attempts after the same approval are exempt,
+   * including a re-attempt of a first attempt that died mid-flight: every one of them started
+   * after the approval, and the node's own changes are what the approval authorised. A
+   * fingerprint that cannot be computed parks stale-base — never a pass.
+   */
+  private async requiresGate(nodeId: string, def: NodeDef<any>, visit: number): Promise<{ code: ParkCode; reason: string } | null> {
+    if (def.kind !== "agent" || !def.requires) return null;
+    const approvalId = def.requires.approvalOf;
+    const approval = this.graph.def.nodes[approvalId];
+    if (!approval || approval.kind !== "approval") throw new EngineError(`"${nodeId}" requires unknown approval node "${approvalId}"`);
+    const missing = (why: string) => ({ code: "approval-missing" as const, reason: `"${nodeId}" requires an approval from "${approvalId}": ${why}` });
+
+    const events = this.log.read();
+    const round = currentProposal(events, approvalId);
+    if (!round) return missing("nothing has been proposed yet");
+    const decision = findDecision(events, round.proposal_id);
+    if (!decision) return missing(`proposal #${round.proposal_id} is undecided`);
+    if (decision.type !== "slice-approved") return missing(`proposal #${round.proposal_id} was sent back with feedback, not approved`);
+
+    const reader = { node: `${nodeId}(requires)`, visit };
+    let proposal: unknown;
+    let base: ReturnType<typeof readBase>;
+    try {
+      if (!this.ctx.has(approval.proposal) || !this.ctx.has(approval.base))
+        return missing(`"${approval.proposal}" / "${approval.base}" are not readable in context`);
+      proposal = this.ctx.get(approval.proposal, reader);
+      base = readBase(this.ctx.get(approval.base, reader), approval.base);
+    } catch (err) {
+      return missing(err instanceof Error ? err.message : String(err));
+    }
+    if (!isApproved(events, proposal, base.manifest_hash, approvalId))
+      return missing(`the approval of proposal #${round.proposal_id} does not match the proposal and base now in context`);
+
+    const firstAttempt = !events.some((e) => e.type === "node-started" && e.node === nodeId && e.seq > decision.seq);
+    if (firstAttempt) {
+      const stale = (why: string) => ({ code: "stale-base" as const, reason: `the worktree changed since proposal #${round.proposal_id} was approved: ${why}` });
+      if (!round.fingerprint) return stale("the approved round recorded no fingerprint to compare against");
+      let live: Fingerprint | null;
+      try {
+        live = await fingerprint(this.workCwd());
+      } catch (err) {
+        return { code: "stale-base", reason: `cannot verify the worktree against approved proposal #${round.proposal_id}: ${err instanceof Error ? err.message : String(err)}` };
+      }
+      const moved = describeFingerprintChange(round.fingerprint, live);
+      if (moved) return stale(moved);
+    }
+    return null;
+  }
+
+  /**
+   * approval nodes whose proposal key this node just wrote, validated by the graph's hook,
+   * with the base and live fingerprint the round binds to. Runs inside the attempt, so a
+   * malformed base or a fingerprint failure fails the proposer attempt (parks) instead of
+   * opening a round nobody can verify.
+   */
+  private async checkProposals(nodeId: string, visit: number, result: AttemptResult): Promise<{ result: AttemptResult; rounds: ProposalRound[] }> {
+    const rounds: ProposalRound[] = [];
+    for (const [approvalId, approval] of this.graph.approvalNodes()) {
+      if (!(approval.proposal in result.writes)) continue;
+      const proposal = result.writes[approval.proposal];
+      const refusal = this.graph.def.validateProposal?.(proposal, approvalId) ?? null;
+      if (refusal !== null)
+        return { result: { status: "failed", writes: {}, reason: `proposal for "${approvalId}" refused: ${refusal}` }, rounds: [] };
+      // the base the round binds to: readable at the proposer's exit on any legal graph
+      const base = this.ctx.has(approval.base) ? readBase(this.ctx.get(approval.base, { node: nodeId, visit }), approval.base) : null;
+      const live = await fingerprint(this.workCwd());
+      if (live === null) throw new EngineError(`a proposal round binds to a git fingerprint, and ${this.workCwd() ?? "(no folder)"} is not a git work tree`);
+      rounds.push({ approvalId, approval, proposal, manifestHash: base?.manifest_hash ?? null, fingerprint: live });
+    }
+    return { result, rounds };
+  }
+
+  /** D15: open a proposal round — proposal_id is this event's own seq, under the log lock */
+  private openRound(nodeId: string, round: ProposalRound): void {
+    const stamped = this.log.appendIf((events) => ({
+      type: "ghost-proposed",
+      node: nodeId,
+      approval: round.approvalId,
+      proposal_id: nextSeq(events),
+      proposal_hash: proposalHash(round.proposal),
+      manifest_hash: round.manifestHash,
+      fingerprint: round.fingerprint,
+      proposal: round.proposal,
+    }));
+    if (!stamped || stamped.type !== "ghost-proposed" || stamped.proposal_id !== stamped.seq)
+      throw new EngineError(`ghost-proposed was stamped seq ${stamped?.seq} but carries a different proposal_id`);
+  }
+
+  /**
+   * D22: the redesignTo node's success publishes the approval's feedback key (engine-owned
+   * there — core/graph.ts writesOf):
+   *   - the unconsumed redesign messages, when there are any;
+   *   - [] when the key was never published (the proposer's first read), or when this visit
+   *     was entered by an operator JUMP (a plain `jump` restarts the design conversation — the
+   *     proposer must not re-read comments from a round the operator walked away from);
+   *   - otherwise NOTHING, so feedback the graph routes through this node
+   *     (approve → extract → propose) is not wiped.
+   */
+  private seedRedesignFeedback(nodeId: string, result: AttemptResult): AttemptResult {
+    let writes = result.writes;
+    for (const [approvalId, approval] of this.graph.approvalNodes()) {
+      if (approval.redesignTo !== nodeId) continue;
+      const events = this.log.read();
+      const pending = pendingRedesigns(events, approvalId, nodeId, approval.feedback);
+      if (pending.length > 0 || !this.ctx.has(approval.feedback) || enteredByJump(events, nodeId))
+        writes = { ...writes, [approval.feedback]: pending };
+    }
+    return writes === result.writes ? result : { ...result, writes };
   }
 
   private route(from: string, visit: number): EdgeDef<any> | null {
@@ -394,20 +665,12 @@ export class Engine {
     return pinned;
   }
 
-  /** run override → UI node tuning → TS node → UI graph tuning → TS graph default */
   private resolveAgentConfig(def: Extract<NodeDef<any>, { kind: "agent" }>, nodeId: string): AgentConfig {
-    const node: AgentConfig = {
-      harness: def.harness, model: def.model, effort: def.effort,
-      permissionMode: def.permissionMode, maxTurns: def.maxTurns, skills: def.skills,
-    };
-    return resolveAgentConfigLayers([
-      this.shouldForceCodexFallback() ? { harness: "codex" } : undefined,
-      this.opts.overrides,
-      this.opts.tuning?.nodes?.[nodeId],
-      node,
-      this.opts.tuning?.defaults,
-      this.graph.def.defaults,
-    ]);
+    return resolveAgentConfig(this.graph, def, nodeId, {
+      overrides: this.opts.overrides,
+      tuning: this.opts.tuning,
+      fallbackHarness: this.shouldForceCodexFallback() ? "codex" : undefined,
+    });
   }
 
   private shouldForceCodexFallback(): boolean {

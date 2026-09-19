@@ -5,8 +5,13 @@
  * Status rules (design review): ONE canonical enum, one renderer, and
  * needs-input OUTRANKS failed — a parked run needing a human is never shown as merely
  * "failed", because the human is the unblock.
+ *
+ * system-map 1a (D17): an `awaiting-approval` ask closes as soon as a decision for its
+ * current proposal round exists (engine/slice-decision.ts decisionAnswers) — the same rule
+ * replay uses, so the viewer never shows needs-input for a run `howdah up` will resume.
  */
 import type { LoggedEvent } from "../log/events";
+import { decisionAnswers } from "../engine/slice-decision";
 import type { Scope } from "../core/context";
 import { coalesce, outcomesByHash, type CoalescedTurn, type JoinedOutcome } from "../log/coalesce";
 
@@ -112,6 +117,7 @@ export function deriveStatus(events: LoggedEvent[]): { status: RunStatus; ask: R
       if (ask) ask = null;
     }
   }
+  if (ask && decisionAnswers(events, ask)) ask = null; // D17: the decision alone answers it
   // needs-input outranks everything except a completed run
   if (finished)
     return { status: finished.outcome === "success" ? "done" : "failed-terminal", ask: null, failure, paused: false, outcome: finished.outcome };
@@ -349,6 +355,19 @@ export function deriveLogRows(events: LoggedEvent[]): LogRow[] {
           summary: `${e.harness} ${e.state}${e.remaining !== undefined ? ` · ${Math.round(e.remaining * 100)}% left` : ""}${e.resets_at ? ` · resets ${e.resets_at}` : ""}` };
       case "run-finished":
         return { ...base, node: null, visit: null, kind: "engine", depth: 0, summary: e.outcome };
+      case "ghost-proposed":
+        return { ...base, node: e.node, visit: null, kind: "agent", depth: 0,
+          summary: `proposal #${e.proposal_id} for ${e.approval} · ${e.proposal_hash}` };
+      case "comment-pinned":
+        return { ...base, node: null, visit: null, kind: "operator", depth: 0,
+          summary: `comment on ${e.entity_id} (proposal #${e.proposal_id}) · ${e.text.slice(0, 120)}` };
+      case "slice-feedback-sent":
+        return { ...base, node: null, visit: null, kind: "operator", depth: 0,
+          summary: `feedback sent on proposal #${e.proposal_id} · ${e.comment_ids.length} comment${e.comment_ids.length === 1 ? "" : "s"}` };
+      case "slice-approved":
+        return { ...base, node: null, visit: null, kind: "operator", depth: 0, summary: `approved proposal #${e.proposal_id}` };
+      case "slice-redesign-requested":
+        return { ...base, node: null, visit: null, kind: "operator", depth: 0, summary: `redesign · ${e.message.slice(0, 120)}` };
       default: {
         const never: never = e;
         throw new Error(`unhandled event type in deriveLogRows: ${JSON.stringify(never)}`);

@@ -7,6 +7,10 @@ import { deriveStatus, deriveSummary, deriveDetail, deriveTimeline, deriveLogRow
 import { createHowdahServer, guardRequest } from "./server";
 import { AttentionCenter } from "../engine/attention";
 import { renderedHash } from "../core/template";
+import { seedAwaitingRun } from "../engine/slice-decision.fixtures";
+import { defineGraph } from "../core/graph";
+import { claimRunner, releaseRunner } from "../engine/control";
+import { processStart } from "../log/lockfile";
 
 function fixedClock(startMs = 1757750000000): () => Date {
   let t = 0;
@@ -167,7 +171,8 @@ describe("server API", () => {
     log.append({ type: "run-started", graph: "write-doc", inputs: { goal: "pause me" }, pinned_prompts: { "doc.draft": 1 } });
     log.append({ type: "node-started", node: "doc.draft", visit: 1, attempt_id: "doc.draft#1" });
     const child = Bun.spawn(["sh", "-c", "sleep 30"], { stdout: "ignore", stderr: "ignore" });
-    writeFileSync(join(runsDir, id, "runner.pid"), String(child.pid));
+    // an identity lock (pid + start time), as claimRunner writes: the holder is PROVEN
+    writeFileSync(join(runsDir, id, "runner.pid"), `${child.pid} ${processStart(child.pid)}`);
 
     const res = await fetch(url(`/api/runs/${id}/pause`), { method: "POST" });
     expect(res.status).toBe(202);
@@ -175,6 +180,56 @@ describe("server API", () => {
     expect(readLog(join(runsDir, id, "run.jsonl")).some((e) => e.type === "run-paused")).toBe(true);
     await Bun.sleep(50);
     expect(() => process.kill(child.pid, 0)).toThrow();
+
+    // a second pause records nothing new: one run-paused, however many operators press it
+    await fetch(url(`/api/runs/${id}/pause`), { method: "POST" });
+    expect(readLog(join(runsDir, id, "run.jsonl")).filter((e) => e.type === "run-paused")).toHaveLength(1);
+  });
+
+  // Rebase reconciliation: f8c8d96 spawns the jump detached (it resumes the whole run), so the
+  // route refuses in-process with the CLI's own precheck — refusals are never lost.
+  test("jump refusals come back as 400 before anything is spawned", async () => {
+    const id = "jump-refused";
+    const log = new EventLog(join(runsDir, id, "run.jsonl"), fixedClock());
+    log.append({ type: "run-started", graph: "write-doc", inputs: { goal: "g" }, pinned_prompts: { "doc.draft": 1 } });
+    const post = (body: unknown) =>
+      fetch(url(`/api/runs/${id}/jump`), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+
+    const unknown = await post({ node: "nope" });
+    expect(unknown.status).toBe(400);
+    expect(((await unknown.json()) as any).error).toContain('unknown node "nope"');
+
+    const runner = Bun.spawn(["sh", "-c", "sleep 30"], { stdout: "ignore", stderr: "ignore" });
+    try {
+      writeFileSync(join(runsDir, id, "runner.pid"), `${runner.pid} ${processStart(runner.pid)}`);
+      const live = await post({ node: "doc.draft" });
+      expect(live.status).toBe(400);
+      expect(((await live.json()) as any).error).toBe("runner is live — pause or abort first, then jump");
+      expect(readLog(join(runsDir, id, "run.jsonl")).some((e) => e.type === "operator-jump")).toBe(false);
+    } finally {
+      runner.kill();
+    }
+  });
+
+  // Rebase reconciliation: f8c8d96's pause interrupt goes through the same identity check as
+  // abort — a legacy runner.pid naming an unrelated live process is never signalled.
+  test("pause never signals a runner.pid holder it cannot prove is this run's runner", async () => {
+    const id = "pause-impostor";
+    const log = new EventLog(join(runsDir, id, "run.jsonl"), fixedClock());
+    log.append({ type: "run-started", graph: "write-doc", inputs: { goal: "pause me" }, pinned_prompts: { "doc.draft": 1 } });
+    log.append({ type: "node-started", node: "doc.draft", visit: 1, attempt_id: "doc.draft#1" });
+    const bystander = Bun.spawn(["sh", "-c", "sleep 30"], { stdout: "ignore", stderr: "ignore" });
+    try {
+      writeFileSync(join(runsDir, id, "runner.pid"), String(bystander.pid)); // legacy bare pid
+      const res = await fetch(url(`/api/runs/${id}/pause`), { method: "POST" });
+      expect(res.status).toBe(202);
+      expect((await res.json()) as any).toMatchObject({ ok: true, interrupted: false });
+      expect(readLog(join(runsDir, id, "run.jsonl")).some((e) => e.type === "run-paused")).toBe(true);
+      await Bun.sleep(50);
+      expect(() => process.kill(bystander.pid, 0)).not.toThrow();
+    } finally {
+      bystander.kill();
+    }
   });
 
   test("SSE streams events appended after connect", async () => {
@@ -1161,8 +1216,9 @@ describe("reply route shares the CLI's rules (system-map 0.2)", () => {
     log.append({ type: "run-started", graph, inputs: { goal: "g", work: "w" }, pinned_prompts: {} });
     log.append({ type: "node-started", node, visit: 1, attempt_id: `${node}#1` });
     log.append({ type: "attention-raised", node, visit: 1, reason: "r", code } as never);
-    // a live runner (this process) — an accepted reply must not spawn a real resume here
-    writeFileSync(join(runsDir, id, "runner.pid"), String(process.pid));
+    // a live runner (this process holds the run's runner lock) — an accepted reply must not
+    // spawn a real resume here
+    claimRunner(join(runsDir, id));
     return join(runsDir, id, "run.jsonl");
   }
 
@@ -1181,7 +1237,7 @@ describe("reply route shares the CLI's rules (system-map 0.2)", () => {
         ["wt", "implement-ticket", "create_worktree", "attempt-failed", "worktree node"],
         ["mv", "write-doc", "doc.revise", "max-visits", "use `jump mv <node> <msg>`"],
         ["amb", "implement-ticket", "delivery.probe_pr", "ambiguous-effect", "resolve the effect first"],
-        ["appr", "write-doc", "doc.review", "awaiting-approval", "use approve / send-feedback / redesign"],
+        ["appr", "write-doc", "doc.review", "awaiting-approval", "use `approve appr`, `comment appr <entity-id> <text>` then `send-feedback appr`"],
       ];
       for (const [id, graph, node, code, needle] of cases) {
         const path = parked(runsDir, id, graph, node, code);
@@ -1218,6 +1274,225 @@ describe("reply route shares the CLI's rules (system-map 0.2)", () => {
       expect((await raw("{}")).status).toBe(200);
     } finally {
       server.stop(true);
+    }
+  });
+});
+
+describe("approval routes (system-map 1a)", () => {
+  interface G { goal: string; base: unknown; feedback: unknown; proposal: unknown; decision: unknown }
+  const decideGraph = defineGraph<G>({
+    name: "decide-graph",
+    entry: "extract",
+    inputs: ["goal"],
+    nodes: {
+      extract: { kind: "command", run: "x", writes: { base: { scope: "sticky" } } },
+      propose: { kind: "agent", prompt: "discover", reads: ["base", "feedback"], writes: { proposal: { scope: "per-visit" } } },
+      approve: { kind: "approval", proposal: "proposal", base: "base", decision: "decision", feedback: "feedback", redesignTo: "extract" },
+      done: { kind: "terminal", outcome: "success" },
+    },
+    edges: [
+      { from: "extract", to: "propose" },
+      { from: "propose", to: "approve" },
+      { from: "approve", to: "done" },
+    ],
+  });
+  const base = mkdtempSync(join(tmpdir(), "howdah-web-approval-"));
+  const runsDir = join(base, "runs");
+  mkdirSync(runsDir, { recursive: true });
+  const attentionDir = join(base, "attention");
+  // never the real `bun cli/main.ts resume`: that spawns an engine that may spend tokens
+  const resumed: string[] = [];
+  const server = createHowdahServer({ runsDir, attentionDir, port: 0, graphs: { "decide-graph": decideGraph }, resumeRun: (id) => void resumed.push(id) });
+  afterAll(() => server.stop(true));
+  const waitFor = async (pred: () => boolean) => {
+    for (let i = 0; i < 500 && !pred(); i++) await Bun.sleep(20); // generous bound: up to 10s under load
+    return pred();
+  };
+  const post = (path: string, body: unknown, headers: Record<string, string> = {}) =>
+    fetch(`http://localhost:${server.port}${path}`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...headers },
+      body: typeof body === "string" ? body : JSON.stringify(body),
+    });
+
+  test("malformed bodies are 400, nothing appended", async () => {
+    const run = seedAwaitingRun(runsDir, "bad-bodies");
+    const before = run.events().length;
+    const cases: Array<[string, unknown]> = [
+      ["/comments", "not json"],
+      ["/comments", [1, 2]],
+      ["/comments", { entity_id: 3, text: "x" }],
+      ["/comments", { entity_id: "e", text: "" }],
+      ["/comments", { entity_id: "e", text: "x", proposal_id: "7" }],
+      ["/approval", {}],
+      ["/approval", { approved: "yes", proposal_id: run.round.proposal_id }],
+      ["/approval", { approved: true }],
+      ["/approval", { approved: true, proposal_id: 1.5 }],
+      ["/redesign", { message: 42 }],
+      ["/redesign", { message: "   " }],
+    ];
+    for (const [sub, body] of cases) {
+      const res = await post(`/api/runs/bad-bodies${sub}`, body);
+      expect([sub, res.status]).toEqual([sub, 400]);
+      expect(typeof ((await res.json()) as { error: unknown }).error).toBe("string");
+    }
+    expect(run.events()).toHaveLength(before);
+    expect((await post("/api/runs/no-such-run/approval", { approved: true, proposal_id: 1 })).status).toBe(404);
+  });
+
+  test("comment → approval(false) sends feedback; approval(true) after it is 409 already-decided", async () => {
+    const run = seedAwaitingRun(runsDir, "fb");
+    const c = await post("/api/runs/fb/comments", { entity_id: "route:/a", text: "narrow it", proposal_id: run.round.proposal_id });
+    expect(c.status).toBe(201);
+    expect(await c.json()).toMatchObject({ ok: true, proposal_id: run.round.proposal_id, comment_id: expect.stringMatching(/^c\d+$/) });
+    const fb = await post("/api/runs/fb/approval", { approved: false, proposal_id: run.round.proposal_id });
+    expect(fb.status).toBe(200);
+    expect(await fb.json()).toMatchObject({ ok: true, idempotent: false });
+    const again = await post("/api/runs/fb/approval", { approved: false, proposal_id: run.round.proposal_id });
+    expect(await again.json()).toMatchObject({ ok: true, idempotent: true });
+    const refused = await post("/api/runs/fb/approval", { approved: true, proposal_id: run.round.proposal_id });
+    expect(refused.status).toBe(409);
+    const body = (await refused.json()) as { error: string; code: string };
+    expect(body.code).toBe("already-decided");
+    expect(body.error).toMatch(/already sent feedback at \d\d:\d\d/);
+    expect(run.events().filter((e) => e.type === "slice-feedback-sent")).toHaveLength(1);
+  });
+
+  test("approval: 200 with the round; a stale proposal_id is 409 superseded; the ask closes (D17)", async () => {
+    const run = seedAwaitingRun(runsDir, "ap");
+    expect((await (await fetch(`http://localhost:${server.port}/api/runs/ap`)).json() as any).summary.status).toBe("needs-input");
+    const stale = await post("/api/runs/ap/approval", { approved: true, proposal_id: run.round.proposal_id - 1 });
+    expect(stale.status).toBe(409);
+    expect(((await stale.json()) as { code: string }).code).toBe("superseded");
+    const ok = await post("/api/runs/ap/approval", { approved: true, proposal_id: run.round.proposal_id });
+    expect(ok.status).toBe(200);
+    expect(await ok.json()).toEqual({ ok: true, proposal_id: run.round.proposal_id, idempotent: false });
+    expect(await waitFor(() => resumed.includes("ap"))).toBe(true); // the decision woke a runner
+    const again = await post("/api/runs/ap/approval", { approved: true, proposal_id: run.round.proposal_id });
+    expect(await again.json()).toMatchObject({ idempotent: true });
+    await Bun.sleep(100);
+    expect(resumed.filter((id) => id === "ap")).toHaveLength(1); // the repeat woke nothing
+    expect(run.events().find((e) => e.type === "attention-resolved")).toMatchObject({ reply: "approved", source: "operator" });
+    expect((await (await fetch(`http://localhost:${server.port}/api/runs/ap`)).json() as any).summary.status).not.toBe("needs-input");
+  });
+
+  test("redesign: 202 and the jump logged; refused 409 while a runner is live", async () => {
+    const run = seedAwaitingRun(runsDir, "rd");
+    expect(claimRunner(run.dir)).toBeNull(); // this test process is the run's live runner
+    const live = await post("/api/runs/rd/redesign", { message: "rethink" });
+    releaseRunner(run.dir);
+    expect(live.status).toBe(409);
+    expect(((await live.json()) as { code: string }).code).toBe("runner-live");
+    writeFileSync(join(run.dir, "runner.pid"), "999999999"); // a runner killed with -9
+    const res = await post("/api/runs/rd/redesign", { message: "rethink" });
+    expect(res.status).toBe(202);
+    expect(await res.json()).toEqual({ ok: true, jumped_to: "extract" });
+    expect(resumed).toContain("rd");
+    const types = run.events().map((e) => e.type);
+    expect(types.slice(types.indexOf("slice-redesign-requested"))).toContain("operator-jump");
+  });
+
+  test("the shared guard still applies to every approval route", async () => {
+    const run = seedAwaitingRun(runsDir, "guarded");
+    for (const sub of ["comments", "approval", "redesign"]) {
+      const foreign = await post(`/api/runs/guarded/${sub}`, { approved: true, proposal_id: run.round.proposal_id }, { origin: "http://evil.example" });
+      expect(foreign.status).toBe(403);
+      const form = await fetch(`http://localhost:${server.port}/api/runs/guarded/${sub}`, {
+        method: "POST",
+        headers: { "content-type": "text/plain" },
+        body: "approved=true",
+      });
+      expect(form.status).toBe(415);
+    }
+    expect(run.events().some((e) => e.type === "slice-approved")).toBe(false);
+  });
+
+  test("D17: a decision with no resolution (route died mid-way) already closes the needs-input ask", () => {
+    const run = seedAwaitingRun(runsDir, "d17");
+    expect(deriveStatus(run.events()).status).toBe("needs-input");
+    run.log.append({ type: "slice-approved", proposal_id: run.round.proposal_id, proposal_hash: run.round.proposal_hash, manifest_hash: "m1" });
+    expect(deriveStatus(run.events())).toMatchObject({ status: "running", ask: null });
+  });
+
+  test("log rows summarise every slice event", () => {
+    const run = seedAwaitingRun(runsDir, "rows");
+    run.log.append({ type: "comment-pinned", id: "c1", entity_id: "e", proposal_id: run.round.proposal_id, text: "t" });
+    run.log.append({ type: "slice-feedback-sent", proposal_id: 1, proposal_hash: "h", manifest_hash: null, comment_ids: ["c1"] });
+    run.log.append({ type: "slice-approved", proposal_id: 1, proposal_hash: "h", manifest_hash: null });
+    run.log.append({ type: "slice-redesign-requested", approval: "approve", message: "again" });
+    const rows = deriveLogRows(run.events()).filter((r) => ["ghost-proposed", "comment-pinned", "slice-feedback-sent", "slice-approved", "slice-redesign-requested"].includes(r.type));
+    expect(rows.map((r) => r.summary)).toEqual([
+      `proposal #${run.round.proposal_id} for approve · ${run.round.proposal_hash}`,
+      `comment on e (proposal #${run.round.proposal_id}) · t`,
+      "feedback sent on proposal #1 · 1 comment",
+      "approved proposal #1",
+      "redesign · again",
+    ]);
+  });
+});
+
+describe("abort signals only a PROVEN runner (system-map 1a final review)", () => {
+  const base = mkdtempSync(join(tmpdir(), "howdah-abort-"));
+  const runsDir = join(base, "runs");
+  mkdirSync(runsDir, { recursive: true });
+  const server = createHowdahServer({ runsDir, attentionDir: join(base, "attention"), port: 0, resumeRun: () => {} });
+  afterAll(() => server.stop(true));
+  const abort = (id: string) => fetch(`http://localhost:${server.port}/api/runs/${id}/abort`, { method: "POST" });
+  const runWithLock = (id: string, lock: string) => {
+    const log = new EventLog(join(runsDir, id, "run.jsonl"));
+    log.append({ type: "run-started", graph: "write-doc", inputs: {}, pinned_prompts: {} });
+    writeFileSync(join(runsDir, id, "runner.pid"), lock);
+    return log;
+  };
+  const alive = (pid: number) => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  test("a legacy runner.pid naming a live bun process that is not this run's runner: NOT killed", async () => {
+    const bystander = Bun.spawn(["bun", "-e", "setInterval(()=>{},1e9)"]);
+    try {
+      await Bun.sleep(200);
+      const log = runWithLock("legacy", String(bystander.pid));
+      expect((await abort("legacy")).status).toBe(200);
+      expect(alive(bystander.pid)).toBe(true);
+      expect(bystander.exitCode).toBeNull();
+      expect(log.read().at(-1)).toMatchObject({ type: "run-finished", outcome: "aborted" }); // the run is still sealed
+    } finally {
+      bystander.kill(9);
+      await bystander.exited;
+    }
+  });
+
+  test("identity unknown (ps unavailable): NOT killed — never a licence to signal", async () => {
+    const holder = Bun.spawn(["sleep", "30"]);
+    const saved = process.env.HOWDAH_PS;
+    process.env.HOWDAH_PS = "/nonexistent/ps";
+    try {
+      runWithLock("unknown", `${holder.pid} Thu Jan  1 00:00:00 1970`);
+      expect((await abort("unknown")).status).toBe(200);
+      expect(alive(holder.pid)).toBe(true);
+    } finally {
+      if (saved === undefined) delete process.env.HOWDAH_PS;
+      else process.env.HOWDAH_PS = saved;
+      holder.kill(9);
+      await holder.exited;
+    }
+  });
+
+  test("a genuine runner (start time matches its lock): killed", async () => {
+    const runner = Bun.spawn(["sleep", "30"]);
+    try {
+      runWithLock("genuine", `${runner.pid} ${processStart(runner.pid)}`);
+      expect((await abort("genuine")).status).toBe(200);
+      await runner.exited;
+      expect(runner.signalCode).toBe("SIGTERM");
+    } finally {
+      runner.kill(9);
     }
   });
 });

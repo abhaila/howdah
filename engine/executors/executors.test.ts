@@ -190,6 +190,38 @@ describe("codex executor over the fake app-server wire", () => {
     expect(JSON.parse(readFileSync(capture, "utf8")).sandbox).toBe("danger-full-access");
     delete process.env.FAKE_CODEX_CAPTURE;
   });
+
+  // system-map 1a (D6/5A) over 9f59264's full-access default: a readOnly node resolves to
+  // plan, and codex has no modes — so the thread itself must open read-only.
+  test("a readOnly node opens a read-only codex sandbox, not the full-access default", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "howdah-codex-ro-"));
+    const capture = join(dir, "thread-start.json");
+    chmodSync(FAKE_CODEX, 0o755);
+    process.env.FAKE_CODEX_CAPTURE = capture;
+    const ro = defineGraph<Ctx>({
+      name: "mini-doc-ro",
+      entry: "draft",
+      inputs: ["goal"],
+      defaults: { harness: "codex" },
+      nodes: {
+        draft: { kind: "agent", prompt: "doc.draft", readOnly: true, reads: ["goal"], writes: { doc_summary: { scope: "sticky" } } },
+        done: { kind: "terminal", outcome: "success" },
+      },
+      edges: [{ from: "draft", to: "done" }],
+    });
+    try {
+      const engine = new Engine(ro, {
+        dir,
+        promptsDir: promptDir(),
+        overrides: { permissionMode: "bypassPermissions" },
+        executors: { agent: codexExecutor({ attentionDir: join(dir, "attn"), binary: FAKE_CODEX, notifiers: [] }) },
+      });
+      expect(await engine.start({ goal: "read only" })).toEqual({ state: "finished", outcome: "success" });
+      expect(JSON.parse(readFileSync(capture, "utf8")).sandbox).toBe("read-only");
+    } finally {
+      delete process.env.FAKE_CODEX_CAPTURE;
+    }
+  });
 });
 
 // system-map 0.1: rendered_hash must cover the bytes the CLI actually receives — the skill

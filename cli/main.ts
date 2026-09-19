@@ -7,20 +7,32 @@
  *   howdah runs --json
  *   howdah reply <run-id> <text>
  *   howdah graphs --json
+ *
+ * Approval verbs (system-map 1a) — the same engine/control.ts functions the web routes call:
+ *   howdah approve <run-id> [--proposal <id>]                        approve the current proposal round
+ *   howdah comment <run-id> [--proposal <id>] <entity-id> <text...>  pin a comment to the current round
+ *   howdah send-feedback <run-id> [--proposal <id>]                  send the round's comments back to the proposer
+ * `--proposal` binds the action to the round you looked at: refused if it was superseded.
+ *   howdah redesign <run-id> <msg...>                re-extract and redraw with an instruction
+ * A refusal prints the reason and exits 1.
  */
-import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { Engine } from "../engine/run";
 import { liveExecutors, stubExecutors } from "../engine/executors";
 import { EventLog, readLog } from "../log/write";
-import { AttentionCenter, osNotifier, pidAlive, writeHeartbeat } from "../engine/attention";
+import { AttentionCenter, osNotifier, writeHeartbeat } from "../engine/attention";
 import { replayState } from "../engine/replay";
 import { Reconciler, readsForgeFacts } from "../engine/reconcile";
 import { effectiveCwd, readWorktreeRecord } from "../engine/executors/worktree";
 import { GRAPHS, graphCatalog } from "../graphs/index";
 import { howdahHome, loadConfig, saveConfig, resolveWorkspace, repoNameFor, ensureHowdahHome } from "../config/config";
 import { loadTuning } from "../config/tuning";
-import { readControl, writeControl, clearControl, interruptRunner, resolveReply } from "../engine/control";
+import {
+  readControl, writeControl, clearControl, interruptRunner, markPaused, resolveReply, runnerAlive, supervisorShouldResume, jumpMissingReads, jumpRefusal, forceReleaseRunner,
+  runnerHolder, raiseRunnerLock,
+  approve, sendFeedback, pinComment, redesign, afterDecision, clearAsks, type DecisionResult,
+} from "../engine/control";
 
 const base = howdahHome();
 const runsDir = join(base, "runs");
@@ -56,24 +68,8 @@ function reconcilerHook(runDir: string, engineRef: () => import("../engine/run")
   };
 }
 
-function writePid(runDir: string): void {
-  writeFileSync(join(runDir, "runner.pid"), String(process.pid));
-}
-
-function runnerAlive(runDir: string): boolean {
-  const p = join(runDir, "runner.pid");
-  if (!existsSync(p)) return false;
-  const pid = Number(readFileSync(p, "utf8").trim());
-  return Number.isFinite(pid) && pid > 0 && pidAlive(pid);
-}
-
-function markPaused(runDir: string): void {
-  const path = join(runDir, "run.jsonl");
-  if (!existsSync(path)) return;
-  const events = readLog(path);
-  const paused = events.findLast((e) => e.type === "run-paused" || e.type === "run-resumed");
-  if (!events.some((e) => e.type === "run-finished") && paused?.type !== "run-paused")
-    new EventLog(path).append({ type: "run-paused", by: "operator" });
+function spawnResume(runId: string): void {
+  Bun.spawn(["bun", import.meta.path, "resume", runId], { env: { ...process.env }, stdout: "ignore", stderr: "ignore" }).unref();
 }
 
 function parseRunArgs(argv: string[]) {
@@ -125,20 +121,42 @@ export async function runCommand(argv: string[]): Promise<string> {
     tuning: loadTuning(base)[graphName!],
     control: () => readControl(runDir),
     beforeNode: reconcilerHook(runDir, () => engine),
+    whileHeld: raiseParkAttention(runId),
   });
   console.log(`run ${runId} starting (${cwd ?? "no folder"})`);
-  writePid(runDir);
+  // the engine takes runner.pid as the run's runner lock (engine/control.ts claimRunner)
   const result = await engine.start(inputs);
-  if (result.state === "parked") {
-    const center = new AttentionCenter(join(base, "attention"), [osNotifier]);
-    await center.raise({ run: runId, node: result.node, visit: 1, reason: result.reason }).catch(() => {});
-  }
   console.log(`run ${runId}: ${JSON.stringify(result)}`);
   return runId;
 }
 
-export async function resumeCommand(runId: string): Promise<void> {
+/**
+ * A park's durable attention, raised while the engine still holds the runner lock (system-
+ * map 1a review): a decision's wake cannot start the next runner — or clear this record —
+ * until it has landed, so the watchdog never re-rings for a round already decided.
+ */
+function raiseParkAttention(runId: string) {
+  return async (result: import("../engine/run").RunState) => {
+    if (result.state !== "parked") return;
+    const ask = readLog(join(runsDir, runId, "run.jsonl")).findLast((e) => e.type === "attention-raised");
+    const visit = ask?.type === "attention-raised" && ask.node === result.node ? ask.visit : 1;
+    const center = new AttentionCenter(join(base, "attention"), [osNotifier]);
+    await center.raise({ run: runId, node: result.node, visit, reason: result.reason }).catch(() => {});
+  };
+}
+
+/**
+ * `resume <run> [--force]`. When another runner holds the run: a genuine live runner owns it
+ * (exit 0, nothing to do); a holder that is NOT this run's runner (a legacy lock naming some
+ * other process) raises attention and exits 1 naming `--force`, which breaks such a lock but
+ * never a genuine runner's (engine/control.ts forceReleaseRunner).
+ */
+export async function resumeCommand(runId: string, opts: { force?: boolean } = {}): Promise<void> {
   const runDir = join(runsDir, runId);
+  if (opts.force) {
+    const refused = forceReleaseRunner(runDir);
+    if (refused) throw new Error(`cannot force: ${refused.refused}`);
+  }
   const path = join(runDir, "run.jsonl");
   if (!existsSync(path)) throw new Error(`unknown run: ${runId}`);
   const replayed = replayState(readLog(path));
@@ -156,13 +174,14 @@ export async function resumeCommand(runId: string): Promise<void> {
     control: () => readControl(runDir),
     beforeNode: reconcilerHook(runDir, () => engine),
     probe: async () => "unknown", // ambiguous side effects park for the operator
+    whileHeld: raiseParkAttention(runId),
   });
-  writePid(runDir);
   const result = await engine.resume();
-  if (result.state === "parked") {
-    const center = new AttentionCenter(join(base, "attention"), [osNotifier]);
-    const visit = replayed.visits[result.node] ?? 1;
-    await center.raise({ run: runId, node: result.node, visit, reason: result.reason }).catch(() => {});
+  if (result.state === "busy") {
+    // another live runner holds this run (`up`, a decision route and a resume can race): it owns it
+    if (result.holder.genuine)
+      return void console.log(`run ${runId} already has a live runner (pid ${result.holder.pid ?? "?"}) — nothing to do`);
+    throw new Error(await raiseRunnerLock(join(base, "attention"), [osNotifier], runId, result.holder));
   }
   console.log(`run ${runId}: ${JSON.stringify(result)}`);
 }
@@ -176,38 +195,11 @@ export async function resumeCommand(runId: string): Promise<void> {
 export async function jumpCommand(runId: string, node: string, message?: string): Promise<void> {
   const runDir = join(runsDir, runId);
   const path = join(runDir, "run.jsonl");
-  if (!existsSync(path)) throw new Error(`unknown run: ${runId}`);
-  if (runnerAlive(runDir)) throw new Error("runner is live — pause or abort first, then jump");
-  const replayed = replayState(readLog(path));
-  if (!replayed.started) throw new Error("empty run");
-  if (replayed.finished) throw new Error(`run already finished (${replayed.finished.outcome})`);
-  const graph = GRAPHS[replayed.started.graph];
-  if (!graph) throw new Error(`unknown graph ${replayed.started.graph}`);
-  const def = graph.def.nodes[node];
-  if (!def) throw new Error(`unknown node "${node}" — have: ${Object.keys(graph.def.nodes).join(", ")}`);
-  if (def.kind === "terminal") throw new Error("cannot jump to a terminal node");
-
-  // precheck: the target's declared reads must be satisfiable from the replayed context,
-  // otherwise the jump is refused with the missing keys named — never a runtime surprise
-  const { ContextStore } = await import("../core/context");
-  const declared = graph.declarations() as Record<string, { scope: any; writer: string[] }>;
-  for (const k of graph.def.inputs) {
-    if (declared[k]) declared[k]!.writer.push("__inputs__");
-    else declared[k] = { scope: "sticky", writer: ["__inputs__"] };
-  }
-  const ctx = new ContextStore(declared as any);
-  ctx.beginAttempt("__inputs__", 0);
-  for (const k of graph.def.inputs) ctx.set(k as never, (replayed.started.inputs as any)[k] as never);
-  ctx.endAttempt("succeeded");
-  for (const f of replayed.finishes) {
-    ctx.beginAttempt(f.node, f.visit);
-    for (const [k, v] of Object.entries(f.writes)) ctx.set(k as never, v as never);
-    ctx.endAttempt(f.status);
-  }
-  const reads: string[] = "reads" in def && def.reads ? def.reads : [];
-  const missing = reads.filter((k) => !ctx.has(k as never));
-  if (missing.length)
-    throw new Error(`cannot jump to "${node}": context missing ${missing.join(", ")} — those writers have not run`);
+  // the precheck (live runner, finished, unknown node, missing reads) is shared with the
+  // viewer's jump route — engine/control.ts jumpRefusal
+  const check = jumpRefusal(runDir, node, GRAPHS);
+  if (!check.ok) throw new Error(check.message);
+  const { replayed } = check;
 
   // system-map 0.3: a jump resets every node's maxVisits budget (not its visit numbers),
   // otherwise jumping to a node parked on maxVisits re-parks it immediately
@@ -228,10 +220,16 @@ export async function upCommand(opts: { intervalMs?: number; once?: boolean } = 
       const runDir = join(runsDir, id);
       try {
         const replayed = replayState(readLog(join(runDir, "run.jsonl")));
-        if (!replayed.started || replayed.finished) continue;
-        if (runnerAlive(runDir)) continue;
-        if (replayed.parked) continue; // awaiting the human; the reply flow resumes it
-        if (replayed.paused || readControl(runDir)) continue; // operator holds it — never auto-resume
+        if (runnerAlive(runDir)) {
+          // a lock held by something that is not this run's runner never resolves by itself:
+          // say so (once) instead of skipping the run silently every tick
+          const holder = runnerHolder(runDir);
+          if (holder && !holder.genuine) await raiseRunnerLock(join(base, "attention"), [osNotifier], id, holder);
+          continue;
+        }
+        // parked = awaiting the human (the reply/decision flow resumes it); paused or a control
+        // command = the operator holds it. A DECIDED awaiting-approval park is not parked (D17).
+        if (!supervisorShouldResume(replayed, readControl(runDir))) continue;
         console.log(`resuming dead run ${id}`);
         const child = Bun.spawn(["bun", import.meta.path, "resume", id], {
           env: { ...process.env },
@@ -309,10 +307,78 @@ export function replyCommand(runId: string, text: string): void {
   if (!result.ok) throw new Error(result.message);
   new AttentionCenter(join(base, "attention"), []).resolve(`${runId}:${result.node}:${result.visit}`);
   // if the runner died while parked, kick a resume so the answer takes effect
-  if (!runnerAlive(runDir)) {
-    Bun.spawn(["bun", import.meta.path, "resume", runId], { env: { ...process.env }, stdout: "ignore", stderr: "ignore" }).unref();
-  }
+  if (!runnerAlive(runDir)) spawnResume(runId);
   console.log(result.rendered ? "replied — the retry will carry your reply" : "replied");
+}
+
+// ---- approval verbs (system-map 1a) ------------------------------------------------------
+
+function decided(result: DecisionResult): Extract<DecisionResult, { ok: true }> {
+  if (!result.ok) throw new Error(`${result.message} [${result.code}]`);
+  return result;
+}
+
+async function wake(runId: string, result: Extract<DecisionResult, { ok: true }>): Promise<void> {
+  await afterDecision(join(runsDir, runId), result, { attentionDir: join(base, "attention"), spawn: () => spawnResume(runId) });
+}
+
+/**
+ * `--proposal <id>` binds a decision to that round (refused as superseded if it is no longer
+ * current). It is a flag only among the LEADING arguments: before a `--` separator, and —
+ * for `comment` — before the free text starts (after `<run> <entity-id>`), so a comment
+ * whose text happens to contain "--proposal" is kept verbatim:
+ *   comment r1 --proposal 7 e1 some text      flag
+ *   comment r1 e1 the --proposal flag is odd  text
+ *   comment r1 e1 -- --proposal as text       text (after `--`)
+ * `textFrom` = how many positionals come before free text (Infinity: no free text).
+ */
+export function splitProposalFlag(args: string[], textFrom = Infinity): { proposalId: number | undefined; rest: string[] } {
+  let proposalId: number | undefined;
+  const rest: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i]!;
+    const inText = rest.length >= textFrom;
+    // `--` separates while no text has been taken yet (it may sit exactly where the text starts)
+    if (a === "--" && rest.length <= textFrom) {
+      rest.push(...args.slice(i + 1));
+      break;
+    }
+    if (a === "--proposal" && !inText) {
+      const raw = args[++i] ?? "";
+      if (!/^\d+$/.test(raw)) throw new Error(`--proposal needs a proposal id (a number), got "${raw}"`);
+      proposalId = Number(raw);
+      continue;
+    }
+    rest.push(a);
+  }
+  return { proposalId, rest };
+}
+
+export async function approveCommand(runId: string, proposalId?: number): Promise<void> {
+  const r = decided(approve(join(runsDir, runId), { proposalId }));
+  await wake(runId, r);
+  console.log(r.idempotent ? `proposal #${r.proposal_id} was already approved` : `approved proposal #${r.proposal_id}`);
+}
+
+export async function sendFeedbackCommand(runId: string, proposalId?: number): Promise<void> {
+  const r = decided(sendFeedback(join(runsDir, runId), { proposalId }));
+  await wake(runId, r);
+  console.log(r.idempotent ? `feedback on proposal #${r.proposal_id} was already sent` : `sent feedback on proposal #${r.proposal_id}`);
+}
+
+export function commentCommand(runId: string, entityId: string, text: string, proposalId?: number): void {
+  const r = decided(pinComment(join(runsDir, runId), entityId, text, { proposalId }));
+  console.log(`pinned ${r.comment_id} to ${entityId} on proposal #${r.proposal_id}`);
+}
+
+/** like jump: refused while a runner is live; resumes in-process once the jump is logged */
+export async function redesignCommand(runId: string, message: string): Promise<void> {
+  const runDir = join(runsDir, runId);
+  const r = decided(redesign(runDir, message, { graphs: GRAPHS }));
+  clearAsks(join(base, "attention"), runDir, r.asks);
+  clearControl(runDir);
+  console.log(`redesign requested — re-running from ${r.jumped_to}`);
+  await resumeCommand(runId);
 }
 
 if (import.meta.main) {
@@ -323,7 +389,11 @@ if (import.meta.main) {
       const ids = existsSync(runsDir) ? readdirSync(runsDir).filter((d) => existsSync(join(runsDir, d, "run.jsonl"))) : [];
       console.log(JSON.stringify(ids));
     } else if (verb === "reply") replyCommand(rest[0] ?? "", rest.slice(1).join(" "));
-    else if (verb === "resume") { clearControl(join(runsDir, rest[0] ?? "")); await resumeCommand(rest[0] ?? ""); }
+    else if (verb === "resume") {
+      const id = rest.find((a) => a !== "--force") ?? "";
+      clearControl(join(runsDir, id));
+      await resumeCommand(id, { force: rest.includes("--force") });
+    }
     else if (verb === "pause") {
       const runDir = join(runsDir, rest[0] ?? "");
       if (!existsSync(join(runDir, "run.jsonl")))
@@ -335,6 +405,13 @@ if (import.meta.main) {
     }
     else if (verb === "abort") { writeControl(join(runsDir, rest[0] ?? ""), "abort"); console.log("abort requested — lands at the next node boundary"); }
     else if (verb === "jump") await jumpCommand(rest[0] ?? "", rest[1] ?? "", rest.slice(2).join(" ") || undefined);
+    else if (verb === "approve" || verb === "send-feedback" || verb === "comment") {
+      const { proposalId, rest: args } = splitProposalFlag(rest, verb === "comment" ? 2 : Infinity);
+      if (verb === "approve") await approveCommand(args[0] ?? "", proposalId);
+      else if (verb === "send-feedback") await sendFeedbackCommand(args[0] ?? "", proposalId);
+      else commentCommand(args[0] ?? "", args[1] ?? "", args.slice(2).join(" "), proposalId);
+    }
+    else if (verb === "redesign") await redesignCommand(rest[0] ?? "", rest.slice(1).join(" "));
     else if (verb === "up") await upCommand({ once: rest.includes("--once") });
     else if (verb === "setup") setupCommand();
     else if (verb === "doctor") process.exit((await doctorCommand()) ? 0 : 1);
@@ -375,7 +452,7 @@ if (import.meta.main) {
       console.log(`scaffolded ${await newGraph(rest[0] ?? "", kind)}`);
     }
     else {
-      console.error("usage: howdah setup|run|resume|pause|abort|jump|reply|runs|graphs|new-graph|workspace|up|doctor");
+      console.error("usage: howdah setup|run|resume|pause|abort|jump|reply|approve|comment|send-feedback|redesign|runs|graphs|new-graph|workspace|up|doctor");
       process.exit(1);
     }
   } catch (err) {

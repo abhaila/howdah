@@ -8,6 +8,11 @@
  *   GET  /api/runs/:id             full detail (thread, timeline, usage, allowance, ask)
  *   GET  /api/runs/:id/events?since=N   SSE of events with seq > N
  *   POST /api/runs/:id/reply       {text} → resolveReply (system-map 0.2): 200 + record cleared, or 409 naming the next step
+ *   POST /api/runs/:id/comments    {entity_id, text, proposal_id?} → pin a comment to the current proposal round
+ *   POST /api/runs/:id/approval    {approved, proposal_id} → approve, or send the round's comments as feedback
+ *   POST /api/runs/:id/redesign    {message} → re-extract and redraw (refused while a runner is live)
+ *   (system-map 1a: the same engine/control.ts functions as the CLI verbs; 400 on a malformed
+ *   body, 409 {error, code} on a refusal)
  *
  * Run layout: <runsDir>/<run-id>/run.jsonl (the engine's dir option).
  *
@@ -36,7 +41,12 @@ import { graphCatalog, GRAPHS } from "../graphs/index";
 import { ensureHowdahHome, loadConfig, saveConfig } from "../config/config";
 import { listGithubRepos, registerGithubRepo } from "../config/github";
 import { loadTuning, saveTuning, pruneTuning } from "../config/tuning";
-import { writeControl, clearControl, interruptRunner, resolveReply } from "../engine/control";
+import {
+  writeControl, clearControl, interruptRunner, jumpRefusal, markPaused, resolveReply, runnerAlive, approve, sendFeedback, pinComment, redesign, afterDecision, wakeRunner,
+  clearAsks, runnerHolder, type DecisionResult,
+} from "../engine/control";
+import { resolveAgentConfig } from "../engine/run";
+import type { Graph } from "../core/graph";
 import { EventLog as ControlLog } from "../log/write";
 import { effectiveCwd, readWorktreeRecord } from "../engine/executors/worktree";
 import { PromptStore } from "../prompts/store";
@@ -45,7 +55,6 @@ import {
   type LibraryPaths,
 } from "../prompts/library";
 import { acceptProposal, listProposals, proposalsDir, rejectProposal, viewProposal } from "../prompts/proposals";
-import { resolveAgentConfigLayers, type AgentConfig } from "../core/graph";
 
 export interface ServerOpts {
   runsDir: string;
@@ -56,7 +65,16 @@ export interface ServerOpts {
   /** where prompts/, feedback/ and reviser/proposals/ live — overridable so tests that
    *  accept proposals and write feedback cannot mutate the real repo */
   repoRoot?: string;
+  /** the graph registry (default graphs/index.ts GRAPHS) — tests pass graphs of their own */
+  graphs?: Record<string, Graph<any>>;
+  /**
+   * starts a detached runner for a run (default: `bun cli/main.ts resume <id>`). Tests inject
+   * a recorder: the real one spawns an engine that may spend tokens.
+   */
+  resumeRun?: (id: string) => void;
 }
+
+type EngineTuning = NonNullable<Parameters<typeof resolveAgentConfig>[3]>["tuning"];
 
 const logPath = (runsDir: string, id: string) => join(runsDir, id, "run.jsonl");
 
@@ -103,19 +121,6 @@ function listRunIds(runsDir: string): string[] {
   return readdirSync(runsDir).filter((d) => existsSync(logPath(runsDir, d)));
 }
 
-function runnerAlive(runDir: string): boolean {
-  const pidFile = join(runDir, "runner.pid");
-  if (!existsSync(pidFile)) return false;
-  const pid = Number(readFileSync(pidFile, "utf8").trim());
-  if (!Number.isFinite(pid) || pid <= 0) return false;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 function withRunnerLiveness<T extends { status: RunSummary["status"] }>(summary: T, events: ReturnType<typeof readLog>, runDir: string): T {
   if (summary.status !== "running") return summary;
   const hasOpenNode = deriveTimeline(events).some((row) => row.status === "running");
@@ -128,18 +133,33 @@ export function createHowdahServer(opts: ServerOpts) {
   const home = dirname(opts.runsDir);
   ensureHowdahHome(home);
   const promptStore = new PromptStore(join(root, "prompts"));
+  const graphs = opts.graphs ?? GRAPHS;
+  const launchResume =
+    opts.resumeRun ??
+    ((id: string) =>
+      Bun.spawn(["bun", join(import.meta.dir, "..", "cli", "main.ts"), "resume", id], {
+        stdout: "ignore", stderr: "ignore", env: { ...process.env },
+      }).unref());
+  /** explicit operator resume: start a runner unless one is live */
   const spawnResume = (id: string) => {
-    // a live runner is already polling the log for the reply — don't double-run
-    const pidFile = join(opts.runsDir, id, "runner.pid");
-    if (existsSync(pidFile)) {
-      try {
-        const pid = Number(readFileSync(pidFile, "utf8").trim());
-        if (pid > 0) { process.kill(pid, 0); return; } // alive → it will pick the reply up
-      } catch { /* dead pid → resume below */ }
-    }
-    Bun.spawn(["bun", join(import.meta.dir, "..", "cli", "main.ts"), "resume", id], {
-      stdout: "ignore", stderr: "ignore", env: { ...process.env },
-    }).unref();
+    if (!runnerAlive(join(opts.runsDir, id))) launchResume(id);
+  };
+  /**
+   * after an answer (reply or decision): make a runner pick it up. Not a blind PID check — a
+   * runner exiting within the grace window without consuming the answer is resumed
+   * (engine/control.ts wakeRunner). Runs in the background so the response is not held.
+   */
+  const wake = (id: string) => void wakeRunner(join(opts.runsDir, id), () => launchResume(id)).catch(() => {});
+  const decisionResponse = (id: string, result: DecisionResult, status = 200) => {
+    if (!result.ok) return json({ error: result.message, code: result.code }, 409);
+    // background: wake the runner, then clear the answered asks' attention records
+    void afterDecision(join(opts.runsDir, id), result, { attentionDir: opts.attentionDir, spawn: () => launchResume(id) }).catch(() => {});
+    return json({ ok: true, proposal_id: result.proposal_id, idempotent: result.idempotent, comment_id: result.comment_id }, status);
+  };
+  /** a JSON object body, or null (the caller answers 400) */
+  const objectBody = async (req: Request): Promise<Record<string, unknown> | null> => {
+    const body: unknown = await req.json().catch(() => undefined);
+    return typeof body === "object" && body !== null && !Array.isArray(body) ? (body as Record<string, unknown>) : null;
   };
   return Bun.serve({
     port: opts.port ?? 4711,
@@ -166,7 +186,7 @@ export function createHowdahServer(opts: ServerOpts) {
       if (url.pathname === "/api/graphs") return json(graphCatalog());
       const gm = url.pathname.match(/^\/api\/graphs\/([^/]+)(\/tuning)?$/);
       if (gm) {
-        const g = GRAPHS[gm[1]!];
+        const g = graphs[gm[1]!];
         if (!g) return json({ error: "unknown graph" }, 404);
 
         if (gm[2] === "/tuning" && req.method === "PUT") {
@@ -183,11 +203,9 @@ export function createHowdahServer(opts: ServerOpts) {
 
         const tuning = loadTuning()[g.def.name] ?? {};
         const tsDefaults = g.def.defaults ?? {};
-        const effectiveOf = (id: string, n: (typeof g.def.nodes)[string]) => {
-          if (n.kind !== "agent") return undefined;
-          const base: AgentConfig = { harness: n.harness, model: n.model, effort: n.effort, permissionMode: n.permissionMode, maxTurns: n.maxTurns, skills: n.skills };
-          return resolveAgentConfigLayers([tuning.nodes?.[id], base, tuning.defaults, tsDefaults]);
-        };
+        // the engine's own resolution (no run override): what a run would get, readOnly included
+        const effectiveOf = (id: string, n: (typeof g.def.nodes)[string]) =>
+          n.kind === "agent" ? resolveAgentConfig(g, n, id, { tuning: tuning as EngineTuning }) : undefined;
         return json({
           name: g.def.name,
           description: g.def.description ?? "",
@@ -394,7 +412,7 @@ export function createHowdahServer(opts: ServerOpts) {
         return render ? json(render) : json({ error: "no such render, or its pinned prompt is gone" }, 404);
       }
 
-      const m = url.pathname.match(/^\/api\/runs(?:\/([^/]+)(?:\/(events|reply|open-ide|open-run-folder|resume|pause|abort|jump|ask))?)?$/);
+      const m = url.pathname.match(/^\/api\/runs(?:\/([^/]+)(?:\/(events|reply|open-ide|open-run-folder|resume|pause|abort|jump|ask|comments|approval|redesign))?)?$/);
       if (!m) {
         // static: /public assets by name, everything else → the app shell.
         // no-cache: this is a local app whose bundle changes constantly — the browser must
@@ -447,11 +465,50 @@ export function createHowdahServer(opts: ServerOpts) {
         const text = raw === undefined ? "" : raw;
         if (typeof text !== "string") return json({ error: "text must be a string" }, 400);
         // system-map 0.2: one shared rule set with `howdah reply`; refusals name the next step
-        const result = resolveReply(join(opts.runsDir, id), text, { graphs: GRAPHS });
+        const result = resolveReply(join(opts.runsDir, id), text, { graphs });
         if (!result.ok) return json({ error: result.message, code: result.code }, 409);
         new AttentionCenter(opts.attentionDir, []).resolve(`${id}:${result.node}:${result.visit}`);
-        spawnResume(id); // the reply must MOVE the run, not just record the answer
+        wake(id); // the reply must MOVE the run, not just record the answer
         return json({ ok: true, rendered: result.rendered });
+      }
+
+      // ---- approval decisions (system-map 1a) ------------------------------------------
+      if (sub === "comments" && req.method === "POST") {
+        const body = await objectBody(req);
+        if (!body) return json({ error: "body must be a JSON object {entity_id, text, proposal_id?}" }, 400);
+        const { entity_id, text, proposal_id } = body;
+        if (typeof entity_id !== "string" || entity_id.trim() === "") return json({ error: "entity_id must be a non-empty string" }, 400);
+        if (typeof text !== "string" || text.trim() === "") return json({ error: "text must be a non-empty string" }, 400);
+        if (proposal_id !== undefined && !Number.isInteger(proposal_id)) return json({ error: "proposal_id must be an integer" }, 400);
+        const result = pinComment(join(opts.runsDir, id), entity_id, text, { proposalId: proposal_id as number | undefined });
+        if (!result.ok) return json({ error: result.message, code: result.code }, 409);
+        return json({ ok: true, proposal_id: result.proposal_id, comment_id: result.comment_id }, 201);
+      }
+
+      if (sub === "approval" && req.method === "POST") {
+        const body = await objectBody(req);
+        if (!body) return json({ error: "body must be a JSON object {approved, proposal_id}" }, 400);
+        const { approved, proposal_id } = body;
+        if (typeof approved !== "boolean") return json({ error: "approved must be a boolean" }, 400);
+        // required: the operator decides on the proposal they SAW, never whatever is current now
+        if (!Number.isInteger(proposal_id)) return json({ error: "proposal_id must be an integer" }, 400);
+        const runDir = join(opts.runsDir, id);
+        const decide = approved ? approve : sendFeedback;
+        return decisionResponse(id, decide(runDir, { proposalId: proposal_id as number }));
+      }
+
+      if (sub === "redesign" && req.method === "POST") {
+        const body = await objectBody(req);
+        if (!body) return json({ error: "body must be a JSON object {message}" }, 400);
+        const { message } = body;
+        if (typeof message !== "string" || message.trim() === "") return json({ error: "message must be a non-empty string" }, 400);
+        const runDir = join(opts.runsDir, id);
+        const result = redesign(runDir, message, { graphs });
+        if (!result.ok) return json({ error: result.message, code: result.code }, 409);
+        clearAsks(opts.attentionDir, runDir, result.asks);
+        clearControl(runDir); // like jump: the operator now owns where the run goes
+        launchResume(id);
+        return json({ ok: true, jumped_to: result.jumped_to }, 202);
       }
 
       if (sub === "resume" && req.method === "POST") {
@@ -463,10 +520,7 @@ export function createHowdahServer(opts: ServerOpts) {
       if (sub === "pause" && req.method === "POST") {
         const runDir = join(opts.runsDir, id);
         writeControl(runDir, "pause");
-        const events = readLog(path);
-        const paused = events.findLast((e) => e.type === "run-paused" || e.type === "run-resumed");
-        if (!events.some((e) => e.type === "run-finished") && paused?.type !== "run-paused")
-          new ControlLog(path).append({ type: "run-paused", by: "operator" });
+        markPaused(runDir);
         const interrupted = await interruptRunner(runDir);
         return json({ ok: true, interrupted, note: interrupted ? "paused and interrupted the live runner" : "pause recorded" }, 202);
       }
@@ -474,7 +528,12 @@ export function createHowdahServer(opts: ServerOpts) {
       if (sub === "abort" && req.method === "POST") {
         const runDir = join(opts.runsDir, id);
         writeControl(runDir, "abort");
-        // a live runner aborts at the boundary; a hung/mid-turn one is killed with its agents
+        // a live runner aborts at the boundary; a hung/mid-turn one is killed with its agents —
+        // interruptRunner signals ONLY a holder PROVEN to be this run's runner (start time
+        // matched, or a legacy lock whose argv is cli/main.ts … <this run>): a legacy runner.pid
+        // can name any bun process (the supervisor, a test run, another run's runner), and an
+        // unknown identity is never a licence to kill. Anything else is left alone; the control
+        // file stops a real runner at its next boundary.
         await interruptRunner(runDir);
         const events = readLog(path);
         if (!events.some((e) => e.type === "run-finished"))
@@ -485,12 +544,10 @@ export function createHowdahServer(opts: ServerOpts) {
       if (sub === "jump" && req.method === "POST") {
         const body = (await req.json()) as { node?: string; message?: string };
         if (!body.node) return json({ error: "node required" }, 400);
-        const events = readLog(path);
-        const started = events.find((e) => e.type === "run-started");
-        const graph = started?.type === "run-started" ? GRAPHS[started.graph] : undefined;
-        const node = graph?.def.nodes[body.node];
-        if (!node) return json({ error: `unknown node "${body.node}"` }, 400);
-        if (node.kind === "terminal") return json({ error: "cannot jump to a terminal node" }, 400);
+        // refuse in-process (the same precheck `howdah jump` runs) — the jump itself is spawned
+        // detached, so a refusal from it would never reach the operator
+        const check = jumpRefusal(join(opts.runsDir, id), body.node, graphs);
+        if (!check.ok) return json({ error: check.message }, 400);
         const cli = join(import.meta.dir, "..", "cli", "main.ts");
         const args = ["bun", cli, "jump", id, body.node, ...(body.message ? [body.message] : [])];
         Bun.spawn(args, { stdout: "ignore", stderr: "ignore", env: { ...process.env } }).unref();
@@ -504,7 +561,7 @@ export function createHowdahServer(opts: ServerOpts) {
 
         const events = readLog(path);
         const started = events.find((e) => e.type === "run-started");
-        const graph = started?.type === "run-started" ? GRAPHS[started.graph] : undefined;
+        const graph = started?.type === "run-started" ? graphs[started.graph] : undefined;
         let declarations = {};
         try { declarations = graph ? graph.declarations() : {}; } catch { /* still answerable */ }
         const digest = runDigest(id, events, declarations);
@@ -571,7 +628,7 @@ export function createHowdahServer(opts: ServerOpts) {
       // scopes and declared writers come from the graph, not the log: that is what lets the
       // Context tab list a key no step has reached yet instead of hiding it (CUR5)
       const started = events.find((e) => e.type === "run-started");
-      const graph = started?.type === "run-started" ? GRAPHS[started.graph] : undefined;
+      const graph = started?.type === "run-started" ? graphs[started.graph] : undefined;
       let declarations = {};
       try {
         declarations = graph ? graph.declarations() : {};

@@ -37,6 +37,17 @@ export interface CodexExecutorOpts {
   viewerBase?: string;
 }
 
+/**
+ * The thread's sandbox. Codex has no permission MODES, so the one mode that must hold is
+ * mapped here: "plan" (a `readOnly` node, system-map 1a D6/5A — resolveAgentConfig forces it
+ * over every override, and over the Claude→Codex fallback) opens a read-only sandbox, never
+ * the full-access default. Every other mode gets the configured sandbox.
+ */
+export function codexSandbox(permissionMode: string | undefined, configured?: string): string {
+  if (permissionMode === "plan") return "read-only";
+  return configured ?? "danger-full-access";
+}
+
 export function codexExecutor(opts: CodexExecutorOpts): Executor {
   return async ({ nodeId, def, visit, runId, cwd, log, renderedPrompt, agentConfig }) => {
     if (def.kind !== "agent") throw new Error("codexExecutor on non-agent node");
@@ -156,7 +167,7 @@ export function codexExecutor(opts: CodexExecutorOpts): Executor {
       const thread = await request("thread/start", {
         cwd: effectiveCwd(log.path, cwd) ?? dirname(log.path),
         approvalPolicy: "on-request",
-        sandbox: opts.sandbox ?? "danger-full-access",
+        sandbox: codexSandbox(agentConfig?.permissionMode, opts.sandbox),
         ...((agentConfig?.model ?? opts.model) ? { model: agentConfig?.model ?? opts.model } : {}),
       });
       const threadId = thread?.threadId ?? thread?.thread?.id;

@@ -3,7 +3,8 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { defineGraph } from "../core/graph";
-import { Engine } from "./run";
+import { Engine, resolveAgentConfig } from "./run";
+import { codexSandbox } from "./executors/codex";
 
 interface Ctx { goal: string; a: string; b: string; }
 
@@ -155,5 +156,103 @@ describe("cross-harness model leak (haiku→codex regression)", () => {
     await engine.start({ goal: "g" });
     expect(seen[0]).toMatchObject({ nodeId: "one", harness: "codex", model: "gpt-5.6-luna" });
     expect(seen[1]).toMatchObject({ nodeId: "two", harness: "codex" });
+  });
+});
+
+describe("read-only nodes (system-map 1a, D6/5A)", () => {
+  const roGraph = () =>
+    defineGraph<Ctx>({
+      name: "ro",
+      defaults: { permissionMode: "bypassPermissions" },
+      entry: "one",
+      inputs: ["goal"],
+      nodes: {
+        one: { kind: "agent", prompt: "doc.draft", readOnly: true, permissionMode: "acceptEdits", reads: ["goal"], writes: { a: { scope: "sticky" } } },
+        two: { kind: "agent", prompt: "doc.draft", reads: ["goal"], writes: { b: { scope: "sticky" } } },
+        done: { kind: "terminal", outcome: "success" },
+      },
+      edges: [
+        { from: "one", to: "two" },
+        { from: "two", to: "done" },
+      ],
+    });
+
+  test("readOnly resolves to plan even over a bypassPermissions run override, UI tuning and graph default", async () => {
+    const seen: Record<string, string | undefined> = {};
+    const engine = new Engine(roGraph(), {
+      dir: mkdtempSync(join(tmpdir(), "howdah-cfg-ro-")),
+      promptsDir: prompts(),
+      overrides: { permissionMode: "bypassPermissions" },
+      tuning: { defaults: { permissionMode: "dontAsk" }, nodes: { one: { permissionMode: "bypassPermissions" } } },
+      executors: {
+        agent: async ({ nodeId, agentConfig }) => {
+          seen[nodeId] = agentConfig?.permissionMode;
+          return { status: "succeeded", writes: nodeId === "one" ? { a: "x" } : { b: "y" } };
+        },
+      },
+    });
+    await engine.start({ goal: "g" });
+    expect(seen["one"]).toBe("plan");
+    // everything else keeps the ordinary resolution: claude runs in auto (9f59264), whatever
+    // a layer asked for
+    expect(seen["two"]).toBe("auto");
+  });
+
+  // Rebase reconciliation: f8c8d96's Claude→Codex fallback outranks every layer, but not
+  // readOnly — a read-only node that falls back to codex stays in plan (→ codex read-only sandbox).
+  test("readOnly survives the Claude→Codex fallback: the retry is codex AND still plan", async () => {
+    const seen: Array<{ nodeId: string; visit: number; harness?: string; permissionMode?: string }> = [];
+    const engine = new Engine(roGraph(), {
+      dir: mkdtempSync(join(tmpdir(), "howdah-cfg-ro-")),
+      promptsDir: prompts(),
+      executors: {
+        agent: async ({ nodeId, visit, agentConfig, log }) => {
+          seen.push({ nodeId, visit, harness: agentConfig?.harness, permissionMode: agentConfig?.permissionMode });
+          if (nodeId === "one" && agentConfig?.harness === "claude") {
+            log.append({ type: "allowance", harness: "claude", state: "exhausted" });
+            return { status: "failed", writes: {} };
+          }
+          return { status: "succeeded", writes: nodeId === "one" ? { a: "x" } : { b: "y" } };
+        },
+      },
+    });
+    expect(await engine.start({ goal: "g" })).toEqual({ state: "finished", outcome: "success" });
+    expect(seen).toEqual([
+      { nodeId: "one", visit: 1, harness: "claude", permissionMode: "plan" },
+      { nodeId: "one", visit: 2, harness: "codex", permissionMode: "plan" },
+      { nodeId: "two", visit: 1, harness: "codex", permissionMode: "bypassPermissions" },
+    ]);
+  });
+
+  test("resolveAgentConfig: a fallback harness beats a run override; readOnly beats the fallback", () => {
+    const g = roGraph();
+    const one = g.def.nodes.one as Extract<(typeof g.def.nodes)[string], { kind: "agent" }>;
+    const two = g.def.nodes.two as Extract<(typeof g.def.nodes)[string], { kind: "agent" }>;
+    expect(resolveAgentConfig(g, one, "one", { overrides: { harness: "claude" }, fallbackHarness: "codex" })).toMatchObject({ harness: "codex", permissionMode: "plan" });
+    expect(resolveAgentConfig(g, two, "two", { overrides: { harness: "claude" }, fallbackHarness: "codex" })).toMatchObject({ harness: "codex" });
+    expect(resolveAgentConfig(g, two, "two", { overrides: { harness: "claude" } })).toMatchObject({ harness: "claude", permissionMode: "auto" });
+  });
+
+  test("codex maps plan to its read-only sandbox; every other mode keeps the configured one", () => {
+    expect(codexSandbox("plan")).toBe("read-only");
+    expect(codexSandbox("plan", "danger-full-access")).toBe("read-only");
+    expect(codexSandbox("bypassPermissions")).toBe("danger-full-access");
+    expect(codexSandbox(undefined, "workspace-write")).toBe("workspace-write");
+  });
+
+  test("with no overrides at all, readOnly still beats the node's own permissionMode", async () => {
+    let mode: string | undefined;
+    const engine = new Engine(roGraph(), {
+      dir: mkdtempSync(join(tmpdir(), "howdah-cfg-ro-")),
+      promptsDir: prompts(),
+      executors: {
+        agent: async ({ nodeId, agentConfig }) => {
+          if (nodeId === "one") mode = agentConfig?.permissionMode;
+          return { status: "succeeded", writes: nodeId === "one" ? { a: "x" } : { b: "y" } };
+        },
+      },
+    });
+    await engine.start({ goal: "g" });
+    expect(mode).toBe("plan");
   });
 });

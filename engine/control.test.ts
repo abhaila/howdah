@@ -435,9 +435,9 @@ describe("resolveReply refuses what a reply cannot fix (system-map 0.2)", () => 
     ["no-edge", "one", "no-edge", /use `jump \S+ <node> <msg>`/],
     ["max-steps", "one", "max-steps", /use `jump \S+ <node> <msg>`/],
     ["ambiguous-effect", "cmd", "ambiguous-effect", /resolve the effect first/],
-    ["awaiting-approval", "one", "awaiting-approval", /use approve \/ send-feedback \/ redesign/],
-    ["approval-missing", "one", "approval-missing", /use `approve \S+`, or `redesign \S+ <msg>`/],
-    ["stale-base", "one", "stale-base", /use `redesign \S+ <msg>` \(re-extracts\)/],
+    ["awaiting-approval", "one", "awaiting-approval", /use `approve \S+`, `comment \S+ <entity-id> <text>` then `send-feedback \S+`, or `redesign \S+ <msg>`/],
+    ["approval-missing", "one", "approval-missing", /use `jump \S+ <approval-node>` to return to the approval step \(then `approve \S+`\), or `redesign \S+ <msg>`/],
+    ["stale-base", "one", "stale-base", /undo the change and `resume \S+`, or `redesign \S+ <msg>` to re-extract and redraw/],
   ];
   for (const [label, node, code, message] of refusals) {
     test(`${label}: refused naming the next step, nothing appended`, () => {
