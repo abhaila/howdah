@@ -99,8 +99,7 @@ export function deriveStatus(events: LoggedEvent[]): { status: RunStatus; ask: R
       // a park right after a failed attempt carries the WHY — keep it past resolution
       if (lastFailed && e.node === lastFailed.node && e.visit === lastFailed.visit)
         failure = { node: e.node, visit: e.visit, reason: e.reason, at: e.ts };
-    } else if (e.type === "attention-resolved") ask = null;
-    else if (e.type === "operator-jump") ask = null;
+    } else if (e.type === "attention-resolved" || e.type === "operator-jump") ask = null; // a jump supersedes the park (replay.ts does the same)
     else if (e.type === "run-paused") paused = true;
     else if (e.type === "run-resumed") paused = false;
     else if (e.type === "node-finished") {
@@ -176,7 +175,7 @@ export function deriveTimeline(events: LoggedEvent[]): TimelineRow[] {
     let open = false;
     for (const e of events) {
       if (e.type === "attention-raised") open = true;
-      else if (e.type === "attention-resolved" || e.type === "run-finished") open = false;
+      else if (e.type === "attention-resolved" || e.type === "operator-jump" || e.type === "run-finished") open = false;
     }
     return open;
   })();
@@ -208,6 +207,13 @@ export function deriveTimeline(events: LoggedEvent[]): TimelineRow[] {
       const key = `${e.node}@${e.visit}`;
       const from = asks.get(key);
       if (from !== undefined) { charge(key, from, new Date(e.ts).getTime()); asks.delete(key); }
+    } else if (e.type === "operator-jump") {
+      // the jump closes every open ask, exactly as replay clears `parked` (system-map 0.3).
+      // Without this a maxVisits park — raised at visit N+1, which never ran — stays open,
+      // and the real post-jump attempt N+1 gets charged as time waiting on a human.
+      const at = new Date(e.ts).getTime();
+      for (const [key, from] of asks) charge(key, from, at);
+      asks.clear();
     }
   }
   for (const [key, from] of asks) charge(key, from, end); // still waiting: measure to now

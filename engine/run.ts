@@ -20,6 +20,9 @@
  * operator suffixes, skill hint, outputs contract (core/template.ts assemblePrompt) —
  * before hashing, and logs the suffix inputs (skills, output_keys, suffix_version) so
  * reconstruction can rebuild it. Executors send `renderedPrompt` unchanged.
+ *
+ * Visit budgets (system-map 0.3): maxVisits counts visits above a per-node floor that a
+ * reset_budgets operator-jump sets (engine/replay.ts). Visit numbers themselves never reset.
  */
 import { copyFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -109,6 +112,12 @@ export class Engine {
   private ctx!: ContextStore<any>;
   private inputs: Record<string, unknown> = {};
   private visits: Record<string, number> = {};
+  /**
+   * system-map 0.3: per-node maxVisits floor from the latest reset_budgets operator-jump.
+   * Only resume() sets it — jumps are refused while a runner is live, so a jump always
+   * reaches the engine through replay.
+   */
+  private floors: Record<string, number> = {};
   private completedEffects = new Set<string>();
   /** rendered_hash per agent node's latest render — outcome attribution joins here */
   private lastRender = new Map<string, string>();
@@ -153,6 +162,7 @@ export class Engine {
 
     this.inputs = replayed.started.inputs;
     this.visits = { ...replayed.visits };
+    this.floors = { ...replayed.floors };
     this.completedEffects = new Set(replayed.completedEffects);
     this.freshContext();
     this.seedInputs(this.inputs);
@@ -223,11 +233,21 @@ export class Engine {
         return { state: "finished", outcome: def.outcome };
       }
 
+      // visit numbers only climb (they are attempt identity); the BUDGET is counted above the
+      // floor an operator jump set (system-map 0.3), so a jump buys exactly maxVisits more
       const visit = (this.visits[current] = (this.visits[current] ?? 0) + 1);
       const fallbackVisit = this.pendingCodexFallbackNodes.delete(current);
       const maxVisits = "maxVisits" in def ? def.maxVisits : undefined;
-      if (maxVisits !== undefined && visit > maxVisits && !fallbackVisit)
-        return this.park(current, visit, `maxVisits exceeded (${visit} > ${maxVisits})`);
+      const floor = this.floors[current] ?? 0;
+      // the codex-fallback retry (f8c8d96) is the same attempt on another harness: not charged
+      if (maxVisits !== undefined && visit - floor > maxVisits && !fallbackVisit)
+        return this.park(
+          current,
+          visit,
+          floor > 0
+            ? `maxVisits exceeded (${visit - floor} > ${maxVisits} since the operator jump at visit ${floor})`
+            : `maxVisits exceeded (${visit} > ${maxVisits})`,
+        );
 
       if (this.opts.beforeNode) await this.opts.beforeNode(current, def);
       const attemptId = `${current}#${visit}`;

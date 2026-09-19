@@ -209,7 +209,9 @@ export async function jumpCommand(runId: string, node: string, message?: string)
   if (missing.length)
     throw new Error(`cannot jump to "${node}": context missing ${missing.join(", ")} — those writers have not run`);
 
-  new EventLog(path).append({ type: "operator-jump", to: node, message });
+  // system-map 0.3: a jump resets every node's maxVisits budget (not its visit numbers),
+  // otherwise jumping to a node parked on maxVisits re-parks it immediately
+  new EventLog(path).append({ type: "operator-jump", to: node, message, reset_budgets: true });
   new AttentionCenter(join(base, "attention"), []).resolve(`${runId}:${replayed.parked?.node}:${replayed.parked?.visit}`);
   clearControl(runDir);
   console.log(`jumped ${runId} to ${node}${message ? " with instruction" : ""}; resuming`);
