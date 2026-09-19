@@ -18,6 +18,7 @@
  */
 import type { PromptId } from "../core/prompt-ids";
 import type { Harness } from "../core/graph";
+import type { DriftItem, DriftOutcome } from "../map/drift";
 
 /** fields the writer stamps on every event */
 export interface Stamped {
@@ -80,6 +81,11 @@ export type RunEvent =
       overrides?: { harness?: Harness; model?: string; effort?: string; permissionMode?: string; maxTurns?: number; skills?: string[] };
       /** prompt versions pinned at start (OV-2) — revisions apply to new runs only */
       pinned_prompts: Partial<Record<PromptId, number>>;
+      /**
+       * system-map 1c review: per pinned prompt that `{{> id }}`-includes others, the version of
+       * every prompt it included (transitively) — the pinned text is the expansion of all of them
+       */
+      pinned_includes?: Record<string, Record<string, number>>;
     }
   | { type: "node-started"; node: string; visit: number; attempt_id: string }
   | {
@@ -106,6 +112,11 @@ export type RunEvent =
       output_keys?: string[];
       /** which core/template.ts suffix builders produced the skill hint + outputs contract */
       suffix_version?: number;
+      /**
+       * system-map 1c review: the prompts this one `{{> id }}`-included, with their pinned
+       * versions — prompt_version alone does not identify the text when an included prompt moved
+       */
+      includes?: Record<string, number>;
     }
   | {
       type: "chunk";
@@ -147,6 +158,12 @@ export type RunEvent =
       status: "succeeded" | "failed";
       /** the values written, keyed by context key — replay rebuilds context from these */
       writes: Record<string, unknown>;
+      /**
+       * system-map 1c: a failed attempt whose proposal the graph's validateProposal refused —
+       * the refusal text. Replay carries it to the node's next attempt, which renders it
+       * (core/template.ts refusalInstruction, suffix v3); reconstruction rebuilds it from here.
+       */
+      refused?: string;
     }
   | {
       /** written BEFORE a side-effecting step (OV-1) — intent without a matching done
@@ -277,6 +294,66 @@ export type RunEvent =
       /** the approval node whose proposer this message is for */
       approval: string;
       message: string;
+    }
+  /*
+   * system-map 1c — the map built-ins (engine/executors/map.ts). The manifests themselves live
+   * in runs/<id>/maps/<manifest_hash>.json and the objects in the content-addressed store;
+   * these events carry only bounded summaries, so the log stays small.
+   */
+  | {
+      /** a snapshot was extracted (map:extract / map:reextract) and its manifest written */
+      type: "map-extracted";
+      node: string;
+      visit: number;
+      manifest_hash: string;
+      /** the commit the snapshot's tracked files came from (HEAD; the worktree diff is on top) */
+      commit: string | null;
+      /** the worktree had uncommitted or untracked source changes: the snapshot is commit + those changes */
+      dirty: boolean;
+      /** the object store the snapshot's objects were written to — loaders assemble from it */
+      store: string;
+      /** the worktree fingerprint the snapshot was extracted at (D18) */
+      fingerprint: Fingerprint;
+      /** which extraction layers ran (SM-D4) — slice 1 runs tree-sitter only: ["syntactic"] */
+      tiers_run: string[];
+      /** counts, not lists: the manifest names each file and region */
+      unparsed: number;
+      skipped: number;
+      not_checked: number;
+      files: number;
+    }
+  | {
+      /** extraction progress, throttled — the viewer shows movement on a cold parse */
+      type: "map-progress";
+      node: string;
+      visit: number;
+      done: number;
+      total: number;
+      skipped: number;
+    }
+  | {
+      /**
+       * map:drift compared the approved ghosts with base vs after (D19). `commit` is the after
+       * snapshot's commit — what every `verified` refers to (D21). Items are capped (worst
+       * outcome first); `counts` covers every item.
+       */
+      type: "drift-detected";
+      node: string;
+      visit: number;
+      commit: string | null;
+      /** "<sha>" or "<sha> + uncommitted changes" — a dirty after snapshot reports nothing verified */
+      stamp: string;
+      dirty: boolean;
+      base_commit: string | null;
+      manifest_hash: string;
+      base_manifest_hash: string;
+      counts: Record<DriftOutcome, number>;
+      items: DriftItem[];
+      truncated: number;
+      /** the recorded base came from another extractor version and was re-extracted at its commit (base_manifest_hash is the new one) */
+      base_reextracted?: boolean;
+      /** base and after still come from different extractors (re-extraction impossible): every ghost item is not-checked */
+      extractor_mismatch?: { base: string; after: string };
     }
   | { type: "run-finished"; outcome: RunOutcome };
 

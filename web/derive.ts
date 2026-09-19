@@ -368,6 +368,16 @@ export function deriveLogRows(events: LoggedEvent[]): LogRow[] {
         return { ...base, node: null, visit: null, kind: "operator", depth: 0, summary: `approved proposal #${e.proposal_id}` };
       case "slice-redesign-requested":
         return { ...base, node: null, visit: null, kind: "operator", depth: 0, summary: `redesign · ${e.message.slice(0, 120)}` };
+      case "map-extracted":
+        return { ...base, ...at(e.node, e.visit), kind: "engine", depth: 0,
+          summary: `map ${e.manifest_hash.slice(0, 12)} @ ${e.commit?.slice(0, 12) ?? "(no commit)"}${e.dirty ? " + uncommitted changes" : ""} · ${e.files} files · ${e.skipped} skipped · ${e.not_checked} not-checked · ${e.unparsed} unparsed` };
+      case "map-progress":
+        return { ...base, ...at(e.node, e.visit), kind: "engine", depth: 1, summary: `extracting ${e.done}/${e.total} (skipped ${e.skipped})` };
+      case "drift-detected": {
+        const counts = Object.entries(e.counts).filter(([, n]) => n > 0).map(([k, n]) => `${k} ${n}`).join(" · ");
+        return { ...base, ...at(e.node, e.visit), kind: "engine", depth: 0,
+          summary: `drift @ ${e.stamp ?? e.commit?.slice(0, 12) ?? "(no commit)"} · ${counts || "nothing to check"}${e.truncated ? ` · ${e.truncated} more not listed` : ""}${e.extractor_mismatch ? ` · extractor mismatch ${e.extractor_mismatch.base} vs ${e.extractor_mismatch.after}` : ""}` };
+      }
       default: {
         const never: never = e;
         throw new Error(`unhandled event type in deriveLogRows: ${JSON.stringify(never)}`);

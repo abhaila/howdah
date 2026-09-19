@@ -12,6 +12,10 @@
  *                                                                                     │                                      └─reject─▶ revise ─▶ publish
  *                                                                                     └─ (fallback) wait 5m ─▶ probe_pr
  *
+ * The delivery half (publish → probe_pr → repairs → complete / cleanup) is the shared
+ * `deliveryGraph({ verifyAfterRepair: false })` in graphs/delivery.ts (system-map 1c) — the
+ * same nodes, edges and bounds this graph always had; implement-slice uses it with `true`.
+ *
  * Loop bounds (system-map 0.3): every agent-driven loop parks for the operator instead of
  * spinning to maxSteps — plan_review ≤ 3 (local review keeps rejecting), revise_repairs ≤ 3
  * (repair review keeps rejecting, across repair cycles), publish ≤ 5 (repairs → publish →
@@ -20,29 +24,21 @@
  * human reviewer, and time passing is not a failure. `howdah jump` resets these budgets.
  */
 import { defineGraph } from "../core/graph";
+import { deliveryGraph, type DeliveryCtx } from "./delivery";
 
-export type PrState = "OPEN" | "MERGED" | "CLOSED" | "CONFLICTS" | "CI_FAILED" | "CHANGES_REQUIRED";
+export type { PrState } from "./delivery";
 
-export interface ImplementTicketCtx {
-  /** run inputs */
-  goal: string;
-  work: string;
-  /** agent outputs */
+export interface ImplementTicketCtx extends DeliveryCtx {
+  /** agent outputs (the delivery keys — review, publication, repairs, pr.state — come from DeliveryCtx) */
   implementation_plan: string;
   implementation_summary: string;
-  review_verdict: "pass" | "reject";
-  review_findings: unknown;
-  publication_summary: string;
-  repair_summary: string;
-  completion_summary: string;
-  /** machine facts */
-  "pr.state": PrState;
-  "worktree.clean": boolean;
 }
 
 const sticky = { scope: "sticky" } as const;
 const cleared = { scope: "cleared" } as const;
-const perVisit = { scope: "per-visit" } as const;
+
+/** system-map 1c: the shared delivery half, unverified — exactly what this graph always ran */
+const delivery = deliveryGraph({ verifyAfterRepair: false });
 
 export const implementTicket = defineGraph<ImplementTicketCtx>({
   name: "implement-ticket",
@@ -91,66 +87,7 @@ export const implementTicket = defineGraph<ImplementTicketCtx>({
       class: "implementation",
     },
 
-    "delivery.publish": {
-      kind: "agent",
-      prompt: "delivery.publish", // v2 — the accepted reviser revision
-      reads: ["goal", "work"],
-      writes: { publication_summary: sticky },
-      class: "delivery",
-      maxVisits: 5, // system-map 0.3: bounds repairs → review_repairs → publish → probe_pr
-    },
-    // no maxVisits: probe_pr ⇄ wait polls on a human reviewer (system-map 0.3)
-    "delivery.probe_pr": { kind: "command", run: "probe:pr", reads: ["publication_summary"], writes: { "pr.state": perVisit }, class: "delivery" },
-    "delivery.address_reviews": {
-      kind: "agent",
-      prompt: "delivery.address_reviews",
-      reads: ["goal", "work", "publication_summary", "review_verdict", "review_findings"],
-      writes: { repair_summary: sticky },
-      class: "delivery",
-    },
-    "delivery.fix_ci": {
-      kind: "agent",
-      prompt: "delivery.fix_ci",
-      reads: ["goal", "work", "publication_summary", "review_verdict", "review_findings"],
-      writes: { repair_summary: sticky },
-      class: "delivery",
-    },
-    "delivery.resolve_conflicts": {
-      kind: "agent",
-      prompt: "delivery.resolve_conflicts",
-      reads: ["goal", "work", "publication_summary"],
-      writes: { repair_summary: sticky },
-      class: "delivery",
-    },
-    "delivery.review_repairs": {
-      kind: "agent",
-      prompt: "delivery.review_repairs",
-      reads: ["goal", "work", "publication_summary", "repair_summary"],
-      writes: { review_verdict: cleared, review_findings: cleared },
-      class: "delivery",
-    },
-    "delivery.revise_repairs": {
-      kind: "agent",
-      prompt: "delivery.revise_repairs",
-      reads: ["goal", "work", "publication_summary", "repair_summary", "review_verdict", "review_findings"],
-      writes: { repair_summary: sticky },
-      class: "delivery",
-      maxVisits: 3, // system-map 0.3: bounds repeated repair-review rejects (revise → publish → probe)
-    },
-    "delivery.wait": { kind: "wait", duration: "5m", class: "delivery" },
-
-    complete_ticket: {
-      kind: "agent",
-      prompt: "complete_ticket",
-      reads: ["goal", "work", "publication_summary"],
-      writes: { completion_summary: sticky },
-    },
-    cleanup_merged: { kind: "worktree", action: "remove", writes: { "worktree.clean": perVisit } },
-    cleanup_closed: { kind: "worktree", action: "remove", writes: { "worktree.clean": perVisit } },
-
-    complete: { kind: "terminal", outcome: "success" },
-    closed: { kind: "terminal", outcome: "aborted" },
-    cleanup_pending: { kind: "terminal", outcome: "failed", label: "Worktree retained to preserve local work" },
+    ...delivery.nodes,
   },
   edges: [
     { from: "create_worktree", to: "implementation.plan" },
@@ -171,71 +108,6 @@ export const implementTicket = defineGraph<ImplementTicketCtx>({
     { from: "implementation.plan_review", to: "implementation.implement_review" },
     { from: "implementation.implement_review", to: "implementation.local_review" },
 
-    { from: "delivery.publish", to: "delivery.probe_pr" },
-    {
-      from: "delivery.probe_pr",
-      to: "complete_ticket",
-      condition: { reads: ["pr.state"], test: (v) => v["pr.state"] === "MERGED", label: "pr.state == 'MERGED'" },
-      weight: 6,
-    },
-    {
-      from: "delivery.probe_pr",
-      to: "cleanup_closed",
-      condition: { reads: ["pr.state"], test: (v) => v["pr.state"] === "CLOSED", label: "pr.state == 'CLOSED'" },
-      weight: 5,
-    },
-    {
-      from: "delivery.probe_pr",
-      to: "delivery.resolve_conflicts",
-      condition: { reads: ["pr.state"], test: (v) => v["pr.state"] === "CONFLICTS", label: "pr.state == 'CONFLICTS'" },
-      weight: 4,
-    },
-    {
-      from: "delivery.probe_pr",
-      to: "delivery.address_reviews",
-      condition: { reads: ["pr.state"], test: (v) => v["pr.state"] === "CHANGES_REQUIRED", label: "pr.state == 'CHANGES_REQUIRED'" },
-      weight: 3,
-    },
-    {
-      from: "delivery.probe_pr",
-      to: "delivery.fix_ci",
-      condition: { reads: ["pr.state"], test: (v) => v["pr.state"] === "CI_FAILED", label: "pr.state == 'CI_FAILED'" },
-      weight: 2,
-    },
-    { from: "delivery.probe_pr", to: "delivery.wait" },
-
-    { from: "delivery.address_reviews", to: "delivery.review_repairs" },
-    { from: "delivery.fix_ci", to: "delivery.review_repairs" },
-    { from: "delivery.resolve_conflicts", to: "delivery.review_repairs" },
-    {
-      from: "delivery.review_repairs",
-      to: "delivery.revise_repairs",
-      condition: { reads: ["review_verdict"], test: (v) => v.review_verdict === "reject", label: "review_verdict == 'reject'" },
-      weight: 2,
-    },
-    {
-      from: "delivery.review_repairs",
-      to: "delivery.publish",
-      condition: { reads: ["review_verdict"], test: (v) => v.review_verdict === "pass", label: "review_verdict == 'pass'" },
-      weight: 1,
-    },
-    { from: "delivery.revise_repairs", to: "delivery.publish" },
-    { from: "delivery.wait", to: "delivery.probe_pr" },
-
-    { from: "complete_ticket", to: "cleanup_merged" },
-    {
-      from: "cleanup_merged",
-      to: "complete",
-      condition: { reads: ["worktree.clean"], test: (v) => v["worktree.clean"], label: "worktree.clean == true" },
-      weight: 1,
-    },
-    { from: "cleanup_merged", to: "cleanup_pending" },
-    {
-      from: "cleanup_closed",
-      to: "closed",
-      condition: { reads: ["worktree.clean"], test: (v) => v["worktree.clean"], label: "worktree.clean == true" },
-      weight: 1,
-    },
-    { from: "cleanup_closed", to: "cleanup_pending" },
+    ...delivery.edges,
   ],
 });

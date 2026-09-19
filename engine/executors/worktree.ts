@@ -13,37 +13,17 @@
  * COMMAND: `bash -c <script>` with a 10-minute default timeout (Orbital parity), stdout
  * streamed as chunks, and declared facts read from THE FINAL JSON LINE of stdout. The
  * built-in `probe:pr` routes through the reconciler: gh is the source, forge-unreachable
- * THROWS (parks the run) rather than reading as "no PR".
+ * THROWS (parks the run) rather than reading as "no PR". The map built-ins (map:extract,
+ * map:reextract, map:drift — system-map 1c, engine/executors/map.ts) dispatch from here too.
  */
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { effectiveCwd, readWorktreeRecord, worktreeRecordPath, type WorktreeRecord } from "./worktree-record";
 import { basename, dirname, join } from "node:path";
 import type { Executor } from "../run";
 import { probeGit, ghForgeProbe, type ForgeProbe } from "../reconcile";
+import { isMapBuiltin, mapBuiltinExecutor, type MapBuiltinOpts } from "./map";
 
-export interface WorktreeRecord {
-  path: string;
-  branch: string;
-  repo: string;
-}
-
-export function worktreeRecordPath(runDir: string): string {
-  return join(runDir, "worktree.json");
-}
-
-export function readWorktreeRecord(runDir: string): WorktreeRecord | null {
-  const p = worktreeRecordPath(runDir);
-  if (!existsSync(p)) return null;
-  try {
-    return JSON.parse(readFileSync(p, "utf8")) as WorktreeRecord;
-  } catch {
-    return null;
-  }
-}
-
-/** where a node actually works: the run's worktree once one exists, else the run cwd */
-export function effectiveCwd(logPath: string, cwd: string | undefined): string | undefined {
-  return readWorktreeRecord(dirname(logPath))?.path ?? cwd;
-}
+export { type WorktreeRecord, worktreeRecordPath, readWorktreeRecord, effectiveCwd } from "./worktree-record";
 
 function sh(cmd: string[], cwd?: string): { code: number; stdout: string; stderr: string } {
   const r = Bun.spawnSync(cmd, { cwd, stdout: "pipe", stderr: "pipe", env: { ...process.env } });
@@ -171,11 +151,17 @@ export interface CommandExecutorOpts {
   /** injectable pr probe for tests; default gh */
   prProbe?: typeof ghPrProbe;
   defaultTimeoutMs?: number;
+  /** the map built-ins' store / workers / throttle (system-map 1c) */
+  map?: MapBuiltinOpts;
 }
 
 export function commandExecutor(opts: CommandExecutorOpts = {}): Executor {
-  return async ({ nodeId, def, visit, cwd, log, reads }) => {
+  const mapBuiltins = mapBuiltinExecutor(opts.map);
+  return async (args) => {
+    const { nodeId, def, visit, cwd, log, reads } = args;
     if (def.kind !== "command") throw new Error("commandExecutor on non-command node");
+    // built-ins: map:extract / map:reextract / map:drift run in-process with the node's reads
+    if (isMapBuiltin(def.run)) return mapBuiltins(args);
     const workDir = effectiveCwd(log.path, cwd);
     const declared = Object.keys(def.writes ?? {});
     let index = 0;

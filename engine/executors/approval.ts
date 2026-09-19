@@ -26,7 +26,7 @@
 import type { Executor } from "../run";
 import { proposalHash } from "../../core/proposal";
 import { describeFingerprintChange, fingerprint } from "../reconcile";
-import { effectiveCwd } from "./worktree";
+import { effectiveCwd } from "./worktree-record";
 import {
   currentProposal,
   decisionKind,

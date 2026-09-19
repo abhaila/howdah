@@ -32,7 +32,8 @@
  * Approval (system-map 1a):
  *   - Proposal rounds (D15): when a node's successful write lands on an approval node's
  *     `proposal` key, the graph's validateProposal hook checks it (a refusal fails the
- *     attempt with the validator's message), then `ghost-proposed` is appended BEFORE that
+ *     attempt with the validator's message, logged as node-finished.refused, and the node's
+ *     next attempt renders it — suffix v3, system-map 1c), then `ghost-proposed` is appended BEFORE that
  *     node's node-finished, with proposal_id = the event's own seq.
  *   - Awaiting (D4/3A): an approval executor returns `awaiting` while nobody has decided.
  *     The attempt ends "failed" in the ContextStore (veiled cleared keys come back), NO
@@ -53,19 +54,19 @@
  *   - A graph with an approval node only runs in a git work tree: the fingerprint is what
  *     an approval binds to, and "no fingerprint" must never compare equal.
  */
-import { copyFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { nodeReads, resolveAgentConfigLayers, type Graph, type NodeDef, type EdgeDef, type AgentConfig, type ApprovalNodeDef, type Harness } from "../core/graph";
 import { basename } from "node:path";
 import { ContextStore, type Scope } from "../core/context";
-import { SUFFIX_VERSION, assemblePrompt, renderTemplate, renderedHash, skillsForHarness, splitFrontMatter } from "../core/template";
+import { SUFFIX_VERSION, assemblePrompt, expandIncludes, renderTemplate, renderedHash, skillsForHarness, splitFrontMatter } from "../core/template";
 import { EventLog } from "../log/write";
 import type { LoggedEvent, ParkCode } from "../log/events";
 import { replayState, effectKey } from "./replay";
 import type { PromptId } from "../core/prompt-ids";
 import { proposalHash } from "../core/proposal";
 import { describeFingerprintChange, fingerprint, type Fingerprint } from "./reconcile";
-import { effectiveCwd } from "./executors/worktree";
+import { effectiveCwd } from "./executors/worktree-record";
 import { currentProposal, findDecision, isApproved, nextSeq, pendingRedesigns, readBase } from "./slice-decision";
 import { claimRunner, releaseRunner, type RunnerHolder } from "./control";
 
@@ -108,6 +109,8 @@ export interface AttemptResult {
   writes: Record<string, unknown>;
   /** why: the park reason for failed/awaiting, a thread note for a succeeded stale outcome */
   reason?: string;
+  /** engine-set (system-map 1c): the graph refused this attempt's proposal — logged on node-finished */
+  refused?: string;
 }
 
 export type Executor = (args: ExecArgs) => Promise<AttemptResult>;
@@ -208,6 +211,12 @@ function enteredByJump(events: readonly LoggedEvent[], node: string): boolean {
 
 const INPUTS_NODE = "__inputs__";
 
+/** A prompt file's front-matter version (1 when absent — the pre-versioning default). */
+function promptVersion(raw: string): number {
+  const vm = raw.match(/^version:\s*(\d+)\s*$/m);
+  return vm && vm[1] !== undefined ? Number(vm[1]) : 1;
+}
+
 export class Engine {
   readonly log: EventLog;
   private readonly graph: Graph<any>;
@@ -232,6 +241,10 @@ export class Engine {
   private pendingCodexFallbackNodes = new Set<string>();
   /** system-map 0.2: operator reply awaiting the parked node's next attempt */
   private replyNote: { node: string; message: string } | null = null;
+  /** system-map 1c review: per pinned includer, the version of each prompt it included */
+  private pinnedIncludes: Record<string, Record<string, number>> = {};
+  /** system-map 1c: why the node's last proposal was refused, for its next attempt (suffix v3) */
+  private refusalNote: { node: string; message: string } | null = null;
 
   constructor(graph: Graph<any>, opts: EngineOpts) {
     graph.validateOrThrow();
@@ -274,12 +287,14 @@ export class Engine {
           `${this.opts.cwd ?? "(no folder)"} is not a git work tree`,
       );
     this.inputs = inputs;
-    const pinned = this.pinPrompts();
+    const { pinned, includes } = this.pinPrompts();
+    this.pinnedIncludes = includes;
     this.log.append({
       type: "run-started",
       graph: this.graph.def.name,
       inputs,
       pinned_prompts: pinned,
+      ...(Object.keys(includes).length ? { pinned_includes: includes } : {}),
       cwd: this.opts.cwd,
       folder_kind: this.opts.folderKind,
       overrides: this.opts.overrides,
@@ -295,6 +310,7 @@ export class Engine {
     if (replayed.finished) return { state: "finished", outcome: replayed.finished.outcome };
 
     this.inputs = replayed.started.inputs;
+    this.pinnedIncludes = replayed.started.pinned_includes ?? {};
     this.visits = { ...replayed.visits };
     this.floors = { ...replayed.floors };
     this.completedEffects = new Set(replayed.completedEffects);
@@ -346,6 +362,7 @@ export class Engine {
       return open ? { type: "attention-resolved", node: open.node, visit: open.visit, reply: "resume", source: "resume" } : null;
     });
     this.replyNote = replyNote;
+    this.refusalNote = replayed.refusalNote;
 
     const position = replayed.position ?? { node: this.graph.def.entry, midFlight: false };
     // a mid-flight node re-attempts on the SAME visit number (the attempt never finished)
@@ -438,7 +455,10 @@ export class Engine {
       for (const [k, v] of Object.entries(result.writes)) this.ctx.set(k, v);
       this.ctx.endAttempt(result.status);
       for (const round of rounds) this.openRound(current, round);
-      this.log.append({ type: "node-finished", node: current, visit, status: result.status, writes: result.writes });
+      this.log.append({
+        type: "node-finished", node: current, visit, status: result.status, writes: result.writes,
+        ...(result.refused !== undefined ? { refused: result.refused } : {}),
+      });
 
       if (result.status === "failed") {
         const fallback = def.kind === "agent" && this.shouldFallbackToCodex(current, visit);
@@ -575,11 +595,12 @@ export class Engine {
     for (const [approvalId, approval] of this.graph.approvalNodes()) {
       if (!(approval.proposal in result.writes)) continue;
       const proposal = result.writes[approval.proposal];
-      const refusal = this.graph.def.validateProposal?.(proposal, approvalId) ?? null;
-      if (refusal !== null)
-        return { result: { status: "failed", writes: {}, reason: `proposal for "${approvalId}" refused: ${refusal}` }, rounds: [] };
       // the base the round binds to: readable at the proposer's exit on any legal graph
-      const base = this.ctx.has(approval.base) ? readBase(this.ctx.get(approval.base, { node: nodeId, visit }), approval.base) : null;
+      const baseValue = this.ctx.has(approval.base) ? this.ctx.get(approval.base, { node: nodeId, visit }) : undefined;
+      const refusal = this.graph.def.validateProposal?.(proposal, approvalId, { dir: this.opts.dir, base: baseValue, cwd: this.workCwd() }) ?? null;
+      if (refusal !== null)
+        return { result: { status: "failed", writes: {}, reason: `proposal for "${approvalId}" refused: ${refusal}`, refused: refusal }, rounds: [] };
+      const base = baseValue === undefined ? null : readBase(baseValue, approval.base);
       const live = await fingerprint(this.workCwd());
       if (live === null) throw new EngineError(`a proposal round binds to a git fingerprint, and ${this.workCwd() ?? "(no folder)"} is not a git work tree`);
       rounds.push({ approvalId, approval, proposal, manifestHash: base?.manifest_hash ?? null, fingerprint: live });
@@ -651,18 +672,42 @@ export class Engine {
     return join(this.opts.dir, "prompts");
   }
 
-  private pinPrompts(): Partial<Record<PromptId, number>> {
+  /**
+   * Pin every consumed prompt (OV-2). `{{> id }}` includes are expanded HERE (system-map 1c
+   * review): the pinned file holds the text the run renders, so rendered_hash and
+   * reconstruction never see an include; a prompt with no include is copied byte for byte.
+   * EVERY prompt is read and expanded before anything is written — a broken include refuses the
+   * start without leaving a half-pinned run dir behind. Returns the pinned versions and, per
+   * includer, the version of every prompt it included (the include closure).
+   */
+  private pinPrompts(): { pinned: Partial<Record<PromptId, number>>; includes: Record<string, Record<string, number>> } {
     const source = this.opts.promptsDir ?? join(import.meta.dir, "..", "prompts");
+    const rawOf = (id: string) => readFileSync(join(source, `${id}.md`), "utf8");
+    const bodyOf = (id: string) => splitFrontMatter(rawOf(id)).body;
+    const plans: Array<{ id: PromptId; raw: string; text: string | null; version: number; includes: Record<string, number> }> = [];
+    for (const node of Object.values(this.graph.def.nodes)) {
+      if (node.kind !== "agent" || plans.some((p) => p.id === node.prompt)) continue;
+      const raw = rawOf(node.prompt);
+      const { frontmatter, body } = splitFrontMatter(raw);
+      const { text, included } = expandIncludes(body, bodyOf, [node.prompt]);
+      plans.push({
+        id: node.prompt,
+        raw,
+        text: included.length ? `---\n${frontmatter ?? ""}\n---\n${text}` : null,
+        version: promptVersion(raw),
+        includes: Object.fromEntries(included.map((id) => [id, promptVersion(rawOf(id))])),
+      });
+    }
     mkdirSync(this.pinDir(), { recursive: true });
     const pinned: Partial<Record<PromptId, number>> = {};
-    for (const node of Object.values(this.graph.def.nodes)) {
-      if (node.kind !== "agent") continue;
-      const dest = join(this.pinDir(), `${node.prompt}.md`);
-      if (!existsSync(dest)) copyFileSync(join(source, `${node.prompt}.md`), dest);
-      const vm = readFileSync(dest, "utf8").match(/^version:\s*(\d+)\s*$/m);
-      pinned[node.prompt] = vm && vm[1] !== undefined ? Number(vm[1]) : 1;
+    const includes: Record<string, Record<string, number>> = {};
+    for (const plan of plans) {
+      const dest = join(this.pinDir(), `${plan.id}.md`);
+      if (!existsSync(dest)) writeFileSync(dest, plan.text ?? plan.raw);
+      pinned[plan.id] = promptVersion(readFileSync(dest, "utf8"));
+      if (Object.keys(plan.includes).length) includes[plan.id] = plan.includes;
     }
-    return pinned;
+    return { pinned, includes };
   }
 
   private resolveAgentConfig(def: Extract<NodeDef<any>, { kind: "agent" }>, nodeId: string): AgentConfig {
@@ -740,6 +785,11 @@ export class Engine {
       replyMessage = this.replyNote.message;
       this.replyNote = null; // consumed by this attempt (replay: at node-started)
     }
+    let refusalMessage: string | undefined;
+    if (this.refusalNote && this.refusalNote.node === nodeId) {
+      refusalMessage = this.refusalNote.message;
+      this.refusalNote = null; // consumed by this attempt (replay: at node-started)
+    }
     const { text: rendered, read: contextRead } = renderTemplate(body, (key) =>
       key in reads ? reads[key] : this.ctx.get(key, { node: nodeId, visit }),
     );
@@ -749,6 +799,7 @@ export class Engine {
       body: rendered,
       jumpMessage,
       replyMessage,
+      refusalMessage,
       skills,
       outputKeys,
       suffixVersion: SUFFIX_VERSION,
@@ -769,6 +820,7 @@ export class Engine {
       skills,
       output_keys: outputKeys,
       suffix_version: SUFFIX_VERSION,
+      ...(this.pinnedIncludes[prompt] ? { includes: this.pinnedIncludes[prompt] } : {}),
     });
     return finalRendered;
   }

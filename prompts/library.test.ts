@@ -201,7 +201,7 @@ describe("outcome rows (A5.3 join by rendered_hash)", () => {
     log.append({ type: "run-started", graph: "mini", inputs: {}, pinned_prompts: { work: 3 } as never });
     log.append({ type: "prompt-rendered", node: "work", visit: 1, prompt: "work" as never, prompt_version: 3, rendered_hash: "h1", context_read: {} });
     const summaries = promptSummaries(paths(root, runsDir), [miniGraph()], new PromptStore(join(root, "prompts")));
-    expect(summaries.find((s) => s.id === "work")!.outcomes).toEqual({ renders: 1, success: 0, failed: 0, aborted: 0, pending: 1 });
+    expect(summaries.find((s) => s.id === "work")!.outcomes).toEqual({ renders: 1, success: 0, failed: 0, aborted: 0, pending: 1, indirect: 0 });
   });
 
   test("a corrupt run log does not take the library down", () => {
@@ -273,7 +273,7 @@ describe("reconstructRender — proven against what the engine actually wrote", 
     expect(r.verified).toBe(true);
     // system-map 0.1: the outputs contract is part of what the agent read, so part of the proof
     expect(r.text).toBe("Do ship the thing given nothing yet.\n" + buildOutputInstruction(["summary"]));
-    expect(render).toMatchObject({ skills: [], output_keys: ["summary"], suffix_version: 2 });
+    expect(render).toMatchObject({ skills: [], output_keys: ["summary"], suffix_version: 3 });
     expect(r).toMatchObject({ prompt: "work", prompt_version: 3, node: "work", visit: 1 });
     expect(r.context_read).toEqual({ goal: "ship the thing", summary: "nothing yet" });
   });
@@ -434,7 +434,7 @@ describe("reconstructRender — proven against what the engine actually wrote", 
     { type: "attention-resolved", node: "work", visit: 1, reply, ...(source ? { source } : {}) },
   ];
 
-  test("a retried turn carrying an operator reply verifies (engine-written, suffix_version 2)", async () => {
+  test("a retried turn carrying an operator reply verifies (engine-written, suffix_version 3)", async () => {
     const root = fakeRepo();
     const runsDir = mkdtempSync(join(tmpdir(), "howdah-runs-"));
     const runDir = join(runsDir, "run-reply");
@@ -458,7 +458,7 @@ describe("reconstructRender — proven against what the engine actually wrote", 
     await engine().resume();
 
     const render: any = readLog(join(runDir, "run.jsonl")).find((e) => e.type === "prompt-rendered" && e.node === "work" && e.visit === 2);
-    expect(render.suffix_version).toBe(2);
+    expect(render.suffix_version).toBe(3);
     const r = reconstructRender(runDir, render.rendered_hash)!;
     expect(r.verified).toBe(true);
     expect(r.text).toBe("Do g given s.\n" + replyV2("mind the null case") + buildOutputInstruction(["summary"]));

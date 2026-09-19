@@ -213,8 +213,21 @@ export interface GraphDef<C extends object> {
    * round. Called with the value a node wrote to an approval node's `proposal` key; a
    * non-null result is the reason the write is refused — the proposer's attempt fails and
    * the run parks `attempt-failed` with that message, so the agent can be told what to fix.
+   *
+   * system-map 1c: `run` says WHICH run the proposal belongs to, because a real validator
+   * (graphs/implement-slice.ts: GhostSet ids against the base snapshot) must load that run's
+   * base — `dir` is the run directory (manifests live in <dir>/maps/), `base` is the value of
+   * the approval node's `base` key at the proposer's exit (undefined if unreadable) and `cwd`
+   * is where the run works (its worktree once one exists).
    */
-  validateProposal?: (proposal: unknown, approvalNode: string) => string | null;
+  validateProposal?: (proposal: unknown, approvalNode: string, run: ProposalRun) => string | null;
+}
+
+/** Which run a proposal is validated for (GraphDef.validateProposal). */
+export interface ProposalRun {
+  dir: string;
+  base: unknown;
+  cwd: string | undefined;
 }
 
 export class GraphError extends Error {}

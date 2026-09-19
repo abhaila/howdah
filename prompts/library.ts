@@ -27,6 +27,7 @@ import { dirname, join } from "node:path";
 import type { Graph } from "../core/graph";
 import {
   assemblePrompt,
+  expandIncludes,
   frontMatterField,
   operatorInstructionSuffix,
   renderTemplate,
@@ -45,6 +46,12 @@ import { PromptStore, PromptStoreError } from "./store";
 export interface Consumer {
   graph: string;
   node: string;
+  /**
+   * system-map 1c review: set when the node's prompt does not name this prompt but includes it
+   * (`{{> id }}`, transitively) — the includer's id. Accepting a revision of this prompt changes
+   * what that node runs, too.
+   */
+  via?: string;
 }
 
 export type Verdict = "accept" | "reject";
@@ -66,6 +73,14 @@ export interface OutcomeRow {
   node: string;
   visit: number;
   prompt_version: number;
+  /**
+   * system-map 1c review: the version of the TEXT that ran — the rendered prompt's version plus
+   * every included prompt's ("slice.fix_ci v1 · delivery.fix_ci v2 · slice._design v1"). Group
+   * by this, not prompt_version: an included prompt can move while the includer's does not.
+   */
+  version_key: string;
+  /** set on an INDIRECT row: this prompt was included by the rendered prompt `via` */
+  via?: string;
   rendered_hash: string;
   at: string;
   verdict_downstream?: string;
@@ -77,9 +92,12 @@ export interface PromptSummary {
   id: string;
   version: number;
   tags: string[];
+  /** direct consumers, then indirect ones (`via` an includer) */
   consumers: Consumer[];
-  feedback: { count: number; rejects: number; last_at: string | null };
-  outcomes: { renders: number; success: number; failed: number; aborted: number; pending: number };
+  /** direct feedback; `indirect` = feedback on includers' renders that carried this prompt */
+  feedback: { count: number; rejects: number; last_at: string | null; indirect: number };
+  /** every render that carried this prompt's text; `indirect` of them via an includer */
+  outcomes: { renders: number; success: number; failed: number; aborted: number; pending: number; indirect: number };
   proposals: { pending: number; total: number };
 }
 
@@ -89,8 +107,14 @@ export interface PromptDetail extends PromptSummary {
   provenance: string | null;
   /** commits touching prompts/<id>.md, newest first — [] outside a git repo */
   history: Array<{ sha: string; at: string; subject: string }>;
-  feedback_entries: FeedbackEntry[];
+  /** this prompt's own feedback, each joined to the version of the text it judged */
+  feedback_entries: Array<FeedbackEntry & { version_key?: string }>;
+  /** feedback filed on includers' renders that carried this prompt — labelled with `via` */
+  indirect_feedback: Array<FeedbackEntry & { via: string; version_key?: string }>;
+  /** direct and indirect (`via`) rows */
   outcome_rows: OutcomeRow[];
+  /** outcome tallies per version_key — the text that ran, not just the includer's version */
+  by_version: Record<string, PromptSummary["outcomes"]>;
 }
 
 export interface LibraryPaths {
@@ -204,19 +228,33 @@ export function scanRuns(runsDir: string): RunScan[] {
   return out;
 }
 
-/** Outcome rows for one prompt id, across every run, oldest render first. */
+/** "slice.fix_ci v1 · delivery.fix_ci v2 · slice._design v1" — the version of the text that ran. */
+export function versionKey(prompt: string, version: number, includes?: Record<string, number>): string {
+  return [`${prompt} v${version}`, ...Object.entries(includes ?? {}).map(([id, v]) => `${id} v${v}`)].join(" · ");
+}
+
+type Render = Extract<LoggedEvent, { type: "prompt-rendered" }>;
+
+/**
+ * Outcome rows for one prompt id, across every run, oldest render first: renders OF it
+ * (direct) and renders of prompts that included it (indirect, `via` the includer).
+ */
 export function outcomeRows(scans: RunScan[], id: string): OutcomeRow[] {
   const rows: OutcomeRow[] = [];
   for (const { run, events } of scans) {
     const joined = outcomesByHash(events);
     for (const e of events) {
-      if (e.type !== "prompt-rendered" || e.prompt !== id) continue;
+      if (e.type !== "prompt-rendered") continue;
+      const direct = e.prompt === id;
+      if (!direct && !(e.includes && id in e.includes)) continue;
       const o = joined.get(e.rendered_hash);
       rows.push({
         run,
         node: e.node,
         visit: e.visit,
         prompt_version: e.prompt_version,
+        version_key: versionKey(e.prompt, e.prompt_version, e.includes),
+        ...(direct ? {} : { via: e.prompt }),
         rendered_hash: e.rendered_hash,
         at: e.ts,
         verdict_downstream: o?.verdict_downstream,
@@ -229,14 +267,54 @@ export function outcomeRows(scans: RunScan[], id: string): OutcomeRow[] {
 }
 
 function tally(rows: OutcomeRow[]): PromptSummary["outcomes"] {
-  const t = { renders: rows.length, success: 0, failed: 0, aborted: 0, pending: 0 };
+  const t = { renders: rows.length, success: 0, failed: 0, aborted: 0, pending: 0, indirect: 0 };
   for (const r of rows) {
+    if (r.via !== undefined) t.indirect++;
     if (r.terminal_outcome === "success") t.success++;
     else if (r.terminal_outcome === "failed") t.failed++;
     else if (r.terminal_outcome === "aborted") t.aborted++;
     else t.pending++; // the run has not ended, so no terminal outcome has joined yet
   }
   return t;
+}
+
+function tallyByVersion(rows: OutcomeRow[]): Record<string, PromptSummary["outcomes"]> {
+  const groups = new Map<string, OutcomeRow[]>();
+  for (const r of rows) groups.set(r.version_key, [...(groups.get(r.version_key) ?? []), r]);
+  return Object.fromEntries([...groups].map(([k, rs]) => [k, tally(rs)]));
+}
+
+/**
+ * What one library request reads once and every prompt's summary shares: the run scans, every
+ * render by rendered_hash (feedback joins on the hash) and every prompt's feedback file.
+ * Building it per prompt would re-read every run and every feedback file prompts × times.
+ */
+export interface LibraryIndex {
+  scans: RunScan[];
+  renders: Map<string, Render>;
+  feedback: Map<string, FeedbackEntry[]>;
+}
+
+export function libraryIndex(scans: RunScan[], feedbackDir: string, promptIds: string[]): LibraryIndex {
+  const renders = new Map<string, Render>();
+  for (const { events } of scans) for (const e of events) if (e.type === "prompt-rendered") renders.set(e.rendered_hash, e);
+  return { scans, renders, feedback: new Map(promptIds.map((id) => [id, readFeedback(feedbackDir, id)])) };
+}
+
+/**
+ * Feedback filed on OTHER prompts' renders that carried `id` through an include — the evidence
+ * an included prompt (a partial especially, which never renders on its own) has.
+ */
+export function indirectFeedback(index: LibraryIndex, id: string): PromptDetail["indirect_feedback"] {
+  const out: PromptDetail["indirect_feedback"] = [];
+  for (const [other, entries] of index.feedback) {
+    if (other === id) continue;
+    for (const f of entries) {
+      const r = index.renders.get(f.rendered_hash);
+      if (r?.includes && id in r.includes) out.push({ ...f, via: r.prompt, version_key: versionKey(r.prompt, r.prompt_version, r.includes) });
+    }
+  }
+  return out.sort((a, b) => a.at.localeCompare(b.at));
 }
 
 // ---- git history (A1.1: git is the version history) ------------------------------
@@ -276,14 +354,35 @@ function proposalCounts(proposalsDir: string, id: string): PromptSummary["propos
 
 // ---- summaries + detail ----------------------------------------------------------
 
-export function consumersOf(graphs: Graph<any>[], id: string): Consumer[] {
-  const out: Consumer[] = [];
+/**
+ * The graph nodes that run this prompt: directly (`def.prompt === id`) and — given a store to
+ * expand with — through includes (`via` the includer), following nested includes. A node whose
+ * prompt's includes cannot be expanded is skipped here (codegen refuses such a library).
+ */
+export function consumersOf(graphs: Graph<any>[], id: string, store?: PromptStore): Consumer[] {
+  const direct: Consumer[] = [];
+  const indirect: Consumer[] = [];
+  const includedBy = new Map<string, string[]>();
+  const closure = (prompt: string): string[] => {
+    let c = includedBy.get(prompt);
+    if (c === undefined) {
+      try {
+        c = store ? expandIncludes(store.load(prompt).body, (i) => store.load(i).body, [prompt]).included : [];
+      } catch {
+        c = [];
+      }
+      includedBy.set(prompt, c);
+    }
+    return c;
+  };
   for (const g of graphs) {
     for (const [node, def] of Object.entries(g.def.nodes)) {
-      if (def.kind === "agent" && def.prompt === id) out.push({ graph: g.def.name, node });
+      if (def.kind !== "agent") continue;
+      if (def.prompt === id) direct.push({ graph: g.def.name, node });
+      else if (closure(def.prompt).includes(id)) indirect.push({ graph: g.def.name, node, via: def.prompt });
     }
   }
-  return out;
+  return [...direct, ...indirect];
 }
 
 function tagsOf(frontmatter: string | null): string[] {
@@ -296,21 +395,23 @@ function tagsOf(frontmatter: string | null): string[] {
     .filter(Boolean);
 }
 
-function summaryFor(d: Dirs, graphs: Graph<any>[], scans: RunScan[], id: string, store: PromptStore): PromptSummary {
+function summaryFor(d: Dirs, graphs: Graph<any>[], index: LibraryIndex, id: string, store: PromptStore): PromptSummary {
   const file = store.load(id);
   const { frontmatter } = splitFrontMatter(readFileSync(store.path(id), "utf8"));
-  const feedback = readFeedback(d.feedback, id);
+  const feedback = index.feedback.get(id) ?? readFeedback(d.feedback, id);
+  const indirect = indirectFeedback(index, id);
   return {
     id,
     version: file.version,
     tags: tagsOf(frontmatter),
-    consumers: consumersOf(graphs, id),
+    consumers: consumersOf(graphs, id, store),
     feedback: {
       count: feedback.length,
       rejects: feedback.filter((f) => f.verdict === "reject").length,
       last_at: feedback.at(-1)?.at ?? null,
+      indirect: indirect.length,
     },
-    outcomes: tally(outcomeRows(scans, id)),
+    outcomes: tally(outcomeRows(index.scans, id)),
     proposals: proposalCounts(d.proposals, id),
   };
 }
@@ -328,8 +429,9 @@ export function promptSummaries(
   store = new PromptStore(dirs(paths).prompts),
 ): PromptSummary[] {
   const d = dirs(paths);
-  const scans = scanRuns(d.runs);
-  const summaries = store.list().map((id) => summaryFor(d, graphs, scans, id, store));
+  const ids = store.list();
+  const index = libraryIndex(scanRuns(d.runs), d.feedback, ids);
+  const summaries = ids.map((id) => summaryFor(d, graphs, index, id, store));
   return summaries.sort((a, b) => {
     if (a.proposals.pending !== b.proposals.pending) return b.proposals.pending - a.proposals.pending;
     if (a.feedback.rejects !== b.feedback.rejects) return b.feedback.rejects - a.feedback.rejects;
@@ -344,17 +446,24 @@ export function promptDetail(
   store = new PromptStore(dirs(paths).prompts),
 ): PromptDetail {
   const d = dirs(paths);
-  const scans = scanRuns(d.runs);
+  const index = libraryIndex(scanRuns(d.runs), d.feedback, store.list());
   const file = store.load(id);
   const { frontmatter } = splitFrontMatter(readFileSync(store.path(id), "utf8"));
+  const rows = outcomeRows(index.scans, id);
+  const summary = summaryFor(d, graphs, index, id, store);
   return {
-    ...summaryFor(d, graphs, scans, id, store),
+    ...summary,
     body: file.body,
     accepted_at: frontMatterField(frontmatter, "accepted"),
     provenance: frontMatterField(frontmatter, "provenance"),
     history: promptHistory(d.root, id),
-    feedback_entries: readFeedback(d.feedback, id),
-    outcome_rows: outcomeRows(scans, id),
+    feedback_entries: (index.feedback.get(id) ?? readFeedback(d.feedback, id)).map((f) => {
+      const r = index.renders.get(f.rendered_hash);
+      return r ? { ...f, version_key: versionKey(r.prompt, r.prompt_version, r.includes) } : f;
+    }),
+    indirect_feedback: indirectFeedback(index, id),
+    outcome_rows: rows,
+    by_version: tallyByVersion(rows),
   };
 }
 
@@ -430,6 +539,13 @@ export function reconstructRender(runDir: string, renderedHashWanted: string): R
     }
   }
 
+  // system-map 1c: a refused proposal's reason renders into the node's next attempt — the
+  // candidates are the refusals logged on that node before this render, most recent first
+  const refusalMessages = events
+    .filter((e): e is Extract<LoggedEvent, { type: "node-finished" }> => e.type === "node-finished" && e.node === render.node && e.seq < render.seq && e.refused !== undefined)
+    .map((e) => e.refused!)
+    .reverse();
+
   let candidates: string[];
   const builders = render.suffix_version === undefined ? undefined : suffixBuilders(render.suffix_version);
   if (render.suffix_version === undefined) {
@@ -437,14 +553,19 @@ export function reconstructRender(runDir: string, renderedHashWanted: string): R
     candidates = jumpOptions.map((m) => (m === undefined ? plain : plain + operatorInstructionSuffix(m)));
   } else if (builders) {
     const suffixVersion = render.suffix_version;
-    const assemble = (jumpMessage?: string, replyMessage?: string) =>
-      assemblePrompt({ body: plain, jumpMessage, replyMessage, skills: render.skills ?? [], outputKeys: render.output_keys ?? [], suffixVersion });
+    const assemble = (jumpMessage?: string, replyMessage?: string, refusalMessage?: string) =>
+      assemblePrompt({ body: plain, jumpMessage, replyMessage, refusalMessage, skills: render.skills ?? [], outputKeys: render.output_keys ?? [], suffixVersion });
     // [plain, ...jumps, ...replies] — never both: a jump clears any pending reply (replay.ts),
-    // and v1 has no reply builder, so a v1 render cannot have carried one
-    candidates = [
+    // and v1 has no reply builder, so a v1 render cannot have carried one. A refusal (v3+) comes
+    // with no jump (a jump drops it) and with or without a reply.
+    const base = [
       ...jumpOptions.map((m) => assemble(m)),
       ...(builders.replyInstruction ? replyMessages.map((m) => assemble(undefined, m)) : []),
     ];
+    const refused = builders.refusalInstruction
+      ? refusalMessages.flatMap((r) => [assemble(undefined, undefined, r), ...replyMessages.map((m) => assemble(undefined, m, r))])
+      : [];
+    candidates = [...base, ...refused];
   } else {
     candidates = []; // a suffix version this code never had — do not guess
   }

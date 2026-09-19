@@ -15,6 +15,11 @@
  * `--proposal` binds the action to the round you looked at: refused if it was superseded.
  *   howdah redesign <run-id> <msg...>                re-extract and redraw with an instruction
  * A refusal prints the reason and exits 1.
+ *
+ * System map (system-map 1b/1c):
+ *   howdah map <repo-dir> [--json] [--commit <sha>] [--store <dir>] [--workers N] [--manifest-out <dir>]
+ *                                                    extract + assemble a snapshot (map/cli.ts)
+ *   howdah metrics [--json]                          implement-slice runs vs the implement-ticket baseline (cli/metrics.ts)
  */
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
@@ -311,6 +316,21 @@ export function replyCommand(runId: string, text: string): void {
   console.log(result.rendered ? "replied — the retry will carry your reply" : "replied");
 }
 
+// ---- system map (system-map 1b/1c) -------------------------------------------------------
+
+/** `map <dir> [...]`: a thin wrapper — map/cli.ts owns the arguments and the output. */
+export function mapCommand(args: string[]): number {
+  const r = Bun.spawnSync([process.execPath, join(import.meta.dir, "..", "map", "cli.ts"), ...args], { stdout: "inherit", stderr: "inherit", env: { ...process.env } });
+  return r.exitCode ?? 1;
+}
+
+/** `metrics [--json]` (T16): reads every runs/<id>/run.jsonl under HOWDAH_HOME. */
+export async function metricsCommand(args: string[]): Promise<void> {
+  const { formatMetrics, metricsReport, readRunMetrics } = await import("./metrics");
+  const report = metricsReport(readRunMetrics(runsDir));
+  console.log(args.includes("--json") ? JSON.stringify(report, null, 2) : formatMetrics(report));
+}
+
 // ---- approval verbs (system-map 1a) ------------------------------------------------------
 
 function decided(result: DecisionResult): Extract<DecisionResult, { ok: true }> {
@@ -414,6 +434,8 @@ if (import.meta.main) {
     else if (verb === "redesign") await redesignCommand(rest[0] ?? "", rest.slice(1).join(" "));
     else if (verb === "up") await upCommand({ once: rest.includes("--once") });
     else if (verb === "setup") setupCommand();
+    else if (verb === "map") process.exit(mapCommand(rest));
+    else if (verb === "metrics") await metricsCommand(rest);
     else if (verb === "doctor") process.exit((await doctorCommand()) ? 0 : 1);
     else if (verb === "graphs") console.log(JSON.stringify(graphCatalog(), null, 2));
     else if (verb === "workspace") {
@@ -452,7 +474,7 @@ if (import.meta.main) {
       console.log(`scaffolded ${await newGraph(rest[0] ?? "", kind)}`);
     }
     else {
-      console.error("usage: howdah setup|run|resume|pause|abort|jump|reply|approve|comment|send-feedback|redesign|runs|graphs|new-graph|workspace|up|doctor");
+      console.error("usage: howdah setup|run|resume|pause|abort|jump|reply|approve|comment|send-feedback|redesign|map|metrics|runs|graphs|new-graph|workspace|up|doctor");
       process.exit(1);
     }
   } catch (err) {
