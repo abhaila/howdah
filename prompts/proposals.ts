@@ -5,21 +5,32 @@
  *   bun prompts/proposals.ts accept reviser/proposals/<id>.vN.proposal.md
  *   bun prompts/proposals.ts reject reviser/proposals/<id>.vN.proposal.md "reason"
  *
- * accept() delegates the guards to PromptStore.accept (stale base, template reads) and,
- * on success, stamps the proposal file `status: accepted`. reject() stamps
+ * accept() delegates the guards to PromptStore.accept (stale base — the prompt OR anything it
+ * includes moved —, a changed include set without `fork: true`, template reads) and, on
+ * success, stamps the proposal file `status: accepted`. reject() stamps
  * `status: rejected` + the reason — the reviser reads rejections as feedback for the
  * next reflection round, so the reason is part of the loop, not just bookkeeping.
+ *
+ * Includes (system-map 1c review): a proposal records `base_includes` — the versions of the
+ * prompts its prompt `{{> id }}`-included when it was drafted (JSON in the front-matter). The
+ * review view shows the INDIRECT consumers accepting it affects: graph nodes whose prompt
+ * includes this one.
  */
 import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { PromptStore, PromptStoreError } from "./store";
 import type { Graph } from "../core/graph";
 import { frontMatterField, splitFrontMatter } from "../core/template";
-import { readFeedback, repoRoot, type FeedbackEntry } from "./library";
+import { consumersOf, readFeedback, repoRoot, type Consumer, type FeedbackEntry } from "./library";
+import { GRAPHS } from "../graphs/index";
 
 export interface Proposal {
   id: string;
   base_version: number;
+  /** the included prompts' versions when drafted; undefined on proposals that predate it */
+  base_includes: Record<string, number> | undefined;
+  /** the revision deliberately changes its `{{> id }}` lines */
+  fork: boolean;
   proposed_version: number;
   status: "pending" | "accepted" | "rejected";
   body: string;
@@ -39,9 +50,21 @@ export function loadProposal(path: string): Proposal {
     if (!fmm || fmm[1] === undefined) throw new PromptStoreError(`${path}: missing ${name}`);
     return fmm[1].trim();
   };
+  const opt = (name: string): string | undefined => fm.match(new RegExp(`^${name}:\\s*(.+)$`, "m"))?.[1]?.trim();
+  let baseIncludes: Record<string, number> | undefined;
+  const rawIncludes = opt("base_includes");
+  if (rawIncludes !== undefined) {
+    try {
+      baseIncludes = JSON.parse(rawIncludes) as Record<string, number>;
+    } catch {
+      throw new PromptStoreError(`${path}: base_includes is not JSON`);
+    }
+  }
   return {
     id: field("id"),
     base_version: Number(field("base_version")),
+    base_includes: baseIncludes,
+    fork: opt("fork") === "true",
     proposed_version: Number(field("proposed_version")),
     status: field("status") as Proposal["status"],
     body: m[2],
@@ -59,7 +82,7 @@ export function acceptProposal(path: string, graphs: Graph<any>[], store = new P
   const p = loadProposal(path);
   if (p.status !== "pending") throw new PromptStoreError(`${p.id} proposal is already ${p.status}`);
   const v = store.accept(
-    { id: p.id, base_version: p.base_version, body: p.body, provenance: `proposal ${path}` },
+    { id: p.id, base_version: p.base_version, base_includes: p.base_includes, fork: p.fork, body: p.body, provenance: `proposal ${path}` },
     graphs,
   );
   stamp(p, `status: accepted\naccepted_at: ${new Date().toISOString()}`);
@@ -79,8 +102,9 @@ export function rejectProposal(path: string, reason: string): void {
  * changed, the reviser's own reasoning, the feedback it was drafted from, the eval result
  * if a case has been run — and, load-bearing, whether its base is still current.
  *
- * `stale` is D7 in a boolean: the prompt moved since this was drafted, so accepting would
- * silently drop whatever moved it. Accept refuses; the screen offers a re-draft instead.
+ * `stale` is D7 in a boolean: the prompt — or a prompt it includes — moved since this was
+ * drafted, so accepting would silently drop whatever moved it. Accept refuses; the screen
+ * offers a re-draft instead. `stale_reason` says which.
  */
 export interface ProposalView extends Proposal {
   file: string;
@@ -94,6 +118,10 @@ export interface ProposalView extends Proposal {
   /** the prompt's version right now — null if the prompt no longer exists */
   current_version: number | null;
   stale: boolean;
+  /** why it is stale (the prompt, or an included prompt, moved), when it is */
+  stale_reason: string | null;
+  /** graph nodes that run this prompt through an include — accepting changes them too */
+  indirect_consumers: Consumer[];
   /** A3.3: per-prompt eval case, authored lazily; absent for most prompts */
   eval: { case: string | null; score: string | null; verdict: string | null };
   /** A2.1 evidence: the feedback this revision answers */
@@ -115,14 +143,24 @@ function sidecar(dir: string, file: string, ext: string): string | null {
   return existsSync(p) ? readFileSync(p, "utf8") : null;
 }
 
-export function viewProposal(dir: string, file: string, store = new PromptStore(), root = repoRoot()): ProposalView {
+export function viewProposal(dir: string, file: string, store = new PromptStore(), root = repoRoot(), graphs: Graph<any>[] = Object.values(GRAPHS)): ProposalView {
   const p = loadProposal(join(dir, file));
   const { frontmatter } = splitFrontMatter(readFileSync(p.path, "utf8"));
   let current: number | null = null;
+  let staleReason: string | null = null;
   try {
     current = store.load(p.id).version;
   } catch {
     current = null; // the prompt was renamed or removed out from under the proposal
+  }
+  // staleness is a question about accepting, so only a PENDING proposal can be stale:
+  // an accepted one has necessarily moved the prompt past its own base
+  if (current !== null && p.status === "pending") {
+    try {
+      staleReason = store.staleness(p.id, p.base_version, p.base_includes);
+    } catch (err) {
+      staleReason = `cannot check what ${p.id} includes: ${err instanceof Error ? err.message : String(err)}`;
+    }
   }
   return {
     ...p,
@@ -134,9 +172,9 @@ export function viewProposal(dir: string, file: string, store = new PromptStore(
     diff: sidecar(dir, file, ".diff"),
     reflection: sidecar(dir, file, ".reflection.md"),
     current_version: current,
-    // staleness is a question about accepting, so only a PENDING proposal can be stale:
-    // an accepted one has necessarily moved the prompt past its own base
-    stale: p.status === "pending" && current !== null && current !== p.base_version,
+    stale: staleReason !== null,
+    stale_reason: staleReason,
+    indirect_consumers: current === null ? [] : consumersOf(graphs, p.id, store).filter((c) => c.via !== undefined),
     eval: {
       case: evalCaseFor(p.id, root),
       score: frontMatterField(frontmatter, "eval_score"),
@@ -147,13 +185,13 @@ export function viewProposal(dir: string, file: string, store = new PromptStore(
 }
 
 /** Every proposal, pending first, then newest — the queue you actually work through. */
-export function listProposals(dir = proposalsDir(), store = new PromptStore(), root = repoRoot()): ProposalView[] {
+export function listProposals(dir = proposalsDir(), store = new PromptStore(), root = repoRoot(), graphs: Graph<any>[] = Object.values(GRAPHS)): ProposalView[] {
   if (!existsSync(dir)) return [];
   const views: ProposalView[] = [];
   for (const file of readdirSync(dir)) {
     if (!file.endsWith(".proposal.md")) continue;
     try {
-      views.push(viewProposal(dir, file, store, root));
+      views.push(viewProposal(dir, file, store, root, graphs));
     } catch {
       /* a malformed proposal file must not hide the rest of the queue */
     }
@@ -181,7 +219,6 @@ if (import.meta.main) {
   if (cmd === "accept" && path) {
     // EVERY registered graph: validateTemplateReads only checks the graphs it is handed, so
     // a hand-maintained subset here would silently skip the OV-3 guard for the rest
-    const { GRAPHS } = await import("../graphs/index");
     const v = acceptProposal(path, Object.values(GRAPHS));
     console.log(`accepted → v${v}`);
   } else if (cmd === "reject" && path && reason) {

@@ -7,8 +7,17 @@
  *
  * FAKE_CAPTURE=<file> appends the exact prompt text received on stdin (one JSON string
  * per line) so tests can prove rendered_hash covers the bytes sent (system-map 0.1).
+ *
+ * FAKE_CLAUDE_SCRIPT=<file.json> scripts whole turns (system-map 1c E2E): a list of turns,
+ * each `{ match, outputs?, edits?, commit? }`. A turn applies when `match` is one of the output
+ * keys the contract demands; turns are consumed in order (a `<file>.state` file remembers which
+ * ran, across the one-process-per-turn spawns), and the last matching turn repeats once the
+ * others are used. `edits` ({path, content} | {path, delete: true}) are applied relative to the
+ * cwd — the run's worktree — and `commit` commits everything with that message. Keys the turn
+ * does not set get the usual fake values.
  */
-import { appendFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 
 const out = (o: unknown) => process.stdout.write(JSON.stringify(o) + "\n");
 
@@ -70,8 +79,41 @@ if (process.env.FAKE_CLAUDE_RATELIMIT === "1")
   out({ type: "rate_limit_event", rate_limit: { status: "allowed", remaining: 0.31, resetsAt: "2026-09-13T18:00:00Z" } });
 
 // derive the demanded output keys from the appended contract so tests exercise parsing
-const keys = [...promptText.matchAll(/"(\w+)": <value>/g)].map((m) => m[1]!);
-const outputs = Object.fromEntries(keys.map((k) => [k, k === "review_verdict" ? (process.env.FAKE_CLAUDE_VERDICT ?? "pass") : `fake ${k}`]));
+const keys = [...promptText.matchAll(/"([\w.]+)": <value>/g)].map((m) => m[1]!);
+const outputs: Record<string, unknown> = Object.fromEntries(keys.map((k) => [k, k === "review_verdict" ? (process.env.FAKE_CLAUDE_VERDICT ?? "pass") : `fake ${k}`]));
+
+interface ScriptTurn {
+  match: string;
+  outputs?: Record<string, unknown>;
+  edits?: Array<{ path: string; content?: string; delete?: boolean }>;
+  commit?: string;
+}
+const scriptPath = process.env.FAKE_CLAUDE_SCRIPT;
+if (scriptPath) {
+  const turns = (JSON.parse(readFileSync(scriptPath, "utf8")) as { turns: ScriptTurn[] }).turns;
+  const statePath = `${scriptPath}.state`;
+  const used: number[] = existsSync(statePath) ? JSON.parse(readFileSync(statePath, "utf8")) : [];
+  const candidates = turns.map((t, i) => [t, i] as const).filter(([t]) => keys.includes(t.match));
+  const pick = candidates.find(([, i]) => !used.includes(i)) ?? candidates.at(-1);
+  if (pick) {
+    const [turn, i] = pick;
+    writeFileSync(statePath, JSON.stringify([...used, i]));
+    for (const edit of turn.edits ?? []) {
+      const target = join(process.cwd(), edit.path);
+      if (edit.delete) rmSync(target, { force: true });
+      else {
+        mkdirSync(dirname(target), { recursive: true });
+        writeFileSync(target, edit.content ?? "");
+      }
+    }
+    if (turn.commit) {
+      const git = (...args: string[]) => Bun.spawnSync(["git", "-c", "user.name=fake", "-c", "user.email=fake@fake", "-c", "commit.gpgsign=false", ...args], { cwd: process.cwd() });
+      git("add", "-A");
+      git("commit", "-q", "-m", turn.commit);
+    }
+    Object.assign(outputs, turn.outputs ?? {});
+  }
+}
 const finalText = `All done.\n{"outputs": ${JSON.stringify(outputs)}}`;
 
 out({

@@ -26,7 +26,15 @@ export type PromptId =
   | "research.synthesize"
   | "review.seq_review"
   | "review.sonarqube"
-  | "review.uncle_bob";
+  | "review.uncle_bob"
+  | "slice.address_reviews"
+  | "slice.fix_ci"
+  | "slice.implement"
+  | "slice.local_review"
+  | "slice.propose"
+  | "slice.resolve_conflicts"
+  | "slice.review_repairs"
+  | "slice.revise_repairs";
 
 export const PROMPT_IDS = [
   "checkout.pull_pr",
@@ -56,4 +64,12 @@ export const PROMPT_IDS = [
   "review.seq_review",
   "review.sonarqube",
   "review.uncle_bob",
+  "slice.address_reviews",
+  "slice.fix_ci",
+  "slice.implement",
+  "slice.local_review",
+  "slice.propose",
+  "slice.resolve_conflicts",
+  "slice.review_repairs",
+  "slice.revise_repairs",
 ] as const;

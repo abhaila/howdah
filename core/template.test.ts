@@ -35,9 +35,26 @@ describe("versioned suffix builders (system-map 0.1)", () => {
     expect(v1.outputContract([])).toBe(V1_SUMMARY_ONLY);
   });
 
-  test("the current version is 2 and buildOutputInstruction is its contract builder", () => {
-    expect(SUFFIX_VERSION).toBe(2);
+  test("the current version is 3 and buildOutputInstruction is its contract builder", () => {
+    expect(SUFFIX_VERSION).toBe(3);
     expect(buildOutputInstruction(["a", "b"])).toBe(V1_CONTRACT);
+  });
+
+  test("v3 is v2 plus the refusal builder (system-map 1c): everything else byte-identical, refusal pinned literally", () => {
+    const v2 = suffixBuilders(2)!;
+    const v3 = suffixBuilders(3)!;
+    expect(v3.skillHint(["review"])).toBe(v2.skillHint(["review"]));
+    expect(v3.outputContract(["a"])).toBe(v2.outputContract(["a"]));
+    expect(v3.replyInstruction!("x")).toBe(v2.replyInstruction!("x"));
+    expect(v3.refusalInstruction!("entities[0]: bad key")).toBe(
+      "\n\n## Your previous proposal was refused\nThe previous attempt at this step produced a proposal the graph's validator refused. Fix every problem below and return the corrected proposal:\nentities[0]: bad key",
+    );
+    expect(v2.refusalInstruction).toBeUndefined();
+    expect(() => assemblePrompt({ body: "x", refusalMessage: "no", skills: [], outputKeys: [], suffixVersion: 2 })).toThrow(/suffix version 2 has no refusal builder/);
+    // order: body → reply → refusal → skill hint → contract
+    const text = assemblePrompt({ body: "B", replyMessage: "R", refusalMessage: "F", skills: ["s"], outputKeys: ["k"], suffixVersion: 3 });
+    expect(text.indexOf("R")).toBeLessThan(text.indexOf("refused"));
+    expect(text.indexOf("refused")).toBeLessThan(text.indexOf("/s"));
   });
 
   test("v1 has no reply builder — a v1 render cannot have carried a reply (system-map 0.2)", () => {

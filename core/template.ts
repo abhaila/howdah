@@ -23,6 +23,17 @@
  * system-map 0.2: an operator's reply to a failed agent attempt is rendered into the
  * retried prompt. Its wording is a versioned builder like the others — v2 is v1 plus
  * replyInstruction, and v1 stays byte-for-byte what it was.
+ *
+ * system-map 1c: v3 = v2 + refusalInstruction — when the graph's validateProposal refused a
+ * proposer's output, the retried attempt is told WHY (the validator's errors), so it can fix
+ * them instead of drawing the same thing again. Its source is the refusal logged on that
+ * attempt's node-finished (engine/replay.ts refusalNote), so reconstruction rebuilds it.
+ *
+ * Includes (system-map 1c review): `{{> prompt.id }}` pulls another prompt file's body in AT
+ * PIN TIME — expandIncludes() runs when a run pins its prompts, and the pinned file holds the
+ * expanded text. Rendering, rendered_hash and reconstruction therefore never see an include:
+ * the single-renderer invariant holds unchanged. The prompt store's undeclared-read guard and
+ * the codegen check expand through the same function.
  */
 import { createHash } from "node:crypto";
 import type { Harness } from "./graph";
@@ -85,7 +96,7 @@ export function operatorInstructionSuffix(message: string): string {
 // ---- suffixes (system-map 0.1) ---------------------------------------------------
 
 /** The suffix wording new renders use. Bump it — and add a builder set — to reword. */
-export const SUFFIX_VERSION = 2;
+export const SUFFIX_VERSION = 3;
 
 /** The versioned builders: what a render's `suffix_version` pins. */
 export interface SuffixBuilders {
@@ -98,6 +109,11 @@ export interface SuffixBuilders {
    * versions that predate it (v1) — such a version cannot have rendered a reply.
    */
   replyInstruction?(message: string): string;
+  /**
+   * system-map 1c: why the graph refused the previous attempt's proposal. Absent from versions
+   * that predate it (v1, v2) — such a version cannot have rendered a refusal.
+   */
+  refusalInstruction?(reason: string): string;
 }
 
 /**
@@ -126,9 +142,16 @@ const V2: SuffixBuilders = {
     `\n\n## Operator reply\nThe previous attempt at this step failed and the run parked. The operator replied — take it into account on this attempt:\n${message}`,
 };
 
-const SUFFIX_BUILDERS: Readonly<Record<number, SuffixBuilders>> = { 1: V1, 2: V2 };
+/** v3 (system-map 1c) = v2 + the proposal-refusal suffix. NEVER edit a published version. */
+const V3: SuffixBuilders = {
+  ...V2,
+  refusalInstruction: (reason) =>
+    `\n\n## Your previous proposal was refused\nThe previous attempt at this step produced a proposal the graph's validator refused. Fix every problem below and return the corrected proposal:\n${reason}`,
+};
+
+const SUFFIX_BUILDERS: Readonly<Record<number, SuffixBuilders>> = { 1: V1, 2: V2, 3: V3 };
 /** the builders new renders use; bump together with SUFFIX_VERSION */
-const CURRENT: SuffixBuilders = V2;
+const CURRENT: SuffixBuilders = V3;
 
 /** The builders a logged `suffix_version` pins, or undefined for a version this code never had. */
 export function suffixBuilders(version: number): SuffixBuilders | undefined {
@@ -159,6 +182,8 @@ export interface PromptParts {
    * message; the version's replyInstruction builder words it.
    */
   replyMessage?: string;
+  /** system-map 1c: the validator's refusal of the previous attempt's proposal — raw text */
+  refusalMessage?: string;
   /** skills named in the hint — already filtered by skillsForHarness */
   skills: readonly string[];
   /** the node's declared write keys, in declaration order */
@@ -168,7 +193,8 @@ export interface PromptParts {
 
 /**
  * The ONE assembly of a prompt as sent. Fixed order:
- *   template body → operator jump → operator reply (0.2) → skill hint → outputs contract.
+ *   template body → operator jump → operator reply (0.2) → proposal refusal (1c) → skill hint
+ *   → outputs contract.
  * Throws on a suffix version with no builders — the engine only ever passes SUFFIX_VERSION,
  * and reconstruction checks suffixBuilders() first — and on a reply under a version with
  * no reply builder, which no engine ever produced.
@@ -181,10 +207,16 @@ export function assemblePrompt(parts: PromptParts): string {
     if (!builders.replyInstruction) throw new Error(`suffix version ${parts.suffixVersion} has no reply builder`);
     reply = builders.replyInstruction(parts.replyMessage);
   }
+  let refusal = "";
+  if (parts.refusalMessage !== undefined) {
+    if (!builders.refusalInstruction) throw new Error(`suffix version ${parts.suffixVersion} has no refusal builder`);
+    refusal = builders.refusalInstruction(parts.refusalMessage);
+  }
   return (
     parts.body +
     (parts.jumpMessage !== undefined ? operatorInstructionSuffix(parts.jumpMessage) : "") +
     reply +
+    refusal +
     builders.skillHint(parts.skills) +
     builders.outputContract(parts.outputKeys)
   );
@@ -202,4 +234,48 @@ export function frontMatterField(frontmatter: string | null, name: string): stri
   if (!frontmatter) return null;
   const m = frontmatter.match(new RegExp(`^${name}:\\s*(.+)$`, "m"));
   return m && m[1] !== undefined ? m[1].trim() : null;
+}
+
+// ---- includes (system-map 1c review) ----------------------------------------------------
+
+/** `{{> prompt.id }}` — a pin-time include of another prompt file's body. */
+const INCLUDE_REF = String.raw`\{\{>\s*([\w.-]+)\s*\}\}`;
+/** includes may nest this deep (a partial including a partial); deeper is refused */
+export const MAX_INCLUDE_DEPTH = 3;
+
+export class IncludeError extends Error {}
+
+/** The prompt ids a body includes directly, in order. */
+export function includeRefs(body: string): string[] {
+  return [...body.matchAll(new RegExp(INCLUDE_REF, "g"))].map((m) => m[1]!);
+}
+
+/**
+ * Expand every `{{> id }}` with `load(id)` — the included prompt's BODY (front-matter already
+ * stripped) — recursively, trailing whitespace of each included body trimmed. Refuses cycles,
+ * nesting deeper than MAX_INCLUDE_DEPTH and ids `load` cannot provide (IncludeError). Returns
+ * the text and every id included (transitively), in first-use order. A body with no include is
+ * returned unchanged, byte for byte.
+ */
+export function expandIncludes(body: string, load: (id: string) => string, stack: readonly string[] = []): { text: string; included: string[] } {
+  const included: string[] = [];
+  const text = body.replace(new RegExp(INCLUDE_REF, "g"), (_whole: string, id: string) => {
+    if (stack.includes(id)) throw new IncludeError(`include cycle: ${[...stack, id].join(" → ")}`);
+    if (stack.length >= MAX_INCLUDE_DEPTH) throw new IncludeError(`includes nest deeper than ${MAX_INCLUDE_DEPTH}: ${[...stack, id].join(" → ")}`);
+    let inner: string;
+    try {
+      inner = load(id);
+    } catch (err) {
+      throw new IncludeError(`cannot include "${id}"${stack.length ? ` (from ${stack.at(-1)})` : ""}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    const expanded = expandIncludes(inner, load, [...stack, id]);
+    for (const i of [id, ...expanded.included]) if (!included.includes(i)) included.push(i);
+    return expanded.text.replace(/\s+$/, "");
+  });
+  return { text, included };
+}
+
+/** A prompt id that names a partial (last dot-segment starts with `_`): included, never run. */
+export function isPartialId(id: string): boolean {
+  return (id.split(".").at(-1) ?? "").startsWith("_");
 }
