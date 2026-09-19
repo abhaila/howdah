@@ -148,6 +148,13 @@ export type RunEvent =
       type: "operator-jump";
       to: string;
       message?: string;
+      /**
+       * system-map 0.3: the operator took responsibility for the run, so every node's
+       * maxVisits budget restarts from its visit count at this event (a floor — visit
+       * NUMBERS never reset, they are attempt identity). Absent on legacy events, which
+       * replay with no floors.
+       */
+      reset_budgets?: boolean;
     }
   | { type: "attention-raised"; node: string; visit: number; reason: string; ask?: unknown }
   | { type: "attention-resolved"; node: string; visit: number; reply?: string }

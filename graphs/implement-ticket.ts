@@ -10,6 +10,12 @@
  *            │                              └──────────────────────────────┘(loop)    ├─ CLOSED ─▶ cleanup_closed ─▶ closed
  *                                                                                     ├─ CONFLICTS/CI/CHANGES ─▶ repairs → review_repairs ⇄ revise
  *                                                                                     └─ (fallback) wait 5m ─▶ probe_pr
+ *
+ * Loop bounds (system-map 0.3): every agent-driven loop parks for the operator instead of
+ * spinning to maxSteps — plan_review ≤ 3 (local review keeps rejecting), revise_repairs ≤ 3
+ * (repair review keeps rejecting), publish ≤ 5 (repairs → publish → probe keeps failing).
+ * The probe_pr ⇄ wait poll is deliberately unbounded except by maxSteps: it waits on a
+ * human reviewer, and time passing is not a failure. `howdah jump` resets these budgets.
  */
 import { defineGraph } from "../core/graph";
 
@@ -74,6 +80,7 @@ export const implementTicket = defineGraph<ImplementTicketCtx>({
       reads: ["goal", "work", "implementation_plan", "implementation_summary", "review_verdict", "review_findings"],
       writes: { implementation_plan: sticky },
       class: "implementation",
+      maxVisits: 3, // system-map 0.3: bounds local_review → plan_review → implement_review
     },
     "implementation.implement_review": {
       kind: "agent",
@@ -89,7 +96,9 @@ export const implementTicket = defineGraph<ImplementTicketCtx>({
       reads: ["goal", "work"],
       writes: { publication_summary: sticky },
       class: "delivery",
+      maxVisits: 5, // system-map 0.3: bounds repairs → review_repairs → publish → probe_pr
     },
+    // no maxVisits: probe_pr ⇄ wait polls on a human reviewer (system-map 0.3)
     "delivery.probe_pr": { kind: "command", run: "probe:pr", writes: { "pr.state": perVisit }, class: "delivery" },
     "delivery.address_reviews": {
       kind: "agent",
@@ -125,6 +134,7 @@ export const implementTicket = defineGraph<ImplementTicketCtx>({
       reads: ["goal", "work", "publication_summary", "repair_summary", "review_verdict", "review_findings"],
       writes: { repair_summary: sticky },
       class: "delivery",
+      maxVisits: 3, // system-map 0.3: bounds review_repairs ⇄ revise_repairs
     },
     "delivery.wait": { kind: "wait", duration: "5m", class: "delivery" },
 
