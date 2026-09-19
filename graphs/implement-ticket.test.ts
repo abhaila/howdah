@@ -2,6 +2,7 @@
  * implement-ticket loop bounds (system-map 0.3 / T5): every agent-driven review loop parks
  * with a maxVisits reason instead of spinning to maxSteps, and an operator jump after that
  * park gets a fresh budget — visit numbers keep climbing, because they are identity.
+ * Each park is asserted by its code (system-map 0.2), not only its reason text.
  */
 import { describe, expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
@@ -60,6 +61,8 @@ function engineFor(dir: string, script: Script, prompts: Map<string, string>, ex
   });
 }
 
+const lastPark = (events: LoggedEvent[]) => events.filter((e) => e.type === "attention-raised").at(-1);
+
 const started = (events: LoggedEvent[], node: string): number[] =>
   events.flatMap((e) => (e.type === "node-started" && e.node === node ? [e.visit] : []));
 
@@ -75,31 +78,34 @@ describe("implement-ticket loop bounds (system-map 0.3)", () => {
   test("an always-rejecting local reviewer parks the plan_review loop after 3 visits", async () => {
     const engine = engineFor(tmp(), { localReview: () => "reject" }, new Map());
     const result = await engine.start(INPUTS);
-    expect(result).toMatchObject({ state: "parked", node: "implementation.plan_review" });
+    expect(result).toMatchObject({ state: "parked", node: "implementation.plan_review", code: "max-visits" });
     expect((result as any).reason).toContain("maxVisits");
+    expect(lastPark(engine.log.read())).toMatchObject({ node: "implementation.plan_review", code: "max-visits" });
     expect(started(engine.log.read(), "implementation.plan_review")).toEqual([1, 2, 3]);
   });
 
   test("an always-rejecting repair reviewer parks review_repairs ⇄ revise_repairs after 3 revisions", async () => {
     const engine = engineFor(tmp(), { localReview: () => "pass", repairReview: () => "reject", pr: () => "CI_FAILED" }, new Map());
     const result = await engine.start(INPUTS);
-    expect(result).toMatchObject({ state: "parked", node: "delivery.revise_repairs" });
+    expect(result).toMatchObject({ state: "parked", node: "delivery.revise_repairs", code: "max-visits" });
     expect((result as any).reason).toContain("maxVisits");
+    expect(lastPark(engine.log.read())).toMatchObject({ node: "delivery.revise_repairs", code: "max-visits" });
     expect(started(engine.log.read(), "delivery.revise_repairs")).toEqual([1, 2, 3]);
   });
 
   test("CI that never goes green parks the repair → publish cycle after 5 publishes", async () => {
     const engine = engineFor(tmp(), { localReview: () => "pass", repairReview: () => "pass", pr: () => "CI_FAILED" }, new Map());
     const result = await engine.start(INPUTS);
-    expect(result).toMatchObject({ state: "parked", node: "delivery.publish" });
+    expect(result).toMatchObject({ state: "parked", node: "delivery.publish", code: "max-visits" });
     expect((result as any).reason).toContain("maxVisits");
+    expect(lastPark(engine.log.read())).toMatchObject({ node: "delivery.publish", code: "max-visits" });
     expect(started(engine.log.read(), "delivery.publish")).toEqual([1, 2, 3, 4, 5]);
   });
 
   test("the probe_pr ⇄ wait poll stays unbounded by maxVisits (it waits on a human reviewer)", async () => {
     const engine = engineFor(tmp(), { localReview: () => "pass", pr: () => "OPEN" }, new Map(), { maxSteps: 60 });
     const result = await engine.start(INPUTS);
-    expect(result).toMatchObject({ state: "parked" });
+    expect(result).toMatchObject({ state: "parked", code: "max-steps" });
     expect((result as any).reason).toContain("maxSteps");
     expect(started(engine.log.read(), "delivery.probe_pr").length).toBeGreaterThan(5);
   });
@@ -110,7 +116,7 @@ describe("jump after a maxVisits park (system-map 0.3 budget floors)", () => {
 
   async function parkedOnPlanReview(dir: string): Promise<Engine> {
     const engine = engineFor(dir, { localReview: () => "reject" }, new Map());
-    expect(await engine.start(INPUTS)).toMatchObject({ state: "parked", node: "implementation.plan_review" });
+    expect(await engine.start(INPUTS)).toMatchObject({ state: "parked", node: "implementation.plan_review", code: "max-visits" });
     // what `howdah jump` appends (the runner is dead), before it resumes
     engine.log.append({ type: "operator-jump", to: "implementation.plan_review", message: JUMP, reset_budgets: true });
     return engine;
@@ -137,15 +143,15 @@ describe("jump after a maxVisits park (system-map 0.3 budget floors)", () => {
     await parkedOnPlanReview(dir);
     const resumed = engineFor(dir, { localReview: () => "reject" }, new Map());
     const result = await resumed.resume();
-    expect(result).toMatchObject({ state: "parked", node: "implementation.plan_review" });
+    expect(result).toMatchObject({ state: "parked", node: "implementation.plan_review", code: "max-visits" });
     expect((result as any).reason).toContain("maxVisits");
 
     const events = resumed.log.read();
     expect(started(events, "implementation.plan_review")).toEqual([1, 2, 3, 4, 5, 6]);
     const parks = events.filter((e) => e.type === "attention-raised");
-    expect(parks.map((e: any) => `${e.node}@${e.visit}`)).toEqual([
-      "implementation.plan_review@4",
-      "implementation.plan_review@7",
+    expect(parks.map((e: any) => `${e.node}@${e.visit}:${e.code}`)).toEqual([
+      "implementation.plan_review@4:max-visits",
+      "implementation.plan_review@7:max-visits",
     ]);
     expectNoDuplicateAttempts(events);
   });

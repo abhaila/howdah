@@ -1154,3 +1154,70 @@ describe("guardRequest (system-map 0.4)", () => {
     expect(guardRequest(req("POST", { ...withBody, "content-type": "application/json, text/plain" }, "{}"), PORT)?.status).toBe(415);
   });
 });
+
+describe("reply route shares the CLI's rules (system-map 0.2)", () => {
+  function parked(runsDir: string, id: string, graph: string, node: string, code: string) {
+    const log = new EventLog(join(runsDir, id, "run.jsonl"));
+    log.append({ type: "run-started", graph, inputs: { goal: "g", work: "w" }, pinned_prompts: {} });
+    log.append({ type: "node-started", node, visit: 1, attempt_id: `${node}#1` });
+    log.append({ type: "attention-raised", node, visit: 1, reason: "r", code } as never);
+    // a live runner (this process) — an accepted reply must not spawn a real resume here
+    writeFileSync(join(runsDir, id, "runner.pid"), String(process.pid));
+    return join(runsDir, id, "run.jsonl");
+  }
+
+  test("refusals are 409 JSON naming the next step, with nothing appended; an agent failure is accepted", async () => {
+    const base = mkdtempSync(join(tmpdir(), "howdah-web-reply-"));
+    const runsDir = join(base, "runs");
+    mkdirSync(runsDir, { recursive: true });
+    const server = createHowdahServer({ runsDir, attentionDir: join(base, "attention"), port: 0 });
+    const post = (id: string, text: string) =>
+      fetch(`http://localhost:${server.port}/api/runs/${id}/reply`, {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text }),
+      });
+    try {
+      const cases: Array<[string, string, string, string, string]> = [
+        ["cmd", "implement-ticket", "delivery.probe_pr", "attempt-failed", "fix the cause, then `resume cmd`"],
+        ["wt", "implement-ticket", "create_worktree", "attempt-failed", "worktree node"],
+        ["mv", "write-doc", "doc.revise", "max-visits", "use `jump mv <node> <msg>`"],
+        ["amb", "implement-ticket", "delivery.probe_pr", "ambiguous-effect", "resolve the effect first"],
+        ["appr", "write-doc", "doc.review", "awaiting-approval", "use approve / send-feedback / redesign"],
+      ];
+      for (const [id, graph, node, code, needle] of cases) {
+        const path = parked(runsDir, id, graph, node, code);
+        const before = readFileSync(path, "utf8");
+        const res = await post(id, "please continue");
+        expect(res.status).toBe(409);
+        const body = (await res.json()) as any;
+        expect(body.code).toBe(code);
+        expect(body.error).toContain(`reply refused (${code})`);
+        expect(body.error).toContain(needle);
+        expect(readFileSync(path, "utf8")).toBe(before);
+      }
+
+      const path = parked(runsDir, "agent", "write-doc", "doc.review", "executor-threw");
+      const res = await post("agent", "cover the edge cases");
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ ok: true, rendered: true });
+      expect(readLog(path).find((e) => e.type === "attention-resolved")).toMatchObject({ reply: "cover the edge cases", source: "operator" });
+      // answered once — the second reply has nothing to answer
+      expect((await post("agent", "again")).status).toBe(409);
+
+      // a malformed body is a 400, never a 500 — and appends nothing
+      const bad = parked(runsDir, "bad", "write-doc", "doc.review", "attempt-failed");
+      const badBefore = readFileSync(bad, "utf8");
+      const raw = (body: string) =>
+        fetch(`http://localhost:${server.port}/api/runs/bad/reply`, { method: "POST", headers: { "content-type": "application/json" }, body });
+      for (const body of ['{"text":42}', '{"text":{"a":1}}', '{"text":null}', '{"text":["x"]}', "[]", "null", "not json"]) {
+        const res = await raw(body);
+        expect(res.status).toBe(400);
+        expect(((await res.json()) as any).error).toBeString();
+      }
+      expect(readFileSync(bad, "utf8")).toBe(badBefore);
+      // an absent text is the empty reply, as before
+      expect((await raw("{}")).status).toBe(200);
+    } finally {
+      server.stop(true);
+    }
+  });
+});

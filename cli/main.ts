@@ -20,7 +20,7 @@ import { effectiveCwd, readWorktreeRecord } from "../engine/executors/worktree";
 import { GRAPHS, graphCatalog } from "../graphs/index";
 import { howdahHome, loadConfig, saveConfig, resolveWorkspace, repoNameFor, ensureHowdahHome } from "../config/config";
 import { loadTuning } from "../config/tuning";
-import { readControl, writeControl, clearControl, interruptRunner } from "../engine/control";
+import { readControl, writeControl, clearControl, interruptRunner, resolveReply } from "../engine/control";
 
 const base = howdahHome();
 const runsDir = join(base, "runs");
@@ -299,20 +299,20 @@ export function setupCommand(): void {
   console.log("  howdah up");
 }
 
-function replyCommand(runId: string, text: string): void {
-  const path = join(runsDir, runId, "run.jsonl");
-  if (!existsSync(path)) throw new Error(`unknown run: ${runId}`);
-  const events = readLog(path);
-  const ask = events.findLast((e) => e.type === "attention-raised");
-  if (!ask || events.some((e) => e.type === "attention-resolved" && e.seq > ask.seq))
-    throw new Error("nothing awaiting a reply");
-  new EventLog(path).append({ type: "attention-resolved", node: ask.node, visit: ask.visit, reply: text });
-  new AttentionCenter(join(base, "attention"), []).resolve(`${runId}:${ask.node}:${ask.visit}`);
+/**
+ * system-map 0.2: the reply rules live in engine/control.ts resolveReply (shared with the
+ * web route). A refusal names the verb that can move the run and exits non-zero.
+ */
+export function replyCommand(runId: string, text: string): void {
+  const runDir = join(runsDir, runId);
+  const result = resolveReply(runDir, text, { graphs: GRAPHS });
+  if (!result.ok) throw new Error(result.message);
+  new AttentionCenter(join(base, "attention"), []).resolve(`${runId}:${result.node}:${result.visit}`);
   // if the runner died while parked, kick a resume so the answer takes effect
-  if (!runnerAlive(join(runsDir, runId))) {
+  if (!runnerAlive(runDir)) {
     Bun.spawn(["bun", import.meta.path, "resume", runId], { env: { ...process.env }, stdout: "ignore", stderr: "ignore" }).unref();
   }
-  console.log("replied");
+  console.log(result.rendered ? "replied — the retry will carry your reply" : "replied");
 }
 
 if (import.meta.main) {

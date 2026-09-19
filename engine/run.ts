@@ -23,6 +23,11 @@
  *
  * Visit budgets (system-map 0.3): maxVisits counts visits above a per-node floor that a
  * reset_budgets operator-jump sets (engine/replay.ts). Visit numbers themselves never reset.
+ *
+ * Park codes + replies (system-map 0.2): every park carries a machine-readable `code`
+ * alongside its free-text reason; engine/control.ts decides per code what an operator
+ * reply may do. A reply to a failed agent attempt reaches the retried prompt through the
+ * replay-derived replyNote, assembled after the jump suffix (core/template.ts).
  */
 import { copyFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -31,6 +36,7 @@ import { basename } from "node:path";
 import { ContextStore, type Scope } from "../core/context";
 import { SUFFIX_VERSION, assemblePrompt, renderTemplate, renderedHash, skillsForHarness, splitFrontMatter } from "../core/template";
 import { EventLog } from "../log/write";
+import type { ParkCode } from "../log/events";
 import { replayState, effectKey } from "./replay";
 import type { PromptId } from "../core/prompt-ids";
 
@@ -98,7 +104,7 @@ export interface EngineOpts {
 
 export type RunState =
   | { state: "finished"; outcome: "success" | "failed" | "aborted" }
-  | { state: "parked"; node: string; reason: string }
+  | { state: "parked"; node: string; reason: string; code: ParkCode }
   | { state: "paused"; node: string };
 
 export class EngineError extends Error {}
@@ -127,6 +133,8 @@ export class Engine {
   private codexFallbackAfterClaudeLimit = false;
   /** nodes granted one extra visit for the immediate Claude→Codex fallback retry */
   private pendingCodexFallbackNodes = new Set<string>();
+  /** system-map 0.2: operator reply awaiting the parked node's next attempt */
+  private replyNote: { node: string; message: string } | null = null;
 
   constructor(graph: Graph<any>, opts: EngineOpts) {
     graph.validateOrThrow();
@@ -189,7 +197,7 @@ export class Engine {
         });
         this.completedEffects.add(effectKey(intent.node, intent.effect));
       } else if (verdict === "unknown") {
-        return this.park(intent.node, intent.visit, `ambiguous side effect "${intent.effect}" — probe could not decide`);
+        return this.park(intent.node, intent.visit, "ambiguous-effect", `ambiguous side effect "${intent.effect}" — probe could not decide`);
       }
       // not-happened: nothing recorded; the retry will claim() it again
     }
@@ -198,8 +206,19 @@ export class Engine {
     // cause still holds (maxVisits, exhausted conditions) simply re-park deterministically.
     this.jumpNote = replayed.jumpNote;
     if (replayed.paused) this.log.append({ type: "run-resumed", by: "operator" });
-    if (replayed.parked)
-      this.log.append({ type: "attention-resolved", node: replayed.parked.node, visit: replayed.parked.visit, reply: "resume" });
+    // system-map 0.2: an operator reply may have landed since the replay above (the probes
+    // are async). Re-read under the log lock: if it did, the park is already answered and
+    // its replyNote is adopted; if not, resume's own resolution goes in atomically — source
+    // "resume", bookkeeping that never renders into a prompt.
+    let replyNote = replayed.replyNote;
+    this.log.appendIf((events) => {
+      const now = replayState(events);
+      replyNote = now.replyNote;
+      return now.parked
+        ? { type: "attention-resolved", node: now.parked.node, visit: now.parked.visit, reply: "resume", source: "resume" }
+        : null;
+    });
+    this.replyNote = replyNote;
 
     const position = replayed.position ?? { node: this.graph.def.entry, midFlight: false };
     // a mid-flight node re-attempts on the SAME visit number (the attempt never finished)
@@ -244,6 +263,7 @@ export class Engine {
         return this.park(
           current,
           visit,
+          "max-visits",
           floor > 0
             ? `maxVisits exceeded (${visit - floor} > ${maxVisits} since the operator jump at visit ${floor})`
             : `maxVisits exceeded (${visit} > ${maxVisits})`,
@@ -263,7 +283,7 @@ export class Engine {
         // the reason must be readable in the thread, not only in the (resolvable) ask
         this.log.append({ type: "chunk", node: current, visit, turn: 1, index: 9999, kind: "text", content: `\n[attempt failed: ${message}]` });
         this.log.append({ type: "node-finished", node: current, visit, status: "failed", writes: {} });
-        return this.park(current, visit, `executor threw: ${message}`);
+        return this.park(current, visit, "executor-threw", `executor threw: ${message}`);
       }
 
       for (const [k, v] of Object.entries(result.writes)) this.ctx.set(k, v);
@@ -286,16 +306,16 @@ export class Engine {
           });
           continue;
         }
-        return this.park(current, visit, "attempt failed");
+        return this.park(current, visit, "attempt-failed", "attempt failed");
       }
 
       const next = this.route(current, visit);
-      if (!next) return this.park(current, visit, "no edge matched (conditions exhausted)");
+      if (!next) return this.park(current, visit, "no-edge", "no edge matched (conditions exhausted)");
       this.log.append({ type: "edge-taken", from: current, to: next.to, label: next.condition?.label });
       this.attributeVerdict(current, next);
       current = next.to;
     }
-    return this.park(current, this.visits[current] ?? 0, `maxSteps reached (${maxSteps})`);
+    return this.park(current, this.visits[current] ?? 0, "max-steps", `maxSteps reached (${maxSteps})`);
   }
 
   private async execute(nodeId: string, def: NodeDef<any>, visit: number, attemptId: string): Promise<AttemptResult> {
@@ -452,6 +472,11 @@ export class Engine {
       jumpMessage = this.jumpNote.message;
       this.jumpNote = null; // consumed by this attempt
     }
+    let replyMessage: string | undefined;
+    if (this.replyNote && this.replyNote.node === nodeId) {
+      replyMessage = this.replyNote.message;
+      this.replyNote = null; // consumed by this attempt (replay: at node-started)
+    }
     const { text: rendered, read: contextRead } = renderTemplate(body, (key) =>
       key in reads ? reads[key] : this.ctx.get(key, { node: nodeId, visit }),
     );
@@ -460,7 +485,7 @@ export class Engine {
     const finalRendered = assemblePrompt({
       body: rendered,
       jumpMessage,
-      // replySuffix: Sprint 0.2 fills this slot with the operator reply suffix
+      replyMessage,
       skills,
       outputKeys,
       suffixVersion: SUFFIX_VERSION,
@@ -520,8 +545,8 @@ export class Engine {
     this.ctx.endAttempt("succeeded");
   }
 
-  private park(node: string, visit: number, reason: string): RunState {
-    this.log.append({ type: "attention-raised", node, visit, reason });
-    return { state: "parked", node, reason };
+  private park(node: string, visit: number, code: ParkCode, reason: string): RunState {
+    this.log.append({ type: "attention-raised", node, visit, reason, code });
+    return { state: "parked", node, reason, code };
   }
 }

@@ -3,10 +3,11 @@ import { mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { defineGraph } from "../core/graph";
-import { Engine, type Executor, type AttemptResult } from "./run";
+import { Engine, type Executor, type AttemptResult, type EngineOpts } from "./run";
 import { replayState } from "./replay";
 import { PromptStore } from "../prompts/store";
 import { readLog } from "../log/write";
+import type { LoggedEvent } from "../log/events";
 import { buildOutputInstruction, renderedHash } from "../core/template";
 import { reconstructRender } from "../prompts/library";
 
@@ -52,6 +53,8 @@ function pipelineGraph() {
 
 const ok = (writes: Record<string, unknown> = {}): AttemptResult => ({ status: "succeeded", writes });
 
+const lastPark = (events: LoggedEvent[]) => events.filter((e) => e.type === "attention-raised").at(-1);
+
 describe("engine loop + routing", () => {
   test("runs the pipeline to terminal, taking the weighted conditional path", async () => {
     const verdicts: Ctx["verdict"][] = ["reject", "pass"]; // first review rejects, second passes
@@ -82,9 +85,9 @@ describe("engine loop + routing", () => {
       },
     });
     const result = await engine.start({ goal: "g", summary: "" });
-    expect(result).toMatchObject({ state: "parked", node: "implement" });
+    expect(result).toMatchObject({ state: "parked", node: "implement", code: "max-visits" });
     expect((result as any).reason).toContain("maxVisits");
-    expect(engine.log.read().some((e) => e.type === "attention-raised")).toBe(true);
+    expect(lastPark(engine.log.read())).toMatchObject({ node: "implement", visit: 4, code: "max-visits" });
   });
 
   test("failed attempt parks; context write is NOT published (publish-on-success)", async () => {
@@ -332,8 +335,10 @@ describe("exactly-once side effects (OV-1)", () => {
     const prCount = { n: 0 };
     await publishingEngine(dir, { crashDuringEffect: true, prCount }).start({ goal: "g", summary: "" });
     const r2 = await publishingEngine(dir, { probe: "unknown", prCount }).resume();
-    expect(r2).toMatchObject({ state: "parked" });
+    expect(r2).toMatchObject({ state: "parked", code: "ambiguous-effect" });
     expect((r2 as any).reason).toContain("ambiguous side effect");
+    // system-map 0.2: the logged ask carries the code a reply is judged by
+    expect(lastPark(publishingEngine(dir, { prCount }).log.read())).toMatchObject({ code: "ambiguous-effect", node: "publish" });
     expect(prCount.n).toBe(0);
   });
 });
@@ -400,7 +405,7 @@ describe("render proof covers every suffix (system-map 0.1)", () => {
       expect(handed.startsWith("Implement per g. Prior: p\n")).toBe(true);
       expect(handed.endsWith(buildOutputInstruction(["summary"]))).toBe(true);
       expect(handed.includes("/review")).toBe(harness !== "codex");
-      expect(render).toMatchObject({ skills: harness === "codex" ? [] : ["review"], output_keys: ["summary"], suffix_version: 1 });
+      expect(render).toMatchObject({ skills: harness === "codex" ? [] : ["review"], output_keys: ["summary"], suffix_version: 2 });
     });
   }
 });
@@ -475,5 +480,61 @@ describe("resume-by-replay (R7)", () => {
     expect(s.visits).toEqual({ a: 1, b: 1 });
     expect(s.finishes).toHaveLength(1);
     expect(s.parked).toBeNull();
+  });
+});
+
+describe("every park carries its code (system-map 0.2)", () => {
+  const engineWith = (executors: EngineOpts["executors"], extra: { maxSteps?: number } = {}) =>
+    new Engine(pipelineGraph(), { dir: mkdtempSync(join(tmpdir(), "howdah-run-")), promptsDir: promptFixtures(), executors, ...extra });
+
+  test("a failed attempt parks with attempt-failed, reason text unchanged", async () => {
+    const engine = engineWith({ agent: async () => ({ status: "failed", writes: {} }) });
+    expect(await engine.start({ goal: "g", summary: "" })).toEqual({
+      state: "parked", node: "implement", reason: "attempt failed", code: "attempt-failed",
+    });
+    expect(lastPark(engine.log.read())).toMatchObject({ node: "implement", visit: 1, reason: "attempt failed", code: "attempt-failed" });
+  });
+
+  test("a throwing executor parks with executor-threw", async () => {
+    const engine = engineWith({ agent: async () => { throw new Error("boom"); } });
+    expect(await engine.start({ goal: "g", summary: "" })).toMatchObject({ state: "parked", code: "executor-threw", reason: "executor threw: boom" });
+    expect(lastPark(engine.log.read())).toMatchObject({ node: "implement", code: "executor-threw" });
+  });
+
+  test("a command node's failure carries the same code — the reply rule, not the engine, tells kinds apart", async () => {
+    const engine = engineWith({
+      agent: async ({ nodeId }) => (nodeId === "review" ? ok({ verdict: "pass" }) : ok({ summary: "s" })),
+      command: async () => ({ status: "failed", writes: {} }),
+    });
+    expect(await engine.start({ goal: "g", summary: "" })).toMatchObject({ state: "parked", node: "publish", code: "attempt-failed" });
+  });
+
+  test("exhausted conditions park with no-edge", async () => {
+    const engine = engineWith({ agent: async ({ nodeId }) => (nodeId === "review" ? ok({ verdict: "maybe" }) : ok({ summary: "s" })) });
+    expect(await engine.start({ goal: "g", summary: "" })).toMatchObject({ state: "parked", node: "review", code: "no-edge" });
+    expect(lastPark(engine.log.read())).toMatchObject({ code: "no-edge", reason: "no edge matched (conditions exhausted)" });
+  });
+
+  test("the step guard parks with max-steps", async () => {
+    const engine = engineWith({ agent: async ({ nodeId }) => (nodeId === "review" ? ok({ verdict: "reject" }) : ok({ summary: "s" })) }, { maxSteps: 2 });
+    expect(await engine.start({ goal: "g", summary: "" })).toMatchObject({ state: "parked", code: "max-steps", reason: "maxSteps reached (2)" });
+    expect(lastPark(engine.log.read())).toMatchObject({ code: "max-steps" });
+  });
+
+  test("resume()'s own resolution is marked source resume", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "howdah-run-"));
+    const promptsDir = promptFixtures();
+    const make = (fail: boolean) =>
+      new Engine(pipelineGraph(), {
+        dir, promptsDir,
+        executors: {
+          agent: async ({ nodeId }) => (fail ? { status: "failed", writes: {} } : nodeId === "review" ? ok({ verdict: "pass" }) : ok({ summary: "s" })),
+          command: async () => ok(),
+        },
+      });
+    await make(true).start({ goal: "g", summary: "" });
+    await make(false).resume();
+    const resolved = readLog(join(dir, "run.jsonl")).filter((e) => e.type === "attention-resolved");
+    expect(resolved).toEqual([expect.objectContaining({ node: "implement", visit: 1, reply: "resume", source: "resume" })]);
   });
 });

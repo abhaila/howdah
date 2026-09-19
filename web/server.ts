@@ -7,7 +7,7 @@
  *   GET  /api/runs                 run summaries, needs-input first
  *   GET  /api/runs/:id             full detail (thread, timeline, usage, allowance, ask)
  *   GET  /api/runs/:id/events?since=N   SSE of events with seq > N
- *   POST /api/runs/:id/reply       {text} → attention-resolved into the log + record cleared
+ *   POST /api/runs/:id/reply       {text} → resolveReply (system-map 0.2): 200 + record cleared, or 409 naming the next step
  *
  * Run layout: <runsDir>/<run-id>/run.jsonl (the engine's dir option).
  *
@@ -29,14 +29,14 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir, tmpdir } from "node:os";
-import { EventLog, readLog } from "../log/write";
+import { readLog } from "../log/write";
 import { deriveDetail, deriveSummary, deriveTimeline, runDigest, sortRuns, type RunSummary } from "./derive";
 import { AttentionCenter } from "../engine/attention";
 import { graphCatalog, GRAPHS } from "../graphs/index";
 import { ensureHowdahHome, loadConfig, saveConfig } from "../config/config";
 import { listGithubRepos, registerGithubRepo } from "../config/github";
 import { loadTuning, saveTuning, pruneTuning } from "../config/tuning";
-import { writeControl, clearControl, interruptRunner } from "../engine/control";
+import { writeControl, clearControl, interruptRunner, resolveReply } from "../engine/control";
 import { EventLog as ControlLog } from "../log/write";
 import { effectiveCwd, readWorktreeRecord } from "../engine/executors/worktree";
 import { PromptStore } from "../prompts/store";
@@ -438,14 +438,20 @@ export function createHowdahServer(opts: ServerOpts) {
       }
 
       if (sub === "reply" && req.method === "POST") {
-        const body = (await req.json()) as { text?: string };
-        const events = readLog(path);
-        const ask = deriveSummary(id, events).status === "needs-input" ? deriveDetail(id, events).ask : null;
-        if (!ask) return json({ error: "nothing awaiting a reply" }, 409);
-        new EventLog(path).append({ type: "attention-resolved", node: ask.node, visit: ask.visit, reply: body.text ?? "" });
-        new AttentionCenter(opts.attentionDir, []).resolve(`${id}:${ask.node}:${ask.visit}`);
+        const body: unknown = await req.json().catch(() => undefined);
+        if (typeof body !== "object" || body === null || Array.isArray(body))
+          return json({ error: "body must be a JSON object {text}" }, 400);
+        // absent text is the empty reply ("let it through" on a permission ask); anything
+        // other than a string is a malformed request, not a 500 from deep in the rules
+        const raw = (body as { text?: unknown }).text;
+        const text = raw === undefined ? "" : raw;
+        if (typeof text !== "string") return json({ error: "text must be a string" }, 400);
+        // system-map 0.2: one shared rule set with `howdah reply`; refusals name the next step
+        const result = resolveReply(join(opts.runsDir, id), text, { graphs: GRAPHS });
+        if (!result.ok) return json({ error: result.message, code: result.code }, 409);
+        new AttentionCenter(opts.attentionDir, []).resolve(`${id}:${result.node}:${result.visit}`);
         spawnResume(id); // the reply must MOVE the run, not just record the answer
-        return json({ ok: true });
+        return json({ ok: true, rendered: result.rendered });
       }
 
       if (sub === "resume" && req.method === "POST") {

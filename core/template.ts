@@ -19,6 +19,10 @@
  * hashing; executors send the result unchanged. Suffix wording is keyed by SUFFIX_VERSION
  * (logged on prompt-rendered), so rewording a suffix bumps the version instead of silently
  * turning every earlier render UNVERIFIED.
+ *
+ * system-map 0.2: an operator's reply to a failed agent attempt is rendered into the
+ * retried prompt. Its wording is a versioned builder like the others — v2 is v1 plus
+ * replyInstruction, and v1 stays byte-for-byte what it was.
  */
 import { createHash } from "node:crypto";
 import type { Harness } from "./graph";
@@ -81,7 +85,7 @@ export function operatorInstructionSuffix(message: string): string {
 // ---- suffixes (system-map 0.1) ---------------------------------------------------
 
 /** The suffix wording new renders use. Bump it — and add a builder set — to reword. */
-export const SUFFIX_VERSION = 1;
+export const SUFFIX_VERSION = 2;
 
 /** The versioned builders: what a render's `suffix_version` pins. */
 export interface SuffixBuilders {
@@ -89,6 +93,11 @@ export interface SuffixBuilders {
   skillHint(skills: readonly string[]): string;
   /** the outputs contract (T16) generated from the node's declared writes */
   outputContract(keys: readonly string[]): string;
+  /**
+   * system-map 0.2: the operator's reply to the park this attempt retries. Absent from
+   * versions that predate it (v1) — such a version cannot have rendered a reply.
+   */
+  replyInstruction?(message: string): string;
 }
 
 /**
@@ -110,9 +119,16 @@ const V1: SuffixBuilders = {
   },
 };
 
-const SUFFIX_BUILDERS: Readonly<Record<number, SuffixBuilders>> = { 1: V1 };
+/** v2 (system-map 0.2) = v1 + the operator reply suffix. NEVER edit a published version. */
+const V2: SuffixBuilders = {
+  ...V1,
+  replyInstruction: (message) =>
+    `\n\n## Operator reply\nThe previous attempt at this step failed and the run parked. The operator replied — take it into account on this attempt:\n${message}`,
+};
+
+const SUFFIX_BUILDERS: Readonly<Record<number, SuffixBuilders>> = { 1: V1, 2: V2 };
 /** the builders new renders use; bump together with SUFFIX_VERSION */
-const CURRENT: SuffixBuilders = V1;
+const CURRENT: SuffixBuilders = V2;
 
 /** The builders a logged `suffix_version` pins, or undefined for a version this code never had. */
 export function suffixBuilders(version: number): SuffixBuilders | undefined {
@@ -139,10 +155,10 @@ export interface PromptParts {
   /** operator jump instruction consumed by this render (built via operatorInstructionSuffix) */
   jumpMessage?: string;
   /**
-   * Slot for Sprint 0.2's operator reply suffix — the already-built suffix text. Unused
-   * until 0.2 adds its (versioned) builder; kept here so the order is fixed now.
+   * system-map 0.2: the operator's reply to the park this attempt retries — the raw
+   * message; the version's replyInstruction builder words it.
    */
-  replySuffix?: string;
+  replyMessage?: string;
   /** skills named in the hint — already filtered by skillsForHarness */
   skills: readonly string[];
   /** the node's declared write keys, in declaration order */
@@ -154,15 +170,21 @@ export interface PromptParts {
  * The ONE assembly of a prompt as sent. Fixed order:
  *   template body → operator jump → operator reply (0.2) → skill hint → outputs contract.
  * Throws on a suffix version with no builders — the engine only ever passes SUFFIX_VERSION,
- * and reconstruction checks suffixBuilders() first.
+ * and reconstruction checks suffixBuilders() first — and on a reply under a version with
+ * no reply builder, which no engine ever produced.
  */
 export function assemblePrompt(parts: PromptParts): string {
   const builders = suffixBuilders(parts.suffixVersion);
   if (!builders) throw new Error(`no builders for suffix version ${parts.suffixVersion}`);
+  let reply = "";
+  if (parts.replyMessage !== undefined) {
+    if (!builders.replyInstruction) throw new Error(`suffix version ${parts.suffixVersion} has no reply builder`);
+    reply = builders.replyInstruction(parts.replyMessage);
+  }
   return (
     parts.body +
     (parts.jumpMessage !== undefined ? operatorInstructionSuffix(parts.jumpMessage) : "") +
-    (parts.replySuffix ?? "") +
+    reply +
     builders.skillHint(parts.skills) +
     builders.outputContract(parts.outputKeys)
   );
