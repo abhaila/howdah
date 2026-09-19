@@ -1,10 +1,10 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { networkInterfaces, tmpdir } from "node:os";
 import { join } from "node:path";
 import { EventLog, readLog } from "../log/write";
 import { deriveStatus, deriveSummary, deriveDetail, deriveTimeline, deriveLogRows, deriveContextTable, runDigest, citeParts, sortRuns } from "./derive";
-import { createHowdahServer } from "./server";
+import { createHowdahServer, guardRequest } from "./server";
 import { AttentionCenter } from "../engine/attention";
 import { renderedHash } from "../core/template";
 
@@ -978,5 +978,179 @@ describe("citeParts", () => {
 
   test("an answer with no citations fabricates none", () => {
     expect(citeParts("Nothing to cite here.", known).every((p) => !p.cite)).toBe(true);
+  });
+});
+
+// ---- local-only surface (system-map 0.4 / eng review issue 1) ----------------------
+// The viewer reads run logs full of proprietary code and can launch bypassPermissions
+// runs, so it must be unreachable from the LAN, from a DNS-rebound hostname, and from a
+// cross-origin page — while the UI itself and no-Origin clients (CLI, curl) keep working.
+
+describe("viewer guard (system-map 0.4)", () => {
+  /** a fresh HOWDAH_HOME per test so "no run was launched" is an empty-dir assertion */
+  function guardedServer() {
+    const base = mkdtempSync(join(tmpdir(), "howdah-guard-"));
+    const runsDir = join(base, "runs");
+    mkdirSync(runsDir, { recursive: true });
+    process.env.HOWDAH_HOME = base;
+    process.env.HOWDAH_STUB = "1"; // a launch that slips through must not spend tokens
+    const server = createHowdahServer({ runsDir, attentionDir: join(base, "attention"), port: 0 });
+    const url = (p: string) => `http://localhost:${server.port}${p}`;
+    return { server, runsDir, url, self: `http://localhost:${server.port}` };
+  }
+  /** one cleanup path for every guard test: the stub flag and the listener never leak */
+  async function withGuardedServer(fn: (s: ReturnType<typeof guardedServer>) => Promise<void>) {
+    const s = guardedServer();
+    try {
+      await fn(s);
+    } finally {
+      delete process.env.HOWDAH_STUB;
+      s.server.stop(true);
+    }
+  }
+  const launchBody = JSON.stringify({ graph: "research", inputs: { goal: "guard" }, overrides: { permissionMode: "bypassPermissions" } });
+
+  test("binds loopback only", async () => {
+    await withGuardedServer(async ({ server }) => {
+    expect(server.hostname).toBe("127.0.0.1");
+    // and a non-loopback address of this machine gets no listener at all
+    const lan = Object.values(networkInterfaces()).flat()
+      .find((a) => a && a.family === "IPv4" && !a.internal)?.address;
+    if (lan) {
+      let reached = false;
+      try { await fetch(`http://${lan}:${server.port}/api/runs`, { signal: AbortSignal.timeout(2000) }); reached = true; } catch { /* refused */ }
+      expect(reached).toBe(false);
+    }
+    });
+  });
+
+  test("a foreign Host is refused on reads and writes (DNS rebinding)", async () => {
+    await withGuardedServer(async ({ server, runsDir, url }) => {
+    const get = await fetch(url("/api/runs"), { headers: { host: `evil.test:${server.port}` } });
+    expect(get.status).toBe(403);
+    expect(((await get.json()) as any).error).toContain("evil.test");
+    // the app shell and SSE sit behind the same guard
+    expect((await fetch(url("/"), { headers: { host: `evil.test:${server.port}` } })).status).toBe(403);
+    // right name, wrong port is still foreign
+    expect((await fetch(url("/api/runs"), { headers: { host: "localhost:1" } })).status).toBe(403);
+
+    const post = await fetch(url("/api/runs"), {
+      method: "POST", headers: { host: `evil.test:${server.port}`, "content-type": "application/json" }, body: launchBody,
+    });
+    expect(post.status).toBe(403);
+    await Bun.sleep(500);
+    expect(readdirSync(runsDir)).toEqual([]);
+    });
+  });
+
+  test("both loopback Host spellings are accepted", async () => {
+    await withGuardedServer(async ({ server }) => {
+    expect((await fetch(`http://127.0.0.1:${server.port}/api/runs`)).status).toBe(200);
+    expect((await fetch(`http://localhost:${server.port}/api/runs`)).status).toBe(200);
+    });
+  });
+
+  test("a foreign Origin cannot launch a run (CSRF)", async () => {
+    await withGuardedServer(async ({ server, runsDir, url }) => {
+    for (const origin of ["http://evil.test", "null", `https://localhost:${server.port}`, "http://localhost:1"]) {
+      const r = await fetch(url("/api/runs"), {
+        method: "POST", headers: { origin, "content-type": "application/json" }, body: launchBody,
+      });
+      expect(r.status).toBe(403);
+      expect(((await r.json()) as any).error).toContain(`foreign Origin ${origin}`);
+    }
+    // body-less writes are guarded too
+    expect((await fetch(url("/api/runs/x/pause"), { method: "POST", headers: { origin: "http://evil.test" } })).status).toBe(403);
+    // no detached CLI was spawned: give one time to write, then nothing is there
+    await Bun.sleep(1000);
+    expect(readdirSync(runsDir)).toEqual([]);
+    });
+  });
+
+  test("a non-JSON body is refused with 415 (no-preflight text/plain POST)", async () => {
+    await withGuardedServer(async ({ server, runsDir, url }) => {
+    const plain = await fetch(url("/api/runs"), {
+      method: "POST", headers: { "content-type": "text/plain;charset=UTF-8" }, body: launchBody,
+    });
+    expect(plain.status).toBe(415);
+    expect(((await plain.json()) as any).error).toContain("text/plain");
+    // a missing content-type on a body is just as unacceptable
+    expect((await fetch(url("/api/runs"), { method: "POST", body: launchBody })).status).toBe(415);
+    for (const ct of ["application/x-www-form-urlencoded", "multipart/form-data; boundary=x"])
+      expect((await fetch(url("/api/settings"), { method: "PUT", headers: { "content-type": ct }, body: "a=b" })).status).toBe(415);
+    await Bun.sleep(500);
+    expect(readdirSync(runsDir)).toEqual([]);
+    // a charset parameter on JSON is fine
+    expect((await fetch(url("/api/runs"), {
+      method: "POST", headers: { "content-type": "application/json; charset=utf-8" }, body: "{}",
+    })).status).toBe(400); // past the guard: "graph required"
+    });
+  });
+
+  test("the UI's own same-origin launch still works", async () => {
+    await withGuardedServer(async ({ server, runsDir, url, self }) => {
+    const r = await fetch(url("/api/runs"), {
+      method: "POST", headers: { origin: self, "content-type": "application/json" },
+      body: JSON.stringify({ graph: "research", inputs: { goal: "same origin" } }),
+    });
+    expect(r.status).toBe(202);
+    const { id } = (await r.json()) as { id: string };
+    let started: any;
+    for (let i = 0; i < 50 && !started; i++) {
+      await Bun.sleep(100);
+      const path = join(runsDir, id, "run.jsonl");
+      if (existsSync(path)) started = readLog(path).find((e) => e.type === "run-started");
+    }
+    expect(started).toMatchObject({ graph: "research", inputs: { goal: "same origin" } });
+    // the 127.0.0.1 spelling of our own origin is ours too
+    const alt = await fetch(`http://127.0.0.1:${server.port}/api/runs`, {
+      method: "POST", headers: { origin: `http://127.0.0.1:${server.port}`, "content-type": "application/json" }, body: "{}",
+    });
+    expect(alt.status).toBe(400); // past the guard
+    });
+  });
+
+  test("no-Origin clients (CLI, curl) pass: JSON bodies and body-less writes", async () => {
+    await withGuardedServer(async ({ server, url }) => {
+    expect((await fetch(url("/api/runs"), { method: "POST", headers: { "content-type": "application/json" }, body: "{}" })).status).toBe(400);
+    expect((await fetch(url("/api/runs/nope/pause"), { method: "POST" })).status).toBe(404); // past the guard, unknown run
+    expect((await fetch(url("/api/settings"), { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ chime: true }) })).status).toBe(200);
+    });
+  });
+});
+
+// guardRequest is pure: the header permutations a live server can't easily produce
+describe("guardRequest (system-map 0.4)", () => {
+  const PORT = 4711;
+  const req = (method: string, headers: Record<string, string>, body?: string) =>
+    new Request(`http://127.0.0.1:${PORT}/api/runs`, { method, headers, body });
+  const own = { host: `localhost:${PORT}` };
+
+  test("a missing Host is refused", () => {
+    expect(guardRequest(new Request("http://x/api/runs", { headers: { host: "" } }), PORT)?.status).toBe(403);
+  });
+
+  test("Host matching is case-insensitive but exact", () => {
+    expect(guardRequest(req("GET", { host: `LOCALHOST:${PORT}` }), PORT)).toBeNull();
+    for (const host of [`localhost.:${PORT}`, "localhost", `[::1]:${PORT}`, `127.0.0.1:${PORT + 1}`])
+      expect(guardRequest(req("GET", { host }), PORT)?.status).toBe(403);
+  });
+
+  test("a foreign Origin is refused on every write method, never on reads", () => {
+    for (const method of ["POST", "PUT", "PATCH", "DELETE"])
+      expect(guardRequest(req(method, { ...own, origin: "http://evil.test" }), PORT)?.status).toBe(403);
+    expect(guardRequest(req("GET", { ...own, origin: "http://evil.test" }), PORT)).toBeNull();
+  });
+
+  test("a chunked non-JSON body is refused even without content-length", () => {
+    const r = guardRequest(req("POST", { ...own, "transfer-encoding": "chunked", "content-type": "text/plain" }), PORT);
+    expect(r?.status).toBe(415);
+  });
+
+  test("JSON with parameters or in upper case passes; a JSON-looking list does not", () => {
+    // a constructed Request carries no content-length; a real HTTP request with a body does
+    const withBody = { ...own, "content-length": "2" };
+    expect(guardRequest(req("POST", { ...withBody, "content-type": "APPLICATION/JSON; charset=utf-8" }, "{}"), PORT)).toBeNull();
+    expect(guardRequest(req("POST", { ...withBody, "content-type": "application/json, text/plain" }, "{}"), PORT)?.status).toBe(415);
   });
 });

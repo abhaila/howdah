@@ -10,6 +10,21 @@
  *   POST /api/runs/:id/reply       {text} → attention-resolved into the log + record cleared
  *
  * Run layout: <runsDir>/<run-id>/run.jsonl (the engine's dir option).
+ *
+ * Local-only surface (system-map 0.4 / eng review issue 1). The reads expose run logs full
+ * of proprietary code and the writes can launch an autonomous agent run in any folder, so:
+ *   - the server binds 127.0.0.1 only — unbound, Bun listened on every interface (LAN);
+ *   - guardRequest() runs before EVERY route. Any request whose Host is not
+ *     localhost:<port> / 127.0.0.1:<port> is refused (DNS rebinding: a page on a hostname
+ *     that re-resolves to 127.0.0.1 is same-origin to itself, but still sends its own Host);
+ *   - a write carrying a foreign Origin is refused (CSRF); a write with NO Origin is a
+ *     non-browser client (the CLI, curl, tests) and passes;
+ *   - a write carrying a body must be application/json (415 otherwise). A cross-origin page
+ *     can POST text/plain or a form without a CORS preflight; it cannot send JSON without
+ *     one, and we answer no preflight — so this closes the no-preflight path even for
+ *     browsers that omit Origin.
+ * The port compared against is the BOUND one (server.port), so port 0 works and a port
+ * change cannot lock the UI out of its own writes.
  */
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -44,6 +59,41 @@ export interface ServerOpts {
 }
 
 const logPath = (runsDir: string, id: string) => join(runsDir, id, "run.jsonl");
+
+const json = (body: unknown, status = 200) =>
+  new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", "cache-control": "no-store" } });
+
+/** loopback only: see the header — this is the LAN half of system-map 0.4 */
+const LOOPBACK = "127.0.0.1";
+const WRITE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+
+/**
+ * The single request guard (system-map 0.4). Returns a response to short-circuit with, or
+ * null to let the request through. Order matters only for the error message: Host first
+ * (applies to reads too), then Origin, then the body's media type.
+ */
+export function guardRequest(req: Request, port: number): Response | null {
+  const ownHosts = [`localhost:${port}`, `${LOOPBACK}:${port}`];
+  const host = (req.headers.get("host") ?? "").toLowerCase();
+  if (!ownHosts.includes(host))
+    return json({ error: `foreign Host ${host || "(none)"} refused — the viewer only answers to ${ownHosts.join(" or ")}` }, 403);
+
+  if (!WRITE_METHODS.has(req.method)) return null;
+
+  const origin = req.headers.get("origin");
+  if (origin !== null && !ownHosts.some((h) => origin === `http://${h}`))
+    return json({ error: `foreign Origin ${origin} refused — writes are accepted only from the viewer itself` }, 403);
+
+  const length = Number(req.headers.get("content-length") ?? 0);
+  const hasBody = length > 0 || req.headers.has("transfer-encoding");
+  if (hasBody) {
+    const contentType = req.headers.get("content-type");
+    const mediaType = ((contentType ?? "").split(";")[0] ?? "").trim().toLowerCase();
+    if (mediaType !== "application/json")
+      return json({ error: `content-type ${contentType ?? "(none)"} refused — a write body must be application/json` }, 415);
+  }
+  return null;
+}
 
 /** prompts/, feedback/ and reviser/proposals/ come from the repo; runs come from the server's dir */
 const libraryPaths = (opts: ServerOpts): LibraryPaths => ({ root: opts.repoRoot ?? repoRoot(), runsDir: opts.runsDir });
@@ -91,13 +141,14 @@ export function createHowdahServer(opts: ServerOpts) {
       stdout: "ignore", stderr: "ignore", env: { ...process.env },
     }).unref();
   };
-  const json = (body: unknown, status = 200) =>
-    new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", "cache-control": "no-store" } });
-
   return Bun.serve({
     port: opts.port ?? 4711,
+    hostname: LOOPBACK,
     idleTimeout: 0,
-    async fetch(req) {
+    async fetch(req, server) {
+      // server.port is typed optional only for unix sockets; we always listen on TCP
+      const refused = guardRequest(req, server.port ?? opts.port ?? 4711);
+      if (refused) return refused;
       const url = new URL(req.url);
 
       if (url.pathname === "/api/app") {
