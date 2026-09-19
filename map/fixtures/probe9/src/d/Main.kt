@@ -1,0 +1,13 @@
+package d
+
+import org.http4k.core.Method.GET
+import org.http4k.routing.bind
+import org.http4k.routing.routes
+import org.http4k.server.asServer
+
+fun root() = routes("/api" bind apiRoutes)
+
+fun main() {
+    root().asServer(SunHttp(4)).start()
+    makeApp().asServer(SunHttp(5)).start()
+}
