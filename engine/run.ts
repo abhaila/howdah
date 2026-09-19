@@ -15,13 +15,18 @@
  * Pinning: at start the engine snapshots every prompt this graph consumes into
  * <dir>/prompts/ and renders ONLY from that snapshot. Accepting a revision mid-run
  * changes nothing for this run — revisions apply to new runs (OV-2).
+ *
+ * Render proof (system-map 0.1): renderPrompt() assembles the COMPLETE prompt — template,
+ * operator suffixes, skill hint, outputs contract (core/template.ts assemblePrompt) —
+ * before hashing, and logs the suffix inputs (skills, output_keys, suffix_version) so
+ * reconstruction can rebuild it. Executors send `renderedPrompt` unchanged.
  */
 import { copyFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { resolveAgentConfigLayers, type Graph, type NodeDef, type EdgeDef, type AgentConfig } from "../core/graph";
 import { basename } from "node:path";
 import { ContextStore, type Scope } from "../core/context";
-import { operatorInstructionSuffix, renderTemplate, renderedHash, splitFrontMatter } from "../core/template";
+import { SUFFIX_VERSION, assemblePrompt, renderTemplate, renderedHash, skillsForHarness, splitFrontMatter } from "../core/template";
 import { EventLog } from "../log/write";
 import { replayState, effectKey } from "./replay";
 import type { PromptId } from "../core/prompt-ids";
@@ -45,7 +50,10 @@ export interface ExecArgs {
   log: EventLog;
   /** declared reads, resolved */
   reads: Record<string, unknown>;
-  /** agent nodes: the rendered prompt + its hash (already logged as prompt-rendered) */
+  /**
+   * agent nodes: the COMPLETE prompt to send, byte-for-byte what rendered_hash covers
+   * (already logged as prompt-rendered). Send it unchanged — never append (system-map 0.1).
+   */
   renderedPrompt?: string;
   /** agent nodes: resolved execution config (run override → node → graph default) */
   agentConfig?: AgentConfig;
@@ -281,7 +289,7 @@ export class Engine {
     let agentConfig: AgentConfig | undefined;
     if (def.kind === "agent") {
       agentConfig = this.resolveAgentConfig(def, nodeId);
-      renderedPrompt = this.renderPrompt(nodeId, def.prompt, visit, reads, agentConfig);
+      renderedPrompt = this.renderPrompt(nodeId, def.prompt, visit, reads, Object.keys(def.writes ?? {}), agentConfig);
     }
 
     const effects: EffectsHandle = {
@@ -407,20 +415,36 @@ export class Engine {
     });
   }
 
-  private renderPrompt(nodeId: string, prompt: PromptId, visit: number, reads: Record<string, unknown>, config?: AgentConfig): string {
+  private renderPrompt(
+    nodeId: string,
+    prompt: PromptId,
+    visit: number,
+    reads: Record<string, unknown>,
+    outputKeys: string[],
+    config?: AgentConfig,
+  ): string {
     const raw = readFileSync(join(this.pinDir(), `${prompt}.md`), "utf8");
     const { frontmatter, body } = splitFrontMatter(raw);
     const version = Number(frontmatter?.match(/^version:\s*(\d+)\s*$/m)?.[1] ?? 1);
 
-    let operatorSuffix = "";
+    let jumpMessage: string | undefined;
     if (this.jumpNote && this.jumpNote.node === nodeId) {
-      operatorSuffix = operatorInstructionSuffix(this.jumpNote.message);
+      jumpMessage = this.jumpNote.message;
       this.jumpNote = null; // consumed by this attempt
     }
     const { text: rendered, read: contextRead } = renderTemplate(body, (key) =>
       key in reads ? reads[key] : this.ctx.get(key, { node: nodeId, visit }),
     );
-    const finalRendered = rendered + operatorSuffix;
+    // system-map 0.1: every suffix goes in BEFORE hashing, so the hash covers what is sent
+    const skills = skillsForHarness(config?.harness, config?.skills);
+    const finalRendered = assemblePrompt({
+      body: rendered,
+      jumpMessage,
+      // replySuffix: Sprint 0.2 fills this slot with the operator reply suffix
+      skills,
+      outputKeys,
+      suffixVersion: SUFFIX_VERSION,
+    });
     const hash = renderedHash(finalRendered);
     this.lastRender.set(nodeId, hash);
     this.log.append({
@@ -434,6 +458,9 @@ export class Engine {
       harness: config?.harness,
       model: config?.model,
       effort: config?.effort,
+      skills,
+      output_keys: outputKeys,
+      suffix_version: SUFFIX_VERSION,
     });
     return finalRendered;
   }

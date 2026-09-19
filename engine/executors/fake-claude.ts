@@ -4,7 +4,14 @@
  * (verified shapes from agent-deck spikes) without spending tokens. Reads the user turn
  * from stdin, streams deltas, optionally demands a permission (FAKE_CLAUDE_ASK=1) and
  * honours the control_response, then emits the outputs contract and a result event.
+ *
+ * FAKE_CAPTURE=<file> appends the exact prompt text of EVERY user turn received on stdin
+ * (one JSON string per line, in order) so tests can prove rendered_hash covers the bytes
+ * of the first turn (system-map 0.1); an in-session repair turn lands on a later line.
+ * FAKE_CLAUDE_DROP_OUTPUTS=1 ends the first turn in prose with no contract.
  */
+import { appendFileSync } from "node:fs";
+
 const out = (o: unknown) => process.stdout.write(JSON.stringify(o) + "\n");
 
 const decoder = new TextDecoder();
@@ -34,6 +41,7 @@ async function nextLine(): Promise<string> {
 
 const userTurn = JSON.parse(await nextLine()) as { message: { content: Array<{ text: string }> } };
 const promptText = userTurn.message.content[0]?.text ?? "";
+if (process.env.FAKE_CAPTURE) appendFileSync(process.env.FAKE_CAPTURE, JSON.stringify(promptText) + "\n");
 
 out({ type: "system", subtype: "init", session_id: "fake-session-0001" });
 out({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: "Working on it — " } } });
@@ -84,8 +92,9 @@ function emitTurn(text: string): boolean {
 if (emitTurn(promptText)) {
   // the real CLI stays open for more stdin turns — answer the repair the same way
   const repair = JSON.parse(await nextLine()) as { message: { content: Array<{ text?: string }> } };
-  emitTurn(repair.message.content[0]?.text ?? "");
+  const repairText = repair.message.content[0]?.text ?? "";
+  if (process.env.FAKE_CAPTURE) appendFileSync(process.env.FAKE_CAPTURE, JSON.stringify(repairText) + "\n");
+  emitTurn(repairText);
 }
 process.exit(0);
 
-export {};

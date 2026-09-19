@@ -12,9 +12,14 @@
  * reply`), and answers the CLI over stdin. The human's reply travels: browser → log →
  * this process → claude's stdin.
  *
- * Outputs: the node's declared writes are appended to the prompt as a JSON contract and
- * parsed from the final message (outputs.ts). stderr goes to a file in the run dir, never
- * the UI.
+ * Outputs: the node's declared writes are parsed from the final message (outputs.ts).
+ * The prompt already carries the skill hint and outputs contract — the engine assembles
+ * and hashes them (system-map 0.1) — so it is sent UNCHANGED: appending anything here
+ * would put bytes outside rendered_hash. This executor also serves `opencode` (index.ts).
+ * If the final message lacks the contract, ONE repair turn (outputs.ts
+ * buildRepairInstruction, same key list) is sent on the same session. It is a follow-up
+ * user turn, not part of the first-turn prompt, so it sits outside rendered_hash by design.
+ * stderr goes to a file in the run dir, never the UI.
  */
 import { randomUUID } from "node:crypto";
 import { writeFileSync } from "node:fs";
@@ -22,7 +27,7 @@ import { dirname, join } from "node:path";
 import type { Executor } from "../run";
 import { JsonlChunkParser } from "../../adapter/parse";
 import { mapClaudeEvent, buildClaudePermissionResponse, buildClaudeUserTurn, claudeArgs } from "../../adapter/claude";
-import { buildOutputInstruction, buildRepairInstruction, parseOutputs } from "./outputs";
+import { buildRepairInstruction, parseOutputs } from "./outputs";
 import { AttentionCenter, osNotifier, type Notifier } from "../attention";
 import { readLog } from "../../log/write";
 import { effectiveCwd } from "./worktree";
@@ -42,9 +47,7 @@ export function claudeExecutor(opts: ClaudeExecutorOpts): Executor {
   return async ({ nodeId, def, visit, runId, cwd, log, renderedPrompt, agentConfig }) => {
     if (def.kind !== "agent") throw new Error("claudeExecutor on non-agent node");
     const writeKeys = Object.keys(def.writes ?? {});
-    const skills = agentConfig?.skills ?? [];
-    const skillHint = skills.length ? `\n\nRelevant installed skills for this task: ${skills.map((s) => `/${s}`).join(", ")} — invoke them where they apply.` : "";
-    const prompt = (renderedPrompt ?? "") + skillHint + buildOutputInstruction(writeKeys);
+    const prompt = renderedPrompt ?? ""; // exactly what rendered_hash covers (system-map 0.1)
     const sessionId = randomUUID();
 
     const proc = Bun.spawn(

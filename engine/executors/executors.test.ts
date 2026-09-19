@@ -9,6 +9,9 @@ import { buildOutputInstruction, buildRepairInstruction, parseOutputs } from "./
 import { defineGraph } from "../../core/graph";
 import { EventLog } from "../../log/write";
 import { AttentionCenter } from "../attention";
+import { liveExecutors } from "./index";
+import { renderedHash } from "../../core/template";
+import type { Harness } from "../../core/graph";
 
 const FAKE = join(import.meta.dir, "fake-claude.ts");
 const FAKE_CODEX = join(import.meta.dir, "fake-codex.ts");
@@ -134,7 +137,7 @@ describe("claude executor over the fake wire", () => {
   test("a turn that ends in prose is repaired in-session instead of failing the node", async () => {
     const dir = mkdtempSync(join(tmpdir(), "howdah-repair-"));
     const engine = engineWith({ FAKE_CLAUDE_ASK: "0", FAKE_CLAUDE_DROP_OUTPUTS: "1", FAKE_CLAUDE_VERDICT: "pass" }, join(dir, "attn"), dir);
-    const result = await engine.start({ goal: "repair me" });
+    const result = await engine.start({ goal: "repair me" }).finally(() => delete process.env.FAKE_CLAUDE_DROP_OUTPUTS);
     expect(result).toEqual({ state: "finished", outcome: "success" });
 
     const events = engine.log.read();
@@ -189,3 +192,96 @@ describe("codex executor over the fake app-server wire", () => {
   });
 });
 
+// system-map 0.1: rendered_hash must cover the bytes the CLI actually receives — the skill
+// hint and outputs contract included — for every harness the live registry dispatches.
+describe("the prompt proof covers what is sent (system-map 0.1)", () => {
+  const skilledGraph = (harness: Harness) =>
+    defineGraph<Ctx>({
+      name: "mini-doc-skilled",
+      entry: "draft",
+      inputs: ["goal"],
+      defaults: { harness },
+      nodes: {
+        draft: { kind: "agent", prompt: "doc.draft", reads: ["goal"], writes: { doc_summary: { scope: "sticky" } }, skills: ["review", "qa"] },
+        review: { kind: "agent", prompt: "doc.review", reads: ["doc_summary"], writes: { review_verdict: { scope: "cleared" } } },
+        done: { kind: "terminal", outcome: "success" },
+      },
+      edges: [
+        { from: "draft", to: "review" },
+        { from: "review", to: "done", condition: { reads: ["review_verdict"], test: (v) => v.review_verdict === "pass", label: "pass" }, weight: 1 },
+      ],
+    });
+
+  async function runCapturing(harness: Harness) {
+    const dir = mkdtempSync(join(tmpdir(), "howdah-proof-"));
+    const capture = join(dir, "sent.jsonl");
+    writeFileSync(capture, "");
+    Object.assign(process.env, { FAKE_CAPTURE: capture, FAKE_CLAUDE_ASK: "0", FAKE_CLAUDE_RATELIMIT: "0", FAKE_CLAUDE_VERDICT: "pass" });
+    try {
+      const engine = new Engine(skilledGraph(harness), {
+        dir,
+        promptsDir: promptDir(),
+        executors: liveExecutors({ attentionDir: join(dir, "attn"), notifiers: [], claudeBinary: FAKE, codexBinary: FAKE_CODEX }),
+      });
+      const result = await engine.start({ goal: "prove the hash" });
+      const sent = readFileSync(capture, "utf8").trim().split("\n").map((l) => JSON.parse(l) as string);
+      const renders = engine.log.read().filter((e) => e.type === "prompt-rendered") as Extract<ReturnType<typeof engine.log.read>[number], { type: "prompt-rendered" }>[];
+      return { result, sent, renders };
+    } finally {
+      for (const k of ["FAKE_CAPTURE", "FAKE_CLAUDE_ASK", "FAKE_CLAUDE_RATELIMIT", "FAKE_CLAUDE_VERDICT"]) delete process.env[k];
+    }
+  }
+
+  for (const harness of ["claude", "opencode", "codex"] as const) {
+    test(`${harness}: hash(bytes sent to the CLI) === logged rendered_hash, every turn`, async () => {
+      const { result, sent, renders } = await runCapturing(harness);
+      expect(result).toEqual({ state: "finished", outcome: "success" });
+      expect(sent).toHaveLength(2);
+      expect(renders).toHaveLength(2);
+      sent.forEach((text, i) => expect(renderedHash(text)).toBe(renders[i]!.rendered_hash));
+      // the contract is inside the proof, not bolted on afterwards
+      expect(sent[0]).toContain(buildOutputInstruction(["doc_summary"]));
+      expect(renders[0]).toMatchObject({ output_keys: ["doc_summary"], suffix_version: 1, harness });
+    }, 15000);
+  }
+
+  test("codex gets no skill hint; claude and opencode do (behaviour preserved)", async () => {
+    const hint = "Relevant installed skills for this task: /review, /qa";
+    for (const harness of ["claude", "opencode"] as const) {
+      const { sent, renders } = await runCapturing(harness);
+      expect(sent[0]).toContain(hint);
+      expect(renders[0]!.skills).toEqual(["review", "qa"]);
+      expect(sent[1]).not.toContain("Relevant installed skills"); // review declares none
+    }
+    const { sent, renders } = await runCapturing("codex");
+    expect(sent[0]).not.toContain("Relevant installed skills");
+    expect(renders[0]!.skills).toEqual([]);
+  }, 30000);
+
+  // Upstream 6a31486 added one in-session repair turn when the final message lacks the
+  // contract. The repair is a follow-up user turn, so it is OUTSIDE rendered_hash by design:
+  // the proof is over the FIRST turn of each attempt, and the repair asks for the same keys
+  // the contract did.
+  for (const harness of ["claude", "codex"] as const) {
+    test(`${harness}: with a repair turn, hash(FIRST turn) === rendered_hash and the repair asks for the contract's keys`, async () => {
+      const dropVar = harness === "codex" ? "FAKE_CODEX_DROP_OUTPUTS" : "FAKE_CLAUDE_DROP_OUTPUTS";
+      process.env[dropVar] = "1";
+      try {
+        const { result, sent, renders } = await runCapturing(harness);
+        expect(result).toEqual({ state: "finished", outcome: "success" });
+        // two attempts, each a first turn followed by its repair turn
+        expect(renders).toHaveLength(2);
+        expect(sent).toHaveLength(4);
+        renders.forEach((render, i) => {
+          const first = sent[i * 2]!;
+          const repair = sent[i * 2 + 1]!;
+          expect(renderedHash(first)).toBe(render.rendered_hash);
+          expect(renderedHash(repair)).not.toBe(render.rendered_hash);
+          expect(repair).toBe(buildRepairInstruction(render.output_keys ?? []));
+        });
+      } finally {
+        delete process.env[dropVar];
+      }
+    }, 20000);
+  }
+});

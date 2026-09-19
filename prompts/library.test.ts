@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { defineGraph } from "../core/graph";
-import { renderTemplate, renderedHash, templateReads, operatorInstructionSuffix } from "../core/template";
+import { renderTemplate, renderedHash, templateReads, operatorInstructionSuffix, buildOutputInstruction } from "../core/template";
 import { Engine, type AttemptResult } from "../engine/run";
 import { EventLog } from "../log/write";
 import { PromptStore, PromptStoreError } from "./store";
@@ -270,7 +270,9 @@ describe("reconstructRender — proven against what the engine actually wrote", 
 
     const r = reconstructRender(join(runsDir, "run-a"), render.rendered_hash)!;
     expect(r.verified).toBe(true);
-    expect(r.text).toBe("Do ship the thing given nothing yet.\n");
+    // system-map 0.1: the outputs contract is part of what the agent read, so part of the proof
+    expect(r.text).toBe("Do ship the thing given nothing yet.\n" + buildOutputInstruction(["summary"]));
+    expect(render).toMatchObject({ skills: [], output_keys: ["summary"], suffix_version: 1 });
     expect(r).toMatchObject({ prompt: "work", prompt_version: 3, node: "work", visit: 1 });
     expect(r.context_read).toEqual({ goal: "ship the thing", summary: "nothing yet" });
   });
@@ -309,7 +311,8 @@ describe("reconstructRender — proven against what the engine actually wrote", 
     const jumped = renders.at(-1)!;
     const r = reconstructRender(runDir, jumped.rendered_hash)!;
     expect(r.verified).toBe(true);
-    expect(r.text).toContain(operatorInstructionSuffix("focus on the error path"));
+    // fixed order (system-map 0.1): body → jump suffix → … → outputs contract
+    expect(r.text).toBe("Do g given s.\n" + operatorInstructionSuffix("focus on the error path") + buildOutputInstruction(["summary"]));
   });
 
   test("an edited pinned prompt reports unverified instead of lying", async () => {
@@ -337,6 +340,97 @@ describe("reconstructRender — proven against what the engine actually wrote", 
     mkdirSync(bare, { recursive: true });
     writeFileSync(join(bare, "run.jsonl"), JSON.stringify({ ...render, seq: 1, ts: render.ts }) + "\n");
     expect(reconstructRender(bare, render.rendered_hash)).toBeNull(); // no pinned snapshot
+  });
+
+  // ---- system-map 0.1: suffixes inside the proof, rebuilt by logged version ----------
+
+  const V1_SKILL_HINT = "\n\nRelevant installed skills for this task: /review — invoke them where they apply.";
+
+  test("a render with skills verifies, the skill hint sitting before the outputs contract", async () => {
+    const root = fakeRepo();
+    const runsDir = mkdtempSync(join(tmpdir(), "howdah-runs-"));
+    const g = defineGraph<Ctx>({
+      name: "mini-skilled",
+      entry: "work",
+      inputs: ["goal", "summary"],
+      nodes: {
+        work: { kind: "agent", prompt: "work" as never, reads: ["goal", "summary"], writes: { summary: { scope: "sticky" } }, skills: ["review"] },
+        done: { kind: "terminal", outcome: "success" },
+      },
+      edges: [{ from: "work", to: "done" }],
+    });
+    let sent = "";
+    const engine = new Engine(g, {
+      dir: join(runsDir, "run-s"),
+      promptsDir: join(root, "prompts"),
+      executors: { agent: async ({ renderedPrompt }) => ((sent = renderedPrompt!), ok({ summary: "x" })) },
+    });
+    await engine.start({ goal: "g", summary: "s" });
+    const render: any = engine.log.read().find((e) => e.type === "prompt-rendered");
+    expect(render.skills).toEqual(["review"]);
+
+    const r = reconstructRender(join(runsDir, "run-s"), render.rendered_hash)!;
+    expect(r.verified).toBe(true);
+    expect(r.text).toBe("Do g given s.\n" + V1_SKILL_HINT + buildOutputInstruction(["summary"]));
+    expect(r.text).toBe(sent); // exactly what the executor was handed
+  });
+
+  /** a run dir holding the pinned `work` prompt and one hand-written prompt-rendered event */
+  function handWrittenRender(fields: Record<string, unknown>, text: string, before: object[] = []) {
+    const root = fakeRepo();
+    const runDir = join(mkdtempSync(join(tmpdir(), "howdah-runs-")), "run-h");
+    mkdirSync(join(runDir, "prompts"), { recursive: true });
+    writeFileSync(join(runDir, "prompts", "work.md"), readFileSync(join(root, "prompts", "work.md"), "utf8"));
+    const log = new EventLog(join(runDir, "run.jsonl"));
+    log.append({ type: "run-started", graph: "mini", inputs: {}, pinned_prompts: { work: 3 } } as never);
+    for (const e of before) log.append(e as never);
+    const hash = renderedHash(text);
+    log.append({ type: "prompt-rendered", node: "work", visit: 1, prompt: "work", prompt_version: 3, rendered_hash: hash, context_read: { goal: "g", summary: "s" }, ...fields } as never);
+    return { runDir, hash };
+  }
+
+  test("an event rendered under suffix_version 1 verifies against the literal v1 wording", () => {
+    // literal v1 strings — if a builder is reworded without a version bump, this fails
+    const v1Contract =
+      "\n\n## Output contract (required)\n" +
+      "When your work is complete, the LAST line of your reply must be a single JSON object of the form\n" +
+      '{"outputs": {"summary": <value>}}\n' +
+      "containing exactly these keys: summary. No markdown fence, no trailing text.";
+    const text = "Do g given s.\n" + V1_SKILL_HINT + v1Contract;
+    const { runDir, hash } = handWrittenRender({ skills: ["review"], output_keys: ["summary"], suffix_version: 1 }, text);
+    const r = reconstructRender(runDir, hash)!;
+    expect(r.verified).toBe(true);
+    expect(r.text).toBe(text);
+  });
+
+  test("an event with suffix_version 1 and no skills or output keys verifies with the summary-only tail", () => {
+    const text = "Do g given s.\n" + "\n\n## Output\nWhen your work is complete, end your reply with a one-line summary of what you did.";
+    const { runDir, hash } = handWrittenRender({ skills: [], output_keys: [], suffix_version: 1 }, text);
+    expect(reconstructRender(runDir, hash)!.verified).toBe(true);
+  });
+
+  test("LEGACY: an event with none of the new fields still verifies against the old, shorter text", () => {
+    const text = "Do g given s.\n"; // pre-0.1: the hash covered the template render only
+    const { runDir, hash } = handWrittenRender({}, text);
+    const r = reconstructRender(runDir, hash)!;
+    expect(r.verified).toBe(true);
+    expect(r.text).toBe(text);
+  });
+
+  test("LEGACY: a pre-0.1 jumped-into render still verifies through the jump suffix alone", () => {
+    const text = "Do g given s.\n" + operatorInstructionSuffix("try again");
+    const { runDir, hash } = handWrittenRender({}, text, [{ type: "operator-jump", to: "work", message: "try again" }]);
+    const r = reconstructRender(runDir, hash)!;
+    expect(r.verified).toBe(true);
+    expect(r.text).toBe(text);
+  });
+
+  test("an unknown suffix_version reports unverified rather than guessing", () => {
+    const text = "Do g given s.\nSOMETHING A FUTURE VERSION APPENDS";
+    const { runDir, hash } = handWrittenRender({ skills: [], output_keys: ["summary"], suffix_version: 999 }, text);
+    const r = reconstructRender(runDir, hash)!;
+    expect(r.verified).toBe(false);
+    expect(r.text).toBe("Do g given s.\n");
   });
 });
 

@@ -7,6 +7,8 @@ import { Engine, type Executor, type AttemptResult } from "./run";
 import { replayState } from "./replay";
 import { PromptStore } from "../prompts/store";
 import { readLog } from "../log/write";
+import { buildOutputInstruction, renderedHash } from "../core/template";
+import { reconstructRender } from "../prompts/library";
 
 interface Ctx {
   goal: string;
@@ -129,6 +131,43 @@ describe("engine loop + routing", () => {
     const finishes = engine.log.read().filter((e: any) => e.type === "node-finished" && e.node === "implement") as any[];
     expect(finishes.map((e) => e.status)).toEqual(["failed", "succeeded"]);
     expect(finishes[1].writes).toEqual({ summary: "codex did the work" });
+  });
+
+  // Rebase reconciliation (system-map 0.1 x upstream codex fallback): the fallback retry is
+  // a NEW visit rendered after the harness decision, so its prompt-rendered carries the
+  // harness actually used and that harness's skill hint, and both renders reconstruct VERIFIED.
+  test("a codex fallback re-renders for codex: harness, skills and hash match the attempt that ran", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "howdah-run-"));
+    const sent: Array<{ visit: number; harness?: string; prompt: string }> = [];
+    const engine = new Engine(pipelineGraph(), {
+      dir,
+      promptsDir: promptFixtures(),
+      tuning: { nodes: { implement: { skills: ["review"] } } },
+      executors: {
+        agent: async ({ nodeId, visit, agentConfig, log, renderedPrompt }) => {
+          if (nodeId === "implement") sent.push({ visit, harness: agentConfig?.harness, prompt: renderedPrompt ?? "" });
+          if (nodeId === "implement" && agentConfig?.harness === "claude") {
+            log.append({ type: "allowance", harness: "claude", state: "exhausted" });
+            return { status: "failed", writes: {} };
+          }
+          return nodeId === "review" ? ok({ verdict: "pass" }) : ok({ summary: "codex did the work" });
+        },
+        command: async () => ok(),
+      },
+    });
+
+    expect(await engine.start({ goal: "g", summary: "" })).toEqual({ state: "finished", outcome: "success" });
+
+    const renders = engine.log.read().filter((e) => e.type === "prompt-rendered" && e.node === "implement") as any[];
+    expect(renders.map((r) => [r.visit, r.harness, r.skills])).toEqual([
+      [1, "claude", ["review"]],
+      [2, "codex", []],
+    ]);
+    expect(sent.map((s) => [s.visit, s.harness])).toEqual([[1, "claude"], [2, "codex"]]);
+    expect(sent[0]!.prompt).toContain("/review");
+    expect(sent[1]!.prompt).not.toContain("Relevant installed skills");
+    sent.forEach((s, i) => expect(renderedHash(s.prompt)).toBe(renders[i].rendered_hash));
+    for (const r of renders) expect(reconstructRender(dir, r.rendered_hash)?.verified).toBe(true);
   });
 
   test("claude session-limit text falls back even when allowance says ok", async () => {
@@ -331,6 +370,39 @@ describe("run pinning (OV-2)", () => {
     expect(renders.every((r) => r.prompt_version === 1)).toBe(true);
     expect(renders.every((r) => !String(r.rendered_hash).includes("REVISED"))).toBe(true);
   });
+});
+
+describe("render proof covers every suffix (system-map 0.1)", () => {
+  const skilled = (harness: "claude" | "codex" | "opencode") =>
+    defineGraph<Ctx>({
+      name: "mini-skilled",
+      entry: "implement",
+      inputs: ["goal", "summary"],
+      defaults: { harness },
+      nodes: {
+        implement: { kind: "agent", prompt: "implementation.implement", reads: ["goal", "summary"], writes: { summary: { scope: "sticky" } }, skills: ["review"] },
+        done: { kind: "terminal", outcome: "success" },
+      },
+      edges: [{ from: "implement", to: "done" }],
+    });
+
+  for (const harness of ["claude", "opencode", "codex"] as const) {
+    test(`${harness}: the prompt handed to the executor is exactly the hashed text`, async () => {
+      let handed = "";
+      const engine = new Engine(skilled(harness), {
+        dir: mkdtempSync(join(tmpdir(), "howdah-run-")),
+        promptsDir: promptFixtures(),
+        executors: { agent: async ({ renderedPrompt }) => ((handed = renderedPrompt!), ok({ summary: "s" })) },
+      });
+      await engine.start({ goal: "g", summary: "p" });
+      const render: any = engine.log.read().find((e) => e.type === "prompt-rendered");
+      expect(renderedHash(handed)).toBe(render.rendered_hash);
+      expect(handed.startsWith("Implement per g. Prior: p\n")).toBe(true);
+      expect(handed.endsWith(buildOutputInstruction(["summary"]))).toBe(true);
+      expect(handed.includes("/review")).toBe(harness !== "codex");
+      expect(render).toMatchObject({ skills: harness === "codex" ? [] : ["review"], output_keys: ["summary"], suffix_version: 1 });
+    });
+  }
 });
 
 describe("resume-by-replay (R7)", () => {
