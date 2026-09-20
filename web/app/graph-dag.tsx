@@ -104,11 +104,25 @@ export function GraphDag({
   const height = Math.max(...[...pos.values()].map((p) => p.y)) + 90;
   const depthOf = (id: string) => pos.get(id)?.y ?? 0;
   const nodeRefs = useRef<Array<SVGGElement | null>>([]);
+  /**
+   * The nodes the arrows walk: the SELECTABLE ones, in LAYOUT order (down the layers, then
+   * across each one). Both halves are load-bearing. Only a selectable node carries a
+   * tabIndex, so focusing any other `<g>` is a silent no-op — walking every node meant an
+   * ArrowDown that met a command or worktree node between two agent nodes simply died, which
+   * on the Graphs screen (canSelect defaults to `kind === "agent"`) is the common case, not
+   * the edge one. And declaration order is not what the operator sees: the arrows have to
+   * follow the picture.
+   */
+  const walk = shape.nodes
+    .map((n, i) => ({ i, p: pos.get(n.id)!, ok: !!onSelect && canSelect(n) }))
+    .filter((e) => e.ok)
+    .sort((a, b) => a.p.y - b.p.y || a.p.x - b.p.x)
+    .map((e) => e.i);
   // wraps, so End→ArrowRight lands on the first node rather than nowhere
-  const focusNode = (i: number) => {
-    const n = shape.nodes.length;
+  const focusNode = (ordinal: number) => {
+    const n = walk.length;
     if (n === 0) return;
-    nodeRefs.current[((i % n) + n) % n]?.focus();
+    nodeRefs.current[walk[((ordinal % n) + n) % n]!]?.focus();
   };
 
   return (
@@ -172,12 +186,15 @@ export function GraphDag({
               onClick={() => selectable && onSelect?.(n.id)}
               onKeyDown={(e) => {
                 if (!selectable) return;
+                // where this node sits in the walk — never -1 here, since only a selectable
+                // node is focusable and every selectable node is in it
+                const at = walk.indexOf(i);
                 if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelect?.(n.id); }
                 // arrows walk the nodes in layout order, so the tenth node is not ten Tabs away
-                else if (e.key === "ArrowDown" || e.key === "ArrowRight") { e.preventDefault(); focusNode(i + 1); }
-                else if (e.key === "ArrowUp" || e.key === "ArrowLeft") { e.preventDefault(); focusNode(i - 1); }
+                else if (e.key === "ArrowDown" || e.key === "ArrowRight") { e.preventDefault(); focusNode(at + 1); }
+                else if (e.key === "ArrowUp" || e.key === "ArrowLeft") { e.preventDefault(); focusNode(at - 1); }
                 else if (e.key === "Home") { e.preventDefault(); focusNode(0); }
-                else if (e.key === "End") { e.preventDefault(); focusNode(shape.nodes.length - 1); }
+                else if (e.key === "End") { e.preventDefault(); focusNode(walk.length - 1); }
               }}
             >
               <rect width="180" height="52" rx="9" />
