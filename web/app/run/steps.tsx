@@ -20,6 +20,7 @@ import { Button } from "@/components/ui/button";
 import { PanelResizer, PanelToggle } from "@/components/ui/panel";
 import { readStored, usePanel } from "@/lib/panel";
 import { AskCard } from "./ask";
+import { StepActivity } from "./activity";
 import { PromptAndContext } from "./prompt-context";
 
 /** Status is a SHAPE first (DESIGN.md): the glyph alone must carry the state. */
@@ -216,7 +217,7 @@ export function StepDetail({ runId, row, detail, ask, now, onResolved }: {
   onResolved: () => void;
 }) {
   const [scope, setScope] = useState<"step" | "run">("step");
-  const [pane, setPane] = useState<"ask" | "prompt" | "output" | SlicePaneId | null>(null);
+  const [pane, setPane] = useState<"ask" | "activity" | "prompt" | "output" | SlicePaneId | null>(null);
   // an ask on a node that has no step row at all (e.g. approval-missing after a jump to a node
   // that never ran): no row can carry it, so the panel carries it — the operator is never left
   // with a needs-you banner and nothing to answer
@@ -242,6 +243,7 @@ export function StepDetail({ runId, row, detail, ask, now, onResolved }: {
     ...(askFirst ? [askPane] : []),
     ...slicePaneList,
     ...(askFirst || decidedOnCard ? [] : [askPane]),
+    { value: "activity", label: "Activity" },
     { value: "prompt", label: "Prompt & context" },
     { value: "output", label: "Output" },
   ];
@@ -308,6 +310,9 @@ export function StepDetail({ runId, row, detail, ask, now, onResolved }: {
             {shown === "ask" && (isAsking
               ? <AskCard key={`${ask!.node}@${ask!.visit}#${ask!.seq}`} runId={runId} ask={ask!} detail={detail} onResolved={onResolved} />
               : <div className="pd-note">this step is not waiting on you</div>)}
+            {shown === "activity" && (
+              <StepActivity turns={detail.turns} render={render} row={row} context={detail.context} />
+            )}
             {shown === "prompt" && (render
               ? <PromptAndContext runId={runId} render={render} />
               : <div className="pd-note">this step rendered no prompt (it is not an agent step)</div>)}

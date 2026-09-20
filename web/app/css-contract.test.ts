@@ -78,10 +78,9 @@ const COMPOSED_NAMES: Array<{ name: string; fedBy: string }> = [
   { name: "add", fedBy: "screens/prompts.tsx Diff: `dl ${cls}`" },
   { name: "del", fedBy: "screens/prompts.tsx Diff: `dl ${cls}`" },
   { name: "ctx", fedBy: "screens/prompts.tsx Diff: `dl ${cls}`" },
-  { name: "model", fedBy: "run/view.tsx TranscriptRow: `tr-row ${kind}` / `tr-icon ${kind}`" },
-  { name: "tool", fedBy: "run/view.tsx TranscriptRow, and run/logs.tsx `log-row ${r.kind}`" },
-  { name: "operator", fedBy: "run/view.tsx TranscriptRow: `tr-icon ${kind}`" },
-  { name: "error", fedBy: "run/view.tsx TranscriptRow: `tr-row ${kind}` / `tr-icon ${kind}`" },
+  // `model`, `tool`, `operator` and `error` were fed by run/view.tsx's TranscriptRow, which
+  // went with the Thread tab. Their rules went too, so the exemptions go — which is exactly
+  // what the "allowlist stays honest" test below demands, and why it exists.
   { name: "attention", fedBy: "run/logs.tsx: `log-row ${r.kind}` — deriveLogRows' kind" },
 ];
 

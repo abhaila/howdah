@@ -51,7 +51,7 @@ describe("StepDetail pane routing on the approval step", () => {
     started(log);
     proposeAndPark(log, ghostsV1());
     const el = renderStep(log, "slice.approve", 1);
-    expect(tabLabels(el)).toEqual(["Approval", "Prompt & context", "Output"]);
+    expect(tabLabels(el)).toEqual(["Approval", "Activity", "Prompt & context", "Output"]);
     expect(selected(el)).toBe("Approval");
     expect(el.querySelector(".approval-card.needs-you")).not.toBeNull();
   });
@@ -62,7 +62,7 @@ describe("StepDetail pane routing on the approval step", () => {
     proposeRound(log, ghostsV1());
     failApproval(log, 1, "approval executor threw: base unreadable");
     const el = renderStep(log, "slice.approve", 1);
-    expect(tabLabels(el)).toEqual(["Ask", "Approval", "Prompt & context", "Output"]);
+    expect(tabLabels(el)).toEqual(["Ask", "Approval", "Activity", "Prompt & context", "Output"]);
     expect(selected(el)).toBe("Ask");
     expect(el.querySelector(".ask-card h3")!.textContent).toBe("Needs you — slice.approve@1");
     expect(el.querySelector(".ask-card")!.textContent).toContain("approval executor threw: base unreadable");
@@ -91,7 +91,7 @@ describe("StepDetail pane routing on the approval step", () => {
     log.add({ type: "node-started", node: "map.drift", visit: 1, attempt_id: "map.drift#1" });
     log.add(drift([{ key: "a", outcome: "verified" }]));
     const el = renderStep(log, "map.drift", 1);
-    expect(tabLabels(el)).toEqual(["Drift", "Ask", "Prompt & context", "Output"]);
+    expect(tabLabels(el)).toEqual(["Drift", "Ask", "Activity", "Prompt & context", "Output"]);
     expect(selected(el)).toBe("Drift");
     expect(el.querySelector(".drift-view")).not.toBeNull();
   });

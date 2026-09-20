@@ -35,6 +35,8 @@ export interface RowProps {
   as?: "div";
   role?: string;
   "aria-label"?: string;
+  /** a disclosure row: says whether the thing it opens is open (activity's tool beats) */
+  "aria-expanded"?: boolean;
   "data-testid"?: string;
 }
 

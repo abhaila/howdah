@@ -45,130 +45,8 @@ import { RunLogs } from "./logs";
 import { RunContext } from "./context";
 import { RunChat } from "./chat";
 
-type RunTab = "steps" | "thread" | "context" | "logs" | "chat" | "graph";
+type RunTab = "steps" | "context" | "logs" | "chat" | "graph";
 type DetailDto = RunDetail & { cwd_exists?: boolean; editor_configured?: boolean };
-
-/** Row kind is carried by the glyph's SHAPE; colour only ever seconds it (DESIGN.md). */
-function RowGlyph({ kind }: { kind: "prompt" | "model" | "tool" | "error" | "operator" }) {
-  const st = { fill: "none", stroke: "currentColor", strokeWidth: 1.5, strokeLinecap: "round" as const, strokeLinejoin: "round" as const };
-  const d = {
-    prompt: "M3 8 H11 M8 5 L11 8 L8 11",
-    model: "M4 5 H12 M4 8 H12 M4 11 H9",
-    tool: "M5 4 L11 4 L11 12 L5 12 Z M7 7 H9",
-    error: "M5 5 L11 11 M11 5 L5 11",
-    operator: "M4 10 L7 7 L4 4 M8 11 H12",
-  }[kind];
-  return (
-    <span className={`tr-icon ${kind}`}>
-      <svg width="11" height="11" viewBox="0 0 16 16" aria-label={kind}><path d={d} {...st} /></svg>
-    </span>
-  );
-}
-
-function TranscriptRow({ kind, name, text, chips }: {
-  kind: "prompt" | "model" | "tool" | "error" | "operator";
-  name: string;
-  text: string;
-  chips: string[];
-}) {
-  return (
-    <div className={`tr-row ${kind}`}>
-      <RowGlyph kind={kind} />
-      <div className="tr-body">
-        <div className="tr-head">
-          <span className="m tr-name">{name}</span>
-          <span className="tr-chips">{chips.map((c, i) => <span key={i} className="m tr-chip">{c}</span>)}</span>
-        </div>
-        <div className="tr-text">{text}</div>
-      </div>
-    </div>
-  );
-}
-
-/**
- * Thread (T24, story 6) — Laminar's transcript: one row per thing that happened, with
- * time, tokens and cost on the right. Replaces the flat delta stream that R3.2 complained
- * about. A tool result that failed becomes its own row rather than hiding in a cluster.
- */
-function Turn({ turn, render, runId }: { turn: CoalescedTurn; render?: RunDetail["renders"][number]; runId: string }) {
-  const rows: React.ReactNode[] = [];
-  if (render) {
-    rows.push(
-      <TranscriptRow
-        key="prompt"
-        kind="prompt"
-        name="prompt sent"
-        text={`${render.prompt} v${render.prompt_version} · read ${Object.keys(render.context_read).join(", ") || "nothing"}`}
-        chips={render.model ? [`${render.harness ?? "claude"} · ${render.model}`] : []}
-      />,
-    );
-  }
-  const allText = turn.parts.filter((p) => p.kind === "text").map((p) => p.content).join("");
-  // engine/run.ts appends "[attempt failed: <why>]" as a text chunk when an executor throws
-  const failure = allText.match(/\[attempt failed: ([^\]]+)\]/);
-  const text = allText.replace(/\n?\[attempt failed: [^\]]+\]/, "").trim();
-  if (text) {
-    const u = turn.usage;
-    const chips: string[] = [];
-    if (u?.input_tokens !== undefined) chips.push(`${(u.input_tokens / 1000).toFixed(1)}K in`);
-    if (u?.output_tokens !== undefined) chips.push(`${u.output_tokens} out`);
-    if (u?.cost_usd !== undefined) chips.push(`$${u.cost_usd.toFixed(4)}`);
-    rows.push(<TranscriptRow key="text" kind="model" name={render?.model ?? "agent"} text={text} chips={chips} />);
-  }
-  for (const [i, p] of turn.parts.entries()) {
-    if (p.kind === "tool_call") rows.push(<TranscriptRow key={`t${i}`} kind="tool" name={p.tool_name ?? "tool"} text={p.content} chips={[]} />);
-    else if (p.kind === "tool_result" && /error|failed|exit \d|denied/i.test(p.content))
-      rows.push(<TranscriptRow key={`e${i}`} kind="error" name={`${p.tool_name ?? "tool"} failed`} text={p.content} chips={[]} />);
-  }
-  if (failure) rows.push(<TranscriptRow key="failure" kind="error" name="attempt failed" text={failure[1]!} chips={[]} />);
-  return (
-    <div className="turn">
-      <div className="tr-node m">
-        {turn.node}<span className="tr-visit">@{turn.visit}</span>
-        {!turn.finalized && <span className="tr-interrupted">interrupted</span>}
-      </div>
-      {rows}
-      {render && <PromptAndContext runId={runId} render={render} />}
-    </div>
-  );
-}
-
-function RunThread({ turns, renderByTurnKey, runId, ask, detail, onResolved, onReviewDesign }: {
-  turns: CoalescedTurn[];
-  renderByTurnKey: Map<string, RunDetail["renders"][number]>;
-  runId: string;
-  ask: RunDetail["ask"];
-  detail: RunDetail;
-  onResolved: () => void;
-  /** system-map 1d: open the approval card in the Steps panel */
-  onReviewDesign: () => void;
-}) {
-  const followKey = `${turns.length}:${ask?.seq ?? "no-ask"}:${turns.at(-1)?.parts.length ?? 0}`;
-  return (
-    <ScrollShell className="thread-shell" followKey={followKey}>
-      <div className="thread-transcript">
-        {turns.map((t) => (
-          <Turn key={`${t.node}@${t.visit}#${t.turn}`} turn={t} render={renderByTurnKey.get(`${t.node}@${t.visit}`)} runId={runId} />
-        ))}
-        {ask && (ask.code === "awaiting-approval" && detail.slice?.approval === ask.node && detail.slice.proposal ? (
-          // system-map 1d: an approval is decided on the card in the Steps panel, not by a reply
-          <div className="ask-card" id="needs-input">
-            <h3>Needs you — {ask.node}@{ask.visit}</h3>
-            <div>{ask.reason}</div>
-            <div className="actions">
-              <Button onClick={onReviewDesign}>Review the design</Button>
-            </div>
-          </div>
-        ) : ask.code === "ambiguous-effect" ? (
-          // HOW-3: an ambiguous effect is answered by attesting to it, not by a reply (which
-          // resolveReply refuses) — so the card offers the verdicts instead of a textarea
-          <EffectCard key={`${ask.node}@${ask.visit}#${ask.seq}`} runId={runId} ask={ask} effects={detail.ambiguous_effects} onResolved={onResolved} />
-        ) : <AskCard key={`${ask.node}@${ask.visit}#${ask.seq}`} runId={runId} ask={ask} detail={detail} onResolved={onResolved} />)}
-        {!ask && detail.summary.status === "done" && <div className="operator-row">run complete</div>}
-      </div>
-    </ScrollShell>
-  );
-}
 
 /**
  * Pause / resume / abort. Abort is the one irreversible verb in this app, so it is the one
@@ -452,11 +330,6 @@ export function RunView({ id, graceMs = OPEN_GRACE_MS }: { id: string; graceMs?:
   }, [id, detail === null]); // eslint-disable-line react-hooks/exhaustive-deps
   useAttentionSurfaces(detail?.summary.status === "needs-input");
 
-  const renderByTurnKey = useMemo(() => {
-    const m = new Map<string, RunDetail["renders"][number]>();
-    for (const r of detail?.renders ?? []) m.set(`${r.node}@${r.visit}`, r);
-    return m;
-  }, [detail]);
 
   if (!detail && missing)
     return (
@@ -502,7 +375,6 @@ export function RunView({ id, graceMs = OPEN_GRACE_MS }: { id: string; graceMs?:
             onValueChange={(v) => setTab(v as RunTab)}
             items={[
               { value: "steps", label: "Steps", icon: <Rows3 /> },
-              { value: "thread", label: "Thread", icon: <MessagesSquare /> },
               { value: "context", label: "Context", icon: <Fingerprint /> },
               { value: "logs", label: "Logs", icon: <ScrollText /> },
               { value: "chat", label: "Chat", icon: <MessagesSquare /> },
@@ -561,12 +433,7 @@ export function RunView({ id, graceMs = OPEN_GRACE_MS }: { id: string; graceMs?:
             )}
           </div>
         )}
-        {tab === "steps" ? (
-          <StepsSplit
-            list={<RunSteps timeline={detail.timeline} ask={ask} selected={selectedKey} now={now} onSelect={setPicked} mapping={detail.slice?.mapping} />}
-            detail={<StepDetail runId={id} row={selectedRow} detail={detail} ask={ask} now={now} onResolved={reload} />}
-          />
-        ) : tab === "context" ? (
+        {tab === "context" ? (
           <RunContext entries={detail.context} />
         ) : tab === "chat" ? (
           <RunChat runId={id} detail={detail} ask={ask} onPickStep={(k) => { setPicked(k); setTab("steps"); }} />
@@ -575,14 +442,9 @@ export function RunView({ id, graceMs = OPEN_GRACE_MS }: { id: string; graceMs?:
         ) : tab === "graph" ? (
           <RunGraph runId={id} graph={summary.graph} timeline={detail.timeline} status={summary.status} onJumped={reload} />
         ) : (
-          <RunThread
-            turns={detail.turns}
-            renderByTurnKey={renderByTurnKey}
-            runId={id}
-            ask={ask}
-            detail={detail}
-            onResolved={reload}
-            onReviewDesign={() => { setPicked(askKey); setTab("steps"); }}
+          <StepsSplit
+            list={<RunSteps timeline={detail.timeline} ask={ask} selected={selectedKey} now={now} onSelect={setPicked} mapping={detail.slice?.mapping} />}
+            detail={<StepDetail runId={id} row={selectedRow} detail={detail} ask={ask} now={now} onResolved={reload} />}
           />
         )}
       </div>

@@ -157,18 +157,8 @@ main { flex: 1; min-width: 0; min-height: 0; overflow: hidden; display: flex; fl
   padding: 4px 12px 4px 0;
 }
 
-.thread-shell {
-  margin: 12px 0 0;
-  border-top: 1px solid var(--border);
-  border-bottom: 1px solid var(--border);
-  background: color-mix(in srgb, var(--bg-inset) 42%, transparent);
-}
-.thread-shell .scroll-viewport { padding: 8px 8px 24px 0; }
-.thread-transcript { max-width: 1180px; }
-.turn { margin: 18px 0 26px; }
 .prompt-context { font-size: var(--type-xs); color: var(--fg-faint); cursor: pointer; margin-top: 4px; }
 .prompt-context pre { background: var(--bg-inset); padding: 8px 10px; border-radius: var(--radius-sm); overflow-x: auto; color: var(--fg-muted); }
-.operator-row { color: var(--operator); border-left: 2px solid var(--operator); padding-left: 10px; margin: 14px 0; }
 
 /* ask card — the interaction stays a card */
 .ask-card {
@@ -357,7 +347,6 @@ main { flex: 1; min-width: 0; min-height: 0; overflow: hidden; display: flex; fl
 .mark-btn:active .mark { transform: scale(0.94); }
 
 /* agent-log prose speaks the display face; data and tool detail stay mono */
-.operator-row { font-family: var(--font-display); font-size: var(--type-md); }
 .ask-card > div:first-of-type { font-family: var(--font-display); font-size: var(--type-md); }
 
 /* graph draw-on: edges stroke themselves in (line-drawing recipe), nodes fade by layer.
@@ -554,7 +543,7 @@ main { flex: 1; min-width: 0; min-height: 0; overflow: hidden; display: flex; fl
 [data-pane="closed"] > .pane-resize::before { display: none; }
 
 /* The toggle lives INSIDE the lane, statically — never absolutely placed against it. It is
-   revealed on approach and always available to the keyboard, same contract as `.sd-full`. */
+   revealed on approach and always available to the keyboard. */
 .pane-toggle {
   width: 17px; height: 17px; padding: 0; background: var(--bg);
   margin: 10px auto 0; opacity: 0; transition: opacity var(--dur-fast) ease;
@@ -602,40 +591,6 @@ main { flex: 1; min-width: 0; min-height: 0; overflow: hidden; display: flex; fl
 /* ---- thread transcript (T24, story 6) -------------------------------------------
    Laminar's shape: one row per event, machine values right-aligned. Row KIND is carried
    by the icon's shape — colour only ever seconds it, so amber stays the alarm. */
-.tr-node {
-  display: flex; align-items: center; gap: 6px;
-  padding: 12px 4px 5px; font-size: var(--type-xs); color: var(--fg-faint);
-  border-bottom: 1px solid var(--border);
-}
-.tr-visit { color: var(--fg-faint); }
-.tr-interrupted { color: var(--attention); margin-left: auto; }
-.tr-row { display: flex; gap: 10px; padding: 9px 8px; border-bottom: 1px solid var(--border); }
-.tr-row:hover { background: var(--bg-raised); }
-.tr-icon {
-  width: 18px; height: 18px; flex-shrink: 0; margin-top: 1px;
-  border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
-  display: flex; align-items: center; justify-content: center; color: var(--fg-muted);
-}
-.tr-icon.error { color: var(--status-failed-recoverable); border-color: var(--status-failed-recoverable); }
-.tr-icon.operator { color: var(--operator); }
-.tr-body { min-width: 0; flex-grow: 1; }
-.tr-head { display: flex; align-items: baseline; gap: 10px; }
-.tr-name { font-size: var(--type-xs); color: var(--fg); }
-.tr-row.error .tr-name { color: var(--status-failed-recoverable); }
-.tr-chips { margin-left: auto; display: flex; gap: 10px; white-space: nowrap; }
-.tr-chip { font-size: var(--type-2xs); color: var(--fg-faint); font-variant-numeric: tabular-nums; }
-.tr-text {
-  font-family: var(--font-display); font-size: var(--type-base); line-height: 1.58;
-  color: var(--fg-muted); margin-top: 2px; white-space: pre-wrap;
-}
-.tr-row.tool .tr-text,
-.tr-row.error .tr-text {
-  font-family: var(--font-mono); font-size: var(--type-code); line-height: 1.55;
-  background: var(--bg-inset); border: 1px solid var(--border);
-  border-radius: var(--radius-sm); padding: 8px 10px; overflow-x: auto;
-}
-.tr-row.model .tr-text { color: var(--fg); }
-
 /* ---- logs tab (T24, stories 7 + 8) ----------------------------------------------
    Logfire's dense list under Signal's filter bar. Only attention rows carry colour. */
 .logs-split { display: flex; min-height: 0; flex: 1; overflow: hidden; margin-top: 12px; border-top: 1px solid var(--border); }
@@ -739,4 +694,43 @@ main { flex: 1; min-width: 0; min-height: 0; overflow: hidden; display: flex; fl
   min-height: 420px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: var(--type-sm); line-height: 1.55; white-space: pre; overflow-wrap: normal; overflow-x: auto;
   tab-size: 2;
+}
+
+/* ---- Activity: the step's journey (replaces the Thread tab) ------------------------------
+   Prose is prose and a tool call is one line until you ask. The rules DESIGN.md already sets
+   hold: rows not cards, shape before colour, and the failure red only where the code actually
+   failed — here, a tool result that reads as an error. */
+.activity { display: flex; flex-direction: column; gap: 10px; }
+.act-text { margin: 0; font-size: var(--type-body); line-height: 1.6; color: var(--fg); white-space: pre-wrap; overflow-wrap: anywhere; }
+/* thinking is the agent talking to itself: present, quieter, never competing with its answer */
+.act-thinking { margin: 0; font-size: var(--type-sm); line-height: 1.55; color: var(--fg-muted); font-style: italic; white-space: pre-wrap; }
+.act-beat { display: flex; align-items: flex-start; gap: 7px; color: var(--fg-muted); font-size: var(--type-sm); }
+.act-beat-body { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
+/* the opening and closing beats: what the step was given, and what it handed on */
+.act-prompt { padding-bottom: 2px; border-bottom: 1px solid var(--border); }
+.act-wrote { padding-top: 6px; border-top: 1px solid var(--border); }
+.act-prompt-id { color: var(--fg); }
+.act-prompt-read { color: var(--fg-faint); font-size: var(--type-xs); }
+.act-note { font-size: var(--type-xs); color: var(--status-failed-recoverable); }
+
+/* one line, opening to the whole thing */
+.act-tool { border-top: 1px solid var(--border); }
+.act-tool-head {
+  display: flex; align-items: center; gap: 7px; width: 100%; min-width: 0;
+  background: none; border: 0; padding: 5px 0; cursor: pointer; text-align: left;
+  color: var(--fg-muted); font-family: var(--font-display); font-size: var(--type-sm);
+}
+.act-tool-head:hover { color: var(--fg); }
+.act-tool-name { color: var(--fg); flex-shrink: 0; }
+.act-tool-sum { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; color: var(--fg-muted); }
+.act-caret { flex-shrink: 0; transition: transform var(--dur-fast) var(--ease-out-strong); }
+.act-tool[data-open="open"] .act-caret { transform: rotate(90deg); }
+/* the only colour in the pane, and only where the run actually failed */
+.act-tool.failed .act-tool-name, .act-tool.failed .act-tool-head { color: var(--status-failed-recoverable); }
+.act-tool-body { padding: 2px 0 8px 19px; display: flex; flex-direction: column; gap: 4px; }
+.act-label { font-size: var(--type-2xs); text-transform: uppercase; letter-spacing: 0.06em; color: var(--fg-faint); }
+.act-pre {
+  margin: 0; padding: 8px 10px; background: var(--bg-inset); border-radius: var(--radius-sm);
+  font-family: var(--font-mono); font-size: var(--type-code); line-height: 1.5; color: var(--fg-muted);
+  white-space: pre-wrap; overflow-wrap: anywhere; max-height: 320px; overflow-y: auto;
 }
