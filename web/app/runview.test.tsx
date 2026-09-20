@@ -17,7 +17,8 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { deriveDetail } from "../derive";
 import { FakeLog, started } from "../slice.fixtures";
-import { RunView, OPEN_GRACE_MS } from "./main";
+import { RunView, OPEN_GRACE_MS } from "./run/view";
+import { ToastProvider } from "./components/ui/toast";
 
 let root: Root | null = null;
 let host: HTMLElement | null = null;
@@ -30,22 +31,31 @@ class StubEventSource {
   close() {}
 }
 
-/** the smallest log that derives a real RunDetail */
-function runDetail() {
+/**
+ * The smallest log that derives a real RunDetail. The graph is a parameter because the abort
+ * confirmation names it — naming the graph is how that dialog says WHICH run is about to
+ * stop, so a test of it has to be able to choose one.
+ */
+function runDetail(graph?: string) {
   const log = new FakeLog();
-  started(log);
+  started(log, graph);
   return deriveDetail("r1", log.events);
 }
 
 type Reply = { status: number; body: unknown };
 
-/** every GET /api/runs/<id> answers from this queue; the last entry repeats */
-function serve(replies: Reply[]) {
+/**
+ * Every GET /api/runs/<id> answers from this queue; the last entry repeats. `write` answers
+ * every non-GET — the control verbs (pause/abort/resume) post, and what they get back is the
+ * difference between a control that reports and one that swallows.
+ */
+function serve(replies: Reply[], write: Reply = { status: 200, body: { ok: true } }) {
   const calls: string[] = [];
   let i = 0;
-  globalThis.fetch = (async (input: string | URL | Request) => {
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
     calls.push(url);
+    if ((init?.method ?? "GET") !== "GET") return new Response(JSON.stringify(write.body), { status: write.status, headers: { "content-type": "application/json" } });
     // every other read model the page touches answers empty; only the run detail matters here
     if (!/\/api\/runs\/[^/]+$/.test(url)) return new Response("[]", { status: 200, headers: { "content-type": "application/json" } });
     const r = replies[Math.min(i++, replies.length - 1)]!;
@@ -54,11 +64,12 @@ function serve(replies: Reply[]) {
   return { calls: () => calls.filter((u) => /\/api\/runs\/[^/]+$/.test(u)) };
 }
 
+/** the provider is the app shell's, so a control's toast is observable here as it is live */
 function render(graceMs: number): HTMLElement {
   host = document.createElement("div");
   document.body.appendChild(host);
   root = createRoot(host);
-  act(() => root!.render(<RunView id="write-doc-abc" graceMs={graceMs} />));
+  act(() => root!.render(<ToastProvider><RunView id="write-doc-abc" graceMs={graceMs} /></ToastProvider>));
   return host;
 }
 
@@ -123,5 +134,65 @@ describe("opening a run that has not been written yet", () => {
     expect(el.innerHTML).not.toBe("");
     expect(el.textContent).not.toContain("derive blew up");
     expect(el.textContent).toContain("Loading run");
+  });
+});
+
+/**
+ * Abort is the one irreversible verb, so it confirms — and a confirmation that stays open
+ * over its own failure is worse than none. The AlertDialog is a native <dialog> opened with
+ * showModal(): it makes the rest of the document inert and covers it with a ::backdrop, and
+ * BOTH explanations of a refused abort — the inline field-error and the aria-live toast
+ * region — render outside it. So the dialog closes before the verb is sent, the way every
+ * other confirmation in this app does.
+ */
+describe("aborting a run", () => {
+  const controls = (el: HTMLElement) => [...el.querySelectorAll(".run-controls button")] as HTMLButtonElement[];
+  const abortButton = (el: HTMLElement) => controls(el).find((b) => b.textContent!.startsWith("Abort"))!;
+  const confirmButton = (el: HTMLElement) =>
+    [...el.querySelectorAll("dialog button")].find((b) => b.textContent === "Abort the run") as HTMLButtonElement | undefined;
+
+  async function openConfirm(el: HTMLElement) {
+    await settle(50);
+    await act(async () => abortButton(el).click());
+    return el.querySelector("dialog")!;
+  }
+
+  test("the confirmation names the graph the run stops at, and Cancel leaves the run alone", async () => {
+    const { calls } = serve([{ status: 200, body: runDetail("write-doc") }]);
+    const el = render(OPEN_GRACE_MS);
+    const dialog = await openConfirm(el);
+    expect(dialog.getAttribute("role")).toBe("alertdialog");
+    expect(dialog.textContent).toContain("write-doc");
+    expect(dialog.textContent).toContain("cannot be un-aborted");
+    const before = calls().length;
+    await act(async () => ([...dialog.querySelectorAll("button")].find((b) => b.textContent === "Cancel") as HTMLButtonElement).click());
+    expect(el.querySelectorAll("dialog").length).toBe(0);
+    expect(calls().length).toBe(before); // nothing was posted, and the poll is the only traffic
+  });
+
+  test("a refused abort closes the dialog, so its reason is readable and not behind a backdrop", async () => {
+    serve([{ status: 200, body: runDetail() }], { status: 409, body: { error: "runner lock held by another process" } });
+    const el = render(OPEN_GRACE_MS);
+    const dialog = await openConfirm(el);
+    await act(async () => confirmButton(el)!.click());
+    // the regression: the dialog used to stay open on the failure path, with the field-error
+    // and the toast region both outside it — inert, dimmed, and unreadable
+    expect(el.querySelectorAll("dialog").length).toBe(0);
+    expect(dialog.isConnected).toBe(false);
+    expect(el.querySelector(".field-error")!.textContent).toBe("runner lock held by another process");
+    expect(el.querySelector('[aria-live="polite"]')!.textContent).toContain("runner lock held by another process");
+    // and the control is offered again rather than left saying "Aborting…"
+    expect(abortButton(el).textContent).toBe("Abort");
+    expect(abortButton(el).disabled).toBe(false);
+  });
+
+  test("an accepted abort closes the dialog and announces the outcome", async () => {
+    serve([{ status: 200, body: runDetail() }], { status: 200, body: { ok: true } });
+    const el = render(OPEN_GRACE_MS);
+    await openConfirm(el);
+    await act(async () => confirmButton(el)!.click());
+    expect(el.querySelectorAll("dialog").length).toBe(0);
+    expect(el.querySelectorAll(".field-error").length).toBe(0);
+    expect(el.querySelector('[aria-live="polite"]')!.textContent).toContain("abort accepted");
   });
 });

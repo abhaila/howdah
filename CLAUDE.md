@@ -18,7 +18,7 @@ React + Tailwind for the viewer.
 
 ```bash
 bun install                      # required on a fresh clone (node_modules/ is gitignored)
-bun test                         # whole suite (996 tests, ~2 min) — bun:test, happy-dom preloaded via bunfig.toml
+bun test                         # whole suite (1143 tests, ~3 min) — bun:test, happy-dom preloaded via bunfig.toml
 bun test engine/engine.test.ts   # one file
 bun test -t "resume"             # one test by name
 bun run check                    # tsc --noEmit + prompt-id codegen staleness gate
@@ -206,7 +206,7 @@ Break one of these and the design stops working, so check them before changing t
 | `engine/` | `run.ts` (loop, routing, pinning, effects, attribution), `replay.ts`, `reconcile.ts` (git probes + worktree fingerprint), `attention.ts`, `control.ts` (replies, decisions, runner lock), `slice-decision.ts`, `slice-map.ts`, `executors/` |
 | `cli/` | `main.ts` verbs, `new-graph.ts` scaffolder (writes into `$HOWDAH_HOME`) |
 | `config/` | `config.json` workspaces + settings, `tuning.json` overlay, GitHub repo registration |
-| `web/` | Bun server (read model + reply/launch/control writes, SSE), `derive.ts` read model, React app in `app/` |
+| `web/` | Bun server (read model + reply/launch/control writes, SSE), `derive.ts` read model, React app in `app/`: `main.tsx` is the shell/nav/router only, screens in `app/screens/`, run-detail panes in `app/run/`, primitives in `app/components/ui/`, helpers in `app/lib/` |
 | `reviser/` | GEPA-method revision script, eval case, generated proposals |
 | `watchdog/` | out-of-process heartbeat/attention checker + launchd plist |
 | `research/` | Orbital spec, feedback doc, DOT exports, UI captures — the inputs this design was built from |
@@ -258,9 +258,20 @@ served an entire old UI.
 
 UI conventions worth preserving: one canonical `RunStatus` enum with one renderer, and
 **needs-input outranks failed** — a parked run waiting on a human is never shown as merely
-failed. Design tokens (palette, typography, motion) live in `web/public/tokens.css` +
-`app/globals.css` and are decided in `shaping.md`'s Design section; `ui.tsx` is shadcn
-patterns mapped onto those tokens, with native `<select>` instead of a Radix dependency.
+failed. Design tokens (palette, type scale, motion) live in `web/public/tokens.css` +
+`app/globals.css` and are decided in `shaping.md`'s Design section; tokens.css is the ONLY
+place a hex or a `font-size: Npx` may appear. The components are shadcn patterns vendored and
+rewritten onto those tokens — one file each under `app/components/ui/`, wired to `shadcn add`
+by the root `components.json` and the `@/*` path in `tsconfig.json`. **No Radix**, ever:
+`Select` is a styled native `<select>`, `Dialog` is the native `<dialog>`, and anything that
+cannot be had without Radix is hand-written in the `cva` + `cn` pattern with its file header
+saying so. Every interactive element goes through a primitive — a raw `<button>`, `<input>`,
+`<select>`, `<textarea>` or `<label>` outside `components/ui/` is a test failure, and so is a
+class emitted with no rule, a rule with no consumer, or a `title=` used as a tooltip
+(`app/css-contract.test.ts`, `app/components/components.test.tsx`). Those two files exist
+because the seam between the component layer and hand-CSS shipped two invisible defects
+(`.tab.on` matching nothing, `.chip` with modifiers but no base rule) that nothing else could
+see: TypeScript does not read CSS, and a missing rule renders as plain text.
 
 ## Conventions
 

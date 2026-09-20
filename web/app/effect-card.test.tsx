@@ -13,7 +13,7 @@ import { act, type ReactElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { deriveDetail } from "../derive";
 import { FakeLog, started } from "../slice.fixtures";
-import { EffectCard } from "./main";
+import { EffectCard } from "./run/ask";
 
 let root: Root | null = null;
 let host: HTMLElement | null = null;
