@@ -33,6 +33,7 @@
  * colour" are the two things this file exists to protect.
  */
 import { useRef, useState } from "react";
+import { submitOnEnter } from "@/lib/keys";
 import type { GhostGroup, GhostRow, RunDetail, SliceComment, SliceDecision, SliceDrift, SliceMapProgress, SliceMapSnapshot, SliceView } from "../derive";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -317,6 +318,14 @@ export function ApprovalCard({ runId, slice, onChanged }: { runId: string; slice
     }
   };
 
+  /* One submit path for the button and for Enter: a composer must not grow a second copy. */
+  const requestRedesign = () =>
+    run("redesign", `/api/runs/${runId}/redesign`, { message: redesignText }, () => {
+      setRedesignOpen(false);
+      setRedesignText("");
+      return "redesign requested — re-extracting the map for a new proposal";
+    });
+
   const decide = (approved: boolean) =>
     run(approved ? "approve" : "feedback", `/api/runs/${runId}/approval`, { approved, proposal_id: p.proposal_id }, (json) =>
       json?.idempotent
@@ -396,17 +405,13 @@ export function ApprovalCard({ runId, slice, onChanged }: { runId: string; slice
             placeholder="What should the proposer do differently? The map is re-extracted and this message reaches the next proposal once."
             value={redesignText}
             onChange={(e) => setRedesignText(e.target.value)}
+            onKeyDown={submitOnEnter(() => void requestRedesign(), { enabled: !busy && redesignText.trim() !== "" })}
           />
           <div className="actions">
             <Button
               size="sm"
               disabled={busy || redesignText.trim() === ""}
-              onClick={() =>
-                run("redesign", `/api/runs/${runId}/redesign`, { message: redesignText }, () => {
-                  setRedesignOpen(false);
-                  setRedesignText("");
-                  return "redesign requested — re-extracting the map for a new proposal";
-                })}
+              onClick={requestRedesign}
             >
               {busy && act.what === "redesign" ? "Requesting…" : "Request redesign"}
             </Button>
@@ -548,7 +553,7 @@ function GhostRowView({ row, slice, runId, canPin, proposalId, onChanged }: {
             placeholder="Comment for the proposer…"
             value={text}
             onChange={(e) => setText(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") void pin(); }}
+            onKeyDown={submitOnEnter(() => void pin())}
           />
           <Button size="sm" disabled={state.sending || text.trim() === ""} onClick={() => void pin()}>{state.sending ? "Pinning…" : "Pin"}</Button>
           <Button size="sm" variant="ghost" onClick={() => setOpen(false)}>Cancel</Button>

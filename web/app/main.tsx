@@ -11,12 +11,15 @@
 import "./globals.css";
 import { createRoot } from "react-dom/client";
 import { useCallback, useEffect, useState } from "react";
-import { Rows3, Plus, Workflow, Settings as SettingsIcon, Library, FileDiff } from "lucide-react";
+import { Rows3, Plus, Workflow, Settings as SettingsIcon, Library, FileDiff, Sun, Moon, Monitor } from "lucide-react";
 import type { ProposalView } from "../../prompts/proposals";
 import { PROPOSALS_CHANGED } from "@/lib/types";
 import { getJSON } from "@/lib/net";
 import { Button } from "@/components/ui/button";
+import { PanelToggle } from "@/components/ui/panel";
+import { Tooltip } from "@/components/ui/tooltip";
 import { ToastProvider } from "@/components/ui/toast";
+import { usePanel } from "@/lib/panel";
 import { Mark, Splash } from "./brand";
 import { RunView } from "./run/view";
 import { RunsList } from "./screens/runs";
@@ -26,8 +29,38 @@ import { PromptsScreen } from "./screens/prompts";
 import { ProposalsScreen } from "./screens/proposals";
 import { Settings } from "./screens/settings";
 
+const THEMES = ["dark", "light", "system"] as const;
+type Theme = (typeof THEMES)[number];
+const THEME_ICON = { dark: Moon, light: Sun, system: Monitor };
+
+/**
+ * The theme control is an icon: the ghost button reading "theme: system" was the one item in
+ * the nav that spelled its own state out in prose, and it had no icon to stand in for it when
+ * the rail collapsed.
+ *
+ * An icon-only control has to say two things the glyph cannot. The MODE is the icon (moon,
+ * sun, monitor — not one toggle, because "system" is a third state and a two-way switch
+ * cannot express it), and the accessible name carries both where you are and where the next
+ * press goes, so the control is usable without seeing it (HOW-16 P2.11).
+ */
+/** Exported for component tests (web/app/panel.test.tsx). */
+export function ThemeToggle({ theme, onChange }: { theme: string; onChange: (t: Theme) => void }) {
+  const current = (THEMES as readonly string[]).includes(theme) ? (theme as Theme) : "system";
+  const next = THEMES[(THEMES.indexOf(current) + 1) % THEMES.length]!;
+  const Icon = THEME_ICON[current];
+  return (
+    <Tooltip content={`Theme: ${current} — switch to ${next}`}>
+      <Button variant="ghost" size="icon" aria-label={`Theme: ${current}. Switch to ${next}.`} onClick={() => onChange(next)}>
+        <Icon size={15} />
+      </Button>
+    </Tooltip>
+  );
+}
+
 function App() {
   const [path, setPath] = useState(location.pathname);
+  // the nav collapses to an icon rail; width is fixed by its content, so only the state is ours
+  const nav = usePanel({ key: "howdah.nav", min: 184, def: 184, minOther: 480, side: "left" });
   useEffect(() => {
     const onClick = (e: MouseEvent) => {
       const a = (e.target as HTMLElement).closest("a[href^='/']");
@@ -75,9 +108,11 @@ function App() {
 
   return (
     <ToastProvider>
-      <div className="shell">
+      <div className="shell" data-nav={nav.collapsed ? "rail" : "full"}>
         {!splashDone && <Splash onDone={() => setSplashDone(true)} />}
-        <nav className="sidebar">
+        {/* Collapsing the nav is a preference, so it persists; the labels go and the icons
+            stay, which is the same shape the 900px breakpoint already falls back to. */}
+        <nav className="sidebar" aria-label="Primary">
           {/* the mark goes home like every other logo; it does NOT replay the splash —
               the boot jingle belongs to an actual load, not to navigating back to Runs */}
           <a className="mark-btn" href="/" aria-label="Howdah — runs"><Mark className="mark" /><span className="wordmark">Howdah</span></a>
@@ -91,9 +126,10 @@ function App() {
           </a>
           <a className={`nav ${isSettings ? "active" : ""}`} href="/settings"><SettingsIcon size={15} /><span className="label">Settings</span></a>
           <div className="spacer" />
-          <Button variant="ghost" size="sm" className="justify-start text-faint" onClick={() => setTheme(theme === "dark" ? "light" : theme === "light" ? "system" : "dark")}>
-            theme: {theme}
-          </Button>
+          <div className="nav-footer">
+            <ThemeToggle theme={theme} onChange={setTheme} />
+            <PanelToggle panel={nav} label="the sidebar" side="left" />
+          </div>
         </nav>
         <main>
           {runMatch ? <RunView id={runMatch[1]!} />

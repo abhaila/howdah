@@ -12,6 +12,8 @@
 import { useState } from "react";
 import type { RunDetail } from "../../derive";
 import { fmtValue } from "@/lib/format";
+import { PanelResizer, PanelToggle } from "@/components/ui/panel";
+import { usePanel } from "@/lib/panel";
 import { Badge, scopeVariant } from "@/components/ui/badge";
 import { Row } from "@/components/ui/row";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -23,11 +25,17 @@ export const SCOPE_MEANS: Record<string, string> = {
 };
 
 export function RunContext({ entries }: { entries: RunDetail["context"] }) {
+  const panel = usePanel({ key: "howdah.context", min: 300, def: 420, minOther: 360, side: "right" });
   const [picked, setPicked] = useState<string | null>(null);
   if (entries.length === 0) return <EmptyState>this graph declares no context keys</EmptyState>;
   const selected = entries.find((e) => e.key === picked) ?? entries.find((e) => e.written) ?? entries[0]!;
   return (
-    <div className="ctx-split">
+    <div
+      className="ctx-split"
+      ref={panel.boxRef}
+      data-pane={panel.collapsed ? "closed" : "open"}
+      style={{ ["--sd-w" as string]: `${panel.width}px` }}
+    >
       <div className="ctx-col">
         <Row as="div" className="ctx-row ctx-header" role="presentation">
           <span className="ctx-key rh">key</span>
@@ -59,7 +67,12 @@ export function RunContext({ entries }: { entries: RunDetail["context"] }) {
           })}
         </div>
       </div>
-      <ContextDetail entry={selected} />
+      <PanelResizer panel={panel} label="the context detail panel">
+        <div className="pane-controls">
+          <PanelToggle panel={panel} label="the context detail" side="right" />
+        </div>
+      </PanelResizer>
+      {!panel.collapsed && <ContextDetail entry={selected} />}
     </div>
   );
 }

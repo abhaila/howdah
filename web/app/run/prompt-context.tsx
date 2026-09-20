@@ -9,6 +9,7 @@
  * P2.8) and the `.pc-feedback` hand-CSS button (P1.5) are both Buttons now.
  */
 import { useEffect, useState } from "react";
+import { submitOnEnter } from "@/lib/keys";
 import { MessageSquarePlus, Send } from "lucide-react";
 import type { RunDetail } from "../../derive";
 import type { ReconstructedRender } from "../../../prompts/library";
@@ -132,6 +133,7 @@ export function FeedbackForm({ promptId, runId, node, visit, renderedHash, onDon
         placeholder="What should this prompt do differently? Be specific — the reviser reflects on exactly this."
         value={note}
         onChange={(e) => setNote(e.target.value)}
+        onKeyDown={submitOnEnter(() => void send(), { enabled: Boolean(note.trim()) && state !== "saving" })}
       />
       {error && <div className="field-error">{error}</div>}
       <div className="feedback-actions">

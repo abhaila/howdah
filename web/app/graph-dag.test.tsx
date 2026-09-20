@@ -69,8 +69,10 @@ const press = (n: SVGGElement, key: string) =>
 describe("GraphDag is reachable without a mouse", () => {
   test("the picture is a list, and only the selectable nodes are focus stops", () => {
     const el = render({ onSelect: () => {} });
-    expect(el.querySelector("svg")!.getAttribute("role")).toBe("list");
-    expect(el.querySelector("svg")!.getAttribute("aria-label")).toContain("5 nodes");
+    // `svg.dag`, not `svg`: the zoom controls are icon Buttons, so lucide's own <svg>s now
+    // come first in the DOM and a bare tag selector picks up a magnifying glass
+    expect(el.querySelector("svg.dag")!.getAttribute("role")).toBe("list");
+    expect(el.querySelector("svg.dag")!.getAttribute("aria-label")).toContain("5 nodes");
     for (const id of ["plan", "build", "review"]) {
       expect(node(el, id).getAttribute("role")).toBe("button");
       expect(node(el, id).getAttribute("tabindex")).toBe("0");
@@ -144,3 +146,74 @@ describe("GraphDag is reachable without a mouse", () => {
     expect(focused()).toBe("probe");
   });
 });
+
+/**
+ * Zoom and pan. The graph used to be a fixed-size SVG in an unbounded box: reachable only
+ * because the PAGE scrolled, so once the shell owned the viewport the bottom of a tall graph
+ * could not be reached at all. What is pinned here is that scaling changes the rendered size
+ * WITHOUT touching the viewBox — the graph has to grow, not reflow — and that the controls
+ * are named, since they are icon-only.
+ */
+describe("the graph canvas can be zoomed and panned", () => {
+  const dag = (el: HTMLElement) => el.querySelector("svg.dag") as SVGElement;
+  const by = (el: HTMLElement, label: string) => el.querySelector(`[aria-label="${label}"]`) as HTMLButtonElement;
+  const pct = (el: HTMLElement) => el.querySelector(".dag-zoom")!.textContent;
+
+  test("zooming scales the rendered size and leaves the coordinate space alone", () => {
+    const el = render();
+    const box = dag(el).getAttribute("viewBox");
+    const w0 = Number(dag(el).getAttribute("width"));
+    expect(pct(el)).toBe("100%");
+
+    act(() => by(el, "Zoom in").click());
+    expect(Number(dag(el).getAttribute("width"))).toBeGreaterThan(w0);
+    expect(pct(el)).toBe("110%");
+    // the graph grows; it must not re-lay-out, or every node moves under the operator
+    expect(dag(el).getAttribute("viewBox")).toBe(box);
+
+    act(() => by(el, "Zoom out").click());
+    expect(Number(dag(el).getAttribute("width"))).toBe(w0);
+    expect(pct(el)).toBe("100%");
+  });
+
+  test("zoom clamps at both ends rather than inverting or vanishing", () => {
+    const el = render();
+    for (let i = 0; i < 30; i++) act(() => by(el, "Zoom out").click());
+    expect(pct(el)).toBe("30%");
+    expect(by(el, "Zoom out").disabled).toBe(true);
+    expect(Number(dag(el).getAttribute("width"))).toBeGreaterThan(0);
+
+    for (let i = 0; i < 40; i++) act(() => by(el, "Zoom in").click());
+    expect(pct(el)).toBe("200%");
+    expect(by(el, "Zoom in").disabled).toBe(true);
+  });
+
+  test("reset returns to 100% from either direction", () => {
+    const el = render();
+    act(() => by(el, "Zoom in").click());
+    act(() => by(el, "Zoom in").click());
+    expect(pct(el)).not.toBe("100%");
+    act(() => by(el, "Reset zoom to 100%").click());
+    expect(pct(el)).toBe("100%");
+  });
+
+  test("every control is named, because all four are icon-only", () => {
+    const el = render();
+    for (const label of ["Zoom out", "Zoom in", "Fit the graph to the pane", "Reset zoom to 100%"])
+      expect(by(el, label)).not.toBeNull();
+  });
+
+  test("the canvas is a bounded scroller, which is what `overflow: auto` alone never gave it", async () => {
+    const css = await Bun.file(new URL("../public/howdah.css", import.meta.url)).text();
+    const scroll = css.match(/\.dag-scroll\s*\{([^}]*)\}/)?.[1] ?? "";
+    expect(scroll).toContain("overflow: auto");
+    expect(scroll).toContain("min-height: 0"); // without this it grows to the graph and clips
+    expect(scroll).toContain("flex: 1");
+    // and its parents have to hand a height down for that to mean anything
+    for (const sel of ["\\.dag-view", "\\.run-graph"]) {
+      const body = css.match(new RegExp(`${sel}\\s*\\{([^}]*)\\}`))?.[1] ?? "";
+      expect(body).toContain("min-height: 0");
+    }
+  });
+});
+

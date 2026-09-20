@@ -10,7 +10,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { StepsSplit, readDetailWidth } from "./run/steps";
 
-const KEY = "howdah.detail-width";
+const KEY = "howdah.detail.width"; // gained the suffix when the geometry moved to lib/panel.ts
 const DEFAULT = 420;
 const MIN = 320;
 const LIST_MIN = 240;
@@ -32,7 +32,8 @@ function render(containerWidth = 1440): HTMLElement {
 
 const split = (el: HTMLElement) => el.querySelector(".steps-split") as HTMLElement;
 const sep = (el: HTMLElement) => el.querySelector('[role="separator"]') as HTMLElement;
-const toggle = (el: HTMLElement) => el.querySelector(".sd-full") as HTMLButtonElement;
+/* the lane holds two controls now (collapse + full width); target the one under test */
+const toggle = (el: HTMLElement) => el.querySelector('[data-control="full"]') as HTMLButtonElement;
 const widthVar = (el: HTMLElement) => split(el).style.getPropertyValue("--sd-w");
 
 const press = (el: HTMLElement, key: string, shiftKey = false) =>
@@ -151,7 +152,7 @@ describe("StepsSplit", () => {
    */
   test("full width keeps a real lane for the restore control, never a zero-width anchor", async () => {
     const css = await Bun.file(new URL("../public/howdah.css", import.meta.url)).text();
-    const rule = css.match(/\.steps-split\[data-detail="full"\]\s+\.sd-resize\s*\{([^}]*)\}/);
+    const rule = css.match(/\.steps-split\[data-detail="full"\][^{]*\.pane-resize[^{]*\{([^}]*)\}/);
     expect(rule).not.toBeNull();
     const basis = rule![1]!.match(/flex-basis:\s*([\d.]+)px/);
     expect(basis).not.toBeNull();
@@ -167,22 +168,29 @@ describe("StepsSplit", () => {
    * the chain the browser would resolve against: exactly one positioned ancestor under the
    * lane, and it is the one doing the centring.
    */
-  test("the restore control's positioning anchor is the lane, with nothing positioned in between", async () => {
+  test("nothing in the lane is positioned at all, so no control can land on its neighbour", async () => {
     const el = render();
     const lane = sep(el);
     // classes, not elements: a failure here has to print a class list, not a happy-dom node
     const between: string[] = [];
     for (let n = toggle(el).parentElement; n && n !== lane; n = n.parentElement) between.push(n.className);
     expect(between.length).toBeGreaterThan(0); // the Tooltip's spans; this is about what they carry
+
+    // The guarantee got STRONGER than the one this test used to pin. The control was centred
+    // on the lane with `absolute left-1/2 -translate-x-1/2`, and the bug being guarded was a
+    // zero-width `relative` wrapper sneaking in between, which resolves that 50% to the lane's
+    // edge. The controls sit in normal flow inside `.pane-controls` now, so there is no 50% to
+    // resolve and no anchor to get wrong: assert the absence of positioning itself.
     const carrying = (name: string) => between.filter((c) => c.split(/\s+/).includes(name));
-    expect(carrying("relative")).toEqual([]);
-    expect(carrying("absolute").length).toBe(1);
-    expect(carrying("absolute")[0]!.split(/\s+/)).toContain("left-1/2");
-    expect(carrying("absolute")[0]!.split(/\s+/)).toContain("-translate-x-1/2");
-    // and the control itself does not position a second time — that is what put the 50% of a
-    // zero-width wrapper into the sum
+    expect(carrying("absolute")).toEqual([]);
+    expect(carrying("fixed")).toEqual([]);
+
+    // and the stylesheet does not position them either, from the other side
     const css = await Bun.file(new URL("../public/howdah.css", import.meta.url)).text();
-    expect(css.match(/\.sd-full\s*\{([^}]*)\}/)![1]).not.toContain("position:");
+    for (const rule of [".pane-toggle", ".pane-controls"]) {
+      const body = css.match(new RegExp(`\\${rule}\\s*\\{([^}]*)\\}`))?.[1] ?? "";
+      expect(body).not.toContain("position:");
+    }
   });
 
   test("a width that cannot be stored still applies to the panel", () => {

@@ -6,7 +6,7 @@
  * `aria-selected`) rather than from a `.tab.active` rule nothing emitted — see
  * components/ui/tabs.tsx. `itemClassName` is layout only now.
  */
-import { useCallback, useRef, useState } from "react";
+import { useState } from "react";
 import { ArrowUp, X } from "lucide-react";
 import type { RunDetail } from "../../derive";
 import { askRowKey } from "../status";
@@ -17,6 +17,8 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Row } from "@/components/ui/row";
 import { Tooltip } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
+import { PanelResizer, PanelToggle } from "@/components/ui/panel";
+import { readStored, usePanel } from "@/lib/panel";
 import { AskCard } from "./ask";
 import { PromptAndContext } from "./prompt-context";
 
@@ -131,109 +133,70 @@ export function RunSteps({ timeline, ask, selected, now, onSelect, mapping }: {
 const DETAIL_MIN = 320;
 const DETAIL_DEFAULT = 420;
 const LIST_MIN = 240; // the waterfall stops being readable below this, so the drag stops here
-const DETAIL_WIDTH_KEY = "howdah.detail-width";
+export const DETAIL_KEY = "howdah.detail";
 
+/**
+ * Exported for the component tests. The geometry itself now lives in `lib/panel.ts` — this
+ * panel was the only resizable one, and four more surfaces needed the same behaviour, so the
+ * implementation moved rather than being copied. The stored key gained a `.width` suffix in
+ * that move (it now sits beside `.collapsed`), which costs one remembered width on upgrade:
+ * exactly the harmless loss the storage contract is written to tolerate.
+ */
 export function readDetailWidth(): number {
-  try {
-    const raw = localStorage.getItem(DETAIL_WIDTH_KEY);
-    const n = raw === null ? NaN : Number(raw);
-    return Number.isFinite(n) && n >= DETAIL_MIN ? n : DETAIL_DEFAULT;
-  } catch {
-    return DETAIL_DEFAULT;
-  }
+  return readStored(`${DETAIL_KEY}.width`, DETAIL_DEFAULT, (raw) => {
+    const n = Number(raw);
+    return Number.isFinite(n) && n >= DETAIL_MIN ? n : null;
+  });
 }
 
-/** Exported for component tests (web/app/split.test.tsx). */
+/**
+ * Exported for component tests (web/app/split.test.tsx).
+ *
+ * Three states now, not two. DRAG when you want both halves at once, FULL when the design is
+ * all you care about, and CLOSED when you want the waterfall back on its own — the panel was
+ * openable but never closable, which is the one affordance a pane this large has to have.
+ * All three are driven from `usePanel`, the same hook the nav, the rail, Logs and Context use.
+ */
 export function StepsSplit({ list, detail }: { list: React.ReactNode; detail: React.ReactNode }) {
-  const [width, setWidth] = useState(readDetailWidth);
+  const panel = usePanel({ key: DETAIL_KEY, min: DETAIL_MIN, def: DETAIL_DEFAULT, minOther: LIST_MIN, side: "right" });
   const [full, setFull] = useState(false);
-  const box = useRef<HTMLDivElement>(null);
-
-  // clamped against the LIVE container: the same drag at 1440 and at 1024 must both leave a
-  // readable list, and a width remembered from a wide window must not strand a narrow one
-  const clamp = useCallback((w: number) => {
-    const total = box.current?.clientWidth ?? 0;
-    const max = total > 0 ? Math.max(DETAIL_MIN, total - LIST_MIN) : Number.POSITIVE_INFINITY;
-    return Math.round(Math.max(DETAIL_MIN, Math.min(w, max)));
-  }, []);
-
-  const commit = useCallback((w: number) => {
-    const next = clamp(w);
-    setWidth(next);
-    try {
-      localStorage.setItem(DETAIL_WIDTH_KEY, String(next));
-    } catch {
-      /* unremembered is fine; unrendered is not */
-    }
-  }, [clamp]);
-
-  // width measured from the container's RIGHT edge, so the number IS the panel's width
-  const widthAt = (clientX: number) => (box.current?.getBoundingClientRect().right ?? clientX) - clientX;
-
-  const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (full || e.button !== 0) return;
-    e.preventDefault(); // or the pointer drag selects the step list's text instead
-    const el = e.currentTarget;
-    el.setPointerCapture(e.pointerId);
-    const move = (ev: PointerEvent) => setWidth(clamp(widthAt(ev.clientX)));
-    const up = (ev: PointerEvent) => {
-      el.releasePointerCapture(ev.pointerId);
-      el.removeEventListener("pointermove", move);
-      el.removeEventListener("pointerup", up);
-      el.removeEventListener("pointercancel", up); // a cancelled drag still commits what it drew
-      commit(widthAt(ev.clientX));
-    };
-    el.addEventListener("pointermove", move);
-    el.addEventListener("pointerup", up);
-    el.addEventListener("pointercancel", up);
-  };
-
-  // a separator that only a mouse can move is not usable; arrows nudge, Home/End slam it open
-  const onKeyDown = (e: React.KeyboardEvent) => {
-    const step = e.shiftKey ? 96 : 24;
-    const by = e.key === "ArrowLeft" ? step : e.key === "ArrowRight" ? -step : 0;
-    if (by !== 0) { e.preventDefault(); commit(width + by); }
-    else if (e.key === "Home") { e.preventDefault(); commit(Number.POSITIVE_INFINITY); }
-    else if (e.key === "End") { e.preventDefault(); commit(DETAIL_MIN); }
-  };
+  // a closed panel cannot also be full width; closing wins, because it is the explicit ask
+  const state = panel.collapsed ? "closed" : full ? "full" : "split";
 
   return (
     // --sd-w is the operator's remembered width, computed from state — a custom property
     // fed by data is the one inline style DESIGN.md keeps (HOW-16 P3.13)
-    <div className="steps-split" ref={box} data-detail={full ? "full" : "split"} style={{ ["--sd-w" as string]: `${width}px` }}>
-      {!full && list}
-      <div
-        className="sd-resize"
-        role="separator"
-        aria-orientation="vertical"
-        aria-label="resize the detail panel"
-        aria-valuenow={full ? 0 : width}
-        aria-valuemin={DETAIL_MIN}
-        tabIndex={full ? -1 : 0}
-        onPointerDown={onPointerDown}
-        onDoubleClick={() => commit(DETAIL_DEFAULT)}
-        onKeyDown={onKeyDown}
-      >
-        {/* The Tooltip's own span is the positioned anchor, not a `relative` wrapper between
-            the lane and the control: `.sd-full` used to place itself against `.sd-resize`,
-            and a relative ancestor of zero width would resolve its `left: 50%` to the lane's
-            left edge — exactly the overlap howdah.css's lane comment says cannot happen.
-            These are Tailwind utilities so `cn` drops the component's own `relative`. */}
-        <Tooltip content={full ? "restore the step list" : "full width"} className="absolute left-1/2 top-[10px] -translate-x-1/2">
-          <Button
-            variant="outline"
-            size="icon"
-            className="sd-full"
-            aria-pressed={full}
-            aria-label={full ? "restore the step list" : "expand the detail panel to full width"}
-            onPointerDown={(e) => e.stopPropagation()} /* the button is a click, never a drag */
-            onClick={() => setFull(!full)}
-          >
-            {full ? <X size={11} /> : <ArrowUp size={11} className="-rotate-90" />}
-          </Button>
-        </Tooltip>
-      </div>
-      {detail}
+    <div
+      className="steps-split"
+      ref={panel.boxRef}
+      data-detail={state === "full" ? "full" : "split"}
+      data-pane={state === "closed" ? "closed" : "open"}
+      style={{ ["--sd-w" as string]: `${panel.width}px` }}
+    >
+      {state !== "full" && list}
+      <PanelResizer panel={panel} label="the detail panel" disabled={state === "full"}>
+        <div className="pane-controls">
+          <PanelToggle panel={panel} label="the detail panel" side="right" />
+          {/* full width is a separate axis from open/closed, so it keeps its own control */}
+          {state !== "closed" && (
+            <Tooltip content={full ? "restore the step list" : "full width"}>
+              <Button
+                variant="outline"
+                size="icon"
+                className="pane-toggle"
+                data-control="full"
+                aria-pressed={full}
+                aria-label={full ? "restore the step list" : "expand the detail panel to full width"}
+                onPointerDown={(e) => e.stopPropagation()} /* the button is a click, never a drag */
+                onClick={() => setFull(!full)}
+              >
+                {full ? <X size={11} /> : <ArrowUp size={11} className="-rotate-90" />}
+              </Button>
+            </Tooltip>
+          )}
+        </div>
+      </PanelResizer>
+      {state !== "closed" && detail}
     </div>
   );
 }

@@ -8,6 +8,7 @@ import { Send } from "lucide-react";
 import type { RunDetail } from "../../derive";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { submitOnEnter } from "@/lib/keys";
 import { useToast } from "@/components/ui/toast";
 
 export function attentionContext(detail: RunDetail, ask: NonNullable<RunDetail["ask"]>): string | null {
@@ -115,7 +116,15 @@ export function AskCard({ runId, ask, detail, onResolved }: { runId: string; ask
       {(ask.code === "attempt-failed" || ask.reason === "attempt failed") && (
         <div className="field-hint">Reply with instructions to change the retry, or send an empty reply to retry the step as-is.</div>
       )}
-      <Textarea ref={ref} aria-label="your reply" value={text} onChange={(e) => setText(e.target.value)} placeholder="Your reply…" disabled={state === "sending" || state === "delivered"} />
+      <Textarea
+        ref={ref}
+        aria-label="your reply"
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onKeyDown={submitOnEnter(() => void send(), { enabled: state !== "sending" && state !== "delivered" })}
+        placeholder="Your reply… (Enter to send, Shift+Enter for a new line)"
+        disabled={state === "sending" || state === "delivered"}
+      />
       <div className="actions">
         <Button onClick={send} disabled={state === "sending" || state === "delivered"}>
           <Send />{state === "sending" ? "Sending…" : state === "delivered" ? "Delivered" : "Reply"}

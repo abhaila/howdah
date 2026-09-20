@@ -19,7 +19,10 @@
  * exactly when the id is long enough to need it. The label is read on focus by the same
  * assistive tech a tooltip would be for, and it cannot be clipped.
  */
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { ZoomIn, ZoomOut, Maximize2, RotateCcw } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Tooltip } from "@/components/ui/tooltip";
 
 export interface AgentConfigDto {
   harness?: string;
@@ -102,6 +105,61 @@ export function GraphDag({
   const pos = layout(shape);
   const width = Math.max(...[...pos.values()].map((p) => p.x)) + 230;
   const height = Math.max(...[...pos.values()].map((p) => p.y)) + 90;
+  /**
+   * Zoom and pan. A graph of any size used to be a fixed-size SVG in a box that grew to fit
+   * it, which the page scroll happened to make reachable; once the shell owned the viewport
+   * there was no page scroll left and the bottom of a tall graph was simply unreachable.
+   * The canvas scrolls in its own pane now, and the scale is the operator's.
+   *
+   * The controls sit ABOVE the canvas rather than floating on it — a zoom button parked over
+   * the top-left of a graph covers the entry node, which is the one you most want to see.
+   */
+  const view = useRef<HTMLDivElement>(null);
+  const [scale, setScale] = useState(1);
+  const zoom = useCallback((to: number) => setScale(Math.min(2, Math.max(0.3, Math.round(to * 20) / 20))), []);
+  const fit = useCallback(() => {
+    const box = view.current;
+    if (!box || width === 0) return;
+    // the padding the pane already carries, so "fit" does not tuck the graph under its border
+    zoom((box.clientWidth - 24) / width);
+  }, [width, zoom]);
+
+  /** drag the empty canvas to pan; a drag that starts on a node is that node's, not the canvas's */
+  const onPanStart = (e: React.PointerEvent<HTMLDivElement>) => {
+    const box = view.current;
+    if (!box || e.button !== 0) return;
+    if ((e.target as Element).closest?.(".dag-node")) return;
+    const from = { x: e.clientX, y: e.clientY, left: box.scrollLeft, top: box.scrollTop };
+    box.setPointerCapture(e.pointerId);
+    box.dataset.panning = "1"; // an attribute, not a class: nothing reads it but CSS
+    const move = (ev: PointerEvent) => {
+      box.scrollLeft = from.left - (ev.clientX - from.x);
+      box.scrollTop = from.top - (ev.clientY - from.y);
+    };
+    const up = (ev: PointerEvent) => {
+      box.releasePointerCapture(ev.pointerId);
+      delete box.dataset.panning;
+      box.removeEventListener("pointermove", move);
+      box.removeEventListener("pointerup", up);
+      box.removeEventListener("pointercancel", up);
+    };
+    box.addEventListener("pointermove", move);
+    box.addEventListener("pointerup", up);
+    box.addEventListener("pointercancel", up);
+  };
+
+  /** ctrl/cmd+wheel zooms, like every other canvas; a bare wheel still scrolls the pane */
+  useEffect(() => {
+    const box = view.current;
+    if (!box) return;
+    const onWheel = (e: WheelEvent) => {
+      if (!e.ctrlKey && !e.metaKey) return;
+      e.preventDefault();
+      setScale((s) => Math.min(2, Math.max(0.3, Math.round((s - e.deltaY * 0.002) * 20) / 20)));
+    };
+    box.addEventListener("wheel", onWheel, { passive: false });
+    return () => box.removeEventListener("wheel", onWheel);
+  }, []);
   const depthOf = (id: string) => pos.get(id)?.y ?? 0;
   const nodeRefs = useRef<Array<SVGGElement | null>>([]);
   /**
@@ -126,8 +184,37 @@ export function GraphDag({
   };
 
   return (
-    <div className="dag-scroll">
-      <svg width={width} height={height} className="dag" role="list" aria-label={`${shape.name} graph — ${shape.nodes.length} nodes`}>
+    <div className="dag-view">
+      {/* in flow, above the canvas: a control that covers the graph is not a graph control */}
+      <div className="dag-controls">
+        <Tooltip content="Zoom out">
+          <Button variant="outline" size="icon" aria-label="Zoom out" disabled={scale <= 0.3} onClick={() => zoom(scale - 0.1)}>
+            <ZoomOut size={13} />
+          </Button>
+        </Tooltip>
+        <span className="m dag-zoom" aria-live="polite">{Math.round(scale * 100)}%</span>
+        <Tooltip content="Zoom in">
+          <Button variant="outline" size="icon" aria-label="Zoom in" disabled={scale >= 2} onClick={() => zoom(scale + 0.1)}>
+            <ZoomIn size={13} />
+          </Button>
+        </Tooltip>
+        <Tooltip content="Fit the graph to the pane">
+          <Button variant="outline" size="icon" aria-label="Fit the graph to the pane" onClick={fit}><Maximize2 size={13} /></Button>
+        </Tooltip>
+        <Tooltip content="Reset to 100%">
+          <Button variant="outline" size="icon" aria-label="Reset zoom to 100%" onClick={() => zoom(1)}><RotateCcw size={13} /></Button>
+        </Tooltip>
+        <span className="dag-hint">drag to pan · ⌘/ctrl + scroll to zoom</span>
+      </div>
+      <div className="dag-scroll" ref={view} onPointerDown={onPanStart}>
+      <svg
+        width={Math.round(width * scale)}
+        height={Math.round(height * scale)}
+        viewBox={`0 0 ${width} ${height}`}
+        className="dag"
+        role="list"
+        aria-label={`${shape.name} graph — ${shape.nodes.length} nodes`}
+      >
         <defs>
           <marker id="arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
             <path d="M0,0 L8,4 L0,8 z" fill="var(--fg-faint)" />
@@ -208,6 +295,7 @@ export function GraphDag({
           );
         })}
       </svg>
+      </div>
     </div>
   );
 }

@@ -18,10 +18,13 @@ import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/ui/empty-state";
 import { PanelTabs } from "@/components/ui/tabs";
 import { ScrollShell } from "@/components/scroll-shell";
+import { PanelResizer, PanelToggle } from "@/components/ui/panel";
+import { usePanel } from "@/lib/panel";
 
 const KINDS: Array<"all" | LogRow["kind"]> = ["all", "agent", "tool", "engine", "operator", "attention"];
 
 export function RunLogs({ rows }: { rows: LogRow[] }) {
+  const panel = usePanel({ key: "howdah.logs", min: 300, def: 420, minOther: 360, side: "right" });
   const [kind, setKind] = useState<"all" | LogRow["kind"]>("all");
   const [q, setQ] = useState("");
   const [picked, setPicked] = useState<number | null>(null);
@@ -35,7 +38,12 @@ export function RunLogs({ rows }: { rows: LogRow[] }) {
   const selected = rows.find((r) => r.seq === picked) ?? shown.at(-1) ?? null;
 
   return (
-    <div className="logs-split">
+    <div
+      className="logs-split"
+      ref={panel.boxRef}
+      data-pane={panel.collapsed ? "closed" : "open"}
+      style={{ ["--sd-w" as string]: `${panel.width}px` }}
+    >
       <div className="logs-col">
         <div className="logs-filters">
           <Input className="logs-search" aria-label="search events" placeholder="Search events…" value={q} onChange={(e) => setQ(e.target.value)} />
@@ -64,7 +72,12 @@ export function RunLogs({ rows }: { rows: LogRow[] }) {
           </div>
         </ScrollShell>
       </div>
-      <EventDetail row={selected} />
+      <PanelResizer panel={panel} label="the event detail panel">
+        <div className="pane-controls">
+          <PanelToggle panel={panel} label="the event detail" side="right" />
+        </div>
+      </PanelResizer>
+      {!panel.collapsed && <EventDetail row={selected} />}
     </div>
   );
 }

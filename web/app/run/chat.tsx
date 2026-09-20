@@ -8,6 +8,7 @@
  * with an onClick (a class with no base rule, and no keyboard path), and are Chips now.
  */
 import { useState } from "react";
+import { submitOnEnter } from "@/lib/keys";
 import type { RunDetail } from "../../derive";
 import { citeParts } from "../../cite";
 import { Chip } from "@/components/ui/chip";
@@ -88,7 +89,7 @@ export function RunChat({ runId, detail, ask, onPickStep }: {
           value={q}
           disabled={busy}
           onChange={(e) => setQ(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter") send(q); }}
+          onKeyDown={submitOnEnter(() => send(q))}
         />
         <div className="chat-note">Reads this run's steps, prompts and context. It cannot reply to the agent or move the run.</div>
       </div>

@@ -23,11 +23,17 @@ code, pre, .run-meta, .wait-timer, .timer, .kv, .tl-row,
 /* a key/value pair's value, in the Steps detail panel's `.kv` rows */
 .v { min-width: 0; overflow-wrap: anywhere; text-align: right; }
 
-.shell { display: flex; min-height: 100vh; }
+/* The app shell owns the viewport: the PAGE never scrolls, panes do.
+   The run view already worked this way (`height: 100vh; overflow: hidden`) while the other
+   six screens scrolled the document, so "does this pane scroll or does the page?" had two
+   answers depending on where you were, and a pane that filled up clipped instead of
+   scrolling. One model now — shell fills the viewport, `main` hands its height down, and
+   every screen container scrolls inside it. */
+.shell { display: flex; height: 100vh; overflow: hidden; }
 
 /* sidebar */
 .sidebar {
-  width: 184px; flex-shrink: 0; padding: 18px 10px; /* DESIGN.md Layout: left rail 184px */
+  width: 184px; flex-shrink: 0; overflow-y: auto; padding: 18px 10px; /* DESIGN.md Layout: left rail 184px */
   border-right: 1px solid var(--border);
   display: flex; flex-direction: column; gap: 2px;
 }
@@ -43,14 +49,33 @@ code, pre, .run-meta, .wait-timer, .timer, .kv, .tl-row,
 .sidebar a.nav:hover { background: var(--bg-inset); color: var(--fg); }
 .sidebar a.nav.active { background: var(--bg-inset); color: var(--fg); font-weight: 600; }
 .sidebar .spacer { flex: 1; }
+/* The nav's footer controls: theme and collapse, both icon-only Buttons. They sit in a row
+   and stack when the rail collapses, so neither needs placement rules of its own.
+   `.pane-toggle` hides itself until its lane is approached — right for a divider you only
+   want when you reach for it, wrong here: these are permanent nav controls, and inheriting
+   that made the sidebar's collapse button invisible until it was focused. */
+.nav-footer { display: flex; align-items: center; gap: 2px; padding: 0 6px; }
+.nav-footer .pane-toggle { opacity: 1; margin: 0; background: transparent; width: auto; height: auto; }
+
+/* The collapsed nav is the icon rail: labels go, icons stay, everything stays reachable.
+   One rule drives it from `data-nav` so the operator toggle and the 900px breakpoint below
+   cannot describe two different collapsed states. */
+.shell[data-nav="rail"] .sidebar { width: 60px; }
+.shell[data-nav="rail"] .sidebar .label,
+.shell[data-nav="rail"] .sidebar .wordmark { display: none; }
+.shell[data-nav="rail"] .mark-btn { justify-content: center; margin-left: 0; margin-right: 0; }
+.shell[data-nav="rail"] .sidebar a.nav { justify-content: center; padding-left: 0; padding-right: 0; }
+/* the rail is too narrow for two controls side by side, so they stack */
+.shell[data-nav="rail"] .nav-footer { flex-direction: column; padding: 0; }
+.sidebar { transition: width var(--dur-base) var(--ease-out-strong); }
 @media (max-width: 900px) { .sidebar { width: 60px; } .sidebar .label, .sidebar .wordmark { display: none; } }
 
-main { flex: 1; min-width: 0; }
+main { flex: 1; min-width: 0; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
 
 /* runs list */
 /* every screen shares this page container: full-width (left-anchored), generous air.
    1480px is the readable ceiling; below it the content owns ALL the whitespace. */
-.runs { max-width: 1480px; margin: 0; padding: 28px 32px 64px; }
+.runs { max-width: 1480px; margin: 0; padding: 28px 32px 64px; flex: 1; min-height: 0; overflow-y: auto; }
 .runs h1 { font-size: var(--type-lg); font-weight: 600; margin: 0 0 18px; }
 /* rows are rows: a hairline and spacing separate them, never a card (DESIGN.md).
    Hover, selected and needs-input are the Row component's (HOW-16 P1.6) — what is left here
@@ -73,7 +98,8 @@ main { flex: 1; min-width: 0; }
 @keyframes pulse { 50% { opacity: 0.35; } }
 
 /* run view */
-.runview { display: flex; height: 100vh; overflow: hidden; }
+/* height comes from `main` now; 100vh here would ignore the shell it sits in */
+.runview { display: flex; height: 100%; min-height: 0; overflow: hidden; }
 .thread-col {
   flex: 1; min-width: 0; overflow: hidden; padding: 0 36px 56px;
   display: flex; flex-direction: column;
@@ -82,18 +108,29 @@ main { flex: 1; min-width: 0; }
   width: 344px; flex-shrink: 0; overflow-y: auto;
   border-left: 1px solid var(--border); padding: 26px 24px;
 }
+/* The head is a flex item in a column that does not scroll — the scrolling happens in the
+   pane below (`.scroll-shell`). It was `position: sticky` with the banner pinned at
+   `top: 49px`, a hand-measured guess at this bar's height: the bar actually computes to
+   ~61px, so the moment anything here DID scroll the banner would have sat 12px underneath
+   it. A magic offset that only works while the mechanism is inert is a bug waiting for a
+   layout change, so the mechanism goes rather than the number getting re-guessed. */
 .topbar {
-  position: sticky; top: 0; z-index: 3;
+  flex-shrink: 0;
+  /* WRAPS rather than clips. With the rail no longer hiding itself, this column got ~340px
+     narrower and the bar's tail — the Open-in-IDE and run-folder controls — was cut off with
+     no scroll and no ellipsis to admit it: 192px of controls simply unreachable. A second
+     line is the honest answer; a hidden control is not a control. */
+  flex-wrap: wrap; row-gap: 8px;
   display: flex; align-items: center; gap: 14px;
   padding: 20px 0 16px; background: var(--bg);
   border-bottom: 1px solid var(--border);
 }
-.topbar h1 { font-size: var(--type-lg); margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.topbar h1 { font-size: var(--type-lg); margin: 0; min-width: 0; flex-shrink: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .topbar .meta { color: var(--fg-muted); font-size: var(--type-sm); flex-shrink: 0; margin-left: auto; }
 
 /* pinned needs-you banner */
 .banner {
-  position: sticky; top: 49px; z-index: 2;
+  flex-shrink: 0;
   display: flex; align-items: center; gap: 10px;
   margin: 0 -36px; padding: 13px 36px;
   background: var(--attention-bg); color: var(--attention-fg);
@@ -104,18 +141,21 @@ main { flex: 1; min-width: 0; }
 
 /* thread */
 .scroll-shell {
-  position: relative; flex: 1; min-height: 0; overflow: hidden;
+  flex: 1; min-height: 0; overflow: hidden;
   display: flex; flex-direction: column;
 }
 .scroll-viewport {
   flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden;
   scrollbar-gutter: stable;
 }
+/* In FLOW, not over the content. These were absolutely placed at z-index 4 in the shell's
+   top-right corner, so every line of the transcript scrolled underneath them — the Top and
+   Bottom controls sat on the text they were there to help you read. A strip costs ~28px and
+   nothing can pass beneath it, which is the same trade the detail panel's lane already makes. */
 .scroll-actions {
-  position: absolute; top: 10px; right: 12px; z-index: 4;
-  display: flex; gap: 6px; pointer-events: none;
+  flex-shrink: 0; display: flex; justify-content: flex-end; gap: 6px;
+  padding: 4px 12px 4px 0;
 }
-.scroll-actions button { pointer-events: auto; background: var(--bg); }
 
 .thread-shell {
   margin: 12px 0 0;
@@ -183,7 +223,24 @@ main { flex: 1; min-width: 0; }
 .pr-link { text-decoration: underline; text-underline-offset: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 210px; }
 
 /* graph DAG (T20) */
-.dag-scroll { overflow: auto; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-inset); }
+/* The graph canvas. `overflow: auto` alone never scrolled: the box had no bounded height, so
+   it grew to the graph and the pane clipped it — reachable only while the PAGE still
+   scrolled, which the app shell removed. It is a real scroller now (flex child with
+   min-height: 0), and it pans by drag. */
+.dag-view { display: flex; flex-direction: column; min-height: 0; flex: 1; gap: 8px; }
+.dag-scroll {
+  flex: 1; min-height: 0; overflow: auto;
+  border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-inset);
+  cursor: grab; touch-action: none; overscroll-behavior: contain;
+}
+.dag-scroll[data-panning] { cursor: grabbing; }
+/* the node keeps its own pointer, or the whole canvas reads as undraggable furniture */
+.dag-scroll .dag-node.clickable { cursor: pointer; }
+
+/* Above the canvas, in flow. Floating these would park a button on the entry node. */
+.dag-controls { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; flex-shrink: 0; }
+.dag-zoom { min-width: 42px; text-align: center; font-size: var(--type-xs); color: var(--fg-muted); }
+.dag-hint { margin-left: auto; font-size: var(--type-xs); color: var(--fg-faint); }
 .dag-node rect { fill: var(--bg-raised); stroke: var(--border-strong); stroke-width: 1.2; }
 .dag-node.current rect { stroke: var(--status-running); stroke-width: 2; }
 .dag-node.current .dag-title { fill: var(--status-running); }
@@ -204,7 +261,7 @@ main { flex: 1; min-width: 0; }
 .topbar-back { text-decoration: none; color: var(--fg-muted); }
 .section-gap { margin-top: 28px; }
 .wrap-pre { white-space: pre-wrap; }
-.run-graph { padding-top: 16px; }
+.run-graph { padding-top: 16px; display: flex; flex-direction: column; min-height: 0; flex: 1; gap: 8px; }
 .run-graph-hint { margin-bottom: 8px; }
 .jump-card { margin-bottom: 12px; }
 /* P0 defect 1 was HERE: `.tab.active` was the only selected-tab rule in the app, and
@@ -472,36 +529,47 @@ main { flex: 1; min-width: 0; }
 .steps-split[data-detail="full"] .step-detail { width: auto; flex: 1 1 auto; border-left: 0; }
 
 /* The divider is a 9px hit target around a 1px line: comfortable to grab, invisible until
-   wanted. Shape before colour — it thickens on hover/focus, it does not light up. */
-.sd-resize {
+   wanted. Shape before colour — it thickens on hover/focus, it does not light up.
+   `.pane-resize` is the shared one (components/ui/panel.tsx): Steps, Logs, Context and the
+   run rail all use it, so there is ONE divider implementation, not four. */
+.pane-resize {
   position: relative; flex: 0 0 9px; cursor: col-resize; touch-action: none;
   background: transparent;
 }
-.sd-resize::before {
+.pane-resize::before {
   content: ""; position: absolute; inset: 0 4px; background: var(--border);
-  transition: background var(--motion-fast, 120ms) ease, inset var(--motion-fast, 120ms) ease;
+  transition: background var(--dur-fast) ease, inset var(--dur-fast) ease;
 }
-.sd-resize:hover::before, .sd-resize:focus-visible::before { inset: 0 3px; background: var(--border-strong); }
-.sd-resize:focus-visible { outline: none; }
-/* Full width keeps the divider as a real LANE rather than collapsing it to zero. A zero-width
-   anchor put the restore control on top of the panel's own scope tabs — an overlay that ate the
-   "S" of "Step". The lane is the width of the control plus its margins, so nothing can overlap
-   by construction, and the empty column reads as where the step list went. */
-.steps-split[data-detail="full"] .sd-resize { flex-basis: 33px; cursor: default; }
-.steps-split[data-detail="full"] .sd-resize::before { display: none; }
+.pane-resize:hover::before, .pane-resize:focus-visible::before { inset: 0 3px; background: var(--border-strong); }
+.pane-resize:focus-visible { outline: none; }
 
-/* Appearance is Button variant="outline" size="icon"; the reveal is ours. Placement is NOT
-   here: the control sits inside its Tooltip, so the Tooltip's span is the absolutely-placed
-   anchor (run/steps.tsx) and the button is static inside it. Positioning both would put the
-   50% of a zero-width wrapper between the control and the lane it is centred in. */
-.sd-full {
+/* A closed or full-width pane keeps its divider as a real LANE rather than collapsing it to
+   zero. A zero-width anchor put the restore control on top of the panel's own scope tabs — an
+   overlay that ate the "S" of "Step". The lane is the width of the control plus its margins,
+   so nothing can overlap BY CONSTRUCTION, and the empty column reads as where the pane went.
+   This is the rule that keeps every collapsed pane in the app from repeating that bug. */
+.steps-split[data-detail="full"] .pane-resize,
+[data-pane="closed"] > .pane-resize { flex-basis: 33px; cursor: default; }
+.steps-split[data-detail="full"] .pane-resize::before,
+[data-pane="closed"] > .pane-resize::before { display: none; }
+
+/* The toggle lives INSIDE the lane, statically — never absolutely placed against it. It is
+   revealed on approach and always available to the keyboard, same contract as `.sd-full`. */
+.pane-toggle {
   width: 17px; height: 17px; padding: 0; background: var(--bg);
-  opacity: 0; transition: opacity var(--motion-fast, 120ms) ease;
+  margin: 10px auto 0; opacity: 0; transition: opacity var(--dur-fast) ease;
 }
-/* revealed on approach, but never hidden from the keyboard */
-.steps-split:hover .sd-full, .sd-full:focus-visible, .sd-resize:focus-visible .sd-full { opacity: 1; }
-/* In full width the control owns the lane: centred in it, always visible, over nothing. */
-.steps-split[data-detail="full"] .sd-full { opacity: 1; }
+.steps-split:hover .pane-toggle, .logs-split:hover .pane-toggle, .ctx-split:hover .pane-toggle,
+.runview:hover .pane-toggle, .pane-toggle:focus-visible, .pane-resize:focus-visible .pane-toggle { opacity: 1; }
+/* a closed pane's toggle is the only way back, so it never hides */
+[data-pane="closed"] > .pane-resize .pane-toggle { opacity: 1; }
+
+/* The lane's controls stack down it, in normal flow. NOTHING here is absolutely positioned:
+   that is the whole point of the lane, and it is why a control can never land on the pane
+   beside it the way the old restore button did. */
+.pane-controls { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+/* In full width the controls own the lane: always visible, over nothing. */
+.steps-split[data-detail="full"] .pane-toggle { opacity: 1; }
 .sd-scope { display: flex; gap: 6px; padding: 12px 16px; border-bottom: 1px solid var(--border); }
 .sd-head { display: flex; align-items: center; gap: 8px; padding: 13px 16px 0; }
 .sd-node { font-size: var(--type-base); color: var(--fg); }
@@ -523,7 +591,13 @@ main { flex: 1; min-width: 0; }
 /* On Steps the detail panel's Run toggle already carries identity, git and usage, so the
    run rail would be a third column competing for the waterfall's width. At 1440 that left
    the bars unreadable — the rail stands down and Steps gets the room. */
-.runview:has(.steps-split) .rail { display: none; }
+/* The rail used to disappear on its own whenever a Steps split was on screen — a `:has()`
+   rule deciding for the operator, which reads as the inspector being broken rather than
+   hidden. It is a real collapse now: the operator closes it, the choice persists, and the
+   lane's toggle is always there to bring it back. The Steps tab still gets the room, because
+   that is when you close it; it is just your call instead of the stylesheet's. */
+.runview[data-pane="closed"] .rail { display: none; }
+.rail { width: var(--rail-w, 344px); }
 
 /* ---- thread transcript (T24, story 6) -------------------------------------------
    Laminar's shape: one row per event, machine values right-aligned. Row KIND is carried

@@ -25,6 +25,9 @@ import { StatusBadge, askRowKey } from "../status";
 import { getJSON } from "@/lib/net";
 import { fmtDur, fmtWait, liveDuration } from "@/lib/format";
 import { useAttentionSurfaces, useNow } from "@/lib/hooks";
+import { usePanel } from "@/lib/panel";
+import { submitOnEnter } from "@/lib/keys";
+import { PanelResizer, PanelToggle } from "@/components/ui/panel";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -267,7 +270,7 @@ export function RunGraph({ runId, graph, timeline, status, onJumped }: { runId: 
         <div className="ask-card jump-card">
           <h3>Jump to {jumpTo}</h3>
           <div className="field-hint">Starts a fresh attempt at this node using the current context. Your instruction is injected into its prompt and takes precedence.</div>
-          <Textarea autoFocus aria-label={`instructions for ${jumpTo}`} value={message} onChange={(e) => setMessage(e.target.value)} placeholder="Instructions for this step (optional)…" />
+          <Textarea autoFocus aria-label={`instructions for ${jumpTo}`} value={message} onChange={(e) => setMessage(e.target.value)} onKeyDown={submitOnEnter(() => void jump(), { enabled: state !== "jumping" && state !== "sent" })} placeholder="Instructions for this step (optional)…" />
           {error && <div className="field-error">{error}</div>}
           {state === "sent" && <div className="field-hint">Jump requested. The runner is moving; the graph will refresh on the next log event.</div>}
           <div className="actions">
@@ -371,6 +374,9 @@ export function RunView({ id, graceMs = OPEN_GRACE_MS }: { id: string; graceMs?:
   const [bannerAction, setBannerAction] = useState<"resume" | null>(null);
   const [bannerError, setBannerError] = useState<string | null>(null);
   const [missing, setMissing] = useState(false);
+  // the inspector rail: collapsible and drag-resizable, remembered per operator. Declared
+  // with the other state because the early `!detail` return below is after every hook.
+  const rail = usePanel({ key: "howdah.rail", min: 260, def: 344, minOther: 520, side: "right" });
   const now = useNow();
   const { toast } = useToast();
   // a 404 here is normal for a moment: launching spawns the CLI detached and answers 202
@@ -479,7 +485,12 @@ export function RunView({ id, graceMs = OPEN_GRACE_MS }: { id: string; graceMs?:
   const selectedRow = detail.timeline.find((t) => `${t.node}@${t.visit}` === selectedKey) ?? null;
 
   return (
-    <div className="runview">
+    <div
+      className="runview"
+      ref={rail.boxRef}
+      data-pane={rail.collapsed ? "closed" : "open"}
+      style={{ ["--rail-w" as string]: `${rail.width}px` }}
+    >
       <div className="thread-col">
         <div className="topbar">
           <a className="topbar-back" href="/" aria-label="back to runs">←</a>
@@ -576,7 +587,13 @@ export function RunView({ id, graceMs = OPEN_GRACE_MS }: { id: string; graceMs?:
         )}
       </div>
 
-      <div className="rail">
+      <PanelResizer panel={rail} label="the inspector rail">
+        <div className="pane-controls">
+          <PanelToggle panel={rail} label="the inspector" side="right" />
+        </div>
+      </PanelResizer>
+
+      <div className="rail" aria-label="Run inspector">
         <section>
           <h2><Fingerprint size={12} /> Identity</h2>
           <div className="kv"><span className="k">run</span><span>{id}</span></div>
