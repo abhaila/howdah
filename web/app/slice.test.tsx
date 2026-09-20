@@ -71,6 +71,17 @@ async function click(el: HTMLElement) {
   });
 }
 
+/**
+ * Deciding a round is two steps now (HOW-16 P1.4): the action opens an AlertDialog and the
+ * dialog commits. What is being pinned by going through it here — rather than by exporting a
+ * seam that skips it — is that there is NO path from one click to a posted decision.
+ */
+const CONFIRM: Record<string, string> = { Approve: "Approve the design", "Send feedback": "Send the feedback" };
+async function decide(el: ParentNode, label: "Approve" | "Send feedback") {
+  await click(button(el, label));
+  await click(button(el, CONFIRM[label]!));
+}
+
 // ---- fixtures -------------------------------------------------------------------------------
 
 function awaitingSlice(): { slice: SliceView; log: FakeLog; id: number } {
@@ -191,12 +202,13 @@ describe("ApprovalCard", () => {
     let release!: (r: Response) => void;
     const calls = mockFetch(() => new Promise<Response>((r) => (release = r)));
     const el = render(<ApprovalCard runId="r1" slice={slice} onChanged={noop} />);
-    const approve = button(el, "Approve");
+    await click(button(el, "Approve"));
+    const confirm = button(el, "Approve the design");
     await act(async () => {
-      approve.click();
-      approve.click();
+      confirm.click();
+      confirm.click();
     });
-    await click(approve);
+    await click(confirm);
     expect(calls).toEqual([{ url: "/api/runs/r1/approval", body: { approved: true, proposal_id: id } }]);
     expect(button(el, "Approving…").disabled).toBe(true);
 
@@ -211,7 +223,7 @@ describe("ApprovalCard", () => {
     const c = pin(log, id, FIND, "use the repository");
     mockFetch(() => json({ ok: true, proposal_id: id, idempotent: false }));
     const el = render(<ApprovalCard runId="r1" slice={deriveSlice(log.events)!} onChanged={noop} />);
-    await click(button(el, "Send feedback"));
+    await decide(el, "Send feedback");
     expect(button(el, "Approve").disabled).toBe(true);
 
     log.add({ type: "slice-feedback-sent", proposal_id: id, proposal_hash: `h${id}`, manifest_hash: "m1", comment_ids: [c] });
@@ -228,7 +240,7 @@ describe("ApprovalCard", () => {
     const changed = mock(() => {});
     mockFetch(() => json({ error: refusal, code: "superseded" }, 409));
     const el = render(<ApprovalCard runId="r1" slice={slice} onChanged={changed} />);
-    await click(button(el, "Approve"));
+    await decide(el, "Approve");
     const alert = $(el, '[role="alert"]')!;
     expect(alert.textContent).toBe(refusal);
     expect(el.textContent).not.toMatch(/\bfailed\b/i);
@@ -240,7 +252,7 @@ describe("ApprovalCard", () => {
     const refusal = `proposal #${id} was superseded by #99; decide on the current proposal`;
     mockFetch(() => json({ error: refusal, code: "superseded" }, 409));
     const el = render(<ApprovalCard runId="r1" slice={deriveSlice(log.events)!} onChanged={noop} />);
-    await click(button(el, "Approve"));
+    await decide(el, "Approve");
     const c = pin(log, id, FIND, "x");
     log.add({ type: "slice-feedback-sent", proposal_id: id, proposal_hash: `h${id}`, manifest_hash: "m1", comment_ids: [c] });
     proposeAndPark(log, ghostsV2(), 2);
@@ -265,7 +277,7 @@ describe("ApprovalCard", () => {
     const { slice } = awaitingSlice();
     globalThis.fetch = mock(async () => { throw new Error("connection refused"); }) as unknown as typeof fetch;
     const el = render(<ApprovalCard runId="r1" slice={slice} onChanged={noop} />);
-    await click(button(el, "Approve"));
+    await decide(el, "Approve");
     expect($(el, '[role="alert"]')!.textContent).toBe("could not reach the viewer server: connection refused");
   });
 
@@ -279,7 +291,7 @@ describe("ApprovalCard", () => {
     pin(log, id, FIND, "use the repository");
     const calls = mockFetch(() => json({ ok: true, proposal_id: id, idempotent: false }));
     const el = render(<ApprovalCard runId="r1" slice={deriveSlice(log.events)!} onChanged={noop} />);
-    await click(button(el, "Send feedback"));
+    await decide(el, "Send feedback");
     expect(calls).toEqual([{ url: "/api/runs/r1/approval", body: { approved: false, proposal_id: id } }]);
     expect($(el, '[role="status"]')!.textContent).toBe("feedback sent — the proposer redraws");
   });

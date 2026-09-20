@@ -9,6 +9,10 @@
     "skipLibCheck": true,
     "types": ["bun"],
     "jsx": "react-jsx",
+    /* `@/*` is what components.json declares as the import alias, so a component pulled
+       with `shadcn add` compiles unedited (HOW-16 P1.3). TypeScript 7 removed `baseUrl`, so
+       the mapping is relative to this file. */
+    "paths": { "@/*": ["./web/app/*"] },
     "lib": ["ES2023", "DOM", "DOM.Iterable"]
   },
   "include": ["core", "reviser", "graphs", "scripts", "prompts", "log", "adapter", "engine", "watchdog", "web", "cli", "config", "map"],

@@ -30,6 +30,30 @@
   --font-display: "Instrument Sans", "Helvetica Neue", Arial, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
 
+  /*
+   * The type scale — the one place a font size is decided (HOW-16 P3.12). Before this the
+   * app carried 88 hardcoded `font-size: Npx` across eight sizes, plus `text-[13px]` in the
+   * component layer, so "make the ids one step smaller" meant 88 edits and a judgement call
+   * at each one. The ladder is deliberately the sizes the app already used, to a pixel:
+   * this is a token pass, not a redesign (tokens.css and DESIGN.md decide the visual
+   * language). `--type-code` and `--type-body` are the two half-pixel readings the UI was
+   * already tuned to; they keep the ladder honest instead of rounding the app under itself.
+   *
+   * globals.css re-exports these into Tailwind's `--text-*` namespace, so `text-base` in a
+   * component and `var(--type-base)` in howdah.css are the SAME number — the two systems
+   * this sweep collapsed cannot drift apart again.
+   */
+  --type-3xs: 9px;    /* dag edge labels — the smallest thing that is still a word */
+  --type-2xs: 10px;   /* timestamps, visit suffixes, counts */
+  --type-xs: 11px;    /* labels, badges, section headings */
+  --type-code: 11.5px;/* dense machine text: log summaries, tool output */
+  --type-sm: 12px;    /* secondary prose and metadata */
+  --type-base: 13px;  /* controls: buttons, inputs, tabs */
+  --type-body: 13.5px;/* body copy */
+  --type-md: 14px;    /* card titles, prose in the thread */
+  --type-lg: 16px;    /* screen headings */
+  --type-xl: 17px;    /* the prompt/proposal detail heading */
+
   /* ---- dark: the design target ---------------------------------------------------- */
   --bg: #0B0C0D;
   --bg-raised: #141517;
@@ -73,9 +97,22 @@
   --dur-base: 200ms;
   --dur-slow: 350ms;
 
+  /*
+   * Ink that sits ON a saturated fill. Amber and the failure red are the only two fills the
+   * system has, and what reads on them does NOT flip with the theme the way --fg does — the
+   * light theme's amber is a deep gold, so its ink goes light while its dark counterpart's
+   * stays near-black. These were four hardcoded hexes (#fff ×3, #1a1408) before HOW-16.
+   */
+  --on-attention: #1A1408;
+  --on-alarm: #FFFFFF;
+
+  /* the dulled gold a `cleared` context key reads in — veiled, not gone */
+  --scope-cleared: #8C7A4A;
+
   /* shape: near-square. Rounded cards are the dashboard look we left behind. */
   --radius: 3px;
   --radius-sm: 2px;
+  --radius-xs: 2px;
 }
 
 /* ---- light: supported, not the target ---------------------------------------------
@@ -102,6 +139,10 @@
     --attention-fg: #5C4410;
     --attention-bg: rgba(242, 169, 59, 0.16);
     --attention-border: #C9A94A;
+
+    --on-attention: #F7F6F3;
+    --on-alarm: #FFFFFF;
+    --scope-cleared: #6E5E33;
 
     --status-queued: #8C8A85;
     --status-running: #3F6670;
@@ -149,6 +190,11 @@
   --operator: #3F6670;
   --diff-add: #3F6647;
   --diff-del: #A33322;
+
+  /* light's amber is a deep gold, so what reads on it is light, not near-black */
+  --on-attention: #F7F6F3;
+  --on-alarm: #FFFFFF;
+  --scope-cleared: #6E5E33;
 }
 
 /* themed browser surfaces */

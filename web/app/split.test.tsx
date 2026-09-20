@@ -8,7 +8,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { StepsSplit, readDetailWidth } from "./main";
+import { StepsSplit, readDetailWidth } from "./run/steps";
 
 const KEY = "howdah.detail-width";
 const DEFAULT = 420;

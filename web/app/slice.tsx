@@ -24,10 +24,24 @@
  *     listed as orphaned, never hidden.
  *   - `verified` refers to a commit (D21): the drift view is stamped with the engine's name for the
  *     snapshot it checked ("<sha>" or "<sha> + uncommitted changes").
+ *
+ * HOW-16 changed only the SURFACES here, never the round-keyed decision posting: the eight
+ * native `title=` attributes are Tooltips, the `.gr-pin` raw button is a Button, the drift
+ * outcome pills are Badge variants, drift rows are Rows, approve and reject are confirmed by
+ * an AlertDialog and every decision reports through a toast. `post`, `OpGlyph`, `TierGlyph`
+ * and `DriftGlyph` are untouched — the refused-vs-failed distinction and "shape before
+ * colour" are the two things this file exists to protect.
  */
 import { useRef, useState } from "react";
 import type { GhostGroup, GhostRow, RunDetail, SliceComment, SliceDecision, SliceDrift, SliceMapProgress, SliceMapSnapshot, SliceView } from "../derive";
-import { Button, Input, Textarea } from "./ui";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { Badge } from "@/components/ui/badge";
+import { Row } from "@/components/ui/row";
+import { Tooltip } from "@/components/ui/tooltip";
+import { AlertDialog } from "@/components/ui/dialog";
+import { useToast } from "@/components/ui/toast";
 // the ONE "14:02" reading, shared with the decision routes' refusals (dependency-free leaf)
 import { clockTime as clock } from "../../core/clock-time";
 
@@ -169,8 +183,8 @@ function MapPane({ progress, snapshot }: { progress: SliceMapProgress | null; sn
       {snapshot && (
         <>
           <h2 className="rh">Snapshot</h2>
-          <div className="kv"><span className="k">commit</span><span className="v m" title={snapshot.commit ?? ""}>{snapshot.stamp}</span></div>
-          <div className="kv"><span className="k">manifest</span><span className="v m" title={snapshot.manifest_hash}>{snapshot.manifest_hash.slice(0, 12)}</span></div>
+          <div className="kv"><span className="k">commit</span><Tooltip content={snapshot.commit ?? ""}><span className="v m">{snapshot.stamp}</span></Tooltip></div>
+          <div className="kv"><span className="k">manifest</span><Tooltip content={snapshot.manifest_hash}><span className="v m">{snapshot.manifest_hash.slice(0, 12)}</span></Tooltip></div>
           <div className="kv"><span className="k">files</span><span className="v m">{snapshot.files}</span></div>
           <div className="kv"><span className="k">skipped</span><span className="v m">{snapshot.skipped}</span></div>
           <div className="kv"><span className="k">not checked</span><span className="v m">{snapshot.not_checked}</span></div>
@@ -266,6 +280,9 @@ export function ApprovalCard({ runId, slice, onChanged }: { runId: string; slice
   const inFlight = useRef(false); // a double click must issue ONE request, whatever React batches
   const [redesignOpen, setRedesignOpen] = useState(false);
   const [redesignText, setRedesignText] = useState("");
+  // a decision on a round is irreversible — the run moves on it — so it asks first
+  const [confirm, setConfirm] = useState<"approve" | "feedback" | null>(null);
+  const { toast } = useToast();
 
   if (!p || !slice.approval) return <div className="pd-note">nothing has been proposed yet</div>;
   const decision = slice.decision;
@@ -285,10 +302,14 @@ export function ApprovalCard({ runId, slice, onChanged }: { runId: string; slice
     try {
       const r = await post(url, body);
       if (r.ok) {
-        setAct({ state: "done", text: done(r.json), round });
+        const text = done(r.json);
+        setAct({ state: "done", text, round });
+        toast(text);
         onChanged();
       } else {
         setAct({ state: r.refused ? "refused" : "error", text: r.text, round });
+        // the toast SECONDS the inline refusal; it never replaces it (see toast.tsx)
+        toast(r.text, "error");
         if (r.refused) onChanged(); // a refusal means the log moved on: show the state it moved to
       }
     } finally {
@@ -352,12 +373,16 @@ export function ApprovalCard({ runId, slice, onChanged }: { runId: string; slice
       )}
 
       <div className="actions ap-actions">
-        <Button size="sm" variant="outline" disabled={busy || decidedHere || finished || feedbackBlock !== null} title={feedbackBlock ?? undefined} onClick={() => decide(false)}>
-          {busy && act.what === "feedback" ? "Sending…" : "Send feedback"}
-        </Button>
-        <Button size="sm" disabled={busy || decidedHere || block !== null} title={block ?? undefined} onClick={() => decide(true)}>
-          {busy && act.what === "approve" ? "Approving…" : "Approve"}
-        </Button>
+        <Tooltip content={feedbackBlock ?? ""}>
+          <Button size="sm" variant="outline" disabled={busy || decidedHere || finished || feedbackBlock !== null} onClick={() => setConfirm("feedback")}>
+            {busy && act.what === "feedback" ? "Sending…" : "Send feedback"}
+          </Button>
+        </Tooltip>
+        <Tooltip content={block ?? ""}>
+          <Button size="sm" disabled={busy || decidedHere || block !== null} onClick={() => setConfirm("approve")}>
+            {busy && act.what === "approve" ? "Approving…" : "Approve"}
+          </Button>
+        </Tooltip>
         <Button size="sm" variant="ghost" disabled={busy || finished} aria-expanded={redesignOpen} onClick={() => setRedesignOpen(!redesignOpen)}>Redesign</Button>
         {block && <span className="send-state ap-block" data-testid="ap-block">{block}</span>}
         {!block && feedbackBlock && <span className="send-state">{feedbackBlock} to send feedback</span>}
@@ -399,6 +424,27 @@ export function ApprovalCard({ runId, slice, onChanged }: { runId: string; slice
           {act.text}
         </div>
       )}
+
+      {/* One decision per round, and the round is what the build is bound to — so both
+          answers confirm. Cancel holds focus, so Enter is never the one that commits. */}
+      <AlertDialog
+        open={confirm === "approve"}
+        busy={busy}
+        onClose={() => setConfirm(null)}
+        onConfirm={() => { setConfirm(null); decide(true); }}
+        title={`Approve proposal #${p.proposal_id}?`}
+        description="The run resumes into implementation and builds exactly this ghost set. The approval is bound to this proposal's hash and the snapshot it was drawn on — a later round cannot inherit it."
+        confirmLabel="Approve the design"
+      />
+      <AlertDialog
+        open={confirm === "feedback"}
+        busy={busy}
+        onClose={() => setConfirm(null)}
+        onConfirm={() => { setConfirm(null); decide(false); }}
+        title={`Send feedback on proposal #${p.proposal_id}?`}
+        description={`Your ${roundComments.length} pinned comment${roundComments.length === 1 ? "" : "s"} go back to the proposer, which redraws the design as a new round. This round is closed either way.`}
+        confirmLabel="Send the feedback"
+      />
 
       {slice.rounds.length > 1 && (
         <div className="ap-rounds">
@@ -477,12 +523,14 @@ function GhostRowView({ row, slice, runId, canPin, proposalId, onChanged }: {
       <div className="ghost-row">
         <OpGlyph op={row.op} />
         <span className="gr-tier">{row.tier && <TierGlyph tier={row.tier} />}</span>
-        <span className="m gr-id" title={row.id}>
-          {row.edge ? <>{row.edge.from} <span className="gr-arrow">→</span> {row.edge.to}</> : row.id}
-        </span>
+        <Tooltip content={row.id} className="gr-id-wrap">
+          <span className="m gr-id">
+            {row.edge ? <>{row.edge.from} <span className="gr-arrow">→</span> {row.edge.to}</> : row.id}
+          </span>
+        </Tooltip>
         <span className="gr-kind">{row.edge ? `${row.edge.kind} edge` : row.subject}</span>
         {canPin && (
-          <button className="gr-pin" aria-label={`pin a comment on ${row.id}`} onClick={() => setOpen(!open)}>pin</button>
+          <Button variant="ghost" size="sm" className="gr-pin" aria-expanded={open} aria-label={`pin a comment on ${row.id}`} onClick={() => setOpen(!open)}>pin</Button>
         )}
       </div>
       {(row.expected_file || row.prose) && (
@@ -532,8 +580,8 @@ export function DriftView({ drift }: { drift: SliceDrift }) {
     <div className="drift-view">
       <div className="dv-head">
         <span className="dv-title">Drift</span>
-        <span className="m dv-stamp" data-testid="drift-stamp" title={drift.commit ?? ""}>checked at {drift.stamp}</span>
-        {drift.base_commit && <span className="m dv-base" title={drift.base_commit}>base {shortSha(drift.base_commit)}</span>}
+        <Tooltip content={drift.commit ?? ""}><span className="m dv-stamp" data-testid="drift-stamp">checked at {drift.stamp}</span></Tooltip>
+        {drift.base_commit && <Tooltip content={drift.base_commit}><span className="m dv-base">base {shortSha(drift.base_commit)}</span></Tooltip>}
       </div>
       {drift.dirty && (
         <div className="pd-note">The checked snapshot had uncommitted changes, so nothing in it is reported verified — commit them and drift can verify against a commit.</div>
@@ -551,14 +599,18 @@ export function DriftView({ drift }: { drift: SliceDrift }) {
       {drift.groups.length === 0 && <div className="pd-note">nothing to check — the approved design names nothing drift can see</div>}
       {drift.groups.map((g) => (
         <section key={g.outcome} className="dv-group" data-outcome={g.outcome}>
-          <h2 className="rh dv-group-head"><DriftGlyph outcome={g.outcome} problem={g.problem} /> {OUTCOME_LABEL[g.outcome]} <span className="m dv-count">{g.count}</span></h2>
+          <h2 className="rh dv-group-head">
+            <DriftGlyph outcome={g.outcome} problem={g.problem} /> {OUTCOME_LABEL[g.outcome]}{" "}
+            <Badge variant={g.problem ? "destructive" : "default"} className="dv-count">{g.count}</Badge>
+          </h2>
           {g.items.map((it, i) => (
             <div key={`${it.key}#${i}`} className="dv-item" data-outcome={it.outcome}>
-              <div className="dv-row">
+              {/* a drift row is reachable by keyboard: `as="div"` only where it does nothing */}
+              <Row as="div" className="dv-row">
                 <DriftGlyph outcome={it.outcome} problem={g.problem} />
-                <span className="m dv-key" title={it.key}>{it.key}</span>
+                <Tooltip content={it.key} className="dv-key-wrap"><span className="m dv-key">{it.key}</span></Tooltip>
                 <span className="dv-kind">{it.kind}{it.op ? ` · ${it.op}` : ""}</span>
-              </div>
+              </Row>
               {(it.reason || it.evidence) && (
                 <div className="dv-sub">
                   {it.reason && <span className="dv-reason">{it.reason}</span>}

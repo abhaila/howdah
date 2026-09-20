@@ -17,7 +17,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { deriveDetail } from "../derive";
 import { FakeLog, started } from "../slice.fixtures";
-import { RunView, OPEN_GRACE_MS } from "./main";
+import { RunView, OPEN_GRACE_MS } from "./run/view";
 
 let root: Root | null = null;
 let host: HTMLElement | null = null;

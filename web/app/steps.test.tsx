@@ -10,7 +10,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { deriveDetail } from "../derive";
 import { FakeLog, drift, failApproval, ghostsV1, proposeAndPark, proposeRound, started } from "../slice.fixtures";
-import { StepDetail } from "./main";
+import { StepDetail } from "./run/steps";
 import { askRowKey } from "./status";
 import { deriveStatus } from "../derive";
 
