@@ -22,14 +22,22 @@ afterEach(() => {
   root = host = null;
 });
 
-function renderStep(log: FakeLog, node: string | null, visit = 1): HTMLElement {
+/**
+ * `now` is taken from the LOG, not from the wall clock. FakeLog stamps its events at a fixed
+ * date in the past, so a step still running measured against `Date.now()` renders a duration
+ * that grows every day the suite runs — nothing about it can be asserted, and it is not the
+ * reading a live panel gives. `sinceLastEvent` is how far the operator's clock has moved past
+ * the last event, which is the only thing the panel's live timing depends on.
+ */
+function renderStep(log: FakeLog, node: string | null, visit = 1, sinceLastEvent = 0): HTMLElement {
   const detail = deriveDetail("r1", log.events);
   const row = node === null ? null : detail.timeline.findLast((t) => t.node === node && t.visit === visit) ?? null;
   if (node !== null) expect(row).not.toBeNull();
+  const now = new Date(log.last.ts).getTime() + sinceLastEvent;
   host = document.createElement("div");
   document.body.appendChild(host);
   root = createRoot(host);
-  act(() => root!.render(<StepDetail runId="r1" row={row} detail={detail} ask={detail.ask} now={Date.now()} onResolved={() => {}} />));
+  act(() => root!.render(<StepDetail runId="r1" row={row} detail={detail} ask={detail.ask} now={now} onResolved={() => {}} />));
   return host;
 }
 
@@ -86,6 +94,19 @@ describe("StepDetail pane routing on the approval step", () => {
     expect(tabLabels(el)).toEqual(["Drift", "Ask", "Prompt & context", "Output"]);
     expect(selected(el)).toBe("Drift");
     expect(el.querySelector(".drift-view")).not.toBeNull();
+  });
+});
+
+describe("the panel's live timing", () => {
+  test("a step still running reads its elapsed from `now`, and the work bar is that long", () => {
+    const log = new FakeLog();
+    started(log);
+    proposeRound(log, ghostsV1()); // leaves slice.approve started and unfinished — the live case
+    const el = renderStep(log, "slice.approve", 1, 3 * 60_000);
+    expect(el.querySelector(".sd-total")!.textContent).toBe("3m 0s");
+    // nothing was waiting on the operator yet, so the whole of it is agent time
+    expect(el.querySelector(".sd-seg .m")!.textContent).toBe("3m 0s");
+    expect((el.querySelector(".sd-seg-fill") as HTMLElement).style.width).toBe("100%");
   });
 });
 
