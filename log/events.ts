@@ -39,6 +39,8 @@ export type AllowanceState = "ok" | "exhausted" | "unreachable" | "unavailable";
  */
 export type ParkCode =
   | "attempt-failed"
+  /** the harness CLI is not logged in: outside the graph's control, fixed by a human, then resume */
+  | "harness-unauthenticated"
   | "executor-threw"
   | "max-visits"
   | "no-edge"

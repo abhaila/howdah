@@ -654,6 +654,48 @@ function attentionContext(detail: RunDetail, ask: NonNullable<RunDetail["ask"]>)
   return null;
 }
 
+/**
+ * The one park the operator cannot answer by typing: the harness CLI is not logged in. Agent
+ * nodes run `claude -p` / `codex app-server`, which have no TTY, so there is no session to
+ * log into from here. This opens a real terminal in the run's own folder with the login
+ * command ready, and always shows the command too, because the terminal only opens on macOS
+ * and a copyable command is never wrong.
+ *
+ * The harness name comes from the node's own `prompt-rendered` event rather than from parsing
+ * the park reason — the reason is prose, the render is the record of which harness ran.
+ */
+function HarnessLogin({ runId, ask, detail }: { runId: string; ask: NonNullable<RunDetail["ask"]>; detail: RunDetail }) {
+  const [result, setResult] = useState<{ command: string; error?: string } | null>(null);
+  const harness = detail.renders.find((r) => r.node === ask.node && r.visit === ask.visit)?.harness ?? "claude";
+  const open = async () => {
+    try {
+      const r = await fetch(`/api/runs/${runId}/harness-login`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ harness }),
+      });
+      const body = (await r.json().catch(() => ({}))) as { command?: string; error?: string };
+      setResult({ command: body.command ?? `${harness} login`, error: r.ok ? undefined : body.error });
+    } catch (e) {
+      setResult({ command: `${harness} login`, error: e instanceof Error ? e.message : String(e) });
+    }
+  };
+  return (
+    <div className="field-hint">
+      <div className="actions">
+        <Button variant="outline" size="sm" onClick={open}>Open a terminal to log in</Button>
+      </div>
+      {result && (
+        <div>
+          {result.error ? `${result.error} — run: ` : "Opened a terminal. Run: "}
+          <code>{result.command}</code>
+        </div>
+      )}
+      <div>Once you are logged in, send a reply (empty is fine) or resume the run to retry this step.</div>
+    </div>
+  );
+}
+
 function AskCard({ runId, ask, detail, onResolved }: { runId: string; ask: NonNullable<RunDetail["ask"]>; detail: RunDetail; onResolved: () => void }) {
   const [text, setText] = useState("");
   const [state, setState] = useState<"idle" | "sending" | "delivered" | "failed" | "refused">("idle");
@@ -695,6 +737,7 @@ function AskCard({ runId, ask, detail, onResolved }: { runId: string; ask: NonNu
           {context}
         </div>
       )}
+      {ask.code === "harness-unauthenticated" && <HarnessLogin runId={runId} ask={ask} detail={detail} />}
       {(ask.code === "attempt-failed" || ask.reason === "attempt failed") && (
         <div className="field-hint">Reply with instructions to change the retry, or send an empty reply to retry the step as-is.</div>
       )}

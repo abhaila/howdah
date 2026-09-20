@@ -119,6 +119,37 @@ describe("server API", () => {
     expect(runs.find((r) => r.id === "run-a").status).toBe("needs-input");
   });
 
+  /**
+   * The operator cannot log a harness in from inside Howdah — agent nodes run `claude -p`,
+   * which has no TTY. This route opens a real terminal instead. What matters is that nothing
+   * from the request body can reach a shell, and that the command comes back either way so a
+   * platform we cannot open a terminal on still tells the operator what to run.
+   */
+  test("POST /api/runs/:id/harness-login answers with the login command, and refuses unknown harnesses", async () => {
+    seedParkedRun(runsDir, "run-login");
+    const post = (body: unknown) =>
+      fetch(url("/api/runs/run-login/harness-login"), {
+        method: "POST",
+        headers: { "content-type": "application/json", origin: url("") },
+        body: JSON.stringify(body),
+      });
+
+    for (const [harness, command] of [["claude", "claude auth login"], ["codex", "codex login"]] as const) {
+      const r = await post({ harness });
+      const b = (await r.json()) as { command?: string };
+      expect([200, 501]).toContain(r.status); // 501 off macOS, where no terminal is opened
+      expect(b.command).toBe(command);
+    }
+
+    // anything not in the table is refused BEFORE it could reach osascript
+    for (const bad of ["sh -c id", "claude; rm -rf /", "", 7, null, { toString: () => "claude" }]) {
+      const r = await post({ harness: bad });
+      expect(r.status).toBe(400);
+      expect((await r.json() as { error: string }).error).toContain("unknown harness");
+    }
+    expect((await post({})).status).toBe(400);
+  });
+
   test("GET /api/runs/:id returns detail; unknown id is 404", async () => {
     const d = (await (await fetch(url("/api/runs/run-a"))).json()) as any;
     expect(d.summary.graph).toBe("write-doc");

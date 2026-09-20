@@ -109,6 +109,12 @@ export interface AttemptResult {
   writes: Record<string, unknown>;
   /** why: the park reason for failed/awaiting, a thread note for a succeeded stale outcome */
   reason?: string;
+  /**
+   * the park code for a failed attempt, when the executor knows something the engine cannot
+   * see — an auth failure is the harness's problem, not the attempt's, and the operator needs
+   * a different verb for it. Defaults to "attempt-failed".
+   */
+  code?: ParkCode;
   /** engine-set (system-map 1c): the graph refused this attempt's proposal — logged on node-finished */
   refused?: string;
 }
@@ -476,7 +482,7 @@ export class Engine {
           });
           continue;
         }
-        return this.park(current, visit, "attempt-failed", result.reason ?? "attempt failed");
+        return this.park(current, visit, result.code ?? "attempt-failed", result.reason ?? "attempt failed");
       }
 
       const next = this.route(current, visit);

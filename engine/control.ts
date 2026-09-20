@@ -336,6 +336,19 @@ const retryWithReply: Rule = ({ node, run, kind, retryOverBudget }) => {
   return { accept: true };
 };
 
+/**
+ * An auth failure is not the agent's to answer: the fix is a human logging the CLI in, and
+ * only then does a retry mean anything. Replying is still ACCEPTED — the retry is exactly
+ * what the operator wants next, and a reply that arrives while still logged out simply fails
+ * the same way with the same message, which is honest. The wording leads with the login step
+ * so the operator does the thing that actually unblocks the run.
+ */
+const loginThenRetry: Rule = (ask) => {
+  const r = retryWithReply(ask);
+  if (r.accept) return r;
+  return { accept: false, message: `log the harness in first, then ${r.message}` };
+};
+
 const useJump: Rule = ({ run }) => ({
   accept: false,
   message: `a reply cannot change where the graph routes; use ${jumpVerb(run)} to restart at a node with your instruction`,
@@ -348,6 +361,7 @@ const useJump: Rule = ({ run }) => ({
  */
 export const REPLY_RULES: Readonly<Record<ParkCode, Rule>> = {
   "attempt-failed": retryWithReply,
+  "harness-unauthenticated": loginThenRetry,
   "executor-threw": retryWithReply,
   "max-visits": useJump,
   "no-edge": useJump,

@@ -127,6 +127,14 @@ Break one of these and the design stops working, so check them before changing t
 - **Nothing dead-ends silently.** A failed attempt, an exhausted condition set, `maxVisits`,
   or an ambiguous effect all *park* the run with a reason (`attention-raised`) and wait for a
   human. Parking is normal control flow, not an error path.
+- **A harness that never started is not the agent's fault.** Agent executors read the CLI's
+  own exit code: a process that died without speaking the protocol is classified by
+  `engine/executors/harness-failure.ts`, not passed to the outputs check, or a logged-out CLI
+  would be reported as the model violating its contract. Auth failures park as
+  `harness-unauthenticated` and carry the CLI's stderr tail into the log, because the fix is a
+  human logging in (`claude -p` has no TTY to do it through) and the run has to say so.
+  `doctor` asks each harness `auth status` / `login status` — being on PATH is not being
+  logged in.
 - **Attention is durable before it is delivered.** `engine/attention.ts` writes the record,
   then notifies; `watchdog/check.ts` runs outside the process (launchd, 60s) so `kill -9`
   with an ask pending still rings, and a stale heartbeat is itself an attention event.

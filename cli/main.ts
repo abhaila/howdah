@@ -30,6 +30,7 @@ import { AttentionCenter, osNotifier, writeHeartbeat } from "../engine/attention
 import { replayState } from "../engine/replay";
 import { Reconciler, readsForgeFacts } from "../engine/reconcile";
 import { effectiveCwd, readWorktreeRecord } from "../engine/executors/worktree";
+import { probeAuth } from "../engine/executors/harness-failure";
 import { GRAPHS, graphCatalog } from "../graphs/index";
 import { howdahHome, loadConfig, saveConfig, resolveWorkspace, repoNameFor, ensureHowdahHome } from "../config/config";
 import { loadTuning } from "../config/tuning";
@@ -265,6 +266,23 @@ export async function doctorCommand(): Promise<boolean> {
   checks.push(["claude CLI", claude !== null, claude ?? "not on PATH — install Claude Code (subscription auth)"]);
   const codex = probe(["codex", "--version"]);
   checks.push(["codex CLI", codex !== null, codex ?? "not on PATH — install Codex (subscription auth)"]);
+  /**
+   * Being on PATH is not being logged in, and a logged-out CLI fails every agent node while
+   * `--version` still answers happily. Both harnesses ship a local, token-free status
+   * subcommand, so ask them rather than let the first run find out.
+   */
+  for (const [harness, installed, fix] of [
+    ["claude", claude !== null, "claude auth login"],
+    ["codex", codex !== null, "codex login"],
+  ] as const) {
+    if (!installed) continue;
+    const auth = probeAuth(harness);
+    checks.push([
+      `${harness} logged in`,
+      auth !== "out",
+      auth === "in" ? "authenticated" : auth === "out" ? `NOT logged in — run \`${fix}\`` : `could not tell (no ${harness} status subcommand?)`,
+    ]);
+  }
   const gh = probe(["gh", "--version"]);
   checks.push(["gh CLI", gh !== null, gh ?? "not on PATH — needed for PR probes (T18)"]);
   const git = probe(["git", "--version"]);

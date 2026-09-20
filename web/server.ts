@@ -438,7 +438,7 @@ export function createHowdahServer(opts: ServerOpts) {
         return render ? json(render) : json({ error: "no such render, or its pinned prompt is gone" }, 404);
       }
 
-      const m = url.pathname.match(/^\/api\/runs(?:\/([^/]+)(?:\/(events|reply|open-ide|open-run-folder|resume|pause|abort|jump|ask|comments|approval|redesign))?)?$/);
+      const m = url.pathname.match(/^\/api\/runs(?:\/([^/]+)(?:\/(events|reply|open-ide|open-run-folder|harness-login|resume|pause|abort|jump|ask|comments|approval|redesign))?)?$/);
       if (!m) {
         // static: /public assets by name, everything else → the app shell.
         // no-cache: this is a local app whose bundle changes constantly — the browser must
@@ -479,6 +479,36 @@ export function createHowdahServer(opts: ServerOpts) {
         const opener = process.platform === "darwin" ? "open" : process.platform === "win32" ? "explorer" : "xdg-open";
         Bun.spawn([opener, runDir], { stdout: "ignore", stderr: "ignore" }).unref();
         return json({ ok: true, opened: runDir });
+      }
+
+      /**
+       * The one thing the operator cannot do from inside Howdah: log the harness in. Agent
+       * nodes run `claude -p` / `codex app-server`, which have no TTY, so when a run parks on
+       * `harness-unauthenticated` there is nowhere to type the login into. This opens a real
+       * terminal sitting in the run's own folder with the login command ready.
+       *
+       * The harness name is matched against a fixed table rather than interpolated, so
+       * nothing from the request body ever reaches a shell. The command is returned either
+       * way, so a platform we cannot open a terminal on still tells the operator what to run.
+       */
+      if (sub === "harness-login" && req.method === "POST") {
+        const body: unknown = await req.json().catch(() => undefined);
+        const asked = typeof body === "object" && body !== null && !Array.isArray(body) ? (body as { harness?: unknown }).harness : undefined;
+        const LOGIN: Record<string, string> = { claude: "claude auth login", codex: "codex login" };
+        const harness = typeof asked === "string" ? asked : "";
+        const command = LOGIN[harness];
+        if (!command) return json({ error: `unknown harness "${harness}"` }, 400);
+        const events = readLog(path);
+        const started = events.find((e) => e.type === "run-started");
+        const cwd = effectiveCwd(path, started?.type === "run-started" ? started.cwd : undefined);
+        const dir = cwd && existsSync(cwd) ? cwd : opts.runsDir;
+        if (process.platform !== "darwin")
+          return json({ ok: false, command, cwd: dir, error: "opening a terminal is macOS-only so far — run the command yourself" }, 501);
+        // AppleScript string literal: the only untrusted part is the path, and a quote in a
+        // directory name would otherwise end the literal
+        const script = `tell application "Terminal" to do script "cd ${dir.replace(/(["\\$`])/g, "\\$1")} && ${command}"`;
+        Bun.spawn(["osascript", "-e", script, "-e", 'tell application "Terminal" to activate'], { stdout: "ignore", stderr: "ignore" }).unref();
+        return json({ ok: true, command, cwd: dir });
       }
 
       if (sub === "reply" && req.method === "POST") {

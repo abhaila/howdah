@@ -28,6 +28,7 @@ import type { Executor } from "../run";
 import { JsonlChunkParser } from "../../adapter/parse";
 import { mapClaudeEvent, buildClaudePermissionResponse, buildClaudeUserTurn, claudeArgs } from "../../adapter/claude";
 import { buildRepairInstruction, parseOutputs } from "./outputs";
+import { classifyHarnessExit } from "./harness-failure";
 import { AttentionCenter, osNotifier, type Notifier } from "../attention";
 import { readLog } from "../../log/write";
 import { effectiveCwd } from "./worktree";
@@ -102,9 +103,11 @@ export function claudeExecutor(opts: ClaudeExecutorOpts): Executor {
 
     let turnEnded = false;
     let repairSent = false;
+    let sawEvent = false; // did the CLI ever speak stream-json? a logged-out CLI never does
     readLoop: for await (const bytes of proc.stdout) {
       for (const record of parser.push(bytes)) {
         if (!record.ok) continue; // non-JSON noise is not fatal
+        sawEvent = true;
         for (const ev of mapClaudeEvent(record.value)) {
           switch (ev.type) {
             case "text_delta":
@@ -165,14 +168,27 @@ export function claudeExecutor(opts: ClaudeExecutorOpts): Executor {
     if (stderrChunks.length)
       writeFileSync(join(dirname(log.path), `claude-${nodeId.replace(/[^\w.-]/g, "_")}-v${visit}.stderr.log`), stderrChunks.join(""));
 
+    // a CLI that never spoke the protocol did not start: say WHY (usually "not logged in")
+    // instead of letting it fall through to an outputs complaint that blames the model
+    const startup = classifyHarnessExit({
+      harness: opts.binary ?? "claude",
+      exitCode: exited, // null when WE killed it after the grace period, not a self-exit
+      stderr: stderrChunks.join(""),
+      sawOutput: sawEvent,
+    });
+    if (startup) {
+      chunk("text", startup.note);
+      return { status: "failed", writes: {}, reason: startup.reason, code: startup.code };
+    }
+
     if (turnError) {
       chunk("text", `\n[turn error: ${turnError}]`);
-      return { status: "failed", writes: {} };
+      return { status: "failed", writes: {}, reason: `turn error: ${turnError}` };
     }
     const parsed = parseOutputs(resultText ?? accumulated, writeKeys);
     if (!parsed.ok) {
       chunk("text", `\n[output contract violation: ${parsed.problem}]`);
-      return { status: "failed", writes: {} };
+      return { status: "failed", writes: {}, reason: `output contract violation: ${parsed.problem}` };
     }
     return { status: "succeeded", writes: parsed.writes };
   };

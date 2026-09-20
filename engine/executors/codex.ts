@@ -21,6 +21,7 @@ import type { Executor } from "../run";
 import { JsonlChunkParser } from "../../adapter/parse";
 import { mapCodexEvent, buildCodexApprovalResponse } from "../../adapter/codex";
 import { buildRepairInstruction, parseOutputs } from "./outputs";
+import { classifyHarnessExit } from "./harness-failure";
 import { AttentionCenter, osNotifier, type Notifier } from "../attention";
 import { readLog } from "../../log/write";
 import { isAllowReply } from "./reply";
@@ -92,6 +93,12 @@ export function codexExecutor(opts: CodexExecutorOpts): Executor {
     let rpcFault: string | undefined;
     let notice: string | undefined;
     let turnCompleted = false;
+    /**
+     * The exit code the app-server reached ON ITS OWN. Read before the `finally` kills it,
+     * because a kill would overwrite it and make "we shut it down" look like "it crashed".
+     * null therefore means it was still alive, which is the normal path.
+     */
+    let selfExit: number | null = null;
     const chunk = (kind: "text" | "thinking" | "tool_call" | "tool_result", content: string, tool?: { id?: string; name?: string }) =>
       log.append({ type: "chunk", node: nodeId, visit, turn: 1, index: index++, kind, content, tool_id: tool?.id, tool_name: tool?.name });
 
@@ -208,6 +215,7 @@ export function codexExecutor(opts: CodexExecutorOpts): Executor {
         await runTurn(buildRepairInstruction(writeKeys));
       }
     } finally {
+      selfExit = proc.exitCode; // non-null here = it died before we asked it to
       proc.kill();
       await proc.exited.catch(() => {});
       await pump.catch(() => {});
@@ -217,14 +225,27 @@ export function codexExecutor(opts: CodexExecutorOpts): Executor {
     }
 
     log.append({ type: "turn-finalized", node: nodeId, visit, turn: 1, usage });
+    // an app-server that died without ever answering us did not start: name the cause
+    // (usually "not logged in") rather than reporting a stream that ended
+    const startup = classifyHarnessExit({
+      harness: opts.binary ?? "codex",
+      exitCode: selfExit,
+      stderr: stderrChunks.join(""),
+      sawOutput: index > 0 || turnCompleted || rpcFault !== undefined,
+    });
+    if (startup) {
+      chunk("text", startup.note);
+      return { status: "failed", writes: {}, reason: startup.reason, code: startup.code };
+    }
     if (!turnCompleted) {
-      chunk("text", `\n[turn error: ${rpcFault ?? notice ?? "app-server stream ended before turn/completed"}]`);
-      return { status: "failed", writes: {} };
+      const why = rpcFault ?? notice ?? "app-server stream ended before turn/completed";
+      chunk("text", `\n[turn error: ${why}]`);
+      return { status: "failed", writes: {}, reason: `turn error: ${why}` };
     }
     const parsed = parseOutputs(finalMessage ?? accumulated, writeKeys);
     if (!parsed.ok) {
       chunk("text", `\n[output contract violation: ${parsed.problem}]`);
-      return { status: "failed", writes: {} };
+      return { status: "failed", writes: {}, reason: `output contract violation: ${parsed.problem}` };
     }
     return { status: "succeeded", writes: parsed.writes };
   };
