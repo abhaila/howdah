@@ -214,7 +214,12 @@ export function StepsSplit({ list, detail }: { list: React.ReactNode; detail: Re
         onDoubleClick={() => commit(DETAIL_DEFAULT)}
         onKeyDown={onKeyDown}
       >
-        <Tooltip content={full ? "restore the step list" : "full width"}>
+        {/* The Tooltip's own span is the positioned anchor, not a `relative` wrapper between
+            the lane and the control: `.sd-full` used to place itself against `.sd-resize`,
+            and a relative ancestor of zero width would resolve its `left: 50%` to the lane's
+            left edge — exactly the overlap howdah.css's lane comment says cannot happen.
+            These are Tailwind utilities so `cn` drops the component's own `relative`. */}
+        <Tooltip content={full ? "restore the step list" : "full width"} className="absolute left-1/2 top-[10px] -translate-x-1/2">
           <Button
             variant="outline"
             size="icon"

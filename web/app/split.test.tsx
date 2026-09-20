@@ -158,6 +158,33 @@ describe("StepsSplit", () => {
     expect(Number(basis![1])).toBeGreaterThanOrEqual(17); // at least the control's own width
   });
 
+  /**
+   * The other half of that guarantee, and the half a component can break without touching a
+   * stylesheet. The control is placed against the LANE; wrapping it in a Tooltip put that
+   * component's `relative` span in between, and `left: 50%` of a wrapper with no width of its
+   * own resolves to the lane's left edge — the same overlay, reintroduced from the TSX side.
+   * happy-dom computes no layout (offsetParent is null for everything), so what is asserted is
+   * the chain the browser would resolve against: exactly one positioned ancestor under the
+   * lane, and it is the one doing the centring.
+   */
+  test("the restore control's positioning anchor is the lane, with nothing positioned in between", async () => {
+    const el = render();
+    const lane = sep(el);
+    // classes, not elements: a failure here has to print a class list, not a happy-dom node
+    const between: string[] = [];
+    for (let n = toggle(el).parentElement; n && n !== lane; n = n.parentElement) between.push(n.className);
+    expect(between.length).toBeGreaterThan(0); // the Tooltip's spans; this is about what they carry
+    const carrying = (name: string) => between.filter((c) => c.split(/\s+/).includes(name));
+    expect(carrying("relative")).toEqual([]);
+    expect(carrying("absolute").length).toBe(1);
+    expect(carrying("absolute")[0]!.split(/\s+/)).toContain("left-1/2");
+    expect(carrying("absolute")[0]!.split(/\s+/)).toContain("-translate-x-1/2");
+    // and the control itself does not position a second time — that is what put the 50% of a
+    // zero-width wrapper into the sum
+    const css = await Bun.file(new URL("../public/howdah.css", import.meta.url)).text();
+    expect(css.match(/\.sd-full\s*\{([^}]*)\}/)![1]).not.toContain("position:");
+  });
+
   test("a width that cannot be stored still applies to the panel", () => {
     const el = render();
     const real = Object.getOwnPropertyDescriptor(Storage.prototype, "setItem")!;

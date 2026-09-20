@@ -486,9 +486,11 @@ main { flex: 1; min-width: 0; }
 .steps-split[data-detail="full"] .sd-resize { flex-basis: 33px; cursor: default; }
 .steps-split[data-detail="full"] .sd-resize::before { display: none; }
 
-/* appearance is Button variant="outline" size="icon"; placement and the reveal are ours */
+/* Appearance is Button variant="outline" size="icon"; the reveal is ours. Placement is NOT
+   here: the control sits inside its Tooltip, so the Tooltip's span is the absolutely-placed
+   anchor (run/steps.tsx) and the button is static inside it. Positioning both would put the
+   50% of a zero-width wrapper between the control and the lane it is centred in. */
 .sd-full {
-  position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
   width: 17px; height: 17px; padding: 0; background: var(--bg);
   opacity: 0; transition: opacity var(--motion-fast, 120ms) ease;
 }
