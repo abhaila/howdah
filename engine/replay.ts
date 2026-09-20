@@ -35,10 +35,17 @@
  * Decision-resolved parks (system-map 1a, D17): an `awaiting-approval` park counts as
  * RESOLVED once engine/slice-decision.ts finds a decision for the current proposal round —
  * the decision event alone is enough. A route that appended the decision and died before
- * appending the resolution leaves `parked` null here (the ask moves to `awaitingDecided`),
+ * appending the resolution leaves `parked` null here (the ask moves to `answeredPark`),
  * so `howdah up` resumes the run on its next tick instead of waiting forever. The awaiting
  * node itself never logged node-finished, so `position` keeps it mid-flight and resume
  * re-attempts the SAME visit: waiting never consumes a visit.
+ *
+ * Effect-resolved parks (HOW-3): the same rule for `ambiguous-effect`. An operator's
+ * `side-effect-resolved` answers the park it was raised for as soon as it lands — every
+ * intent the park named is gone from `pendingIntents`, so there is nothing left to be
+ * ambiguous about. Without this, a resolution whose spawned resume died would leave the run
+ * parked forever and `supervisorShouldResume` would skip it: the very dead end the verb
+ * exists to remove.
  */
 import { resolutionSource, type LoggedEvent, type ParkCode, type RunEvent } from "../log/events";
 import { decisionAnswers } from "./slice-decision";
@@ -85,8 +92,12 @@ export interface ReplayedState {
   completedEffects: Set<string>;
   /** attention raised and not yet resolved (a decided awaiting-approval park is resolved: D17) */
   parked: Extract<LoggedEvent, { type: "attention-raised" }> | null;
-  /** D17: an awaiting-approval park a decision answered but no attention-resolved closed yet */
-  awaitingDecided: Extract<LoggedEvent, { type: "attention-raised" }> | null;
+  /**
+   * A park an OPERATOR ACTION answered — an approval decision (D17) or an effect resolution
+   * (HOW-3) — that no attention-resolved has closed yet. Resume closes it; `howdah up` treats
+   * the run as resumable meanwhile.
+   */
+  answeredPark: Extract<LoggedEvent, { type: "attention-raised" }> | null;
   /** run-paused with no later run-resumed */
   paused: boolean;
   /** operator-jump message not yet consumed by an attempt of the target node */
@@ -106,6 +117,21 @@ function takeNote(pending: Note | null, inFlight: Note | null, node: string): No
   return null;
 }
 
+/**
+ * Has an operator action already answered this park, even though no attention-resolved has
+ * landed? D17 for an approval decision; HOW-3 for an ambiguous effect.
+ *
+ * The effect rule needs BOTH halves. A `side-effect-resolved` after the park is the operator
+ * action (the park cannot be answered by the mere absence of intents — a log with no intent
+ * at all never became ambiguous by itself), and no intent may still be pending, because
+ * resuming would only probe that one and park again.
+ */
+function parkAnswered(events: LoggedEvent[], ask: Ask, pending: readonly unknown[]): boolean {
+  if (ask.code === "ambiguous-effect")
+    return pending.length === 0 && events.some((e) => e.type === "side-effect-resolved" && e.seq > ask.seq);
+  return decisionAnswers(events, ask);
+}
+
 export function replayState(events: LoggedEvent[]): ReplayedState {
   const state: ReplayedState = {
     started: null,
@@ -117,7 +143,7 @@ export function replayState(events: LoggedEvent[]): ReplayedState {
     pendingIntents: [],
     completedEffects: new Set(),
     parked: null,
-    awaitingDecided: null,
+    answeredPark: null,
     paused: false,
     jumpNote: null,
     replyNote: null,
@@ -175,6 +201,14 @@ export function replayState(events: LoggedEvent[]): ReplayedState {
         state.completedEffects.add(key);
         break;
       }
+      case "side-effect-resolved": {
+        // HOW-3: the operator's attestation. Either way the intent stops being ambiguous.
+        const key = effectKey(e.node, e.effect);
+        intents.delete(key);
+        // `not-happened` never REMOVES a completed key: a proven done outranks an attestation
+        if (e.verdict === "happened") state.completedEffects.add(key);
+        break;
+      }
       case "attention-raised":
         state.parked = e;
         break;
@@ -204,8 +238,8 @@ export function replayState(events: LoggedEvent[]): ReplayedState {
     }
   }
   state.pendingIntents = [...intents.values()];
-  if (state.parked && decisionAnswers(events, state.parked)) {
-    state.awaitingDecided = state.parked;
+  if (state.parked && parkAnswered(events, state.parked, state.pendingIntents)) {
+    state.answeredPark = state.parked;
     state.parked = null;
   }
   // died mid-attempt: resume re-attempts the SAME visit, which must still carry its notes

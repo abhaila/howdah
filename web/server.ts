@@ -11,6 +11,7 @@
  *   POST /api/runs/:id/comments    {entity_id, text, proposal_id?} → pin a comment to the current proposal round
  *   POST /api/runs/:id/approval    {approved, proposal_id} → approve, or send the round's comments as feedback
  *   POST /api/runs/:id/redesign    {message} → re-extract and redraw (refused while a runner is live)
+ *   POST /api/runs/:id/effects     {effect, verdict, node?} → HOW-3: attest to an ambiguous side effect
  *   (system-map 1a: the same engine/control.ts functions as the CLI verbs; 400 on a malformed
  *   body, 409 {error, code} on a refusal)
  *
@@ -47,7 +48,7 @@ import { listGithubRepos, registerGithubRepo } from "../config/github";
 import { loadTuning, saveTuning, pruneTuning } from "../config/tuning";
 import {
   writeControl, clearControl, interruptRunner, jumpRefusal, markPaused, resolveReply, runnerAlive, approve, sendFeedback, pinComment, redesign, afterDecision, wakeRunner,
-  clearAsks, runnerHolder, type DecisionResult,
+  clearAsks, runnerHolder, resolveEffect, EFFECT_VERDICTS, type DecisionResult, type EffectVerdict,
 } from "../engine/control";
 import { resolveAgentConfig } from "../engine/run";
 import type { Graph } from "../core/graph";
@@ -438,7 +439,7 @@ export function createHowdahServer(opts: ServerOpts) {
         return render ? json(render) : json({ error: "no such render, or its pinned prompt is gone" }, 404);
       }
 
-      const m = url.pathname.match(/^\/api\/runs(?:\/([^/]+)(?:\/(events|reply|open-ide|open-run-folder|harness-login|resume|pause|abort|jump|ask|comments|approval|redesign))?)?$/);
+      const m = url.pathname.match(/^\/api\/runs(?:\/([^/]+)(?:\/(events|reply|open-ide|open-run-folder|harness-login|resume|pause|abort|jump|ask|comments|approval|redesign|effects))?)?$/);
       if (!m) {
         // static: /public assets by name, everything else → the app shell.
         // no-cache: this is a local app whose bundle changes constantly — the browser must
@@ -565,6 +566,24 @@ export function createHowdahServer(opts: ServerOpts) {
         clearControl(runDir); // like jump: the operator now owns where the run goes
         launchResume(id);
         return json({ ok: true, jumped_to: result.jumped_to }, 202);
+      }
+
+      // HOW-3: the operator attests to an ambiguous side effect — the viewer half of
+      // `howdah resolve-effect`, through the same locked engine/control.ts rules
+      if (sub === "effects" && req.method === "POST") {
+        const body = await objectBody(req);
+        if (!body) return json({ error: "body must be a JSON object {effect, verdict, node?}" }, 400);
+        const { effect, verdict, node } = body;
+        if (typeof effect !== "string" || effect.trim() === "") return json({ error: "effect must be a non-empty string" }, 400);
+        if (typeof verdict !== "string" || !EFFECT_VERDICTS.includes(verdict as EffectVerdict))
+          return json({ error: `verdict must be ${EFFECT_VERDICTS.join(" or ")}` }, 400);
+        if (node !== undefined && typeof node !== "string") return json({ error: "node must be a string" }, 400);
+        const runDir = join(opts.runsDir, id);
+        const result = resolveEffect(runDir, effect, verdict as EffectVerdict, { node });
+        if (!result.ok) return json({ error: result.message, code: result.code }, 409);
+        clearAsks(opts.attentionDir, runDir, result.asks);
+        wake(id); // the resolution must MOVE the run, not just record the attestation
+        return json({ ok: true, idempotent: result.idempotent, node: result.node, effect: result.effect, verdict: result.verdict });
       }
 
       if (sub === "resume" && req.method === "POST") {

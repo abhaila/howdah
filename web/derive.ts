@@ -10,12 +10,17 @@
  * current proposal round exists (engine/slice-decision.ts decisionAnswers) — the same rule
  * replay uses, so the viewer never shows needs-input for a run `howdah up` will resume.
  *
+ * HOW-3: `ambiguous_effects` is the read model behind the effect card — the pending
+ * side-effect intents of a run parked on `ambiguous-effect`, straight from engine/replay.ts
+ * so the viewer and the engine agree on what is still ambiguous.
+ *
  * system-map 1d: `deriveSlice` is the read model behind the approval card, the drift view and
  * the map-progress line — proposal rounds, decisions, pinned comments (orphans included),
  * redesign requests, extraction progress and drift reports, all folded from the log.
  */
 import type { LoggedEvent, RunOutcome } from "../log/events";
 import { currentProposal, decisionAnswers, decisionKind, findDecision } from "../engine/slice-decision";
+import { replayState } from "../engine/replay";
 import type { Scope } from "../core/context";
 import { coalesce, outcomesByHash, type CoalescedTurn, type JoinedOutcome } from "../log/coalesce";
 import { ghostEdgeId, orphanedComments, OPS, type GhostSet, type GhostTrace, type Op } from "../map/ghosts";
@@ -96,6 +101,12 @@ export interface RunDetail {
   persistence?: { home: string; run_dir: string; log_path: string; worktree_path: string | null; runner_alive: boolean };
   /** system-map 1d: proposal rounds, comments, map progress and drift — null for runs with none */
   slice: SliceView | null;
+  /**
+   * HOW-3: the still-ambiguous side-effect intents, filled ONLY while the run is parked on
+   * `ambiguous-effect` (empty otherwise, so the common path pays for no extra fold). Each one
+   * is a row the operator can attest to in the viewer.
+   */
+  ambiguous_effects: Array<{ node: string; visit: number; effect: string; attempt_id: string }>;
   events_seq: number;
 }
 
@@ -294,6 +305,10 @@ export function deriveDetail(
     context: deriveContextTable(events, declarations),
     identity,
     slice: deriveSlice(events, opts.snapshot ?? null),
+    ambiguous_effects:
+      ask?.code === "ambiguous-effect"
+        ? replayState(events).pendingIntents.map((i) => ({ node: i.node, visit: i.visit, effect: i.effect, attempt_id: i.attempt_id }))
+        : [],
     events_seq: events.at(-1)?.seq ?? 0,
   };
 }
@@ -349,6 +364,8 @@ export function deriveLogRows(events: LoggedEvent[]): LogRow[] {
         return { ...base, ...at(e.node, e.visit), kind: "engine", depth: 1, summary: `intent · ${e.effect}` };
       case "side-effect-done":
         return { ...base, ...at(e.node, e.visit), kind: "engine", depth: 1, summary: `done · ${e.effect}` };
+      case "side-effect-resolved":
+        return { ...base, ...at(e.node, e.visit), kind: "operator", depth: 1, summary: `resolved · ${e.effect} · ${e.verdict}` };
       case "reconciled": {
         const forge = e.forge ? (e.forge.kind === "pr" ? `pr ${e.forge.state}` : e.forge.kind) : "no forge probe";
         return { ...base, node: e.node, visit: null, kind: "engine", depth: 1,

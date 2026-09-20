@@ -4,9 +4,10 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { defineGraph } from "../core/graph";
 import { Engine, type EngineOpts } from "./run";
-import { readControl, writeControl, clearControl, resolveReply, NOTHING_AWAITING } from "./control";
+import { readControl, writeControl, clearControl, resolveReply, resolveEffect, NOTHING_AWAITING } from "./control";
 import { EventLog, readLog } from "../log/write";
 import { replayState } from "./replay";
+import { processStart } from "../log/lockfile";
 import { deriveStatus, deriveTimeline } from "../web/derive";
 
 interface Ctx {
@@ -434,7 +435,7 @@ describe("resolveReply refuses what a reply cannot fix (system-map 0.2)", () => 
     ["max-visits", "one", "max-visits", /use `jump \S+ <node> <msg>`/],
     ["no-edge", "one", "no-edge", /use `jump \S+ <node> <msg>`/],
     ["max-steps", "one", "max-steps", /use `jump \S+ <node> <msg>`/],
-    ["ambiguous-effect", "cmd", "ambiguous-effect", /resolve the effect first/],
+    ["ambiguous-effect", "cmd", "ambiguous-effect", /`resolve-effect \S+ <effect> happened\|not-happened`, then `resume \S+`/],
     ["awaiting-approval", "one", "awaiting-approval", /use `approve \S+`, `comment \S+ <entity-id> <text>` then `send-feedback \S+`, or `redesign \S+ <msg>`/],
     ["approval-missing", "one", "approval-missing", /use `jump \S+ <approval-node>` to return to the approval step \(then `approve \S+`\), or `redesign \S+ <msg>`/],
     ["stale-base", "one", "stale-base", /undo the change and `resume \S+`, or `redesign \S+ <msg>` to re-extract and redraw/],
@@ -708,5 +709,143 @@ describe("resume vs a reply landing mid-resume (system-map 0.2)", () => {
     expect(count(seen.get("one@2"), "late but important")).toBe(1);
     const resolutions = readLog(join(dir, "run.jsonl")).filter((e) => e.type === "attention-resolved");
     expect(resolutions).toEqual([expect.objectContaining({ reply: "late but important", source: "operator" })]);
+  });
+});
+
+describe("resolve-effect: the operator attests to an ambiguous side effect (HOW-3)", () => {
+  /** a run parked on `ambiguous-effect` with `effects` still claimed but never proven done */
+  function ambiguous(effects: Array<{ node: string; effect: string }>, opts: { liveRunner?: number; finished?: boolean } = {}) {
+    const dir = mkdtempSync(join(tmpdir(), "howdah-effect-"));
+    const log = new EventLog(join(dir, "run.jsonl"));
+    log.append({ type: "run-started", graph: "ctl", inputs: { goal: "g" }, pinned_prompts: {} });
+    for (const [i, e] of effects.entries()) {
+      log.append({ type: "node-started", node: e.node, visit: 1, attempt_id: `${e.node}#1` });
+      log.append({ type: "side-effect-intent", node: e.node, visit: 1, attempt_id: `${e.node}#1`, effect: e.effect });
+      if (i === 0) log.append({ type: "attention-raised", node: e.node, visit: 1, reason: `ambiguous side effect "${e.effect}"`, code: "ambiguous-effect" });
+    }
+    if (opts.finished) log.append({ type: "run-finished", outcome: "failed" });
+    // an identity lock naming a PROVEN live holder (the `<pid> <start>` form the engine writes)
+    if (opts.liveRunner) writeFileSync(join(dir, "runner.pid"), `${opts.liveRunner} ${processStart(opts.liveRunner)}`);
+    const path = join(dir, "run.jsonl");
+    const before = readFileSync(path, "utf8");
+    return {
+      dir,
+      unchanged: () => readFileSync(path, "utf8") === before,
+      resolutions: () => readLog(path).filter((e) => e.type === "side-effect-resolved"),
+    };
+  }
+
+  test("accepted: one additive event copied from the intent, and the park comes back to be cleared", () => {
+    const run = ambiguous([{ node: "publish", effect: "create-pr" }]);
+    const r = resolveEffect(run.dir, "create-pr", "happened");
+    expect(r).toMatchObject({ ok: true, node: "publish", visit: 1, effect: "create-pr", verdict: "happened", idempotent: false });
+    if (!r.ok) return;
+    expect(r.asks).toEqual([{ node: "publish", visit: 1 }]);
+    expect(run.resolutions()).toEqual([
+      expect.objectContaining({ node: "publish", visit: 1, attempt_id: "publish#1", effect: "create-pr", verdict: "happened", by: "operator" }),
+    ]);
+  });
+
+  test("the same verdict again is idempotent: nothing appended, the park still offered for clearing", () => {
+    const run = ambiguous([{ node: "publish", effect: "create-pr" }]);
+    resolveEffect(run.dir, "create-pr", "happened");
+    const before = readFileSync(join(run.dir, "run.jsonl"), "utf8");
+    const again = resolveEffect(run.dir, "create-pr", "happened");
+    expect(again).toMatchObject({ ok: true, idempotent: true, verdict: "happened" });
+    if (again.ok) expect(again.asks).toEqual([{ node: "publish", visit: 1 }]);
+    expect(readFileSync(join(run.dir, "run.jsonl"), "utf8")).toBe(before);
+    expect(run.resolutions()).toHaveLength(1);
+  });
+
+  test("the OPPOSITE verdict is refused naming the first — an attestation is not re-writable", () => {
+    const run = ambiguous([{ node: "publish", effect: "create-pr" }]);
+    resolveEffect(run.dir, "create-pr", "not-happened");
+    const before = readFileSync(join(run.dir, "run.jsonl"), "utf8");
+    const r = resolveEffect(run.dir, "create-pr", "happened");
+    expect(r).toMatchObject({ ok: false, code: "already-resolved" });
+    if (!r.ok) expect(r.message).toContain('"create-pr" was already resolved as not-happened');
+    expect(readFileSync(join(run.dir, "run.jsonl"), "utf8")).toBe(before);
+  });
+
+  test("an effect that COMPLETED is refused: a proven done is not something to attest to", () => {
+    const run = ambiguous([{ node: "publish", effect: "create-pr" }]);
+    new EventLog(join(run.dir, "run.jsonl")).append({ type: "side-effect-done", node: "publish", visit: 1, attempt_id: "publish#1", effect: "create-pr" });
+    const r = resolveEffect(run.dir, "create-pr", "happened");
+    expect(r).toMatchObject({ ok: false, code: "already-resolved" });
+    if (!r.ok) expect(r.message).toContain("nothing to resolve");
+    expect(run.resolutions()).toEqual([]);
+  });
+
+  test("the same effect pending on two nodes is refused until --node names one", () => {
+    const run = ambiguous([{ node: "publish", effect: "create-pr" }, { node: "republish", effect: "create-pr" }]);
+    const r = resolveEffect(run.dir, "create-pr", "happened");
+    expect(r).toMatchObject({ ok: false, code: "bad-request" });
+    if (!r.ok) expect(r.message).toContain("`--node <node>`");
+    expect(run.unchanged()).toBe(true);
+
+    const picked = resolveEffect(run.dir, "create-pr", "happened", { node: "republish" });
+    expect(picked).toMatchObject({ ok: true, node: "republish" });
+    expect(run.resolutions()).toHaveLength(1);
+    // the other node's intent is untouched — one resolution per ambiguous intent
+    expect(replayState(readLog(join(run.dir, "run.jsonl"))).pendingIntents).toMatchObject([{ node: "publish" }]);
+  });
+
+  test("an effect nobody claimed: refused, naming what IS ambiguous", () => {
+    const run = ambiguous([{ node: "publish", effect: "create-pr" }]);
+    const r = resolveEffect(run.dir, "push-tag", "happened");
+    expect(r).toMatchObject({ ok: false, code: "no-ambiguous-effect" });
+    if (!r.ok) expect(r.message).toMatch(/no ambiguous effect "push-tag".*ambiguous now: "create-pr" on "publish"/);
+    expect(run.unchanged()).toBe(true);
+  });
+
+  test("a run with nothing ambiguous says so", () => {
+    const dir = mkdtempSync(join(tmpdir(), "howdah-effect-"));
+    new EventLog(join(dir, "run.jsonl")).append({ type: "run-started", graph: "ctl", inputs: { goal: "g" }, pinned_prompts: {} });
+    const r = resolveEffect(dir, "create-pr", "happened");
+    expect(r).toMatchObject({ ok: false, code: "no-ambiguous-effect" });
+    if (!r.ok) expect(r.message).toContain(`nothing is ambiguous in run ${basename(dir)}`);
+  });
+
+  test("a finished run, a live runner, an unknown run and a bad verdict all append nothing", () => {
+    const finished = ambiguous([{ node: "publish", effect: "create-pr" }], { finished: true });
+    expect(resolveEffect(finished.dir, "create-pr", "happened")).toMatchObject({ ok: false, code: "finished" });
+    expect(finished.unchanged()).toBe(true);
+
+    // a live runner owns its own effects and may be mid-claim — jump/redesign refuse the same way
+    const holder = Bun.spawn(["sleep", "30"]);
+    try {
+      const live = ambiguous([{ node: "publish", effect: "create-pr" }], { liveRunner: holder.pid });
+      const r = resolveEffect(live.dir, "create-pr", "happened");
+      expect(r).toMatchObject({ ok: false, code: "runner-live" });
+      if (!r.ok) expect(r.message).toContain("pause or abort first");
+      expect(live.unchanged()).toBe(true);
+    } finally {
+      holder.kill(9);
+    }
+
+    expect(resolveEffect(join(tmpdir(), "howdah-no-such-run"), "create-pr", "happened")).toMatchObject({ ok: false, code: "unknown-run" });
+
+    const bad = ambiguous([{ node: "publish", effect: "create-pr" }]);
+    expect(resolveEffect(bad.dir, "create-pr", "maybe" as never)).toMatchObject({ ok: false, code: "bad-request" });
+    expect(resolveEffect(bad.dir, "  ", "happened")).toMatchObject({ ok: false, code: "bad-request" });
+    expect(bad.unchanged()).toBe(true);
+
+    const notStarted = mkdtempSync(join(tmpdir(), "howdah-effect-"));
+    writeFileSync(join(notStarted, "run.jsonl"), "");
+    expect(resolveEffect(notStarted, "create-pr", "happened")).toMatchObject({ ok: false, code: "not-started" });
+  });
+
+  test("replay honours both verdicts: happened completes the effect, not-happened frees it for a retry", () => {
+    const yes = ambiguous([{ node: "publish", effect: "create-pr" }]);
+    resolveEffect(yes.dir, "create-pr", "happened");
+    const afterYes = replayState(readLog(join(yes.dir, "run.jsonl")));
+    expect(afterYes.pendingIntents).toEqual([]);
+    expect(afterYes.completedEffects.has("publish\u0000create-pr")).toBe(true);
+
+    const no = ambiguous([{ node: "publish", effect: "create-pr" }]);
+    resolveEffect(no.dir, "create-pr", "not-happened");
+    const afterNo = replayState(readLog(join(no.dir, "run.jsonl")));
+    expect(afterNo.pendingIntents).toEqual([]);
+    expect(afterNo.completedEffects.has("publish\u0000create-pr")).toBe(false);
   });
 });

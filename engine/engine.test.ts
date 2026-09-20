@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { defineGraph } from "../core/graph";
 import { Engine, type Executor, type AttemptResult, type EngineOpts } from "./run";
 import { replayState } from "./replay";
+import { resolveEffect, supervisorShouldResume } from "./control";
 import { PromptStore } from "../prompts/store";
 import { readLog } from "../log/write";
 import type { LoggedEvent } from "../log/events";
@@ -340,6 +341,59 @@ describe("exactly-once side effects (OV-1)", () => {
     // system-map 0.2: the logged ask carries the code a reply is judged by
     expect(lastPark(publishingEngine(dir, { prCount }).log.read())).toMatchObject({ code: "ambiguous-effect", node: "publish" });
     expect(prCount.n).toBe(0);
+  });
+
+  // HOW-3: the operator is the probe of last resort. These pin that replay honours the
+  // attestation both ways — the whole point of the verb.
+  test("operator says it happened: the retry skips the effect and the run finishes", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "howdah-run-"));
+    const prCount = { n: 0 };
+    await publishingEngine(dir, { crashDuringEffect: true, prCount }).start({ goal: "g", summary: "" });
+    expect(await publishingEngine(dir, { probe: "unknown", prCount }).resume()).toMatchObject({ code: "ambiguous-effect" });
+
+    const r = resolveEffect(dir, "create-pr", "happened");
+    expect(r).toMatchObject({ ok: true, node: "publish", effect: "create-pr", verdict: "happened", idempotent: false });
+
+    const r2 = await publishingEngine(dir, { probe: "unknown", prCount }).resume();
+    expect(r2).toEqual({ state: "finished", outcome: "success" });
+    expect(prCount.n).toBe(0); // never executed the effect again
+  });
+
+  test("operator says it did not happen: the retry claims and runs the effect exactly once", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "howdah-run-"));
+    const prCount = { n: 0 };
+    await publishingEngine(dir, { crashDuringEffect: true, prCount }).start({ goal: "g", summary: "" });
+    expect(await publishingEngine(dir, { probe: "unknown", prCount }).resume()).toMatchObject({ code: "ambiguous-effect" });
+
+    expect(resolveEffect(dir, "create-pr", "not-happened")).toMatchObject({ ok: true, verdict: "not-happened" });
+
+    const r2 = await publishingEngine(dir, { probe: "unknown", prCount }).resume();
+    expect(r2).toEqual({ state: "finished", outcome: "success" });
+    expect(prCount.n).toBe(1);
+    // the intent was claimed afresh, and this time it was proven done
+    const log = readLog(join(dir, "run.jsonl"));
+    expect(log.filter((e) => e.type === "side-effect-intent")).toHaveLength(2);
+    expect(log.filter((e) => e.type === "side-effect-done")).toHaveLength(1);
+  });
+
+  test("a resolution answers the park, so `up` resumes even if the spawned resume died", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "howdah-run-"));
+    const prCount = { n: 0 };
+    await publishingEngine(dir, { crashDuringEffect: true, prCount }).start({ goal: "g", summary: "" });
+    await publishingEngine(dir, { probe: "unknown", prCount }).resume();
+    const parked = replayState(readLog(join(dir, "run.jsonl")));
+    expect(parked.parked).toMatchObject({ code: "ambiguous-effect" });
+    expect(supervisorShouldResume(parked, null)).toBe(false);
+
+    resolveEffect(dir, "create-pr", "happened");
+
+    // nothing else ran: no attention-resolved, yet the run is no longer waiting on a human
+    const after = replayState(readLog(join(dir, "run.jsonl")));
+    expect(after.parked).toBeNull();
+    expect(after.answeredPark).toMatchObject({ code: "ambiguous-effect", node: "publish" });
+    expect(after.pendingIntents).toEqual([]);
+    expect(supervisorShouldResume(after, null)).toBe(true);
+    expect(supervisorShouldResume(after, "pause")).toBe(false); // the operator still owns a held run
   });
 });
 

@@ -178,6 +178,23 @@ export type RunEvent =
     }
   | { type: "side-effect-done"; node: string; visit: number; attempt_id: string; effect: string; result?: unknown }
   | {
+      /**
+       * HOW-3: a human attested to an AMBIGUOUS effect (an intent with no done, which the
+       * resume probe could not decide). Additive — the intent is never edited. `happened`
+       * replays exactly like side-effect-done; `not-happened` clears the intent so the
+       * retry claims and runs the effect again. `node`/`visit`/`attempt_id` are copied
+       * verbatim from the intent, so the identity matches it and the viewer row lands on
+       * the right node@visit.
+       */
+      type: "side-effect-resolved";
+      node: string;
+      visit: number;
+      attempt_id: string;
+      effect: string;
+      verdict: "happened" | "not-happened";
+      by: "operator";
+    }
+  | {
       /** reconciler observation before a node (A6): git always, forge only for declared
        *  readers. Disagreements between intended and observed identity are FACTS here —
        *  surfaced, never auto-resolved. */
