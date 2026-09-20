@@ -11,6 +11,15 @@
  *
  * The heartbeat file is the watchdog's liveness signal: the engine touches it on a timer;
  * a stale heartbeat with a dead pid IS an attention event ("the harness died").
+ *
+ * HOW-20 added the third rule, the one that makes the first two bearable: a notification is
+ * raised for a SITUATION, not for every event that mentions it.
+ *
+ *   3. One ring per situation. Re-raising an id that is already on disk rewrites the record
+ *      (durability is unchanged) but does not ring again inside a short cooldown — the
+ *      executor's permission ask and the park that follows it are one situation. And a
+ *      record whose run stopped needing a human is resolved by the watchdog rather than
+ *      re-rung forever; see engine/attention-inbox.ts for who answers that question.
  */
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -35,10 +44,30 @@ export interface Notification {
 
 export type Notifier = (n: Notification) => Promise<void>;
 
-/** macOS notification via osascript — replace/augment with Slack webhook in config */
-export const osNotifier: Notifier = async (n) => {
+/**
+ * The macOS ring. A notification whose whole point is its deep link must be CLICKABLE
+ * (HOW-20): `osascript -e 'display notification'` posts the banner as Script Editor, so
+ * clicking it opens Script Editor — the reader is told a run needs them and then handed a
+ * blank AppleScript window. `terminal-notifier -open <url>` opens the run instead.
+ *
+ * It is not installable from here, so this degrades rather than depends: with no click-capable
+ * deliverer on PATH we still ring through osascript, with the URL spelled out in the body so
+ * the reader can get there by hand. Either way the escaping guard stays — a reason with a
+ * quote in it must not break the AppleScript (or the argv).
+ */
+export function notifierArgv(n: Notification, deliverer: string | null): string[] {
   const esc = (s: string) => s.replace(/["\\]/g, "");
-  Bun.spawnSync(["osascript", "-e", `display notification "${esc(n.body)}" with title "${esc(n.title)}" sound name "Glass"`]);
+  if (deliverer)
+    return [deliverer, "-title", esc(n.title), "-message", esc(n.body), "-open", n.link, "-sound", "Glass"];
+  return [
+    "osascript",
+    "-e",
+    `display notification "${esc(`${n.body} — ${n.link}`)}" with title "${esc(n.title)}" sound name "Glass"`,
+  ];
+}
+
+export const osNotifier: Notifier = async (n) => {
+  Bun.spawnSync(notifierArgv(n, Bun.which("terminal-notifier")));
 };
 
 export const slackNotifier = (webhookUrl: string): Notifier => async (n) => {
@@ -57,11 +86,19 @@ export function formatWait(sinceIso: string, now: Date): string {
   return `waiting ${Math.floor(m / 60)}h ${m % 60}m`;
 }
 
+/**
+ * Two raises of the SAME id inside this window are one situation, and ring once (HOW-20):
+ * the claude/codex executor raises `run:node:visit` when a tool needs permission, and the
+ * park that follows raises the very same id seconds later. The second write still happens —
+ * durability is never traded for quiet — only the second ring is skipped.
+ */
+export const NOTIFY_COOLDOWN_MS = 10 * 60_000;
+
 export class AttentionCenter {
   constructor(
     readonly dir: string,
     private readonly notifiers: Notifier[],
-    private readonly opts: { viewerBase?: string; clock?: () => Date } = {},
+    private readonly opts: { viewerBase?: string; clock?: () => Date; notifyCooldownMs?: number } = {},
   ) {
     mkdirSync(dir, { recursive: true });
   }
@@ -74,30 +111,77 @@ export class AttentionCenter {
     return join(this.dir, `${id.replace(/[^\w.-]/g, "_")}.json`);
   }
 
-  /** Durable-first: the record hits disk BEFORE any notifier runs. */
+  /**
+   * Durable-first: the record hits disk BEFORE any notifier runs.
+   *
+   * An id already on disk keeps its original `raised_at` — re-raising must not restart the
+   * wait clock, or the operator is told a two-hour-old ask arrived "just now". The reason and
+   * the link are rewritten (the later raise knows more: `park: no matching edge` says more
+   * than `Bash needs permission`), and the ring is skipped inside NOTIFY_COOLDOWN_MS.
+   */
   async raise(input: { run: string; node: string; visit: number; reason: string }): Promise<AttentionRecord> {
     const id = `${input.run}:${input.node}:${input.visit}`;
+    const prior = this.read(id);
     const record: AttentionRecord = {
       id,
       ...input,
-      raised_at: this.now().toISOString(),
+      raised_at: prior?.raised_at ?? this.now().toISOString(),
       deep_link: `${this.opts.viewerBase ?? "http://localhost:4711"}/run/${input.run}#needs-input`,
+      ...(prior?.notified_at ? { notified_at: prior.notified_at } : {}),
     };
     writeFileSync(this.path(id), JSON.stringify(record, null, 2));
-    await this.notify(record);
+    const cooldown = this.opts.notifyCooldownMs ?? NOTIFY_COOLDOWN_MS;
+    const rang = prior?.notified_at ? this.now().getTime() - new Date(prior.notified_at).getTime() : Infinity;
+    if (rang >= cooldown) await this.notify(record);
     return record;
   }
 
-  /** Notify (or re-notify) a pending record; stamps notified_at on success. */
-  async notify(record: AttentionRecord): Promise<void> {
-    const n: Notification = {
-      title: `Howdah needs you — ${record.node}`,
-      body: `${record.reason} (${formatWait(record.raised_at, this.now())})`,
-      link: record.deep_link,
-    };
+  /**
+   * Notify (or re-notify) pending records; stamps notified_at on success.
+   *
+   * This is what a notification is MEANT to look like (HOW-20): the title names the run AND
+   * the node, because "Howdah needs you — implementation.plan" against six parked runs names
+   * nothing; the body is the reason plus how long it has waited; and the link is handed to
+   * every notifier, not only Slack — the whole point of the banner is that clicking it lands
+   * on the ask.
+   *
+   * Given MORE THAN ONE record it delivers ONE notification that counts them and links the
+   * inbox, instead of a banner per record (what the watchdog tick does with a backlog).
+   */
+  async notify(records: AttentionRecord | AttentionRecord[]): Promise<void> {
+    const list = Array.isArray(records) ? records : [records];
+    if (list.length === 0) return;
+    const first = list[0]!;
+    const one = (r: AttentionRecord) => `${r.run} · ${r.node}`;
+    const n: Notification = list.length === 1
+      ? {
+          title: `Howdah needs you — ${one(first)}`,
+          body: `${first.reason} · ${formatWait(first.raised_at, this.now())}`,
+          link: first.deep_link,
+        }
+      : {
+          title: `Howdah needs you — ${list.length} runs`,
+          body: list.map((r) => `${one(r)} · ${formatWait(r.raised_at, this.now())}`).join(", "),
+          link: `${this.opts.viewerBase ?? "http://localhost:4711"}/attention`,
+        };
     for (const fire of this.notifiers) await fire(n);
-    record.notified_at = this.now().toISOString();
-    writeFileSync(this.path(record.id), JSON.stringify(record, null, 2));
+    // stamped only after every notifier returned: a throw above leaves the records
+    // undelivered on disk, which is what makes the watchdog deliver them later
+    const at = this.now().toISOString();
+    for (const r of list) {
+      r.notified_at = at;
+      writeFileSync(this.path(r.id), JSON.stringify(r, null, 2));
+    }
+  }
+
+  private read(id: string): AttentionRecord | null {
+    const path = this.path(id);
+    if (!existsSync(path)) return null;
+    try {
+      return JSON.parse(readFileSync(path, "utf8")) as AttentionRecord;
+    } catch {
+      return null; // a torn record is no record: re-raising rewrites it
+    }
   }
 
   resolve(id: string): void {
@@ -112,13 +196,28 @@ export class AttentionCenter {
       .sort((a, b) => a.raised_at.localeCompare(b.raised_at));
   }
 
-  /** Restart path (A7.2): re-raise anything never delivered or delivered too long ago. */
-  async reRaise(reNotifyAfterMs: number): Promise<AttentionRecord[]> {
+  /**
+   * Restart path (A7.2): everything never delivered, or delivered too long ago.
+   *
+   * `stillNeedsHuman` is asked FIRST, and a record it rejects is RESOLVED, not notified
+   * (HOW-20): a run that finished hours ago, or whose ask was answered, was re-ringing every
+   * thirty minutes forever because nothing on this path ever looked at the run again. The
+   * predicate is injected rather than imported so this file keeps knowing nothing about runs
+   * — watchdog/check.ts and the viewer both pass engine/attention-inbox.ts's one answer.
+   *
+   * It returns the still-due records WITHOUT ringing, so the caller decides how to deliver
+   * them: one ring for one record, one coalesced ring for a backlog.
+   */
+  async reRaise(reNotifyAfterMs: number, stillNeeded?: (r: AttentionRecord) => boolean): Promise<AttentionRecord[]> {
     const now = this.now().getTime();
-    const due = this.pending().filter(
-      (r) => !r.notified_at || now - new Date(r.notified_at).getTime() >= reNotifyAfterMs,
-    );
-    for (const r of due) await this.notify(r);
+    const due: AttentionRecord[] = [];
+    for (const r of this.pending()) {
+      if (stillNeeded && !stillNeeded(r)) {
+        this.resolve(r.id);
+        continue;
+      }
+      if (!r.notified_at || now - new Date(r.notified_at).getTime() >= reNotifyAfterMs) due.push(r);
+    }
     return due;
   }
 }
