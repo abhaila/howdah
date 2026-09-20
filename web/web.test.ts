@@ -857,6 +857,62 @@ describe("deriveLogRows", () => {
     expect(rows.find((r) => r.type === "chunk" && r.kind === "tool")).toBeDefined();
   });
 
+  /**
+   * The bug this fold exists for, at the size it actually occurs. A real implement-slice run
+   * stored 12,609 `text` chunks averaging 13 characters, so one sentence arrived as six rows
+   * — "I'll expl" / "ore the har" / "ness ab" / … — and 2,252 `thinking` chunks carried
+   * nothing at all. Same events, same log; the reader stops shredding them.
+   */
+  test("contiguous streaming deltas fold into one row carrying the reassembled prose", () => {
+    const dir = mkdtempSync(join(tmpdir(), "howdah-logfold-"));
+    const log = new EventLog(join(dir, "r", "run.jsonl"), fixedClock());
+    const say = (i: number, kind: "text" | "thinking", content: string) =>
+      log.append({ type: "chunk", node: "slice.propose", visit: 1, turn: 1, index: i, kind, content });
+    for (const [i, part] of ["I'll expl", "ore the har", "ness ab", "straction before", " designing the", " slice."].entries())
+      say(i, "text", part);
+
+    const rows = deriveLogRows(log.read());
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.summary).toContain("I'll explore the harness abstraction before designing the slice.");
+    expect(rows[0]!.merged).toBe(6);
+    // `raw` is still a REAL stored event, because the Raw pane's whole job is fidelity
+    expect(rows[0]!.raw.type).toBe("chunk");
+    expect((rows[0]!.raw as { content: string }).content).toBe("I'll expl");
+  });
+
+  test("a tool call between two runs of text ends the first run", () => {
+    const dir = mkdtempSync(join(tmpdir(), "howdah-logfold2-"));
+    const log = new EventLog(join(dir, "r", "run.jsonl"), fixedClock());
+    const at = (index: number, kind: "text" | "tool_call", content: string) =>
+      log.append({ type: "chunk", node: "n", visit: 1, turn: 1, index, kind, content, ...(kind === "tool_call" ? { tool_name: "Bash" } : {}) });
+    at(0, "text", "before ");
+    at(1, "text", "the tool");
+    at(2, "tool_call", '{"command":"ls"}');
+    at(3, "text", "after");
+
+    const rows = deriveLogRows(log.read());
+    expect(rows).toHaveLength(3); // text ×2, the tool, text ×1 — order preserved
+    expect(rows[0]!.merged).toBe(2);
+    expect(rows[0]!.summary).toContain("before the tool");
+    expect(rows[1]!.kind).toBe("tool"); // tool events are never folded away
+    expect(rows[1]!.merged).toBe(1);
+    expect(rows[2]!.summary).toContain("after");
+  });
+
+  test("thinking that says nothing still gets a row, with the count that says how much of it there was", () => {
+    const dir = mkdtempSync(join(tmpdir(), "howdah-logfold3-"));
+    const log = new EventLog(join(dir, "r", "run.jsonl"), fixedClock());
+    for (let i = 0; i < 2252; i++)
+      log.append({ type: "chunk", node: "n", visit: 1, turn: 1, index: i, kind: "thinking", content: "" });
+
+    const rows = deriveLogRows(log.read());
+    // 2,252 blank rows become one that ADMITS to being 2,252 — deleting them would make the
+    // log lie by omission, and keeping them one-per-event is what made the tab unreadable
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.merged).toBe(2252);
+    expect(rows[0]!.summary).toBe("thinking ×2252");
+  });
+
   test("an exhausted allowance is attention, a healthy one is not", () => {
     const dir = mkdtempSync(join(tmpdir(), "howdah-logrows-"));
     const log = new EventLog(join(dir, "r", "run.jsonl"), fixedClock());

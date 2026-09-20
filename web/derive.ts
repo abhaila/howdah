@@ -333,11 +333,49 @@ export interface LogRow {
   depth: 0 | 1;
   /** the stored event, verbatim — the Raw tab must be faithful to run.jsonl, not re-rendered */
   raw: LoggedEvent;
+  /**
+   * How many stored chunk events this row folds. 1 for everything else.
+   *
+   * A streaming delta is not a unit anyone reads: one real run stored 12,609 `text` chunks
+   * averaging 13 characters, so a single sentence arrived as six rows, and 2,252 `thinking`
+   * chunks carried no text at all. Contiguous deltas of the same kind, in the same turn, fold
+   * into one row whose summary is the reassembled prose. `raw` still points at a REAL stored
+   * event — the first of the run — because the Raw pane's whole job is fidelity; the count is
+   * what says the row stands for more than itself.
+   */
+  merged: number;
+}
+
+type Chunky = Extract<LoggedEvent, { type: "chunk" }>;
+const isChunk = (e: LoggedEvent): e is Chunky => e.type === "chunk";
+/** a streaming delta — the kinds that arrive in pieces and mean nothing one piece at a time */
+const streams = (e: Chunky) => e.kind === "text" || e.kind === "thinking";
+
+/**
+ * Fold contiguous streaming deltas of one kind, in one turn, into a single entry carrying the
+ * reassembled text. Anything else passes through untouched, and a tool call between two runs
+ * of text ends the first run — the order the log recorded is the order the rows keep.
+ */
+function foldStreamedChunks(events: LoggedEvent[]): Array<{ e: LoggedEvent; merged: number; text?: string }> {
+  const out: Array<{ e: LoggedEvent; merged: number; text?: string }> = [];
+  for (const e of events) {
+    const last = out.at(-1);
+    if (
+      isChunk(e) && streams(e) && last && isChunk(last.e) && streams(last.e) &&
+      last.e.kind === e.kind && last.e.node === e.node && last.e.visit === e.visit && last.e.turn === e.turn
+    ) {
+      last.merged += 1;
+      last.text = (last.text ?? "") + e.content;
+      continue;
+    }
+    out.push({ e, merged: 1, text: isChunk(e) && streams(e) ? e.content : undefined });
+  }
+  return out;
 }
 
 export function deriveLogRows(events: LoggedEvent[]): LogRow[] {
-  return events.map((e): LogRow => {
-    const base = { seq: e.seq, ts: e.ts, type: e.type, raw: e };
+  return foldStreamedChunks(events).map(({ e, merged, text }): LogRow => {
+    const base = { seq: e.seq, ts: e.ts, type: e.type, raw: e, merged };
     const at = (n: string, v: number) => ({ node: n, visit: v });
     switch (e.type) {
       case "run-started":
@@ -348,9 +386,14 @@ export function deriveLogRows(events: LoggedEvent[]): LogRow[] {
       case "prompt-rendered":
         return { ...base, ...at(e.node, e.visit), kind: "agent", depth: 0,
           summary: `${e.prompt} v${e.prompt_version} · read ${Object.keys(e.context_read).join(", ") || "nothing"} · ${e.rendered_hash}` };
-      case "chunk":
+      case "chunk": {
+        const body = (text ?? e.content).trim();
+        const count = merged > 1 ? ` ×${merged}` : "";
         return { ...base, ...at(e.node, e.visit), kind: e.kind === "tool_call" || e.kind === "tool_result" ? "tool" : "agent", depth: 1,
-          summary: `${e.kind}${e.tool_name ? ` · ${e.tool_name}` : ""} · ${e.content.slice(0, 120)}` };
+          // an empty fold still gets a row: "it thought for 2,252 deltas and said nothing" is
+          // a fact about the run, and deleting it would make the log lie by omission
+          summary: `${e.kind}${count}${e.tool_name ? ` · ${e.tool_name}` : ""}${body ? ` · ${body.slice(0, 200)}` : ""}` };
+      }
       case "turn-finalized":
         return { ...base, ...at(e.node, e.visit), kind: "agent", depth: 1,
           summary: `turn ${e.turn} · in ${e.usage?.input_tokens ?? "—"} · out ${e.usage?.output_tokens ?? "—"}${e.usage?.cost_usd !== undefined ? ` · $${e.usage.cost_usd.toFixed(4)}` : ""}` };
