@@ -187,6 +187,10 @@ main { flex: 1; min-width: 0; }
 .dag-node rect { fill: var(--bg-raised); stroke: var(--border-strong); stroke-width: 1.2; }
 .dag-node.current rect { stroke: var(--status-running); stroke-width: 2; }
 .dag-node.current .dag-title { fill: var(--status-running); }
+/* HOW-16 listed `kind-terminal` among the dead classes to delete, and it is not: the ticket's
+   scan missed that `kind-${n.kind}` in graph-dag.tsx composes it, so this is what gives a
+   terminal node its dashed border. Kept deliberately, declared in css-contract.test.ts's
+   COMPOSED_PREFIXES. The other eleven were confirmed dead and are gone. */
 .dag-node.kind-terminal rect { stroke-dasharray: 3 3; }
 .dag-title { fill: var(--fg); font-family: var(--font-mono); font-size: var(--type-sm); font-weight: 600; }
 .dag-sub { fill: var(--fg-muted); font-family: var(--font-mono); font-size: var(--type-2xs); }
