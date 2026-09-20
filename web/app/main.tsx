@@ -61,6 +61,29 @@ function Mark({ className }: { className?: string }) {
   );
 }
 
+/**
+ * Every read model in this app arrives over fetch, and `fetch` only rejects on a transport
+ * failure: a 404 resolves, and its error body parses as JSON just fine. `.then(r => r.json())
+ * .then(setState)` therefore stores `{error: "unknown run"}` where a RunDetail belongs, which
+ * is worse than no data — a truthy non-value walks straight past every `if (!x) return
+ * <LoadingState/>` guard and the next property read throws mid-render. With no error boundary
+ * in this app, that throw unmounts the tree and the operator gets a blank page.
+ *
+ * So: one door for every read, and a non-ok response leaves the page's state alone, which is
+ * what makes the loading and empty states it already has do their job.
+ */
+class HttpError extends Error {
+  constructor(readonly status: number, url: string) {
+    super(`${status} from ${url}`);
+  }
+}
+
+async function getJSON<T>(url: string, init?: RequestInit): Promise<T> {
+  const r = await fetch(url, init);
+  if (!r.ok) throw new HttpError(r.status, url);
+  return (await r.json()) as T;
+}
+
 function LoadingState({ title = "Loading", detail }: { title?: string; detail?: string }) {
   return (
     <Card className="max-w-[520px]">
@@ -182,8 +205,8 @@ function RunsList() {
   const [app, setApp] = useState<AppInfo | null>(null);
   const now = useNow();
   useEffect(() => {
-    const load = () => fetch("/api/runs").then((r) => r.json()).then(setRuns).catch(() => {});
-    fetch("/api/app").then((r) => r.json()).then(setApp).catch(() => {});
+    const load = () => getJSON<RunSummary[]>("/api/runs").then(setRuns).catch(() => {});
+    getJSON<AppInfo>("/api/app").then(setApp).catch(() => {});
     load();
     const t = setInterval(load, 3000);
     return () => clearInterval(t);
@@ -239,8 +262,7 @@ function PromptAndContext({ runId, render }: { runId: string; render: RunDetail[
 
   useEffect(() => {
     if (!open || instance) return;
-    fetch(`/api/runs/${runId}/render/${render.rendered_hash}`)
-      .then((r) => (r.ok ? r.json() : "missing"))
+    getJSON<ReconstructedRender>(`/api/runs/${runId}/render/${render.rendered_hash}`)
       .then(setInstance)
       .catch(() => setInstance("missing"));
   }, [open, instance, runId, render.rendered_hash]);
@@ -1312,14 +1334,30 @@ function RunChat({ runId, detail, ask, onPickStep }: {
   );
 }
 
-function RunView({ id }: { id: string }) {
+/** how long a just-launched run may take to appear on disk before we say it is not coming */
+export const OPEN_GRACE_MS = 10_000;
+const OPEN_POLL_MS = 300;
+
+/** `graceMs` is a seam for the component test (web/app/runview.test.tsx); nothing else sets it. */
+export function RunView({ id, graceMs = OPEN_GRACE_MS }: { id: string; graceMs?: number }) {
   const [detail, setDetail] = useState<(RunDetail & { cwd_exists?: boolean; editor_configured?: boolean }) | null>(null);
   const [tab, setTab] = useState<"steps" | "thread" | "context" | "logs" | "chat" | "graph">("steps");
   const [picked, setPicked] = useState<string | null>(null);
   const [bannerAction, setBannerAction] = useState<"resume" | null>(null);
   const [bannerError, setBannerError] = useState<string | null>(null);
+  const [missing, setMissing] = useState(false);
   const now = useNow();
-  const reload = useCallback(() => fetch(`/api/runs/${id}`).then((r) => r.json()).then(setDetail).catch(() => {}), [id]);
+  // a 404 here is normal for a moment: launching spawns the CLI detached and answers 202
+  // before the run dir exists (web/server.ts POST /api/runs), so the viewer arrives ahead of
+  // run.jsonl. Leaving `detail` null keeps the loading state this component already renders;
+  // the poll below is what brings it back. Any other failure also leaves the last good view
+  // in place rather than replacing it with an error body.
+  const reload = useCallback(
+    () => getJSON<RunDetail & { cwd_exists?: boolean; editor_configured?: boolean }>(`/api/runs/${id}`)
+      .then((d) => { setDetail(d); setMissing(false); })
+      .catch(() => {}),
+    [id],
+  );
   const runAction = useCallback(async (verb: "resume") => {
     setBannerAction(verb);
     setBannerError(null);
@@ -1333,7 +1371,25 @@ function RunView({ id }: { id: string }) {
       setBannerAction(null);
     }
   }, [id, reload]);
-  useEffect(() => { reload(); }, [reload]);
+  // Waiting for a run that does not exist YET. The CLI needs a moment to boot and write its
+  // first event, so poll while the page shows its loading state, and stop after OPEN_GRACE_MS
+  // rather than spinning forever — a launch that died on boot never arrives, and a spinner
+  // that never resolves is the same lie as a blank page.
+  useEffect(() => {
+    if (detail) return;
+    setMissing(false);
+    let stop = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const started = Date.now();
+    const tick = async () => {
+      await reload();
+      if (stop) return;
+      if (Date.now() - started >= graceMs) setMissing(true);
+      else timer = setTimeout(tick, OPEN_POLL_MS);
+    };
+    void tick();
+    return () => { stop = true; if (timer !== undefined) clearTimeout(timer); };
+  }, [detail, reload, graceMs]);
   useEffect(() => {
     if (!detail) return;
     const active = ["running", "needs-input", "waiting", "harness-dead", "failed-recoverable"].includes(detail.summary.status);
@@ -1367,6 +1423,19 @@ function RunView({ id }: { id: string }) {
     return m;
   }, [detail]);
 
+  if (!detail && missing)
+    return (
+      <Card className="max-w-[520px]">
+        <CardContent className="pt-5">
+          <div className="text-sm">No run <strong>{id}</strong></div>
+          <div className="text-xs text-muted-foreground mt-1">
+            Nothing was written to its log within {graceMs / 1000}s, so it probably failed to
+            start. Check the launch settings and try again.
+          </div>
+          <div className="mt-3"><a href="/"><Button variant="outline" size="sm">Back to runs</Button></a></div>
+        </CardContent>
+      </Card>
+    );
   if (!detail) return <LoadingState title="Loading run" detail={`Opening ${id}.`} />;
   const { summary, ask } = detail;
   const effectiveTimeline = detail.timeline.map((t) => ({ row: t, duration: liveDuration(t, now) }));
@@ -1704,9 +1773,9 @@ function StartRun() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const loadWorkspaces = () => fetch("/api/workspaces").then((r) => r.json()).then(setWorkspaces).catch(() => {});
+  const loadWorkspaces = () => getJSON<Workspaces>("/api/workspaces").then(setWorkspaces).catch(() => {});
   useEffect(() => {
-    fetch("/api/graphs").then((r) => r.json()).then(setGraphs).catch(() => {});
+    getJSON<GraphInfo[]>("/api/graphs").then(setGraphs).catch(() => {});
     loadWorkspaces();
   }, []);
   const selected = graphs.find((g) => g.name === graph);
@@ -2088,7 +2157,7 @@ function GraphsList() {
   const [graphs, setGraphs] = useState<Array<{ name: string; description: string; kind: string }>>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
-  useEffect(() => { fetch("/api/graphs").then((r) => r.json()).then(setGraphs).catch(() => {}); }, []);
+  useEffect(() => { getJSON<Array<{ name: string; description: string; kind: string }>>("/api/graphs").then(setGraphs).catch(() => {}); }, []);
   const shape = useGraphShape(selected ? `${selected}?v=${reloadKey}` as any : undefined);
   return (
     <div className="runs">
@@ -2119,12 +2188,12 @@ function Settings() {
   const [s, setS] = useState<{ editorCommand?: string; slackWebhook?: string; chime?: boolean } | null>(null);
   const [saved, setSaved] = useState(false);
   const [ws, setWs] = useState<Workspaces>({ repos: [], folders: [] });
-  const loadWs = () => fetch("/api/workspaces").then((r) => r.json()).then(setWs).catch(() => {});
+  const loadWs = () => getJSON<Workspaces>("/api/workspaces").then(setWs).catch(() => {});
   const removeWs = async (name: string) => {
     await fetch("/api/workspaces", { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ name }) });
     loadWs();
   };
-  useEffect(() => { fetch("/api/settings").then((r) => r.json()).then(setS).catch(() => {}); loadWs(); }, []);
+  useEffect(() => { getJSON<{ editorCommand?: string; slackWebhook?: string; chime?: boolean }>("/api/settings").then(setS).catch(() => {}); loadWs(); }, []);
   if (!s) return <LoadingState title="Loading settings" />;
   const save = async () => {
     await fetch("/api/settings", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(s) });
@@ -2184,12 +2253,12 @@ const PROPOSALS_CHANGED = "howdah:proposals-changed";
 function PromptsScreen({ selected }: { selected: string | null }) {
   const [list, setList] = useState<PromptSummary[] | null>(null);
   const [detail, setDetail] = useState<PromptDetail | null>(null);
-  const load = useCallback(() => fetch("/api/prompts").then((r) => r.json()).then(setList).catch(() => setList([])), []);
+  const load = useCallback(() => getJSON<PromptSummary[]>("/api/prompts").then(setList).catch(() => setList([])), []);
   useEffect(() => { load(); }, [load]);
   useEffect(() => {
     if (!selected) return void setDetail(null);
     setDetail(null);
-    fetch(`/api/prompts/${encodeURIComponent(selected)}`).then((r) => (r.ok ? r.json() : null)).then(setDetail).catch(() => setDetail(null));
+    getJSON<PromptDetail>(`/api/prompts/${encodeURIComponent(selected)}`).then(setDetail).catch(() => setDetail(null));
   }, [selected]);
 
   if (!list) return <LoadingState title="Loading prompts" detail="Reading prompt history and outcomes." />;
@@ -2325,7 +2394,7 @@ function ProposalsScreen({ selected }: { selected: string | null }) {
   const [notice, setNotice] = useState<string | null>(null);
   const [rejecting, setRejecting] = useState(false);
   const [reason, setReason] = useState("");
-  const load = useCallback(() => fetch("/api/proposals").then((r) => r.json()).then(setList).catch(() => setList([])), []);
+  const load = useCallback(() => getJSON<ProposalView[]>("/api/proposals").then(setList).catch(() => setList([])), []);
   useEffect(() => { load(); }, [load]);
 
   const act = async (file: string, verb: "accept" | "reject" | "redraft", body?: unknown) => {
@@ -2501,9 +2570,8 @@ function App() {
   // count that goes stale after an accept is worse than no count: it is a live-looking lie
   const [pending, setPending] = useState(0);
   const countPending = useCallback(() => {
-    fetch("/api/proposals")
-      .then((r) => r.json())
-      .then((ps: ProposalView[]) => setPending(ps.filter((p) => p.status === "pending").length))
+    getJSON<ProposalView[]>("/api/proposals")
+      .then((ps) => setPending(ps.filter((p) => p.status === "pending").length))
       .catch(() => setPending(0));
   }, []);
   useEffect(() => {
