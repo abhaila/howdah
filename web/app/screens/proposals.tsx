@@ -63,7 +63,6 @@ export function ProposalsScreen({ selected }: { selected: string | null }) {
       toast(`re-drafting ${payload.drafting}${payload.stubbed ? " (stubbed)" : ""}`);
     }
     if (verb === "reject") {
-      setRejecting(false);
       setReason("");
       toast("rejected — the reviser reads your reason as feedback");
     }
@@ -76,6 +75,7 @@ export function ProposalsScreen({ selected }: { selected: string | null }) {
     return <EmptyState>no proposals — add feedback to a prompt, then <code>bun reviser/revise.ts &lt;id&gt;</code></EmptyState>;
 
   const current = list.find((p) => p.file === selected) ?? list[0]!;
+  const reject = () => { setRejecting(false); act(current.file, "reject", { reason }); };
   return (
     <div className="library-layout">
       <div className="runs">
@@ -120,7 +120,7 @@ export function ProposalsScreen({ selected }: { selected: string | null }) {
             <Button size="sm" disabled={busy !== null} onClick={() => act(current.file, "accept")}>
               <ThumbsUp />{busy === "accept" ? "accepting…" : `Accept → v${current.proposed_version}`}
             </Button>
-            <Button variant="destructive-outline" size="sm" disabled={busy !== null} onClick={() => setRejecting(true)}><X />Reject</Button>
+            <Button variant="destructive-outline" size="sm" disabled={busy !== null} onClick={() => setRejecting(true)}><X />{busy === "reject" ? "rejecting…" : "Reject"}</Button>
           </div>
         )}
 
@@ -137,13 +137,15 @@ export function ProposalsScreen({ selected }: { selected: string | null }) {
             placeholder="Why? The reviser reads this."
             value={reason}
             onChange={(e) => setReason(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter" && reason.trim()) act(current.file, "reject", { reason }); }}
+            onKeyDown={(e) => { if (e.key === "Enter" && reason.trim()) reject(); }}
           />
+          {/* the dialog closes before the POST, like every other confirmation here: it is
+              modal, so a refusal banner and a toast raised behind it are unreadable and
+              non-interactive. The reason is kept on a refusal, so Reject reopens where it
+              left off; it is cleared only once the reject lands. */}
           <div className="flex justify-end gap-2">
             <Button variant="outline" size="sm" onClick={() => setRejecting(false)}>Cancel</Button>
-            <Button variant="destructive" size="sm" disabled={!reason.trim() || busy !== null} onClick={() => act(current.file, "reject", { reason })}>
-              {busy === "reject" ? "rejecting…" : "Reject the revision"}
-            </Button>
+            <Button variant="destructive" size="sm" disabled={!reason.trim() || busy !== null} onClick={reject}>Reject the revision</Button>
           </div>
         </Dialog>
 

@@ -182,7 +182,6 @@ export function RunControls({ runId, summary, onAction }: { runId: string; summa
     try {
       const r = await fetch(`/api/runs/${runId}/${verb}`, { method: "POST" });
       if (!r.ok) throw new Error(((await r.json().catch(() => null)) as any)?.error ?? `${verb} failed`);
-      setConfirmAbort(false);
       toast(`${verb} accepted — the runner is acting on it`);
       setTimeout(onAction, 300);
     } catch (e) {
@@ -203,15 +202,19 @@ export function RunControls({ runId, summary, onAction }: { runId: string; summa
       {resumable
         ? <Button variant="outline" size="sm" disabled={busy} onClick={() => act("resume")}>{pending === "resume" ? <Loader2 className="animate-spin" /> : <Play />}{pending === "resume" ? "Resuming…" : "Resume"}</Button>
         : summary.status === "running" && <Button variant="outline" size="sm" disabled={busy} onClick={() => act("pause")}>{pending === "pause" ? <Loader2 className="animate-spin" /> : <Pause />}{pending === "pause" ? "Pausing…" : "Pause"}</Button>}
-      <Button variant="outline" size="sm" disabled={busy} onClick={() => setConfirmAbort(true)}><OctagonX />Abort</Button>
+      <Button variant="outline" size="sm" disabled={busy} onClick={() => setConfirmAbort(true)}>{pending === "abort" ? <Loader2 className="animate-spin" /> : <OctagonX />}{pending === "abort" ? "Aborting…" : "Abort"}</Button>
+      {/* The dialog closes BEFORE the verb is sent, the way every other confirmation in this
+          app does (slice.tsx, settings.tsx). A modal dialog makes the rest of the document
+          inert and covers it with its ::backdrop, and both explanations of a refusal — the
+          inline field-error below and the toast region — render outside it. Leaving it open
+          across a failed abort would hide the only two places that say why. */}
       <AlertDialog
         open={confirmAbort}
-        busy={pending === "abort"}
         onClose={() => setConfirmAbort(false)}
-        onConfirm={() => act("abort")}
+        onConfirm={() => { setConfirmAbort(false); act("abort"); }}
         title="Abort this run?"
         description={<>The runner is interrupted mid-turn and the run stops at <strong>{summary.graph}</strong>. Work already committed in its worktree is untouched, but the run cannot be un-aborted — you would start a new one.</>}
-        confirmLabel={pending === "abort" ? "Aborting…" : "Abort the run"}
+        confirmLabel="Abort the run"
       />
       {error && <span className="field-error">{error}</span>}
     </span>
