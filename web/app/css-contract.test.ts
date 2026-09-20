@@ -325,3 +325,31 @@ describe("no raw interactive primitives outside components/ui (P1.5)", () => {
     expect(offenders).toEqual([]);
   });
 });
+
+/**
+ * A native `title=` is not a tooltip. It is untouchable on touch, unstyled, delayed by half
+ * a second, and announced by some screen readers and not others — which is why HOW-16 P1.4
+ * replaced all thirty of them with `Tooltip`. Nothing else would notice the thirty-first
+ * arriving: `title` is a valid DOM attribute, so TypeScript is happy and the element still
+ * renders.
+ *
+ * Two spellings are deliberately NOT offenders. `title` on a COMPONENT is an ordinary prop —
+ * `<AlertDialog title="Abort this run?">` is a heading, not a hover hint — so only lowercase
+ * (DOM) tags count. And SVG's `<title>` CHILD is the accessible name of a graphic, the
+ * correct spelling rather than a stand-in for one; it carries no `=`, so the ghost glyphs in
+ * slice.tsx are untouched.
+ */
+describe("no native `title=` standing in for a tooltip (P1.4)", () => {
+  test("every `title=` in the app is a component's prop, never a DOM attribute", () => {
+    const offenders: string[] = [];
+    for (const f of SOURCES) {
+      const src = decomment(readFileSync(f, "utf8"));
+      for (const m of src.matchAll(/\btitle\s*=/g)) {
+        // the tag this attribute sits in: the nearest `<Name` before it
+        const tag = [...src.slice(0, m.index).matchAll(/<([A-Za-z][\w.]*)/g)].at(-1)?.[1];
+        if (tag !== undefined && /^[a-z]/.test(tag)) offenders.push(`${f} renders <${tag} title=…>`);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+});
