@@ -316,4 +316,30 @@ describe("the prompt proof covers what is sent (system-map 0.1)", () => {
       }
     }, 20000);
   }
+
+  // codex decides failure by "did the turn complete", NOT by "was there an error" — its error
+  // notifications are startup noise it keeps working through (codex.ts). So the repair guard
+  // is turnCompleted && !rpcFault: a notice must not cost a run the cheap repair, and an error
+  // RESPONSE to one of our own requests must stop us asking that thread for anything more.
+  test("codex: a startup notice still gets the repair turn", async () => {
+    Object.assign(process.env, { FAKE_CODEX_DROP_OUTPUTS: "1", FAKE_CODEX_NOTICE: "1" });
+    try {
+      const { result, sent } = await runCapturing("codex");
+      expect(result).toEqual({ state: "finished", outcome: "success" });
+      expect(sent).toHaveLength(4); // two attempts, each first turn + repair
+    } finally {
+      for (const k of ["FAKE_CODEX_DROP_OUTPUTS", "FAKE_CODEX_NOTICE"]) delete process.env[k];
+    }
+  }, 20000);
+
+  test("codex: an app-server fault gets no repair turn — the attempt fails on the contract", async () => {
+    Object.assign(process.env, { FAKE_CODEX_DROP_OUTPUTS: "1", FAKE_CODEX_RPC_FAULT: "1" });
+    try {
+      const { result, sent } = await runCapturing("codex");
+      expect(result).toMatchObject({ state: "parked" });
+      expect(sent).toHaveLength(1); // the first turn only: no repair was asked for
+    } finally {
+      for (const k of ["FAKE_CODEX_DROP_OUTPUTS", "FAKE_CODEX_RPC_FAULT"]) delete process.env[k];
+    }
+  }, 20000);
 });

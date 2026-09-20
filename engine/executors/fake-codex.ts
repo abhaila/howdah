@@ -13,6 +13,10 @@
  * first turn (system-map 0.1); a repair turn lands on a later line.
  * FAKE_CODEX_DROP_OUTPUTS=1 reproduces the live failure: a turn that ends in prose with no
  * contract. The repair turn, which names itself, complies.
+ * FAKE_CODEX_NOTICE=1 also emits an error NOTIFICATION before the message — codex's startup
+ * noise, which must not stop the repair.
+ * FAKE_CODEX_RPC_FAULT=1 also answers turn/start with an error RESPONSE while still
+ * completing the turn — the app-server refused us, so no repair should be asked for.
  */
 import { appendFileSync, writeFileSync } from "node:fs";
 
@@ -44,7 +48,10 @@ for await (const chunk of Bun.stdin.stream()) {
         const turnId = `fake-turn-${++turns}`;
         const promptText = String(msg.params?.input?.[0]?.text ?? "");
         if (process.env.FAKE_CAPTURE) appendFileSync(process.env.FAKE_CAPTURE, JSON.stringify(promptText) + "\n");
-        out({ jsonrpc: "2.0", id: msg.id, result: { turn: { id: turnId } } });
+        if (process.env.FAKE_CODEX_RPC_FAULT === "1") out({ jsonrpc: "2.0", id: msg.id, error: { code: -32000, message: "fake app-server fault" } });
+        else out({ jsonrpc: "2.0", id: msg.id, result: { turn: { id: turnId } } });
+        if (process.env.FAKE_CODEX_NOTICE === "1")
+          out({ jsonrpc: "2.0", method: "error", params: { message: "MCP server auth expired" } });
         const keys = [...promptText.matchAll(/"([\w.]+)": <value>/g)].map((m) => m[1]!);
         const outputs = Object.fromEntries(keys.map((k) => [k, k === "review_verdict" ? (process.env.FAKE_CLAUDE_VERDICT ?? "pass") : `fake ${k}`]));
         const isRepair = /did not end with the required outputs object/.test(promptText);
