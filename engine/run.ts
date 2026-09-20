@@ -128,7 +128,12 @@ export interface EngineOpts {
   dir: string;
   executors: Partial<Record<"agent" | "command" | "worktree" | "wait" | "approval", Executor>>;
   /** source prompt dir to pin from (defaults to repo prompts/) */
-  promptsDir?: string;
+  /**
+   * Where prompts are read from at pin time. An ARRAY is a search path, tried in order, so a
+   * local graph's prompts (`$HOWDAH_HOME/prompts`) resolve before the repo's without the
+   * engine knowing which graphs are local.
+   */
+  promptsDir?: string | string[];
   /** resolve an ambiguous side effect on resume: did it actually happen? */
   probe?: (node: string, effect: string, attemptId: string) => Promise<ProbeVerdict>;
   /** loop guard — perpetual graphs park here instead of spinning forever */
@@ -688,8 +693,17 @@ export class Engine {
    * includer, the version of every prompt it included (the include closure).
    */
   private pinPrompts(): { pinned: Partial<Record<PromptId, number>>; includes: Record<string, Record<string, number>> } {
-    const source = this.opts.promptsDir ?? join(import.meta.dir, "..", "prompts");
-    const rawOf = (id: string) => readFileSync(join(source, `${id}.md`), "utf8");
+    const dirs = this.opts.promptsDir === undefined
+      ? [join(import.meta.dir, "..", "prompts")]
+      : Array.isArray(this.opts.promptsDir) ? this.opts.promptsDir : [this.opts.promptsDir];
+    const rawOf = (id: string) => {
+      for (const d of dirs) {
+        const p = join(d, `${id}.md`);
+        if (existsSync(p)) return readFileSync(p, "utf8");
+      }
+      // name every place we looked: a missing prompt is usually a typo or an un-scaffolded id
+      throw new Error(`prompt "${id}" not found in ${dirs.join(", ")}`);
+    };
     const bodyOf = (id: string) => splitFrontMatter(rawOf(id)).body;
     const plans: Array<{ id: PromptId; raw: string; text: string | null; version: number; includes: Record<string, number> }> = [];
     for (const node of Object.values(this.graph.def.nodes)) {

@@ -49,7 +49,7 @@ bun cli/main.ts resume|pause|abort <run-id>  # pause/abort also interrupt a PROV
 bun cli/main.ts jump <run-id> <node> [msg]   # move a dead run to a node, injecting an instruction
 bun cli/main.ts up                           # supervisor: heartbeat + resume dead runs
 bun cli/main.ts workspace add|add-github|remove|list
-bun cli/main.ts new-graph <name> --kind doc|research|code|custom
+bun cli/main.ts new-graph <name> --kind doc|research|code|custom   # writes to $HOWDAH_HOME/graphs
 bun cli/main.ts resume <run-id> --force      # break a runner lock whose holder is NOT this run's runner
 bun cli/main.ts approve|send-feedback <run-id> [--proposal <id>]      # decide the current slice round
 bun cli/main.ts comment <run-id> [--proposal <id>] <entity-id> <text> # pin a comment on a ghost
@@ -94,6 +94,19 @@ Break one of these and the design stops working, so check them before changing t
   UI). Never add a mutable sidecar record of something the log already implies; add an event
   type to `log/events.ts` instead. Events are never edited or deleted — late facts (a PR
   merged days later) arrive as follow-up events joined on `rendered_hash`.
+- **An operator's own graphs live in `$HOWDAH_HOME`, not in this repo.** `graphs/local.ts`
+  scans `$HOWDAH_HOME/graphs/*.ts`, imports each and validates it; `graphs/registry.ts` merges
+  them after the built-ins, which win a name collision. Two deliberate differences from the
+  built-in registry. A broken local graph stops ITSELF — excluded from the catalog and
+  reported with a reason — because one half-edited file must not brick the launcher for every
+  other graph. And the compiler half of the validator does not reach it (it is outside the
+  tsconfig `include`), so the loader checks the property `PromptId` was protecting — that
+  every agent node names a prompt file that exists — and `graphs/typecheck.ts` runs the real
+  tsc pass on demand. Local prompt ids are cast through one documented helper in the scaffold,
+  since the generated union is built from this repo's `prompts/`. Loading imports a COPY in a
+  FRESH temp dir: Bun's module cache ignores a `?v=` query and also caches a directory's
+  listing, so neither re-importing the path nor a new sibling file picks up an edit. That is
+  why a local graph cannot use a relative import.
 - **Graphs are TypeScript, and the compiler is half the validator.** `defineGraph<Ctx>()`
   makes context keys, edge-condition reads, and prompt ids compile-checked. The other half is
   `Graph.validate()` + `core/validate.ts`: a forward MUST-analysis proving every read has a
@@ -185,13 +198,13 @@ Break one of these and the design stops working, so check them before changing t
 | Path | Role |
 |---|---|
 | `core/` | graph schema (`graph.ts`), path validator (`validate.ts`), context store, template/render contract (`template.ts`), generated `prompt-ids.ts` |
-| `graphs/` | the runnable graphs + `index.ts` registry; `implement-ticket`, `implement-slice` (design on the map → approve → build → drift), `improve-codebase`, `review-teammate-pr`, `write-doc`, `research`, `quick-task`; `delivery.ts` shared publish/repair half |
+| `graphs/` | the runnable graphs + `index.ts` registry, `local.ts` (the operator's own, from `$HOWDAH_HOME`), `registry.ts` (merged catalog), `typecheck.ts` (tsc gate); `implement-ticket`, `implement-slice` (design on the map → approve → build → drift), `improve-codebase`, `review-teammate-pr`, `write-doc`, `research`, `quick-task`; `delivery.ts` shared publish/repair half |
 | `map/` | the code-derived system map (syntactic tier): tree-sitter extraction (`extract.ts`, `facts.ts`, `adapters.ts` + `queries/`), content-addressed store, `assemble.ts` (identity keys, MountResolver), `ghosts.ts` (GhostSet validator), `drift.ts`, `neighbourhood.ts` |
 | `prompts/` | one `.md` per prompt (front-matter `id`/`version`), codegen, `store.ts` (load/list/accept with stale-base + undeclared-read guards), `proposals.ts` (lifecycle + review view), `library.ts` (read model: consumers, feedback, outcome join, render reconstruction) |
 | `log/` | event union (`events.ts`), durable JSONL writer, view-time `coalesce.ts` |
 | `adapter/` | pure harness → `AgentEvent` mappers (`claude.ts`, `codex.ts`, `opencode.ts`), chunk-safe `parse.ts`, `capabilities.ts` matrix |
 | `engine/` | `run.ts` (loop, routing, pinning, effects, attribution), `replay.ts`, `reconcile.ts` (git probes + worktree fingerprint), `attention.ts`, `control.ts` (replies, decisions, runner lock), `slice-decision.ts`, `slice-map.ts`, `executors/` |
-| `cli/` | `main.ts` verbs, `new-graph.ts` scaffolder |
+| `cli/` | `main.ts` verbs, `new-graph.ts` scaffolder (writes into `$HOWDAH_HOME`) |
 | `config/` | `config.json` workspaces + settings, `tuning.json` overlay, GitHub repo registration |
 | `web/` | Bun server (read model + reply/launch/control writes, SSE), `derive.ts` read model, React app in `app/` |
 | `reviser/` | GEPA-method revision script, eval case, generated proposals |

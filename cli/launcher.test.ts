@@ -120,9 +120,12 @@ describe("launch API", () => {
   const url = (p: string) => `http://localhost:${server.port}${p}`;
   afterAll(() => server.stop(true));
 
-  test("GET /api/graphs serves the catalog", async () => {
-    const graphs = (await (await fetch(url("/api/graphs"))).json()) as any[];
-    expect(graphs.map((g) => g.name)).toContain("write-doc");
+  test("GET /api/graphs serves the catalog, tagging where each graph came from", async () => {
+    const body = (await (await fetch(url("/api/graphs"))).json()) as { graphs: any[]; problems: any[] };
+    expect(body.graphs.map((g) => g.name)).toContain("write-doc");
+    // built-ins are compile-checked and come first; local ones are the operator's own
+    expect(body.graphs.find((g) => g.name === "write-doc")!.source).toBe("builtin");
+    expect(body.problems).toEqual([]);
   });
 
   test("POST /api/runs launches detached and the run appears", async () => {

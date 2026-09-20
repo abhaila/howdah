@@ -43,6 +43,10 @@ import { MapStore, defaultStoreDir } from "../map/store";
 import type { AssembledMap } from "../map/types";
 import { AttentionCenter } from "../engine/attention";
 import { graphCatalog, GRAPHS } from "../graphs/index";
+import { catalogOf, loadRegistry, type Registry } from "../graphs/registry";
+import { deleteLocalGraph, LOCAL_NAME, localGraphPath, readLocalSource, saveLocalSource } from "../graphs/local";
+import { typecheckLocalGraph } from "../graphs/typecheck";
+import { newGraph, type GraphKind } from "../cli/new-graph";
 import { ensureHowdahHome, howdahHome, loadConfig, saveConfig } from "../config/config";
 import { listGithubRepos, registerGithubRepo } from "../config/github";
 import { loadTuning, saveTuning, pruneTuning } from "../config/tuning";
@@ -149,6 +153,15 @@ export function createHowdahServer(opts: ServerOpts) {
   ensureHowdahHome(home);
   const promptStore = new PromptStore(join(root, "prompts"));
   const graphs = opts.graphs ?? GRAPHS;
+  /**
+   * Built-ins plus the operator's own from `$HOWDAH_HOME`, re-read per request: local graphs
+   * are created and edited while the viewer is open, so a cached registry would show a stale
+   * shape and refuse a graph that exists. `opts.graphs` (tests) wins and stays static.
+   */
+  const registry = async (): Promise<Registry> =>
+    opts.graphs
+      ? { graphs: opts.graphs, source: Object.fromEntries(Object.keys(opts.graphs).map((n) => [n, "builtin" as const])), problems: [] }
+      : loadRegistry(home, root);
   const launchResume =
     opts.resumeRun ??
     ((id: string) =>
@@ -198,10 +211,55 @@ export function createHowdahServer(opts: ServerOpts) {
         });
       }
 
-      if (url.pathname === "/api/graphs") return json(graphCatalog());
+      if (url.pathname === "/api/graphs" && req.method === "GET") {
+        const reg = await registry();
+        // a local graph that does not load is REPORTED beside the catalog, never just absent
+        return json({ graphs: catalogOf(reg), problems: reg.problems });
+      }
+      if (url.pathname === "/api/graphs" && req.method === "POST") {
+        const body = (await req.json().catch(() => ({}))) as { name?: unknown; kind?: unknown };
+        const name = typeof body.name === "string" ? body.name : "";
+        const kind = typeof body.kind === "string" ? body.kind : "custom";
+        if (!LOCAL_NAME.test(name)) return json({ error: `graph name must be kebab-case: "${name}"` }, 400);
+        if (!["doc", "research", "code", "custom"].includes(kind)) return json({ error: `unknown kind "${kind}"` }, 400);
+        try {
+          const path = await newGraph(name, kind as GraphKind, home, root);
+          return json({ ok: true, name, path }, 201);
+        } catch (err) {
+          return json({ error: err instanceof Error ? err.message : String(err) }, 422);
+        }
+      }
+
+      const sm = url.pathname.match(/^\/api\/graphs\/([^/]+)\/(source|typecheck)$/);
+      if (sm) {
+        const name = sm[1]!;
+        if (!LOCAL_NAME.test(name)) return json({ error: "not a local graph" }, 400);
+        const path = localGraphPath(home, name);
+        if (!existsSync(path)) return json({ error: `no local graph "${name}" — built-in graphs are edited in the repo` }, 404);
+
+        if (sm[2] === "source" && req.method === "GET") return json({ name, path, source: readLocalSource(home, name) });
+        if (sm[2] === "source" && req.method === "PUT") {
+          const body = (await req.json().catch(() => ({}))) as { source?: unknown };
+          if (typeof body.source !== "string") return json({ error: "source must be a string" }, 400);
+          // the gate: it must load, validate, and name prompt files that exist, or the bytes
+          // on disk are restored — a saved graph is always one the launcher will accept
+          const saved = await saveLocalSource(home, name, body.source, root);
+          return saved.ok ? json({ ok: true }) : json({ error: saved.error }, 422);
+        }
+        if (sm[2] === "typecheck" && req.method === "POST") return json(await typecheckLocalGraph(home, name, root));
+        return json({ error: "method not allowed" }, 405);
+      }
+
       const gm = url.pathname.match(/^\/api\/graphs\/([^/]+)(\/tuning)?$/);
       if (gm) {
-        const g = graphs[gm[1]!];
+        const name = gm[1]!;
+        if (!gm[2] && req.method === "DELETE") {
+          if (!LOCAL_NAME.test(name) || !existsSync(localGraphPath(home, name)))
+            return json({ error: "only a local graph can be deleted" }, 400);
+          deleteLocalGraph(home, name);
+          return json({ ok: true });
+        }
+        const g = (await registry()).graphs[name];
         if (!g) return json({ error: "unknown graph" }, 404);
 
         if (gm[2] === "/tuning" && req.method === "PUT") {
@@ -636,7 +694,7 @@ export function createHowdahServer(opts: ServerOpts) {
 
         const events = readLog(path);
         const started = events.find((e) => e.type === "run-started");
-        const graph = started?.type === "run-started" ? graphs[started.graph] : undefined;
+        const graph = started?.type === "run-started" ? (await registry()).graphs[started.graph] : undefined;
         let declarations = {};
         try { declarations = graph ? graph.declarations() : {}; } catch { /* still answerable */ }
         const digest = runDigest(id, events, declarations);
@@ -703,7 +761,7 @@ export function createHowdahServer(opts: ServerOpts) {
       // scopes and declared writers come from the graph, not the log: that is what lets the
       // Context tab list a key no step has reached yet instead of hiding it (CUR5)
       const started = events.find((e) => e.type === "run-started");
-      const graph = started?.type === "run-started" ? graphs[started.graph] : undefined;
+      const graph = started?.type === "run-started" ? (await registry()).graphs[started.graph] : undefined;
       let declarations = {};
       try {
         declarations = graph ? graph.declarations() : {};

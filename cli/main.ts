@@ -33,6 +33,8 @@ import { Reconciler, readsForgeFacts } from "../engine/reconcile";
 import { effectiveCwd, readWorktreeRecord } from "../engine/executors/worktree";
 import { probeAuth } from "../engine/executors/harness-failure";
 import { GRAPHS, graphCatalog } from "../graphs/index";
+import { loadRegistry, catalogOf } from "../graphs/registry";
+import { promptSearchPath } from "../graphs/local";
 import { howdahHome, loadConfig, saveConfig, resolveWorkspace, repoNameFor, ensureHowdahHome } from "../config/config";
 import { loadTuning } from "../config/tuning";
 import {
@@ -43,6 +45,7 @@ import {
 } from "../engine/control";
 
 const base = howdahHome();
+const ROOT = join(import.meta.dir, "..");
 const runsDir = join(base, "runs");
 
 function executors() {
@@ -110,8 +113,15 @@ export async function runCommand(argv: string[]): Promise<string> {
   const { graphName, inputs, workspace, dir, id, overrides } = parseRunArgs(argv);
   // HOWDAH_MODEL is a run-level default so the RECORD shows what actually ran
   if (!overrides.model && process.env.HOWDAH_MODEL) overrides.model = process.env.HOWDAH_MODEL;
-  const graph = graphName ? GRAPHS[graphName] : undefined;
-  if (!graph) throw new Error(`unknown graph "${graphName}" — have: ${Object.keys(GRAPHS).join(", ")}`);
+  // built-ins plus the operator's own from $HOWDAH_HOME; a local graph that does not load is
+  // named with its reason rather than just missing from the list
+  const registry = await loadRegistry(base, ROOT);
+  const graph = graphName ? registry.graphs[graphName] : undefined;
+  if (!graph) {
+    const broken = registry.problems.find((p) => p.name === graphName);
+    if (broken) throw new Error(`graph "${graphName}" does not load: ${broken.error}`);
+    throw new Error(`unknown graph "${graphName}" — have: ${Object.keys(registry.graphs).join(", ")}`);
+  }
 
   let cwd: string | undefined = dir;
   let folderKind: "repo" | "plain" | undefined = dir ? "plain" : undefined;
@@ -126,6 +136,7 @@ export async function runCommand(argv: string[]): Promise<string> {
   const runDir = join(runsDir, runId);
   const engine: Engine = new Engine(graph, {
     dir: runDir, executors: executors(), cwd, folderKind, overrides,
+    promptsDir: promptSearchPath(base, ROOT),
     tuning: loadTuning(base)[graphName!],
     control: () => readControl(runDir),
     beforeNode: reconcilerHook(runDir, () => engine),
@@ -170,11 +181,20 @@ export async function resumeCommand(runId: string, opts: { force?: boolean } = {
   const replayed = replayState(readLog(path));
   if (!replayed.started) throw new Error(`${runId}: empty log`);
   if (replayed.finished) return void console.log(`run ${runId} already finished: ${replayed.finished.outcome}`);
-  const graph = GRAPHS[replayed.started.graph];
-  if (!graph) throw new Error(`run ${runId} uses unknown graph "${replayed.started.graph}"`);
+  const registry = await loadRegistry(base, ROOT);
+  const graph = registry.graphs[replayed.started.graph];
+  if (!graph) {
+    const broken = registry.problems.find((p) => p.name === replayed.started!.graph);
+    throw new Error(
+      broken
+        ? `run ${runId} uses local graph "${broken.name}", which no longer loads: ${broken.error}`
+        : `run ${runId} uses unknown graph "${replayed.started!.graph}"`,
+    );
+  }
   const engine: Engine = new Engine(graph, {
     dir: runDir,
     executors: executors(),
+    promptsDir: promptSearchPath(base, ROOT),
     cwd: replayed.started.cwd,
     folderKind: replayed.started.folder_kind,
     overrides: (replayed.started.overrides ?? undefined) as any, // the launch overrides survive resume
@@ -492,7 +512,12 @@ if (import.meta.main) {
     else if (verb === "map") process.exit(mapCommand(rest));
     else if (verb === "metrics") await metricsCommand(rest);
     else if (verb === "doctor") process.exit((await doctorCommand()) ? 0 : 1);
-    else if (verb === "graphs") console.log(JSON.stringify(graphCatalog(), null, 2));
+    else if (verb === "graphs") {
+      const reg = await loadRegistry(base, ROOT);
+      console.log(JSON.stringify(catalogOf(reg), null, 2));
+      // a local graph that does not load is NOT silently absent from the list
+      for (const p of reg.problems) console.error(`! ${p.name}: ${p.error}`);
+    }
     else if (verb === "workspace") {
       const [action, name, rawPath] = rest;
       const config = loadConfig(base);
@@ -526,7 +551,8 @@ if (import.meta.main) {
     else if (verb === "new-graph") {
       const { newGraph } = await import("./new-graph");
       const kind = (rest[rest.indexOf("--kind") + 1] ?? "custom") as import("./new-graph").GraphKind;
-      console.log(`scaffolded ${await newGraph(rest[0] ?? "", kind)}`);
+      const path = await newGraph(rest[0] ?? "", kind, base);
+      console.log(`scaffolded ${path} — edit it, then: howdah run ${rest[0]}`);
     }
     else {
       console.error("usage: howdah setup|run|resume|pause|abort|jump|reply|resolve-effect|approve|comment|send-feedback|redesign|map|metrics|runs|graphs|new-graph|workspace|up|doctor");

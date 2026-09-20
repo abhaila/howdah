@@ -1893,7 +1893,10 @@ function AddWorkspace({ onAdded, hint }: { onAdded: () => void; hint?: string })
 
 // ---- start-run form (screen 6) ---------------------------------------------------
 
-interface GraphInfo { name: string; description: string; inputs: string[]; kind: "repo" | "plain" }
+interface GraphInfo { name: string; description: string; inputs: string[]; kind: "repo" | "plain"; source: "builtin" | "local" }
+/** a local graph that will not load is reported beside the catalog, never silently missing */
+interface GraphProblem { name: string; error: string }
+interface GraphCatalog { graphs: GraphInfo[]; problems: GraphProblem[] }
 interface Workspaces { repos: Array<{ name: string; path: string }>; folders: Array<{ name: string; path: string }> }
 
 function StartRun() {
@@ -1909,7 +1912,7 @@ function StartRun() {
 
   const loadWorkspaces = () => getJSON<Workspaces>("/api/workspaces").then(setWorkspaces).catch(() => {});
   useEffect(() => {
-    getJSON<GraphInfo[]>("/api/graphs").then(setGraphs).catch(() => {});
+    getJSON<GraphCatalog>("/api/graphs").then((c) => setGraphs(c.graphs)).catch(() => {});
     loadWorkspaces();
   }, []);
   const selected = graphs.find((g) => g.name === graph);
@@ -2287,12 +2290,158 @@ function GraphTuner({ shape, onSaved }: { shape: GraphShapeDto; onSaved: () => v
 
 // ---- graphs screen (T20) ---------------------------------------------------------
 
+/**
+ * Creating a local graph (D9). The name is the file name AND the graph's own `name`, so it is
+ * checked here before the round trip: kebab-case, and nothing that could escape the dir.
+ */
+function NewGraphForm({ onCreated }: { onCreated: (name: string) => void }) {
+  const [name, setName] = useState("");
+  const [kind, setKind] = useState("custom");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const legal = /^[a-z][a-z0-9-]*$/.test(name);
+
+  const create = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await fetch("/api/graphs", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name, kind }),
+      });
+      const body = (await r.json().catch(() => ({}))) as { error?: string };
+      if (!r.ok) throw new Error(body.error ?? "could not create the graph");
+      setName("");
+      onCreated(name);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Card style={{ marginTop: 12 }}>
+      <CardContent className="pt-5">
+        <Label>
+          New graph
+          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="my-review" />
+        </Label>
+        {name && !legal && <div className="field-error">kebab-case only: a letter, then letters, digits or hyphens</div>}
+        <Label>
+          Shape
+          <Select value={kind} onChange={(e) => setKind(e.target.value)}>
+            <option value="custom">custom — one agent, one terminal</option>
+            <option value="doc">doc — draft, review, revise</option>
+          </Select>
+        </Label>
+        <div className="actions">
+          <Button onClick={create} disabled={!legal || busy}>{busy ? "Creating…" : "Create"}</Button>
+        </div>
+        {error && <div className="field-error">{error}</div>}
+        <div className="field-hint">
+          Saved under <code>$HOWDAH_HOME/graphs</code>, not in the Howdah repo, so updating Howdah
+          never touches them.
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+/**
+ * Editing a local graph as what it is: TypeScript (D2). Save runs the same gate the launcher
+ * trusts — import, `validate()`, and every agent node's prompt file must exist — and restores
+ * the previous bytes when it fails, so what is on disk is always runnable.
+ *
+ * Typecheck is separate and explicit because it costs seconds, not milliseconds (D8). The
+ * badge never claims more than was actually checked: passing Save is not passing tsc.
+ */
+function GraphSource({ name, onSaved }: { name: string; onSaved: () => void }) {
+  const [source, setSource] = useState<string | null>(null);
+  const [dirty, setDirty] = useState(false);
+  const [state, setState] = useState<"idle" | "saving" | "saved" | "checking">("idle");
+  const [error, setError] = useState<string | null>(null);
+  const [checked, setChecked] = useState<{ ok: boolean; diagnostics: string[]; unavailable?: string } | null>(null);
+
+  useEffect(() => {
+    setSource(null); setDirty(false); setError(null); setChecked(null); setState("idle");
+    getJSON<{ source: string | null }>(`/api/graphs/${name}/source`)
+      .then((d) => setSource(d.source ?? ""))
+      .catch(() => setSource(null));
+  }, [name]);
+
+  const save = async () => {
+    setState("saving"); setError(null); setChecked(null);
+    try {
+      const r = await fetch(`/api/graphs/${name}/source`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ source }),
+      });
+      const body = (await r.json().catch(() => ({}))) as { error?: string };
+      if (!r.ok) { setError(body.error ?? "save refused"); setState("idle"); return; }
+      setDirty(false); setState("saved"); onSaved();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setState("idle");
+    }
+  };
+
+  const typecheck = async () => {
+    setState("checking"); setChecked(null);
+    try {
+      const r = await fetch(`/api/graphs/${name}/typecheck`, { method: "POST" });
+      setChecked((await r.json()) as { ok: boolean; diagnostics: string[]; unavailable?: string });
+    } catch (e) {
+      setChecked({ ok: false, diagnostics: [e instanceof Error ? e.message : String(e)] });
+    } finally {
+      setState("idle");
+    }
+  };
+
+  if (source === null) return <LoadingState title="Loading source" detail={`Reading ${name}.ts`} />;
+
+  return (
+    <div className="graph-source">
+      <Textarea
+        className="graph-source-editor"
+        spellCheck={false}
+        value={source}
+        onChange={(e) => { setSource(e.target.value); setDirty(true); setState("idle"); }}
+      />
+      <div className="actions">
+        <Button onClick={save} disabled={!dirty || state === "saving"}>{state === "saving" ? "Checking…" : "Save"}</Button>
+        <Button variant="outline" onClick={typecheck} disabled={state === "checking" || dirty}>
+          {state === "checking" ? "Typechecking…" : "Typecheck"}
+        </Button>
+        {state === "saved" && !dirty && <Badge variant="outline">validated</Badge>}
+        {checked?.ok && <Badge variant="outline">typechecked</Badge>}
+      </div>
+      {dirty && <div className="field-hint">Unsaved. Typecheck runs against what is on disk, so save first.</div>}
+      {error && <div className="field-error" style={{ whiteSpace: "pre-wrap" }}>{error}</div>}
+      {checked?.unavailable && <div className="field-error">Could not run tsc, so nothing was checked: {checked.unavailable}</div>}
+      {checked && !checked.ok && !checked.unavailable && (
+        <div className="field-error" style={{ whiteSpace: "pre-wrap" }}>{checked.diagnostics.join("\n")}</div>
+      )}
+      <div className="field-hint">
+        Save gates on <code>validate()</code> plus every prompt file existing. Typecheck is the
+        compiler, and it is the only thing that catches a type error inside a node.
+      </div>
+    </div>
+  );
+}
+
 function GraphsList() {
-  const [graphs, setGraphs] = useState<Array<{ name: string; description: string; kind: string }>>([]);
+  const [catalog, setCatalog] = useState<GraphCatalog | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
-  useEffect(() => { getJSON<Array<{ name: string; description: string; kind: string }>>("/api/graphs").then(setGraphs).catch(() => {}); }, []);
+  const load = useCallback(() => getJSON<GraphCatalog>("/api/graphs").then(setCatalog).catch(() => {}), []);
+  useEffect(() => { load(); }, [load, reloadKey]);
   const shape = useGraphShape(selected ? `${selected}?v=${reloadKey}` as any : undefined);
+  const graphs = catalog?.graphs ?? [];
+  const isLocal = graphs.find((g) => g.name === selected)?.source === "local";
+
   return (
     <div className="runs">
       <h1>Graphs</h1>
@@ -2301,15 +2450,30 @@ function GraphsList() {
           {graphs.map((g) => (
             <div key={g.name} className={`run-row ${selected === g.name ? "selected" : ""}`} onClick={() => setSelected(g.name)}>
               <span className="run-goal">{g.name}</span>
+              {g.source === "local" && <Badge variant="outline">local</Badge>}
               <Badge variant="outline" className="ml-auto">{g.kind === "repo" ? <GitBranch /> : <FolderGit2 />}{g.kind}</Badge>
             </div>
           ))}
-          <div className="field-hint" style={{ marginTop: 12 }}>
-            New graph: <code>howdah new-graph &lt;name&gt; --kind doc|custom</code> — scaffolds the TS file + prompts; tsc and validate() are the editor.
-          </div>
+          {/* a local graph that will not load is named here rather than quietly missing */}
+          {catalog?.problems.map((p) => (
+            <div key={p.name} className="run-row">
+              <span className="run-goal">{p.name}</span>
+              <Badge variant="outline" className="ml-auto">will not load</Badge>
+              <div className="field-error" style={{ flexBasis: "100%" }}>{p.error}</div>
+            </div>
+          ))}
+          <NewGraphForm onCreated={(n) => { setReloadKey((k) => k + 1); setSelected(n); }} />
         </div>
         <div>
-          {shape ? <><div className="field-hint" style={{ marginBottom: 8 }}>{shape.description}</div><GraphTuner shape={shape} onSaved={() => setReloadKey((k) => k + 1)} /></> : <div className="empty">select a graph</div>}
+          {shape ? (
+            <>
+              <div className="field-hint" style={{ marginBottom: 8 }}>{shape.description}</div>
+              {isLocal
+                ? <GraphSource name={selected!} onSaved={() => setReloadKey((k) => k + 1)} />
+                : <div className="field-hint">Built-in graph: edit it in the Howdah repo, where <code>bun run check</code> covers it.</div>}
+              <GraphTuner shape={shape} onSaved={() => setReloadKey((k) => k + 1)} />
+            </>
+          ) : <div className="empty">select a graph</div>}
         </div>
       </div>
     </div>

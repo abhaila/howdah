@@ -10,8 +10,10 @@
  * prompt-id regeneration, and a validation gate — a scaffold that does not validate is
  * rolled back.
  */
-import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { ensureLocalDirs, LOCAL_NAME, loadLocalGraph, localGraphPath, localPromptsDir } from "../graphs/local";
+import { howdahHome } from "../config/config";
 
 const ROOT = join(import.meta.dir, "..");
 
@@ -23,7 +25,7 @@ function promptStub(id: string, body: string): string {
   return `---\nid: ${id}\nversion: 1\n---\n${body}\n`;
 }
 
-function docTemplate(name: string): { graph: string; prompts: Record<string, string> } {
+function docTemplate(name: string, coreGraph: string): { graph: string; prompts: Record<string, string> } {
   const v = camel(name);
   return {
     prompts: {
@@ -35,7 +37,14 @@ function docTemplate(name: string): { graph: string; prompts: Record<string, str
  * ${name} — scaffolded by \`howdah new-graph --kind doc\`. Plain-folder graph:
  * no worktree, no forge; terminates on the reviewer's verdict (R5).
  */
-import { defineGraph } from "../core/graph";
+import { defineGraph, type PromptRef } from "${coreGraph}";
+
+/**
+ * Prompt ids of a LOCAL graph are not in the generated PromptId union — that union is built
+ * from the Howdah repo's own prompts/, and these live beside this file in $HOWDAH_HOME.
+ * Howdah checks every id here resolves to a real .md before the graph is ever runnable.
+ */
+const prompt = (id: string) => id as PromptRef;
 
 export interface ${v[0]!.toUpperCase()}${v.slice(1)}Ctx {
   goal: string;
@@ -55,19 +64,19 @@ export const ${v} = defineGraph<${v[0]!.toUpperCase()}${v.slice(1)}Ctx>({
   nodes: {
     "${name}.draft": {
       kind: "agent",
-      prompt: "${name}.draft",
+      prompt: prompt("${name}.draft"),
       reads: ["goal", "work"],
       writes: { summary: { scope: "sticky" } },
     },
     "${name}.review": {
       kind: "agent",
-      prompt: "${name}.review",
+      prompt: prompt("${name}.review"),
       reads: ["goal", "summary"],
       writes: { review_verdict: { scope: "cleared" }, review_findings: { scope: "cleared" } },
     },
     "${name}.revise": {
       kind: "agent",
-      prompt: "${name}.revise",
+      prompt: prompt("${name}.revise"),
       reads: ["goal", "summary", "review_findings"],
       writes: { summary: { scope: "sticky" } },
       maxVisits: 3,
@@ -95,7 +104,7 @@ export const ${v} = defineGraph<${v[0]!.toUpperCase()}${v.slice(1)}Ctx>({
   };
 }
 
-function customTemplate(name: string): { graph: string; prompts: Record<string, string> } {
+function customTemplate(name: string, coreGraph: string): { graph: string; prompts: Record<string, string> } {
   const v = camel(name);
   return {
     prompts: {
@@ -105,7 +114,14 @@ function customTemplate(name: string): { graph: string; prompts: Record<string, 
  * ${name} — scaffolded by \`howdah new-graph --kind custom\`. The smallest legal graph:
  * one agent, one terminal. Grow it node by node; validate() gates every shape.
  */
-import { defineGraph } from "../core/graph";
+import { defineGraph, type PromptRef } from "${coreGraph}";
+
+/**
+ * Prompt ids of a LOCAL graph are not in the generated PromptId union — that union is built
+ * from the Howdah repo's own prompts/, and these live beside this file in $HOWDAH_HOME.
+ * Howdah checks every id here resolves to a real .md before the graph is ever runnable.
+ */
+const prompt = (id: string) => id as PromptRef;
 
 export interface ${v[0]!.toUpperCase()}${v.slice(1)}Ctx {
   goal: string;
@@ -122,7 +138,7 @@ export const ${v} = defineGraph<${v[0]!.toUpperCase()}${v.slice(1)}Ctx>({
   nodes: {
     "${name}.work": {
       kind: "agent",
-      prompt: "${name}.work",
+      prompt: prompt("${name}.work"),
       reads: ["goal"],
       writes: { summary: { scope: "sticky" } },
     },
@@ -134,50 +150,39 @@ export const ${v} = defineGraph<${v[0]!.toUpperCase()}${v.slice(1)}Ctx>({
   };
 }
 
-export async function newGraph(name: string, kind: GraphKind): Promise<string> {
-  if (!/^[a-z][a-z0-9-]*$/.test(name)) throw new Error(`graph name must be kebab-case: "${name}"`);
-  const graphPath = join(ROOT, "graphs", `${name}.ts`);
-  if (existsSync(graphPath)) throw new Error(`graphs/${name}.ts already exists`);
+/**
+ * Scaffold a LOCAL graph into `$HOWDAH_HOME` (D9). Nothing is written into this repo, so
+ * `graphs/index.ts` is never machine-edited — the old path string-replaced anchors in it and
+ * failed with "anchors moved" when they drifted, leaving the written files behind.
+ *
+ * The gate is the same one a save passes: the graph must import, validate, and name prompt
+ * files that exist. A scaffold that does not is rolled back whole.
+ */
+export async function newGraph(name: string, kind: GraphKind, home: string, repoRoot = ROOT): Promise<string> {
+  if (!LOCAL_NAME.test(name)) throw new Error(`graph name must be kebab-case: "${name}"`);
+  const graphPath = localGraphPath(home, name);
+  if (existsSync(graphPath)) throw new Error(`${name} already exists at ${graphPath}`);
 
+  ensureLocalDirs(home);
   // research/code reuse the doc shape for now; code additionally needs worktree nodes —
   // copy implement-ticket as the reference until a dedicated template earns its keep
-  const t = kind === "custom" ? customTemplate(name) : docTemplate(name);
+  const coreGraph = join(repoRoot, "core", "graph");
+  const t = kind === "custom" ? customTemplate(name, coreGraph) : docTemplate(name, coreGraph);
 
   const written: string[] = [graphPath];
   writeFileSync(graphPath, t.graph);
   for (const [id, body] of Object.entries(t.prompts)) {
-    const p = join(ROOT, "prompts", `${id}.md`);
+    const p = join(localPromptsDir(home), `${id}.md`);
     written.push(p);
     writeFileSync(p, body);
   }
 
-  // register in graphs/index.ts
-  const indexPath = join(ROOT, "graphs", "index.ts");
-  const index = readFileSync(indexPath, "utf8");
-  const v = camel(name);
-  const updated = index
-    .replace(`import { research } from "./research";`, `import { research } from "./research";\nimport { ${v} } from "./${name}";`)
-    .replace(`  [research.def.name]: research,`, `  [research.def.name]: research,\n  [${v}.def.name]: ${v},`);
-  if (updated === index) throw new Error("could not register in graphs/index.ts — anchors moved");
-
   try {
-    // gates: prompt ids regenerate, then the graph must import + validate clean
-    writeFileSync(indexPath, updated);
-    const codegen = Bun.spawnSync(["bun", join(ROOT, "prompts", "codegen.ts")], { stdout: "pipe", stderr: "pipe" });
-    if (codegen.exitCode !== 0) throw new Error(`codegen failed: ${new TextDecoder().decode(codegen.stderr)}`);
-    const probe = Bun.spawnSync(
-      ["bun", "-e", `const { GRAPHS } = await import(${JSON.stringify(indexPath)}); GRAPHS[${JSON.stringify(name)}].validateOrThrow(); console.log("valid");`],
-      { stdout: "pipe", stderr: "pipe" },
-    );
-    if (probe.exitCode !== 0) throw new Error(`scaffold does not validate: ${new TextDecoder().decode(probe.stderr).slice(0, 400)}`);
+    await loadLocalGraph(home, name, repoRoot);
   } catch (err) {
-    // roll the scaffold back — never leave a broken registry
-    writeFileSync(indexPath, index);
-    for (const f of written) unlinkSync(f);
-    Bun.spawnSync(["bun", join(ROOT, "prompts", "codegen.ts")]);
-    throw err;
+    for (const f of written) if (existsSync(f)) unlinkSync(f);
+    throw new Error(`scaffold does not validate: ${err instanceof Error ? err.message : String(err)}`);
   }
-
   return graphPath;
 }
 
@@ -185,7 +190,7 @@ if (import.meta.main) {
   const [name, ...rest] = process.argv.slice(2);
   const kind = (rest[rest.indexOf("--kind") + 1] ?? "custom") as GraphKind;
   try {
-    const path = await newGraph(name ?? "", kind);
+    const path = await newGraph(name ?? "", kind, howdahHome());
     console.log(`scaffolded ${path} (${kind}) — edit the prompts, then: howdah run ${name}`);
   } catch (err) {
     console.error(err instanceof Error ? err.message : String(err));

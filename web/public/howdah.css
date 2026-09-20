@@ -736,3 +736,13 @@ button.primary:disabled { opacity: 0.5; cursor: default; }
 }
 .chat-input input::placeholder { color: var(--fg-faint); }
 .chat-note { font-size: 10px; color: var(--fg-faint); margin-top: 7px; line-height: 1.5; }
+
+/* Graph source editor (D2/D9): local graphs are edited as what they are — TypeScript. The
+   editor is deliberately plain and monospaced rather than a syntax-highlighted widget: the
+   file is the artifact, and `validate()` plus tsc are what judge it, not the textarea. */
+.graph-source { display: flex; flex-direction: column; gap: 10px; }
+.graph-source-editor {
+  min-height: 420px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px; line-height: 1.55; white-space: pre; overflow-wrap: normal; overflow-x: auto;
+  tab-size: 2;
+}
