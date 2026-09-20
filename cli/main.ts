@@ -32,6 +32,7 @@ import { replayState } from "../engine/replay";
 import { Reconciler, readsForgeFacts } from "../engine/reconcile";
 import { effectiveCwd, readWorktreeRecord } from "../engine/executors/worktree";
 import { probeAuth } from "../engine/executors/harness-failure";
+import { harnessNames, harnessSpec, isHarness } from "../core/harnesses";
 import { GRAPHS, graphCatalog } from "../graphs/index";
 import { loadRegistry, catalogOf } from "../graphs/registry";
 import { promptSearchPath } from "../graphs/local";
@@ -79,6 +80,16 @@ function reconcilerHook(runDir: string, engineRef: () => import("../engine/run")
   };
 }
 
+/**
+ * HOW-17: the operator's harness settings, read from disk ONCE here and handed to the
+ * engine. core/harnesses.ts stays pure (no fs), and a run's default harness and fallback
+ * chain come from the same place whether it was launched, resumed or supervised.
+ */
+function harnessSettings(): { default?: string; fallbackChain?: string[] } {
+  const config = loadConfig(base);
+  return { default: config.defaultHarness, fallbackChain: config.fallbackChain };
+}
+
 function spawnResume(runId: string): void {
   Bun.spawn(["bun", import.meta.path, "resume", runId], { env: { ...process.env }, stdout: "ignore", stderr: "ignore" }).unref();
 }
@@ -99,7 +110,12 @@ function parseRunArgs(argv: string[]) {
     else if (a === "--dir") dir = rest[++i];
     else if (a === "--id") id = rest[++i];
     else if (a === "--model") overrides.model = rest[++i];
-    else if (a === "--harness") overrides.harness = rest[++i] as any;
+    else if (a === "--harness") {
+      const name = rest[++i];
+      // a leaked harness name reaches a spawn, so it is checked here rather than at the CLI
+      if (!isHarness(name)) throw new Error(`unknown harness "${name ?? ""}" — have: ${harnessNames().join(", ")}`);
+      overrides.harness = name;
+    }
     else if (a === "--effort") overrides.effort = rest[++i] as any;
     else if (a === "--permission-mode") overrides.permissionMode = rest[++i] as any;
     else if (a === "--max-turns") overrides.maxTurns = Number(rest[++i]);
@@ -138,6 +154,7 @@ export async function runCommand(argv: string[]): Promise<string> {
     dir: runDir, executors: executors(), cwd, folderKind, overrides,
     promptsDir: promptSearchPath(base, ROOT),
     tuning: loadTuning(base)[graphName!],
+    harnesses: harnessSettings(),
     control: () => readControl(runDir),
     beforeNode: reconcilerHook(runDir, () => engine),
     whileHeld: raiseParkAttention(runId),
@@ -199,6 +216,7 @@ export async function resumeCommand(runId: string, opts: { force?: boolean } = {
     folderKind: replayed.started.folder_kind,
     overrides: (replayed.started.overrides ?? undefined) as any, // the launch overrides survive resume
     tuning: loadTuning(base)[replayed.started.graph],
+    harnesses: harnessSettings(),
     control: () => readControl(runDir),
     beforeNode: reconcilerHook(runDir, () => engine),
     probe: async () => "unknown", // ambiguous side effects park for `howdah resolve-effect`
@@ -275,7 +293,9 @@ export async function upCommand(opts: { intervalMs?: number; once?: boolean } = 
 }
 
 export async function doctorCommand(): Promise<boolean> {
-  const checks: Array<[string, boolean, string]> = [];
+  // [name, pass, detail, optional?] — an optional check that fails is reported, in its own
+  // glyph, without making `doctor` say the install is broken
+  const checks: Array<[string, boolean, string, boolean?]> = [];
   const probe = (cmd: string[]): string | null => {
     try {
       const r = Bun.spawnSync(cmd, { stdout: "pipe", stderr: "pipe" });
@@ -284,25 +304,39 @@ export async function doctorCommand(): Promise<boolean> {
       return null;
     }
   };
-  const claude = probe(["claude", "--version"]);
-  checks.push(["claude CLI", claude !== null, claude ?? "not on PATH — install Claude Code (subscription auth)"]);
-  const codex = probe(["codex", "--version"]);
-  checks.push(["codex CLI", codex !== null, codex ?? "not on PATH — install Codex (subscription auth)"]);
   /**
+   * HOW-17: a loop over the harness table, not a hand-written claude/codex pair — the third
+   * harness must not need an edit here to be reported on. An `optional` harness (cursor) is
+   * reported honestly when it is missing without failing the whole check: not having it
+   * installed is a choice, not a broken install. An `internal` one (opencode) has no CLI of
+   * its own and is skipped rather than double-reported under claude's binary.
+   *
    * Being on PATH is not being logged in, and a logged-out CLI fails every agent node while
-   * `--version` still answers happily. Both harnesses ship a local, token-free status
-   * subcommand, so ask them rather than let the first run find out.
+   * `--version` still answers happily — so each installed harness is also asked its own
+   * local, token-free status subcommand.
    */
-  for (const [harness, installed, fix] of [
-    ["claude", claude !== null, "claude auth login"],
-    ["codex", codex !== null, "codex login"],
-  ] as const) {
-    if (!installed) continue;
-    const auth = probeAuth(harness);
+  for (const name of harnessNames()) {
+    const spec = harnessSpec(name);
+    if (spec.status === "internal") continue;
+    const optional = spec.status === "optional";
+    const version = probe([spec.binary, "--version"]);
     checks.push([
-      `${harness} logged in`,
+      `${name} CLI`,
+      version !== null,
+      version ?? `not on PATH — install ${spec.binary}${optional ? " to use it as a harness or fallback" : " (subscription auth)"}`,
+      optional,
+    ]);
+    if (version === null) continue;
+    const auth = probeAuth(name);
+    checks.push([
+      `${name} logged in`,
       auth !== "out",
-      auth === "in" ? "authenticated" : auth === "out" ? `NOT logged in — run \`${fix}\`` : `could not tell (no ${harness} status subcommand?)`,
+      auth === "in"
+        ? "authenticated"
+        : auth === "out"
+          ? `NOT logged in — run \`${spec.binary} ${spec.loginVerb}\``
+          : `could not tell (no ${spec.binary} status subcommand?)`,
+      optional,
     ]);
   }
   const gh = probe(["gh", "--version"]);
@@ -321,9 +355,9 @@ export async function doctorCommand(): Promise<boolean> {
   checks.push(["howdah up heartbeat", hb, hb ? join(base, "heartbeat.json") : "not running — start `howdah up`"]);
 
   let ok = true;
-  for (const [name, pass, detail] of checks) {
-    if (!pass) ok = false;
-    console.log(`${pass ? "✓" : "✗"} ${name.padEnd(24)} ${detail}`);
+  for (const [name, pass, detail, optional] of checks) {
+    if (!pass && !optional) ok = false;
+    console.log(`${pass ? "✓" : optional ? "—" : "✗"} ${name.padEnd(24)} ${detail}`);
   }
   return ok;
 }

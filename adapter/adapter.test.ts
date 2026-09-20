@@ -5,6 +5,8 @@ import { JsonlChunkParser, type JsonlRecord } from "./parse";
 import { mapClaudeEvent, buildClaudePermissionResponse, buildClaudeUserTurn, claudeArgs } from "./claude";
 import { mapCodexEvent, buildCodexApprovalResponse } from "./codex";
 import { mapOpencodeEvent } from "./opencode";
+import { mapCursorEvent, cursorArgs } from "./cursor";
+import { harnessNames } from "../core/harnesses";
 import { CAPABILITIES } from "./capabilities";
 import type { AgentEvent } from "./events";
 
@@ -180,12 +182,81 @@ describe("opencode adapter + capability matrix", () => {
   });
 
   test("matrix covers every harness and declares the claude/codex spike results", () => {
-    expect(Object.keys(CAPABILITIES).sort()).toEqual(["claude", "codex", "opencode"]);
+    // the matrix is total over the harness union by construction (HOW-17: adding cursor to
+    // core/harnesses.ts made this file a compile error until its entry existed, which is the
+    // point of keying it on Harness)
+    expect(Object.keys(CAPABILITIES).sort()).toEqual([...harnessNames()].sort());
     expect(CAPABILITIES.claude.permissions).toBe("yes");
     expect(CAPABILITIES.claude.steer).toBe("no");
     expect(CAPABILITIES.codex.native_review).toBe("yes");
     expect(CAPABILITIES.codex.live_diff).toBe("yes");
     // untested is a declared state, not a guess
     expect(CAPABILITIES.opencode.resume).toBe("untested");
+    // cursor-agent is not installed here, so nothing about it has been probed: its entries
+    // say so rather than claiming support the viewer would then offer
+    expect(CAPABILITIES.cursor.resume).toBe("untested");
+    expect(CAPABILITIES.cursor.permissions).toBe("no"); // print mode has no wire round-trip
+  });
+});
+
+/**
+ * Cursor (HOW-17). Unlike the claude and codex blocks above, these records are NOT captured
+ * from a live CLI — cursor-agent is not installed here — so what is pinned is the mapper's
+ * CONTRACT rather than the wire: the shapes the documented envelope allows are mapped, both
+ * spellings of an id are accepted, and anything unrecognised is dropped rather than guessed
+ * at. Replace the inputs with a real capture (adapter/fixtures/) once the CLI is available.
+ */
+describe("cursor adapter (shapes documented, not captured)", () => {
+  test("argv is print mode + stream-json, with the prompt LAST", () => {
+    const argv = cursorArgs({ prompt: "do the thing" });
+    expect(argv.slice(0, 3)).toEqual(["-p", "--output-format", "stream-json"]);
+    expect(argv.at(-1)).toBe("do the thing"); // positional: a piped prompt would arrive empty
+    expect(argv).not.toContain("--force"); // approval flags are the caller's decision, never a default
+    expect(argv).not.toContain("--model");
+  });
+
+  test("model, resume and approval flags ride only when given", () => {
+    const argv = cursorArgs({ prompt: "p", model: "auto", resume: "chat-7", approvalFlags: ["--force"] });
+    expect(argv.join(" ")).toContain("--model auto");
+    expect(argv.join(" ")).toContain("--resume chat-7");
+    expect(argv).toContain("--force");
+    expect(argv.at(-1)).toBe("p");
+  });
+
+  test("the init record starts a session, under either spelling of the id", () => {
+    expect(mapCursorEvent({ type: "system", subtype: "init", session_id: "c1" })).toEqual([{ type: "session_started", session_id: "c1" }]);
+    expect(mapCursorEvent({ type: "system", subtype: "init", chatId: "c2" })).toEqual([{ type: "session_started", session_id: "c2" }]);
+    // no id to resume is not an invented one
+    expect(mapCursorEvent({ type: "system", subtype: "init" })).toEqual([]);
+  });
+
+  test("assistant records become text deltas, from content blocks or a bare string", () => {
+    expect(mapCursorEvent({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "hi " }] } }))
+      .toEqual([{ type: "text_delta", text: "hi " }]);
+    expect(mapCursorEvent({ type: "assistant", message: "there" })).toEqual([{ type: "text_delta", text: "there" }]);
+    expect(mapCursorEvent({ type: "assistant", message: { content: [] } })).toEqual([]); // nothing to say
+  });
+
+  test("tool calls come in pairs, and a failed one says so", () => {
+    const started = mapCursorEvent({ type: "tool_call", subtype: "started", call_id: "t1", tool_call: { readToolCall: { args: { path: "a" } } } });
+    expect(started[0]).toMatchObject({ type: "tool_call", id: "t1", name: "readToolCall" });
+    const done = mapCursorEvent({ type: "tool_call", subtype: "completed", call_id: "t1", tool_call: { readToolCall: { result: "contents" } } });
+    expect(done).toEqual([{ type: "tool_result", id: "t1", content: "contents", is_error: undefined }]);
+    const failed = mapCursorEvent({ type: "tool_call", subtype: "failed", call_id: "t1", tool_call: { editToolCall: {} } });
+    expect(failed[0]).toMatchObject({ type: "tool_result", is_error: true });
+  });
+
+  test("the result record ends the turn and carries the text the contract is read from", () => {
+    expect(mapCursorEvent({ type: "result", subtype: "success", is_error: false, result: 'done\n{"outputs": {}}', usage: { input_tokens: 5 } }))
+      .toEqual([{ type: "turn_end", result_text: 'done\n{"outputs": {}}', error: undefined, usage: { input_tokens: 5, output_tokens: undefined } }]);
+    const bad = mapCursorEvent({ type: "result", subtype: "error", is_error: true, result: "it went wrong" });
+    expect(bad[0]).toMatchObject({ type: "turn_end", error: "it went wrong" });
+  });
+
+  test("unmapped record kinds are dropped, never guessed at", () => {
+    expect(mapCursorEvent({ type: "mystery", text: "words" })).toEqual([]);
+    expect(mapCursorEvent({ type: "tool_call", subtype: "unheard-of" })).toEqual([]);
+    expect(mapCursorEvent(null)).toEqual([]);
+    expect(mapCursorEvent("not an object")).toEqual([]);
   });
 });

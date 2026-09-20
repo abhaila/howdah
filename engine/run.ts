@@ -60,6 +60,7 @@ import { nodeReads, resolveAgentConfigLayers, type Graph, type NodeDef, type Edg
 import { basename } from "node:path";
 import { ContextStore, type Scope } from "../core/context";
 import { SUFFIX_VERSION, assemblePrompt, expandIncludes, renderTemplate, renderedHash, skillsForHarness, splitFrontMatter } from "../core/template";
+import { defaultHarness, fallbackChain, harnessNames } from "../core/harnesses";
 import { EventLog } from "../log/write";
 import type { LoggedEvent, ParkCode } from "../log/events";
 import { replayState, effectKey } from "./replay";
@@ -148,6 +149,14 @@ export interface EngineOpts {
   overrides?: AgentConfig;
   /** UI tuning overlay: per-node beats TS node; graph-level beats TS defaults */
   tuning?: { defaults?: AgentConfig; nodes?: Record<string, AgentConfig> };
+  /**
+   * HOW-17: the operator's harness settings from config.json, read from disk by the caller
+   * (cli/main.ts) so core/ and the engine stay free of config loading. `default` is the
+   * harness a node with no declared one runs on; `fallbackChain` is the order an exhausted
+   * harness hands off along. Both are names, validated in core/harnesses.ts — a typo in
+   * config.json is ignored rather than fatal.
+   */
+  harnesses?: { default?: string; fallbackChain?: string[] };
   /** operator control, read at every node boundary — pause/abort land between attempts */
   control?: () => "pause" | "abort" | null;
   /**
@@ -181,18 +190,24 @@ interface ProposalRound {
  * TS graph default — shared by the engine and the viewer's graph API (which passes no run
  * override), so the effective config the UI shows is the one a run gets. The layering itself
  * is core/graph.ts resolveAgentConfigLayers (first set value wins; the model is the first
- * one that fits the resolved harness; claude runs in auto). On top of it:
- *   - `fallbackHarness` is the engine's Claude→Codex fallback (f8c8d96): it outranks every
- *     layer, because the run has observed Claude's allowance is gone;
+ * one that fits the resolved harness; a harness that declares a permission mode always runs
+ * in it). On top of it:
+ *   - `fallbackHarness` is the engine's exhausted-allowance fallback (f8c8d96, generalised to
+ *     an ordered chain by HOW-17): it outranks every layer, because the run has OBSERVED that
+ *     harness's allowance is gone. It is any Harness the chain reached, no longer the literal
+ *     "codex";
  *   - `readOnly` (system-map 1a, D6/5A) is a hard constraint applied LAST: no layer, and no
- *     fallback, can raise it above "plan" (the codex executor maps plan to its read-only
- *     sandbox, so a readOnly node stays read-only after a fallback to codex).
+ *     fallback, can raise it above "plan" (codex maps plan to its read-only sandbox and
+ *     cursor drops its auto-approve flag, so a readOnly node stays read-only wherever the
+ *     chain lands it);
+ *   - `defaultHarness` is config.json's `defaultHarness`, read from disk by the caller — the
+ *     bottom of the stack, under the graph's own default.
  */
 export function resolveAgentConfig(
   graph: Graph<any>,
   def: Extract<NodeDef<any>, { kind: "agent" }>,
   nodeId: string,
-  layers: { overrides?: AgentConfig; tuning?: EngineOpts["tuning"]; fallbackHarness?: Harness } = {},
+  layers: { overrides?: AgentConfig; tuning?: EngineOpts["tuning"]; fallbackHarness?: Harness; defaultHarness?: string } = {},
 ): AgentConfig {
   const node: AgentConfig = {
     harness: def.harness, model: def.model, effort: def.effort,
@@ -205,7 +220,7 @@ export function resolveAgentConfig(
     node,
     layers.tuning?.defaults,
     graph.def.defaults,
-  ]);
+  ], { configuredDefaultHarness: layers.defaultHarness });
   // system-map 1a (D6/5A): a hard constraint — no layer above the node can raise it
   return def.readOnly ? { ...resolved, permissionMode: "plan" } : resolved;
 }
@@ -246,10 +261,14 @@ export class Engine {
   private lastRender = new Map<string, string>();
   /** operator-jump instruction awaiting the target node's next attempt */
   private jumpNote: { node: string; message: string } | null = null;
-  /** set when Claude fails in a way that should move the rest of this run to Codex */
-  private codexFallbackAfterClaudeLimit = false;
-  /** nodes granted one extra visit for the immediate Claude→Codex fallback retry */
-  private pendingCodexFallbackNodes = new Set<string>();
+  /**
+   * HOW-17: harnesses this run has HOPPED OFF because their allowance ran out. It holds what
+   * the log cannot always say: a hop triggered by an attempt that merely READ as rate-limited
+   * leaves no allowance event behind. The chain never hands work back to one of these.
+   */
+  private hoppedAwayFrom = new Set<Harness>();
+  /** nodes granted one extra visit for the immediate fallback retry (not charged to maxVisits) */
+  private pendingFallbackNodes = new Set<string>();
   /** system-map 0.2: operator reply awaiting the parked node's next attempt */
   private replyNote: { node: string; message: string } | null = null;
   /** system-map 1c review: per pinned includer, the version of each prompt it included */
@@ -411,10 +430,10 @@ export class Engine {
       // visit numbers only climb (they are attempt identity); the BUDGET is counted above the
       // floor an operator jump set (system-map 0.3), so a jump buys exactly maxVisits more
       const visit = (this.visits[current] = (this.visits[current] ?? 0) + 1);
-      const fallbackVisit = this.pendingCodexFallbackNodes.delete(current);
+      const fallbackVisit = this.pendingFallbackNodes.delete(current);
       const maxVisits = "maxVisits" in def ? def.maxVisits : undefined;
       const floor = this.floors[current] ?? 0;
-      // the codex-fallback retry (f8c8d96) is the same attempt on another harness: not charged
+      // the fallback retry (f8c8d96) is the same attempt on another harness: not charged
       if (maxVisits !== undefined && visit - floor > maxVisits && !fallbackVisit)
         return this.park(
           current,
@@ -473,10 +492,10 @@ export class Engine {
       });
 
       if (result.status === "failed") {
-        const fallback = def.kind === "agent" && this.shouldFallbackToCodex(current, visit);
-        if (fallback) {
-          this.codexFallbackAfterClaudeLimit = true;
-          this.pendingCodexFallbackNodes.add(current);
+        const hop = def.kind === "agent" ? this.nextFallbackHarness(current, visit) : undefined;
+        if (hop) {
+          this.hoppedAwayFrom.add(hop.from);
+          this.pendingFallbackNodes.add(current);
           this.log.append({
             type: "chunk",
             node: current,
@@ -484,7 +503,7 @@ export class Engine {
             turn: 1,
             index: 10000,
             kind: "text",
-            content: "\n[claude allowance exhausted: retrying this node with codex]",
+            content: `\n[${hop.from} allowance exhausted: retrying this node with ${hop.to}]`,
           });
           continue;
         }
@@ -735,53 +754,104 @@ export class Engine {
     return resolveAgentConfig(this.graph, def, nodeId, {
       overrides: this.opts.overrides,
       tuning: this.opts.tuning,
-      fallbackHarness: this.shouldForceCodexFallback() ? "codex" : undefined,
+      fallbackHarness: this.forcedFallbackHarness(),
+      defaultHarness: this.opts.harnesses?.default,
     });
   }
 
-  private shouldForceCodexFallback(): boolean {
-    return (this.codexFallbackAfterClaudeLimit || this.latestAllowanceState("claude") === "exhausted" || this.hasPriorClaudeLimitFailure()) &&
-      this.latestAllowanceState("codex") !== "exhausted";
+  /**
+   * HOW-17: the harness EVERY subsequent node is forced onto once this run has run out of
+   * allowance somewhere (it replaces shouldForceCodexFallback, which could only answer
+   * whether — a boolean cannot express a three-harness chain). Returns which harness, so the
+   * layer handed to resolveAgentConfig is no longer codex-shaped.
+   */
+  private forcedFallbackHarness(): Harness | undefined {
+    const spent = this.spentHarnesses(this.log.read());
+    // WHICH spent harness we hand off from does not change the answer — the chain skips every
+    // one of them — so any member will do as the `from` the chain is asked about
+    const [anySpent] = spent;
+    return anySpent === undefined ? undefined : this.hopFrom(anySpent, spent);
   }
 
-  private shouldFallbackToCodex(node: string, visit: number): boolean {
-    const rendered = this.log.read()
-      .filter((e) => e.type === "prompt-rendered" && e.node === node && e.visit === visit)
-      .at(-1);
-    if (!rendered || rendered.type !== "prompt-rendered" || rendered.harness !== "claude") return false;
-    if (this.latestAllowanceState("codex") === "exhausted") return false;
-    return this.latestAllowanceState("claude") === "exhausted" || this.attemptLooksRateLimited(node, visit);
+  /** the first harness in the chain that this run has not already spent */
+  private hopFrom(from: Harness, spent: ReadonlySet<Harness>): Harness | undefined {
+    return fallbackChain({ from, tried: [...spent], exhausted: (h) => spent.has(h), configured: this.opts.harnesses?.fallbackChain });
   }
 
-  private latestAllowanceState(harness: "claude" | "codex"): "ok" | "exhausted" | "unreachable" | "unavailable" | undefined {
-    const event = this.log.read()
-      .filter((e) => e.type === "allowance" && e.harness === harness)
-      .at(-1);
+  /**
+   * HOW-17: the next harness to retry THIS failed attempt on, with the one it ran on — or
+   * undefined when the attempt did not fail for allowance, or the chain has nowhere left to
+   * go. It replaces shouldFallbackToCodex, and it is keyed off the attempt's OWN
+   * prompt-rendered harness (not a guess at what the node declares), so the chain never
+   * re-tries a harness it has already spent. The retry stays a fresh visit that is NOT
+   * charged to maxVisits, exactly as the codex fallback always was.
+   */
+  private nextFallbackHarness(node: string, visit: number): { from: Harness; to: Harness } | undefined {
+    const events = this.log.read();
+    const from = this.renderedHarness(events, node, visit);
+    if (!from) return undefined;
+    const limited = this.latestAllowanceState(events, from) === "exhausted" || this.attemptLooksRateLimited(events, node, visit);
+    if (!limited) return undefined;
+    const spent = this.spentHarnesses(events);
+    spent.add(from);
+    const to = this.hopFrom(from, spent);
+    return to ? { from, to } : undefined;
+  }
+
+  /** the harness an attempt actually ran on, per its own prompt-rendered */
+  private renderedHarness(events: readonly LoggedEvent[], node: string, visit: number): Harness | undefined {
+    const rendered = events.filter((e) => e.type === "prompt-rendered" && e.node === node && e.visit === visit).at(-1);
+    if (!rendered || rendered.type !== "prompt-rendered") return undefined;
+    return rendered.harness ?? defaultHarness(this.opts.harnesses?.default);
+  }
+
+  /**
+   * Every harness this run has run out on: one it already hopped off, one the log says is
+   * exhausted, and one whose failed attempt READ as rate-limited (the harness may die before
+   * it emits an allowance event, which is why the text is evidence too). Derived from the
+   * log, so it survives a resume in another process.
+   */
+  private spentHarnesses(events: readonly LoggedEvent[]): Set<Harness> {
+    const spent = new Set<Harness>(this.hoppedAwayFrom);
+    for (const h of harnessNames()) if (this.latestAllowanceState(events, h) === "exhausted") spent.add(h);
+    for (const h of this.priorLimitFailureHarnesses(events)) spent.add(h);
+    return spent;
+  }
+
+  private latestAllowanceState(
+    events: readonly LoggedEvent[],
+    harness: Harness,
+  ): "ok" | "exhausted" | "unreachable" | "unavailable" | undefined {
+    const event = events.filter((e) => e.type === "allowance" && e.harness === harness).at(-1);
     return event?.type === "allowance" ? event.state : undefined;
   }
 
-  private attemptLooksRateLimited(node: string, visit: number): boolean {
-    const text = this.log.read()
+  private attemptLooksRateLimited(events: readonly LoggedEvent[], node: string, visit: number): boolean {
+    const text = events
       .filter((e) => e.type === "chunk" && e.node === node && e.visit === visit)
       .map((e) => e.type === "chunk" ? e.content : "")
       .join("\n");
     return /\b(rate.?limit|usage limit|session limit|quota|allowance|exhausted)\b/i.test(text);
   }
 
-  private hasPriorClaudeLimitFailure(): boolean {
-    const events = this.log.read();
-    const claudeAttempts = events
-      .filter((e) => e.type === "prompt-rendered" && e.harness === "claude")
-      .map((e) => e.type === "prompt-rendered" ? `${e.node}\0${e.visit}` : "");
-    if (claudeAttempts.length === 0) return false;
+  /**
+   * The harnesses a FAILED attempt of this run read as rate-limited on. This is what carries
+   * a hop across a resume: the hop itself is in-memory, but the attempt that caused it is in
+   * the log, and a fresh process must reach the same conclusion. (HOW-17 generalised it from
+   * hasPriorClaudeLimitFailure — the same read, over every harness rather than claude.)
+   */
+  private priorLimitFailureHarnesses(events: readonly LoggedEvent[]): Harness[] {
     const failed = new Set(events
       .filter((e) => e.type === "node-finished" && e.status === "failed")
       .map((e) => e.type === "node-finished" ? `${e.node}\0${e.visit}` : ""));
-    return claudeAttempts.some((key) => {
-      if (!failed.has(key)) return false;
-      const [node, rawVisit] = key.split("\0");
-      return node !== undefined && rawVisit !== undefined && this.attemptLooksRateLimited(node, Number(rawVisit));
-    });
+    const out = new Set<Harness>();
+    for (const e of events) {
+      if (e.type !== "prompt-rendered") continue;
+      const harness = e.harness ?? defaultHarness(this.opts.harnesses?.default);
+      if (out.has(harness) || !failed.has(`${e.node}\0${e.visit}`)) continue;
+      if (this.attemptLooksRateLimited(events, e.node, e.visit)) out.add(harness);
+    }
+    return [...out];
   }
 
   private renderPrompt(

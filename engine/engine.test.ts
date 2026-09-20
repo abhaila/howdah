@@ -137,6 +137,105 @@ describe("engine loop + routing", () => {
     expect(finishes[1].writes).toEqual({ summary: "codex did the work" });
   });
 
+  /**
+   * HOW-17, the ticket's own case: "allow cursor to be used as a backup when we run out of
+   * tokens for claude or codex". Before this the fallback was a BOOLEAN — claude→codex or
+   * nothing — so a run whose codex allowance was also gone simply parked. The chain makes
+   * the hop an ordered walk, and the third hop is a fresh visit that is still not charged to
+   * maxVisits, exactly as the second one always was.
+   */
+  test("claude AND codex exhausted: the node hops on to cursor, and the rest of the run follows", async () => {
+    const seen: Array<{ node: string; visit: number; harness?: string }> = [];
+    const engine = new Engine(pipelineGraph(), {
+      dir: mkdtempSync(join(tmpdir(), "howdah-run-")),
+      promptsDir: promptFixtures(),
+      executors: {
+        agent: async ({ nodeId, visit, agentConfig, log }) => {
+          seen.push({ node: nodeId, visit, harness: agentConfig?.harness });
+          for (const harness of ["claude", "codex"] as const) {
+            if (agentConfig?.harness !== harness) continue;
+            log.append({ type: "allowance", harness, state: "exhausted" });
+            return { status: "failed", writes: {} };
+          }
+          return nodeId === "review" ? ok({ verdict: "pass" }) : ok({ summary: "cursor did the work" });
+        },
+        command: async () => ok(),
+      },
+    });
+
+    expect(await engine.start({ goal: "g", summary: "" })).toEqual({ state: "finished", outcome: "success" });
+    expect(seen).toEqual([
+      { node: "implement", visit: 1, harness: "claude" },
+      { node: "implement", visit: 2, harness: "codex" },
+      { node: "implement", visit: 3, harness: "cursor" },
+      { node: "review", visit: 1, harness: "cursor" },
+    ]);
+    // implement declares maxVisits 3 (pipelineGraph): three visits without a hop would have
+    // been fine, but the point is that neither fallback visit was charged
+    const text = engine.log.read().filter((e: any) => e.type === "chunk").map((e: any) => e.content).join("");
+    expect(text).toContain("[claude allowance exhausted: retrying this node with codex]");
+    expect(text).toContain("[codex allowance exhausted: retrying this node with cursor]");
+  });
+
+  test("the chain is exhausted too: the run parks on the last attempt rather than looping", async () => {
+    const engine = new Engine(pipelineGraph(), {
+      dir: mkdtempSync(join(tmpdir(), "howdah-run-")),
+      promptsDir: promptFixtures(),
+      executors: {
+        agent: async ({ agentConfig, log }) => {
+          log.append({ type: "allowance", harness: agentConfig!.harness!, state: "exhausted" });
+          return { status: "failed", writes: {} };
+        },
+        command: async () => ok(),
+      },
+    });
+    const result = await engine.start({ goal: "g", summary: "" });
+    expect(result).toMatchObject({ state: "parked", node: "implement", code: "attempt-failed" });
+    // one attempt per harness in the chain, and no more
+    const renders = engine.log.read().filter((e: any) => e.type === "prompt-rendered") as any[];
+    expect(renders.map((e) => e.harness)).toEqual(["claude", "codex", "cursor"]);
+  });
+
+  test("config.json can reorder the chain: cursor first", async () => {
+    const seen: string[] = [];
+    const engine = new Engine(pipelineGraph(), {
+      dir: mkdtempSync(join(tmpdir(), "howdah-run-")),
+      promptsDir: promptFixtures(),
+      harnesses: { fallbackChain: ["claude", "cursor", "codex"] },
+      executors: {
+        agent: async ({ nodeId, agentConfig, log }) => {
+          seen.push(agentConfig!.harness!);
+          if (agentConfig?.harness === "claude") {
+            log.append({ type: "allowance", harness: "claude", state: "exhausted" });
+            return { status: "failed", writes: {} };
+          }
+          return nodeId === "review" ? ok({ verdict: "pass" }) : ok({ summary: "s" });
+        },
+        command: async () => ok(),
+      },
+    });
+    expect(await engine.start({ goal: "g", summary: "" })).toEqual({ state: "finished", outcome: "success" });
+    expect(seen).toEqual(["claude", "cursor", "cursor"]);
+  });
+
+  test("the configured default harness is what an undeclared node runs on", async () => {
+    const seen: string[] = [];
+    const engine = new Engine(pipelineGraph(), {
+      dir: mkdtempSync(join(tmpdir(), "howdah-run-")),
+      promptsDir: promptFixtures(),
+      harnesses: { default: "cursor" },
+      executors: {
+        agent: async ({ nodeId, agentConfig }) => {
+          seen.push(agentConfig!.harness!);
+          return nodeId === "review" ? ok({ verdict: "pass" }) : ok({ summary: "s" });
+        },
+        command: async () => ok(),
+      },
+    });
+    expect(await engine.start({ goal: "g", summary: "" })).toEqual({ state: "finished", outcome: "success" });
+    expect(seen).toEqual(["cursor", "cursor"]);
+  });
+
   // Rebase reconciliation (system-map 0.1 x upstream codex fallback): the fallback retry is
   // a NEW visit rendered after the harness decision, so its prompt-rendered carries the
   // harness actually used and that harness's skill hint, and both renders reconstruct VERIFIED.

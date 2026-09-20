@@ -27,6 +27,14 @@ export interface HowdahConfig {
   editorCommand?: string;
   /** where GitHub-picked repos are cloned; default ~/code */
   cloneRoot?: string;
+  /**
+   * HOW-17: the harness a node with no declared one runs on ("claude" unless set), and the
+   * order an exhausted harness hands off along (claude → codex → cursor unless set).
+   * HOWDAH_HARNESS overrides `defaultHarness` for one run. Names are validated where they
+   * are used (core/harnesses.ts) — a typo here is ignored, never fatal.
+   */
+  defaultHarness?: string;
+  fallbackChain?: string[];
   slackWebhook?: string;
   viewerBase?: string;
   theme?: "system" | "dark" | "light";

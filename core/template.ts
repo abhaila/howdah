@@ -36,6 +36,7 @@
  * the codegen check expand through the same function.
  */
 import { createHash } from "node:crypto";
+import { harnessSpec } from "./harnesses";
 import type { Harness } from "./graph";
 
 /** `{{ context.key }}` / `{{ inputs.key }}`, optional `| filter` tail, captured as (ns, key). */
@@ -164,12 +165,17 @@ export function buildOutputInstruction(keys: readonly string[]): string {
 }
 
 /**
- * The skills that actually reach the prompt for a harness. Codex never got a skill hint
- * and still does not; claude and opencode (which runs through the claude executor) do.
- * The result is what gets logged as `skills`, so reconstruction needs no harness rule.
+ * The skills that actually reach the prompt for a harness. Codex never got a skill hint and
+ * still does not; claude and opencode (which runs through the claude executor) do; cursor
+ * does not, because cursor-agent has no Claude Code skills and a hint would name tools it
+ * cannot run. The result is what gets LOGGED as `skills`, so this must answer for the
+ * prompt that was actually sent — a harness handed a hint it never got would break
+ * reconstruction. HOW-17: that answer is a declared field on harnessSpec, never a default,
+ * so a new harness cannot inherit claude's by omission.
  */
 export function skillsForHarness(harness: Harness | undefined, skills: readonly string[] | undefined): string[] {
-  return harness === "codex" ? [] : [...(skills ?? [])];
+  if (harness && !harnessSpec(harness).skillHint) return [];
+  return [...(skills ?? [])];
 }
 
 export interface PromptParts {

@@ -57,6 +57,7 @@ import {
   clearAsks, runnerHolder, resolveEffect, EFFECT_VERDICTS, type DecisionResult, type EffectVerdict,
 } from "../engine/control";
 import { resolveAgentConfig } from "../engine/run";
+import { defaultHarness, harnessNames, harnessSpec, isHarness } from "../core/harnesses";
 import type { Graph } from "../core/graph";
 import { EventLog as ControlLog } from "../log/write";
 import { effectiveCwd, readWorktreeRecord } from "../engine/executors/worktree";
@@ -288,14 +289,20 @@ export function createHowdahServer(opts: ServerOpts) {
         const tuning = loadTuning()[g.def.name] ?? {};
         const tsDefaults = g.def.defaults ?? {};
         // the engine's own resolution (no run override): what a run would get, readOnly included
+        // HOW-17: the configured default harness is part of the resolution, so the effective
+        // config the UI shows is still the one a run gets
+        const configuredDefaultHarness = loadConfig().defaultHarness;
         const effectiveOf = (id: string, n: (typeof g.def.nodes)[string]) =>
-          n.kind === "agent" ? resolveAgentConfig(g, n, id, { tuning: tuning as EngineTuning }) : undefined;
+          n.kind === "agent" ? resolveAgentConfig(g, n, id, { tuning: tuning as EngineTuning, defaultHarness: configuredDefaultHarness }) : undefined;
         return json({
           name: g.def.name,
           description: g.def.description ?? "",
           entry: g.def.entry,
           inputs: g.def.inputs,
           defaults: tsDefaults,
+          // what "inherit" means in the tuner, so it names the operator's default rather than
+          // a hard-coded "claude"
+          default_harness: defaultHarness(configuredDefaultHarness),
           tuning,
           nodes: Object.entries(g.def.nodes).map(([id, n]) => ({
             id,
@@ -498,6 +505,9 @@ export function createHowdahServer(opts: ServerOpts) {
         if (o.model) args.push("--model", o.model);
         if (o.effort) args.push("--effort", o.effort);
         if (o.permissionMode) args.push("--permission-mode", o.permissionMode);
+        // validated against the table, not passed through: --harness reaches a spawn
+        if (o.harness !== undefined && !isHarness(o.harness))
+          return json({ error: `unknown harness "${o.harness}" — have: ${harnessNames().join(", ")}` }, 400);
         if (o.harness) args.push("--harness", o.harness);
         if (o.maxTurns) args.push("--max-turns", String(o.maxTurns));
         if (o.skills?.length) args.push("--skills", o.skills.join(","));
@@ -562,20 +572,22 @@ export function createHowdahServer(opts: ServerOpts) {
 
       /**
        * The one thing the operator cannot do from inside Howdah: log the harness in. Agent
-       * nodes run `claude -p` / `codex app-server`, which have no TTY, so when a run parks on
-       * `harness-unauthenticated` there is nowhere to type the login into. This opens a real
-       * terminal sitting in the run's own folder with the login command ready.
+       * nodes run `claude -p` / `codex app-server` / `cursor-agent -p`, which have no TTY, so
+       * when a run parks on `harness-unauthenticated` there is nowhere to type the login into.
+       * This opens a real terminal sitting in the run's own folder with the login command ready.
        *
-       * The harness name is matched against a fixed table rather than interpolated, so
-       * nothing from the request body ever reaches a shell. The command is returned either
-       * way, so a platform we cannot open a terminal on still tells the operator what to run.
+       * The harness name is matched against the harness TABLE (HOW-17: it used to be a
+       * two-entry literal here, which 400d a cursor park) rather than interpolated, so
+       * nothing from the request body ever reaches a shell — the command is assembled from
+       * the table's own constants. It is returned either way, so a platform we cannot open a
+       * terminal on still tells the operator what to run.
        */
       if (sub === "harness-login" && req.method === "POST") {
         const body: unknown = await req.json().catch(() => undefined);
         const asked = typeof body === "object" && body !== null && !Array.isArray(body) ? (body as { harness?: unknown }).harness : undefined;
-        const LOGIN: Record<string, string> = { claude: "claude auth login", codex: "codex login" };
         const harness = typeof asked === "string" ? asked : "";
-        const command = LOGIN[harness];
+        const spec = isHarness(harness) ? harnessSpec(harness) : undefined;
+        const command = spec ? `${spec.binary} ${spec.loginVerb}` : undefined;
         if (!command) return json({ error: `unknown harness "${harness}"` }, 400);
         const events = readLog(path);
         const started = events.find((e) => e.type === "run-started");

@@ -145,16 +145,18 @@ describe("server API", () => {
       });
 
     opened.length = 0;
-    for (const [harness, command] of [["claude", "claude auth login"], ["codex", "codex login"]] as const) {
+    // HOW-17: cursor is here because the table is, not because the route learned a third
+    // name — before it, a run parked on a cursor auth failure got a 400 from its own viewer
+    for (const [harness, command] of [["claude", "claude auth login"], ["codex", "codex login"], ["cursor", "cursor-agent login"]] as const) {
       const r = await post({ harness });
       const b = (await r.json()) as { command?: string };
       expect([200, 501]).toContain(r.status); // 501 off macOS, where no terminal is opened
       expect(b.command).toBe(command);
     }
 
-    // the side effect goes through the seam, never to the real osascript. On macOS both
-    // logins opened a terminal; off it the route answers 501 and opens none.
-    expect(opened.length).toBe(process.platform === "darwin" ? 2 : 0);
+    // the side effect goes through the seam, never to the real osascript. On macOS each
+    // login opened a terminal; off it the route answers 501 and opens none.
+    expect(opened.length).toBe(process.platform === "darwin" ? 3 : 0);
     for (const argv of opened) {
       expect(argv[0]).toBe("osascript");
       expect(argv.join(" ")).toContain("tell application \"Terminal\"");
@@ -162,6 +164,7 @@ describe("server API", () => {
     if (process.platform === "darwin") {
       expect(opened[0]!.join(" ")).toContain("claude auth login");
       expect(opened[1]!.join(" ")).toContain("codex login");
+      expect(opened[2]!.join(" ")).toContain("cursor-agent login");
     }
 
     // anything not in the table is refused BEFORE it could reach osascript
@@ -1207,6 +1210,25 @@ describe("viewer guard (system-map 0.4)", () => {
     expect(post.status).toBe(403);
     await Bun.sleep(500);
     expect(readdirSync(runsDir)).toEqual([]);
+    });
+  });
+
+  /**
+   * HOW-17: `--harness` reaches a spawn, so the launch route checks the name against the
+   * harness table instead of passing any string through to the CLI. A run must never be
+   * created for a harness that cannot run it.
+   */
+  test("a launch override naming an unknown harness is refused, and spawns nothing", async () => {
+    await withGuardedServer(async ({ runsDir, url }) => {
+      const r = await fetch(url("/api/runs"), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ graph: "write-doc", inputs: { goal: "g" }, overrides: { harness: "nonesuch" } }),
+      });
+      expect(r.status).toBe(400);
+      expect(((await r.json()) as any).error).toContain('unknown harness "nonesuch"');
+      await Bun.sleep(500);
+      expect(readdirSync(runsDir)).toEqual([]);
     });
   });
 

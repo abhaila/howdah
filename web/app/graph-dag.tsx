@@ -39,6 +39,8 @@ export interface GraphShapeDto {
   entry: string;
   inputs?: string[];
   defaults?: AgentConfigDto;
+  /** HOW-17: what an unset harness resolves to for this operator (config.json defaultHarness) */
+  default_harness?: string;
   tuning?: { defaults?: AgentConfigDto; nodes?: Record<string, AgentConfigDto> };
   nodes: Array<{
     id: string; kind: string; class?: string; prompt?: string; run?: string;

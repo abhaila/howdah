@@ -65,7 +65,8 @@ bun reviser/eval/slice-propose.eval.ts --score-only              # proposer eval
 
 Env: `HOWDAH_HOME` (state root, default `~/.howdah`), `HOWDAH_STUB=1` (executors park
 instead of spawning real agents — how tests and dry runs avoid spending tokens),
-`HOWDAH_MODEL` (run-level model default), `HOWDAH_PORT` (viewer port, default 4711).
+`HOWDAH_MODEL` (run-level model default), `HOWDAH_HARNESS` (run-level harness default, beats
+config.json `defaultHarness`), `HOWDAH_PORT` (viewer port, default 4711).
 
 ## Architecture
 
@@ -181,28 +182,42 @@ Break one of these and the design stops working, so check them before changing t
   reason. Drift (`map/drift.ts`) says `verified` only with proof and `missing` only after a
   fully covered search with no near match; snapshots from different extractor versions or
   uncommitted changes are never judged. Cross-project resolution is left to SCIP (slice 2).
+- **Every per-harness fact lives in `core/harnesses.ts`.** Binary, login verb, auth probe,
+  model family, skill hint, forced permission mode, and whether doctor treats it as `core` /
+  `optional` / `internal` — one record per harness (claude, codex, cursor, opencode). It used
+  to be a `harness === "codex" ? … : …` ternary repeated in six files, and the one a new
+  harness slipped past was silent: it would have inherited claude's skill hint, so the logged
+  `skills` would describe a prompt that was never sent. The module is node-free and
+  dependency-free because the browser bundle imports it (the viewer's harness picker).
 - **Agent config resolves in one place.** `resolveAgentConfig` (`engine/run.ts`, also what
-  the viewer's graph API shows) over `core/graph.ts` resolveAgentConfigLayers: Claude→Codex
+  the viewer's graph API shows) over `core/graph.ts` resolveAgentConfigLayers: chain
   fallback → run override → UI node tuning (`tuning.json`) → TS node setting → UI graph
-  tuning → TS graph default. The model is the first one that fits the resolved harness (model
-  names are harness-specific and a leaked one is an API 400); Claude always runs in `auto`
-  permission mode, Codex in a full-access sandbox. `readOnly: true` is applied last and beats
-  everything, the fallback included: `plan` for Claude, a read-only sandbox for Codex.
-- **A harness fallback is a new visit, rendered for the harness that runs it.** When Claude's
-  allowance is exhausted (or the attempt reads as rate-limited) the engine retries the node on
-  Codex as a fresh visit — not charged to `maxVisits` — so its `prompt-rendered` carries the
-  Codex harness and no skill hint, and reconstructs VERIFIED.
+  tuning → TS graph default → config.json `defaultHarness` (`HOWDAH_HARNESS` beats it for one
+  run). The model is the first one that fits the resolved harness (model names are
+  harness-specific and a leaked one is an API 400, and cursor is the one harness that
+  genuinely serves other providers' models); a harness's own permission mode wins where it
+  declares one — Claude always runs in `auto`, Codex in a full-access sandbox, cursor with
+  `--force`. `readOnly: true` is applied last and beats everything, the fallback included:
+  `plan` for Claude, a read-only sandbox for Codex, no auto-approve flag for cursor.
+- **A harness fallback is a new visit, rendered for the harness that runs it.** When a
+  harness's allowance is exhausted (or the attempt reads as rate-limited) the engine retries
+  the node on the next harness in the fallback chain (claude → codex → cursor by default,
+  reorderable in config.json) as a fresh visit — not charged to `maxVisits` — so its
+  `prompt-rendered` carries the harness that ran and that harness's skill hint, and
+  reconstructs VERIFIED. The chain is an ORDER, not a successor map: it skips a harness this
+  run has already spent, so "claude is out and so is codex" lands on cursor instead of
+  parking.
 
 ### Module map
 
 | Path | Role |
 |---|---|
-| `core/` | graph schema (`graph.ts`), path validator (`validate.ts`), context store, template/render contract (`template.ts`), generated `prompt-ids.ts` |
+| `core/` | graph schema (`graph.ts`), path validator (`validate.ts`), context store, template/render contract (`template.ts`), the harness table (`harnesses.ts`), generated `prompt-ids.ts` |
 | `graphs/` | the runnable graphs + `index.ts` registry, `local.ts` (the operator's own, from `$HOWDAH_HOME`), `registry.ts` (merged catalog), `typecheck.ts` (tsc gate); `implement-ticket`, `implement-slice` (design on the map → approve → build → drift), `improve-codebase`, `review-teammate-pr`, `write-doc`, `research`, `quick-task`; `delivery.ts` shared publish/repair half |
 | `map/` | the code-derived system map (syntactic tier): tree-sitter extraction (`extract.ts`, `facts.ts`, `adapters.ts` + `queries/`), content-addressed store, `assemble.ts` (identity keys, MountResolver), `ghosts.ts` (GhostSet validator), `drift.ts`, `neighbourhood.ts` |
 | `prompts/` | one `.md` per prompt (front-matter `id`/`version`), codegen, `store.ts` (load/list/accept with stale-base + undeclared-read guards), `proposals.ts` (lifecycle + review view), `library.ts` (read model: consumers, feedback, outcome join, render reconstruction) |
 | `log/` | event union (`events.ts`), durable JSONL writer, view-time `coalesce.ts` |
-| `adapter/` | pure harness → `AgentEvent` mappers (`claude.ts`, `codex.ts`, `opencode.ts`), chunk-safe `parse.ts`, `capabilities.ts` matrix |
+| `adapter/` | pure harness → `AgentEvent` mappers (`claude.ts`, `codex.ts`, `cursor.ts`, `opencode.ts`), chunk-safe `parse.ts`, `capabilities.ts` matrix |
 | `engine/` | `run.ts` (loop, routing, pinning, effects, attribution), `replay.ts`, `reconcile.ts` (git probes + worktree fingerprint), `attention.ts`, `control.ts` (replies, decisions, runner lock), `slice-decision.ts`, `slice-map.ts`, `executors/` |
 | `cli/` | `main.ts` verbs, `new-graph.ts` scaffolder (writes into `$HOWDAH_HOME`) |
 | `config/` | `config.json` workspaces + settings, `tuning.json` overlay, GitHub repo registration |
@@ -285,8 +300,14 @@ see: TypeScript does not read CSS, and a missing rule renders as plain text.
   (`m[1] !== undefined` checks rather than `!`), so keep new code checking indexed access.
 - File-header comments explain *why* with shaping IDs. Match that when adding a module —
   they are the design's index, not decoration.
-- Adding a harness = one mapper in `adapter/` + a `capabilities.ts` entry; nothing downstream
-  of `AgentEvent` should need to change.
+- Adding a harness = one entry in `core/harnesses.ts` + one mapper in `adapter/` + a
+  `capabilities.ts` entry + an executor in `engine/executors/` wired into `liveExecutors`;
+  nothing downstream of `AgentEvent`, and no UI literal, should need to change.
+- Cursor's adapter and executor are written against the DOCUMENTED `cursor-agent`
+  stream-json envelope, not a captured one — cursor-agent is not installed on this machine,
+  `capabilities.ts` marks its entries `untested`, and `engine/executors/fake-cursor.ts`
+  speaks the same documented shapes. Capture a real turn into `adapter/fixtures/` and pin it
+  the day the CLI is available.
 - Every task in `shaping.md` (T1–T22) is now built. The remaining known gap is that the
   reviser only runs from the CLI; the UI's re-draft button spawns it detached because it
   spends tokens. `HOWDAH_STUB=1` short-circuits that spawn, which is how the route is tested.
