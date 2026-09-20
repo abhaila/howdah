@@ -88,6 +88,12 @@ export interface ServerOpts {
    * recorder: the real reviser is an agent call that spends tokens.
    */
   spawnReviser?: (argv: string[]) => void;
+  /**
+   * opens a real terminal with this argv (default: Bun.spawn, unref'd). Tests inject a
+   * recorder: the real one puts a Terminal window on the operator's screen and starts an
+   * interactive `claude auth login`, which a test run must never do to the machine running it.
+   */
+  openTerminal?: (argv: string[]) => void;
 }
 
 /** A prompt id as the library names files (`prompts/<id>.md`) — no separators, no traversal. */
@@ -168,6 +174,9 @@ export function createHowdahServer(opts: ServerOpts) {
       Bun.spawn(["bun", join(import.meta.dir, "..", "cli", "main.ts"), "resume", id], {
         stdout: "ignore", stderr: "ignore", env: { ...process.env },
       }).unref());
+  const launchTerminal =
+    opts.openTerminal ??
+    ((argv: string[]) => Bun.spawn(argv, { stdout: "ignore", stderr: "ignore" }).unref());
   /** explicit operator resume: start a runner unless one is live */
   const spawnResume = (id: string) => {
     if (!runnerAlive(join(opts.runsDir, id))) launchResume(id);
@@ -566,7 +575,9 @@ export function createHowdahServer(opts: ServerOpts) {
         // AppleScript string literal: the only untrusted part is the path, and a quote in a
         // directory name would otherwise end the literal
         const script = `tell application "Terminal" to do script "cd ${dir.replace(/(["\\$`])/g, "\\$1")} && ${command}"`;
-        Bun.spawn(["osascript", "-e", script, "-e", 'tell application "Terminal" to activate'], { stdout: "ignore", stderr: "ignore" }).unref();
+        // through the seam, never Bun.spawn directly: this is the one route whose side effect
+        // lands on the operator's screen, so the test suite has to be able to hold it back
+        launchTerminal(["osascript", "-e", script, "-e", 'tell application "Terminal" to activate']);
         return json({ ok: true, command, cwd: dir });
       }
 

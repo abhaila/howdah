@@ -108,7 +108,17 @@ describe("server API", () => {
   const runsDir = join(base, "runs");
   const attentionDir = join(base, "attention");
   mkdirSync(runsDir, { recursive: true });
-  const server = createHowdahServer({ runsDir, attentionDir, port: 0, pollMs: 20 });
+  /**
+   * Every terminal this suite would open, recorded instead of opened. Without the seam the
+   * harness-login route reaches osascript for real, so a full `bun test` on a Mac put two
+   * Terminal windows on the operator's screen and started an interactive `claude auth login`
+   * in each. A test run must not touch the machine running it.
+   */
+  const opened: string[][] = [];
+  const server = createHowdahServer({
+    runsDir, attentionDir, port: 0, pollMs: 20,
+    openTerminal: (argv) => void opened.push(argv),
+  });
   const url = (p: string) => `http://localhost:${server.port}${p}`;
   afterAll(() => server.stop(true));
 
@@ -134,6 +144,7 @@ describe("server API", () => {
         body: JSON.stringify(body),
       });
 
+    opened.length = 0;
     for (const [harness, command] of [["claude", "claude auth login"], ["codex", "codex login"]] as const) {
       const r = await post({ harness });
       const b = (await r.json()) as { command?: string };
@@ -141,13 +152,27 @@ describe("server API", () => {
       expect(b.command).toBe(command);
     }
 
+    // the side effect goes through the seam, never to the real osascript. On macOS both
+    // logins opened a terminal; off it the route answers 501 and opens none.
+    expect(opened.length).toBe(process.platform === "darwin" ? 2 : 0);
+    for (const argv of opened) {
+      expect(argv[0]).toBe("osascript");
+      expect(argv.join(" ")).toContain("tell application \"Terminal\"");
+    }
+    if (process.platform === "darwin") {
+      expect(opened[0]!.join(" ")).toContain("claude auth login");
+      expect(opened[1]!.join(" ")).toContain("codex login");
+    }
+
     // anything not in the table is refused BEFORE it could reach osascript
+    opened.length = 0;
     for (const bad of ["sh -c id", "claude; rm -rf /", "", 7, null, { toString: () => "claude" }]) {
       const r = await post({ harness: bad });
       expect(r.status).toBe(400);
       expect((await r.json() as { error: string }).error).toContain("unknown harness");
     }
     expect((await post({})).status).toBe(400);
+    expect(opened).toEqual([]); // a refused harness never reaches a terminal
   });
 
   test("GET /api/runs/:id returns detail; unknown id is 404", async () => {
