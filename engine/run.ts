@@ -359,12 +359,13 @@ export class Engine {
     // its replyNote is adopted; if not, resume's own resolution goes in atomically — source
     // "resume", bookkeeping that never renders into a prompt.
     let replyNote = replayed.replyNote;
-    // system-map 1a (D17): a decided awaiting-approval park is closed here too, in case the
-    // route that decided died before resolving it — the log then reads as answered
+    // system-map 1a (D17) / HOW-3: a park an operator action already answered — a decided
+    // approval round, or an ambiguous effect the operator resolved — is closed here too, in
+    // case the route that answered it died before resolving it: the log then reads as answered
     this.log.appendIf((events) => {
       const now = replayState(events);
       replyNote = now.replyNote;
-      const open = now.parked ?? now.awaitingDecided;
+      const open = now.parked ?? now.answeredPark;
       return open ? { type: "attention-resolved", node: open.node, visit: open.visit, reply: "resume", source: "resume" } : null;
     });
     this.replyNote = replyNote;

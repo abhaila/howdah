@@ -213,7 +213,7 @@ describe("D17: the decision alone resolves the park", () => {
     log.append({ type: "slice-approved", proposal_id: round.proposal_id, proposal_hash: round.proposal_hash, manifest_hash: "m1" });
     const replayed = replayState(log.read());
     expect(replayed.parked).toBeNull();
-    expect(replayed.awaitingDecided).toMatchObject({ node: "approve", code: "awaiting-approval" });
+    expect(replayed.answeredPark).toMatchObject({ node: "approve", code: "awaiting-approval" });
     expect(replayed.position).toEqual({ node: "approve", midFlight: true }); // same visit re-attempted
     expect(supervisorShouldResume(replayed, null)).toBe(true);
     // the operator still owns a paused or controlled run

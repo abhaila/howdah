@@ -151,6 +151,9 @@ main { flex: 1; min-width: 0; }
   font-family: var(--font-mono); font-size: 13px; padding: 8px;
 }
 .ask-card .actions { display: flex; gap: 8px; margin-top: 8px; align-items: center; }
+/* HOW-3: one ambiguous effect and its two verdicts, separated so several read as a list */
+.effect-row { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border); }
+.effect-row code { font-family: var(--font-mono); font-size: 13px; }
 button.primary {
   background: var(--primary); color: var(--primary-fg); border: 0;
   padding: 7px 14px; border-radius: var(--radius-sm);

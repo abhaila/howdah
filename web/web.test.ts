@@ -1267,7 +1267,7 @@ describe("reply route shares the CLI's rules (system-map 0.2)", () => {
         ["cmd", "implement-ticket", "delivery.probe_pr", "attempt-failed", "fix the cause, then `resume cmd`"],
         ["wt", "implement-ticket", "create_worktree", "attempt-failed", "worktree node"],
         ["mv", "write-doc", "doc.revise", "max-visits", "use `jump mv <node> <msg>`"],
-        ["amb", "implement-ticket", "delivery.probe_pr", "ambiguous-effect", "resolve the effect first"],
+        ["amb", "implement-ticket", "delivery.probe_pr", "ambiguous-effect", "`resolve-effect amb <effect> happened|not-happened`"],
         ["appr", "write-doc", "doc.review", "awaiting-approval", "use `approve appr`, `comment appr <entity-id> <text>` then `send-feedback appr`"],
       ];
       for (const [id, graph, node, code, needle] of cases) {
@@ -1526,4 +1526,93 @@ describe("abort signals only a PROVEN runner (system-map 1a final review)", () =
       runner.kill(9);
     }
   });
+});
+
+describe("POST /api/runs/:id/effects — resolving an ambiguous side effect (HOW-3)", () => {
+  const base = mkdtempSync(join(tmpdir(), "howdah-web-effect-"));
+  const runsDir = join(base, "runs");
+  mkdirSync(runsDir, { recursive: true });
+  const attentionDir = join(base, "attention");
+  // never the real resume: it spawns an engine that may spend tokens
+  const resumed: string[] = [];
+  const server = createHowdahServer({ runsDir, attentionDir, port: 0, resumeRun: (id) => void resumed.push(id) });
+  afterAll(() => server.stop(true));
+
+  const post = (id: string, body: unknown) =>
+    fetch(`http://localhost:${server.port}/api/runs/${id}/effects`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: typeof body === "string" ? body : JSON.stringify(body),
+    });
+
+  /** a run parked on ambiguous-effect, with its durable attention record raised */
+  function ambiguous(id: string) {
+    const log = new EventLog(join(runsDir, id, "run.jsonl"));
+    log.append({ type: "run-started", graph: "write-doc", inputs: { goal: "g" }, pinned_prompts: {} });
+    log.append({ type: "node-started", node: "doc.review", visit: 1, attempt_id: "doc.review#1" });
+    log.append({ type: "side-effect-intent", node: "doc.review", visit: 1, attempt_id: "doc.review#1", effect: "create-pr" });
+    log.append({ type: "attention-raised", node: "doc.review", visit: 1, reason: "ambiguous", code: "ambiguous-effect" });
+    void new AttentionCenter(attentionDir, []).raise({ run: id, node: "doc.review", visit: 1, reason: "ambiguous" });
+    const path = join(runsDir, id, "run.jsonl");
+    return { path, events: () => readLog(path), unchanged: (before: string) => readFileSync(path, "utf8") === before };
+  }
+
+  test("a malformed body is 400, nothing appended", async () => {
+    const run = ambiguous("bad-effect-body");
+    const before = readFileSync(run.path, "utf8");
+    const cases: unknown[] = [
+      "not json",
+      [1, 2],
+      { verdict: "happened" },
+      { effect: "", verdict: "happened" },
+      { effect: "create-pr" },
+      { effect: "create-pr", verdict: "probably" },
+      { effect: "create-pr", verdict: "happened", node: 7 },
+    ];
+    for (const body of cases) {
+      const res = await post("bad-effect-body", body);
+      expect(res.status).toBe(400);
+    }
+    expect(run.unchanged(before)).toBe(true);
+  });
+
+  test("a refusal is 409 with its code, and appends nothing", async () => {
+    const run = ambiguous("refused-effect");
+    const before = readFileSync(run.path, "utf8");
+    const res = await post("refused-effect", { effect: "push-tag", verdict: "happened" });
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as { error: string; code: string };
+    expect(body.code).toBe("no-ambiguous-effect");
+    expect(body.error).toContain('no ambiguous effect "push-tag"');
+    expect(run.unchanged(before)).toBe(true);
+    expect(resumed).not.toContain("refused-effect");
+  });
+
+  test("an accepted resolution: 200, the event appended, the attention record cleared, the run resumed", async () => {
+    const run = ambiguous("resolved-effect");
+    const center = new AttentionCenter(attentionDir, []);
+    expect(center.pending().some((a) => a.id === "resolved-effect:doc.review:1")).toBe(true);
+
+    const res = await post("resolved-effect", { effect: "create-pr", verdict: "not-happened", node: "doc.review" });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ ok: true, idempotent: false, node: "doc.review", effect: "create-pr", verdict: "not-happened" });
+
+    expect(run.events().filter((e) => e.type === "side-effect-resolved")).toEqual([
+      expect.objectContaining({ node: "doc.review", visit: 1, attempt_id: "doc.review#1", effect: "create-pr", verdict: "not-happened", by: "operator" }),
+    ]);
+    expect(center.pending().some((a) => a.id === "resolved-effect:doc.review:1")).toBe(false);
+    for (let i = 0; i < 200 && !resumed.includes("resolved-effect"); i++) await Bun.sleep(20);
+    expect(resumed).toContain("resolved-effect"); // the resolution MOVED the run
+
+    // a repeat of the same verdict is idempotent; the opposite is 409
+    const again = await post("resolved-effect", { effect: "create-pr", verdict: "not-happened" });
+    expect(again.status).toBe(200);
+    expect(await again.json()).toMatchObject({ ok: true, idempotent: true });
+    expect(run.events().filter((e) => e.type === "side-effect-resolved")).toHaveLength(1);
+
+    const opposite = await post("resolved-effect", { effect: "create-pr", verdict: "happened" });
+    expect(opposite.status).toBe(409);
+    expect((await opposite.json()) as { code: string }).toMatchObject({ code: "already-resolved" });
+    expect(run.events().filter((e) => e.type === "side-effect-resolved")).toHaveLength(1);
+  }, 15000);
 });

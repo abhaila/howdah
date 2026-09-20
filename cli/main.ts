@@ -6,6 +6,7 @@
  *   howdah run <graph> [-i key=value]... [--workspace <name>] [--dir <path>] [--id <run-id>]
  *   howdah runs --json
  *   howdah reply <run-id> <text>
+ *   howdah resolve-effect <run-id> <effect> happened|not-happened [--node <node>]
  *   howdah graphs --json
  *
  * Approval verbs (system-map 1a) — the same engine/control.ts functions the web routes call:
@@ -38,6 +39,7 @@ import {
   readControl, writeControl, clearControl, interruptRunner, markPaused, resolveReply, runnerAlive, supervisorShouldResume, jumpMissingReads, jumpRefusal, forceReleaseRunner,
   runnerHolder, raiseRunnerLock,
   approve, sendFeedback, pinComment, redesign, afterDecision, clearAsks, type DecisionResult,
+  resolveEffect, EFFECT_VERDICTS, type EffectVerdict,
 } from "../engine/control";
 
 const base = howdahHome();
@@ -179,7 +181,7 @@ export async function resumeCommand(runId: string, opts: { force?: boolean } = {
     tuning: loadTuning(base)[replayed.started.graph],
     control: () => readControl(runDir),
     beforeNode: reconcilerHook(runDir, () => engine),
-    probe: async () => "unknown", // ambiguous side effects park for the operator
+    probe: async () => "unknown", // ambiguous side effects park for `howdah resolve-effect`
     whileHeld: raiseParkAttention(runId),
   });
   const result = await engine.resume();
@@ -334,6 +336,23 @@ export function replyCommand(runId: string, text: string): void {
   console.log(result.rendered ? "replied — the retry will carry your reply" : "replied");
 }
 
+/**
+ * HOW-3: `resolve-effect <run> <effect> happened|not-happened [--node <n>]` — the only exit
+ * from an `ambiguous-effect` park besides hand-editing run.jsonl. The rules and the append
+ * live in engine/control.ts resolveEffect, shared with the web route; a refusal exits
+ * non-zero and appends nothing. The resolution must MOVE the run, so a dead runner is kicked.
+ */
+export function resolveEffectCommand(runId: string, effect: string, verdict: string, node?: string): void {
+  if (!EFFECT_VERDICTS.includes(verdict as EffectVerdict))
+    throw new Error(`usage: howdah resolve-effect <run-id> <effect> ${EFFECT_VERDICTS.join("|")} [--node <node>]`);
+  const runDir = join(runsDir, runId);
+  const result = resolveEffect(runDir, effect, verdict as EffectVerdict, { node });
+  if (!result.ok) throw new Error(`${result.message} [${result.code}]`);
+  clearAsks(join(base, "attention"), runDir, result.asks);
+  console.log(result.idempotent ? `"${effect}" was already resolved as ${verdict}` : `recorded: "${effect}" ${verdict}`);
+  if (!runnerAlive(runDir)) spawnResume(runId);
+}
+
 // ---- system map (system-map 1b/1c) -------------------------------------------------------
 
 /** `map <dir> [...]`: a thin wrapper — map/cli.ts owns the arguments and the output. */
@@ -370,6 +389,20 @@ async function wake(runId: string, result: Extract<DecisionResult, { ok: true }>
  *   comment r1 e1 -- --proposal as text       text (after `--`)
  * `textFrom` = how many positionals come before free text (Infinity: no free text).
  */
+/** pull `--name <value>` out of an argument list wherever it sits; the rest keeps its order */
+export function takeFlag(args: string[], name: string): { value: string | undefined; rest: string[] } {
+  const rest: string[] = [];
+  let value: string | undefined;
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === name && i + 1 < args.length) {
+      value = args[++i];
+      continue;
+    }
+    rest.push(args[i]!);
+  }
+  return { value, rest };
+}
+
 export function splitProposalFlag(args: string[], textFrom = Infinity): { proposalId: number | undefined; rest: string[] } {
   let proposalId: number | undefined;
   const rest: string[] = [];
@@ -427,6 +460,10 @@ if (import.meta.main) {
       const ids = existsSync(runsDir) ? readdirSync(runsDir).filter((d) => existsSync(join(runsDir, d, "run.jsonl"))) : [];
       console.log(JSON.stringify(ids));
     } else if (verb === "reply") replyCommand(rest[0] ?? "", rest.slice(1).join(" "));
+    else if (verb === "resolve-effect") {
+      const { value: node, rest: args } = takeFlag(rest, "--node");
+      resolveEffectCommand(args[0] ?? "", args[1] ?? "", args[2] ?? "", node);
+    }
     else if (verb === "resume") {
       const id = rest.find((a) => a !== "--force") ?? "";
       clearControl(join(runsDir, id));
@@ -492,7 +529,7 @@ if (import.meta.main) {
       console.log(`scaffolded ${await newGraph(rest[0] ?? "", kind)}`);
     }
     else {
-      console.error("usage: howdah setup|run|resume|pause|abort|jump|reply|approve|comment|send-feedback|redesign|map|metrics|runs|graphs|new-graph|workspace|up|doctor");
+      console.error("usage: howdah setup|run|resume|pause|abort|jump|reply|resolve-effect|approve|comment|send-feedback|redesign|map|metrics|runs|graphs|new-graph|workspace|up|doctor");
       process.exit(1);
     }
   } catch (err) {

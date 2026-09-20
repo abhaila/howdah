@@ -43,6 +43,8 @@ bun cli/main.ts run <graph> -i goal=... -i work=... --workspace <name> [--model/
 bun cli/main.ts setup                        # create $HOWDAH_HOME's layout (config.json, runs/, repos/, attention/)
 bun cli/main.ts runs | graphs | doctor
 bun cli/main.ts reply <run-id> <text>        # answers the current ask, resumes if the runner died
+bun cli/main.ts resolve-effect <run-id> <effect> happened|not-happened [--node <n>]
+                                             # HOW-3: attest to an ambiguous side effect, then resume
 bun cli/main.ts resume|pause|abort <run-id>  # pause/abort also interrupt a PROVEN live runner mid-turn
 bun cli/main.ts jump <run-id> <node> [msg]   # move a dead run to a node, injecting an instruction
 bun cli/main.ts up                           # supervisor: heartbeat + resume dead runs
@@ -119,7 +121,14 @@ Break one of these and the design stops working, so check them before changing t
   because the validator proved the graph cannot cause it.
 - **Side effects are exactly-once.** Executors wrap effects in `effects.claim()/done()`,
   which writes intent before and proof after. Intent without proof is *ambiguous*; `resume()`
-  probes it and **parks rather than guesses** when the probe says `unknown`.
+  probes it and **parks rather than guesses** when the probe says `unknown`. The human is the
+  probe of last resort: `resolve-effect <run> <effect> happened|not-happened` (CLI, and
+  `POST /api/runs/:id/effects`) appends an additive `side-effect-resolved`, which replay
+  honours both ways — `happened` counts exactly as a `side-effect-done`, `not-happened` clears
+  the intent so the retry claims and runs it again. The attestation alone answers the park
+  (`ReplayedState.answeredPark`), so `howdah up` resumes even if the spawned resume died. One
+  resolution per ambiguous intent: it is decided and appended under the log lock, a repeat of
+  the same verdict is idempotent, and the opposite verdict is refused naming the first.
 - **Observed reality beats recorded state.** `engine/reconcile.ts` probes git before every
   node and the forge only before nodes that declare forge reads. No cached branch name is
   ever read. Intended-vs-observed disagreement is logged as a fact and surfaced, never

@@ -26,6 +26,15 @@
  * first decision already did. Even if every step after the append is lost, replay counts
  * the decision as answering the park, so `howdah up` resumes the run on its next tick.
  *
+ * Ambiguous effects (HOW-3): resolveEffect() is the ONE implementation behind
+ * `howdah resolve-effect` and POST /api/runs/:id/effects. An `ambiguous-effect` park (an
+ * intent with no done that the resume probe could not decide) had no exit but hand-editing
+ * run.jsonl; the operator now attests to the outside world with an additive
+ * `side-effect-resolved`, which replay honours both ways — `happened` counts as done,
+ * `not-happened` clears the intent so the retry claims it again. Decided and appended under
+ * the same appendIf lock as a decision: one resolution per ambiguous intent, a repeat of the
+ * same verdict is idempotent, and the opposite verdict is refused naming the first.
+ *
  * One runner per run (system-map 1a review): `up`, a decision route, a reply and a manual
  * resume can all try to resume the same run at once. claimRunner() takes `runner.pid` as
  * an O_EXCL lockfile (log/lockfile.ts, stale-PID recovery) for the whole engine run —
@@ -368,7 +377,9 @@ export const REPLY_RULES: Readonly<Record<ParkCode, Rule>> = {
   "max-steps": useJump,
   "ambiguous-effect": ({ run }) => ({
     accept: false,
-    message: `a side effect may or may not have happened; resolve the effect first, then \`resume ${run}\``,
+    message:
+      `a side effect may or may not have happened; \`resolve-effect ${run} <effect> happened|not-happened\`, ` +
+      `then \`resume ${run}\``,
   }),
   "awaiting-approval": ({ run }) => ({
     accept: false,
@@ -595,7 +606,7 @@ function decide(runDir: string, action: RoundAction, proposalId?: number): Decis
   // bookkeeping — replay counts the decision alone — but the log should read as answered)
   const reply = action.kind === "approve" ? "approved" : "feedback sent";
   log.appendIf((events) => {
-    const ask = replayState(events).awaitingDecided;
+    const ask = replayState(events).answeredPark;
     return ask ? { type: "attention-resolved", node: ask.node, visit: ask.visit, reply, source: "operator" } : null;
   });
   return { ...result, asks: result.proposal_id === null ? [] : asksOfRound(log.read(), result.proposal_id) };
@@ -671,6 +682,164 @@ export function redesign(runDir: string, message: string, opts: { graphs: Record
       { type: "slice-redesign-requested", approval: approval[0], message },
       { type: "operator-jump", to: target, reset_budgets: true },
     ];
+  });
+  return result;
+}
+
+// ---- ambiguous side effects (HOW-3) --------------------------------------------------
+
+export type EffectVerdict = "happened" | "not-happened";
+
+export const EFFECT_VERDICTS: readonly EffectVerdict[] = ["happened", "not-happened"];
+
+/**
+ * Why a resolution was refused. Built from the members of DecisionRefusal that genuinely
+ * apply (DecisionRefusal itself is approval vocabulary and is not widened) plus the two
+ * codes only this verb can raise.
+ */
+export type EffectRefusal =
+  | Extract<DecisionRefusal, "unknown-run" | "not-started" | "finished" | "runner-live" | "bad-request">
+  | "no-ambiguous-effect"
+  | "already-resolved";
+
+export type EffectResult =
+  | {
+      ok: true;
+      /** copied from the intent this attestation answers */
+      node: string;
+      visit: number;
+      effect: string;
+      verdict: EffectVerdict;
+      /** the SAME verdict was already recorded — nothing was appended */
+      idempotent: boolean;
+      /** the ambiguous-effect park this answers — its attention record can be cleared */
+      asks: AskRef[];
+    }
+  | { ok: false; code: EffectRefusal; message: string };
+
+const refuseEffect = (code: EffectRefusal, message: string): { event: null; result: EffectResult } => ({
+  event: null,
+  result: { ok: false, code, message },
+});
+
+const namesEffect = (e: { node: string; effect: string }, effect: string, node?: string): boolean =>
+  e.effect === effect && (node === undefined || e.node === node);
+
+const quoted = (xs: readonly string[]): string => [...new Set(xs)].map((x) => `"${x}"`).join(", ");
+
+/**
+ * The pure decision over one log snapshot: the event to append (or null) and the answer.
+ * Runs inside appendIf, so the snapshot IS the log at the moment of the append.
+ */
+export function decideEffect(
+  events: LoggedEvent[],
+  run: string,
+  effect: string,
+  verdict: EffectVerdict,
+  opts: { node?: string } = {},
+): { event: RunEvent | null; result: EffectResult } {
+  const replayed = replayState(events);
+  if (!replayed.started) return refuseEffect("not-started", `run ${run} has not started`);
+  if (replayed.finished) return refuseEffect("finished", `run ${run} already finished (${replayed.finished.outcome})`);
+
+  const on = opts.node === undefined ? "" : ` on "${opts.node}"`;
+  const candidates = replayed.pendingIntents.filter((i) => namesEffect(i, effect, opts.node));
+
+  if (candidates.length === 0) {
+    // nothing ambiguous by that name — say WHY, because "already done", "already resolved the
+    // other way" and "you named the wrong effect" are three different operator mistakes
+    const prior = events.filter((e) => e.type === "side-effect-resolved" && namesEffect(e, effect, opts.node)).at(-1);
+    if (prior?.type === "side-effect-resolved") {
+      if (prior.verdict === verdict)
+        return {
+          event: null,
+          result: { ok: true, node: prior.node, visit: prior.visit, effect, verdict, idempotent: true, asks: answeredAsks(replayed) },
+        };
+      return refuseEffect("already-resolved", `"${effect}"${on} was already resolved as ${prior.verdict}`);
+    }
+    if (events.some((e) => e.type === "side-effect-done" && namesEffect(e, effect, opts.node)))
+      return refuseEffect("already-resolved", `"${effect}"${on} completed; there is nothing to resolve`);
+    const pending = replayed.pendingIntents;
+    return refuseEffect(
+      "no-ambiguous-effect",
+      pending.length
+        ? `run ${run} has no ambiguous effect "${effect}"${on}; ambiguous now: ${pending.map((i) => `"${i.effect}" on "${i.node}"`).join(", ")}`
+        : `nothing is ambiguous in run ${run}`,
+    );
+  }
+
+  if (candidates.length > 1)
+    return refuseEffect(
+      "bad-request",
+      `"${effect}" is ambiguous on several nodes (${quoted(candidates.map((i) => i.node))}); name one with \`--node <node>\``,
+    );
+
+  const intent = candidates[0]!;
+  return {
+    event: {
+      type: "side-effect-resolved",
+      node: intent.node,
+      visit: intent.visit,
+      attempt_id: intent.attempt_id,
+      effect: intent.effect,
+      verdict,
+      by: "operator",
+    },
+    result: {
+      ok: true,
+      node: intent.node,
+      visit: intent.visit,
+      effect: intent.effect,
+      verdict,
+      idempotent: false,
+      asks: standingAsks(replayed),
+    },
+  };
+}
+
+/** the ambiguous-effect park still standing in this snapshot (pre-append) */
+const standingAsks = (replayed: ReplayedState): AskRef[] =>
+  replayed.parked?.code === "ambiguous-effect" ? [{ node: replayed.parked.node, visit: replayed.parked.visit }] : [];
+
+/** the same park once a resolution has already answered it — an idempotent repeat still clears it */
+const answeredAsks = (replayed: ReplayedState): AskRef[] =>
+  replayed.answeredPark?.code === "ambiguous-effect"
+    ? [{ node: replayed.answeredPark.node, visit: replayed.answeredPark.visit }]
+    : standingAsks(replayed);
+
+/**
+ * `resolve-effect <run> <effect> happened|not-happened` (HOW-3): a human attests to the
+ * outside world for an effect the resume probe could not decide, which is the only exit from
+ * an `ambiguous-effect` park that is not hand-editing run.jsonl. Atomic: the "is this effect
+ * still ambiguous, and was it already resolved?" check and the append happen inside ONE
+ * EventLog.appendIf critical section, so two racing resolutions land exactly one event and
+ * the loser reads the winner's (idempotent for the same verdict, refused for the opposite).
+ *
+ * Refused while a runner is live — it owns its own effects and may be mid-claim — exactly as
+ * `jump` and `redesign` are. The caller clears the attention record (`asks`) and resumes.
+ */
+export function resolveEffect(
+  runDir: string,
+  effect: string,
+  verdict: EffectVerdict,
+  opts: { node?: string } = {},
+): EffectResult {
+  const path = logPathOf(runDir);
+  const run = basename(runDir);
+  if (!existsSync(path)) return { ok: false, code: "unknown-run", message: `unknown run: ${run}` };
+  if (effect.trim() === "") return { ok: false, code: "bad-request", message: "name the effect to resolve" };
+  if (!EFFECT_VERDICTS.includes(verdict))
+    return { ok: false, code: "bad-request", message: `verdict must be ${EFFECT_VERDICTS.join(" or ")}, not "${verdict}"` };
+  // a filesystem fact, not a log fact, so it is checked outside the critical section
+  if (runnerAlive(runDir))
+    return { ok: false, code: "runner-live", message: "runner is live — pause or abort first, then resolve-effect" };
+
+  // `as`: assigned inside the appendIf callback, which TS's narrowing cannot see
+  let result = { ok: false, code: "no-ambiguous-effect", message: `nothing is ambiguous in run ${run}` } as EffectResult;
+  new EventLog(path).appendIf((events) => {
+    const d = decideEffect(events, run, effect, verdict, opts);
+    result = d.result;
+    return d.event;
   });
   return result;
 }

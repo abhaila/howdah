@@ -495,6 +495,10 @@ function RunThread({
               <Button onClick={onReviewDesign}>Review the design</Button>
             </div>
           </div>
+        ) : ask.code === "ambiguous-effect" ? (
+          // HOW-3: an ambiguous effect is answered by attesting to it, not by a reply (which
+          // resolveReply refuses) — so the card offers the verdicts instead of a textarea
+          <EffectCard key={`${ask.node}@${ask.visit}#${ask.seq}`} runId={runId} ask={ask} effects={detail.ambiguous_effects} onResolved={onResolved} />
         ) : <AskCard key={`${ask.node}@${ask.visit}#${ask.seq}`} runId={runId} ask={ask} detail={detail} onResolved={onResolved} />)}
         {!ask && detail.summary.status === "done" && <div className="operator-row">run complete</div>}
       </div>
@@ -749,6 +753,93 @@ function AskCard({ runId, ask, detail, onResolved }: { runId: string; ask: NonNu
         {state === "failed" && <span className="send-state">failed — <a onClick={send} style={{ cursor: "pointer", textDecoration: "underline" }}>retry</a></span>}
       </div>
       {state === "refused" && refusal && <div className="send-state" role="alert">{refusal}</div>}
+    </div>
+  );
+}
+
+/**
+ * HOW-3: the viewer half of `howdah resolve-effect`. A run parks on `ambiguous-effect` when
+ * an effect was claimed but never proven done and the resume probe could not decide — the
+ * human is the only source of truth about the outside world ("yes, the PR was published").
+ * Each verdict is spelled out with its consequence, because the two are not symmetric: one
+ * skips the step forever, the other runs it again.
+ *
+ * A 409 names what to do instead (a live runner, an effect already resolved the other way)
+ * and is shown VERBATIM, never collapsed into a generic failure — the same rule as AskCard.
+ */
+export function EffectCard({
+  runId,
+  ask,
+  effects,
+  onResolved,
+}: {
+  runId: string;
+  ask: NonNullable<RunDetail["ask"]>;
+  effects: RunDetail["ambiguous_effects"];
+  onResolved: () => void;
+}) {
+  const [state, setState] = useState<"idle" | "sending" | "recorded" | "failed">("idle");
+  const [refusal, setRefusal] = useState<string | null>(null);
+
+  const resolve = useCallback(
+    async (effect: { node: string; effect: string }, verdict: "happened" | "not-happened") => {
+      setState("sending");
+      setRefusal(null);
+      try {
+        const r = await fetch(`/api/runs/${runId}/effects`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ effect: effect.effect, verdict, node: effect.node }),
+        });
+        if (r.status === 409) {
+          const body = (await r.json().catch(() => ({}))) as { error?: string };
+          setRefusal(body.error ?? "This effect can't be resolved.");
+          setState("idle");
+          return;
+        }
+        if (!r.ok) throw new Error(await r.text());
+        setState("recorded");
+        setTimeout(onResolved, 420);
+      } catch {
+        setState("failed");
+      }
+    },
+    [runId, onResolved],
+  );
+
+  const busy = state === "sending" || state === "recorded";
+  return (
+    <div className={`ask-card ${state === "recorded" ? "collapsing" : ""}`} id="needs-input">
+      <h3>Needs you — {ask.node}@{ask.visit}</h3>
+      <div>{ask.reason}</div>
+      <div className="field-hint">
+        The step was interrupted after it started this work, and nothing proved whether it finished. Only you can say.
+      </div>
+      {effects.length === 0 ? (
+        <div className="send-state">Recorded — waiting for the run to resume.</div>
+      ) : (
+        effects.map((e) => (
+          <div key={`${e.node}\u0000${e.effect}`} className="effect-row">
+            <div>
+              <code>{e.effect}</code> · {e.node}@{e.visit}
+            </div>
+            <div className="actions">
+              <Button onClick={() => resolve(e, "happened")} disabled={busy}>
+                It happened
+              </Button>
+              <Button onClick={() => resolve(e, "not-happened")} disabled={busy}>
+                It didn't happen
+              </Button>
+            </div>
+            <div className="field-hint">
+              “It happened” skips this step's effect for good. “It didn't happen” runs it again on the retry.
+            </div>
+          </div>
+        ))
+      )}
+      {state === "recorded" && <div className="send-state">Recorded — resuming…</div>}
+      {state === "failed" && <div className="send-state" role="alert">failed — try again</div>}
+      {refusal && <div className="send-state" role="alert">{refusal}</div>}
     </div>
   );
 }
