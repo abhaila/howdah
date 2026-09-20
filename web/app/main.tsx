@@ -799,6 +799,118 @@ function RunSteps({ timeline, ask, selected, now, onSelect, mapping }: {
 }
 
 /**
+ * The Steps split. The detail panel was a fixed 420px, which the approval card outgrew: a ghost
+ * set is the densest thing this viewer renders, and reviewing one in a 420px gutter is the
+ * difference between reading a design and squinting at it. Two affordances, because they answer
+ * different needs: DRAG when you want both halves at once, FULL when the design is all you care
+ * about (the list is one keystroke away again, and the panel header still names the step).
+ *
+ * The width is an operator preference, so it lives in localStorage and nowhere else — losing it
+ * is harmless, it never needs to reach another viewer, and it is emphatically not a fact about
+ * the run (the log is the only storage). Every access is wrapped: a private window or blocked
+ * site data throws here, and a viewer that cannot remember a width must still render one.
+ */
+const DETAIL_MIN = 320;
+const DETAIL_DEFAULT = 420;
+const LIST_MIN = 240; // the waterfall stops being readable below this, so the drag stops here
+const DETAIL_WIDTH_KEY = "howdah.detail-width";
+
+export function readDetailWidth(): number {
+  try {
+    const raw = localStorage.getItem(DETAIL_WIDTH_KEY);
+    const n = raw === null ? NaN : Number(raw);
+    return Number.isFinite(n) && n >= DETAIL_MIN ? n : DETAIL_DEFAULT;
+  } catch {
+    return DETAIL_DEFAULT;
+  }
+}
+
+/** Exported for component tests (web/app/split.test.tsx). */
+export function StepsSplit({ list, detail }: { list: React.ReactNode; detail: React.ReactNode }) {
+  const [width, setWidth] = useState(readDetailWidth);
+  const [full, setFull] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
+
+  // clamped against the LIVE container: the same drag at 1440 and at 1024 must both leave a
+  // readable list, and a width remembered from a wide window must not strand a narrow one
+  const clamp = useCallback((w: number) => {
+    const total = box.current?.clientWidth ?? 0;
+    const max = total > 0 ? Math.max(DETAIL_MIN, total - LIST_MIN) : Number.POSITIVE_INFINITY;
+    return Math.round(Math.max(DETAIL_MIN, Math.min(w, max)));
+  }, []);
+
+  const commit = useCallback((w: number) => {
+    const next = clamp(w);
+    setWidth(next);
+    try {
+      localStorage.setItem(DETAIL_WIDTH_KEY, String(next));
+    } catch {
+      /* unremembered is fine; unrendered is not */
+    }
+  }, [clamp]);
+
+  // width measured from the container's RIGHT edge, so the number IS the panel's width
+  const widthAt = (clientX: number) => (box.current?.getBoundingClientRect().right ?? clientX) - clientX;
+
+  const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (full || e.button !== 0) return;
+    e.preventDefault(); // or the pointer drag selects the step list's text instead
+    const el = e.currentTarget;
+    el.setPointerCapture(e.pointerId);
+    const move = (ev: PointerEvent) => setWidth(clamp(widthAt(ev.clientX)));
+    const up = (ev: PointerEvent) => {
+      el.releasePointerCapture(ev.pointerId);
+      el.removeEventListener("pointermove", move);
+      el.removeEventListener("pointerup", up);
+      el.removeEventListener("pointercancel", up); // a cancelled drag still commits what it drew
+      commit(widthAt(ev.clientX));
+    };
+    el.addEventListener("pointermove", move);
+    el.addEventListener("pointerup", up);
+    el.addEventListener("pointercancel", up);
+  };
+
+  // a separator that only a mouse can move is not usable; arrows nudge, Home/End slam it open
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    const step = e.shiftKey ? 96 : 24;
+    const by = e.key === "ArrowLeft" ? step : e.key === "ArrowRight" ? -step : 0;
+    if (by !== 0) { e.preventDefault(); commit(width + by); }
+    else if (e.key === "Home") { e.preventDefault(); commit(Number.POSITIVE_INFINITY); }
+    else if (e.key === "End") { e.preventDefault(); commit(DETAIL_MIN); }
+  };
+
+  return (
+    <div className="steps-split" ref={box} data-detail={full ? "full" : "split"} style={{ ["--sd-w" as string]: `${width}px` }}>
+      {!full && list}
+      <div
+        className="sd-resize"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="resize the detail panel"
+        aria-valuenow={full ? 0 : width}
+        aria-valuemin={DETAIL_MIN}
+        tabIndex={full ? -1 : 0}
+        onPointerDown={onPointerDown}
+        onDoubleClick={() => commit(DETAIL_DEFAULT)}
+        onKeyDown={onKeyDown}
+      >
+        <button
+          className="sd-full"
+          aria-pressed={full}
+          aria-label={full ? "restore the step list" : "expand the detail panel to full width"}
+          title={full ? "restore the step list" : "full width"}
+          onPointerDown={(e) => e.stopPropagation()} /* the button is a click, never a drag */
+          onClick={() => setFull(!full)}
+        >
+          {full ? <X size={11} /> : <ArrowUp size={11} style={{ transform: "rotate(-90deg)" }} />}
+        </button>
+      </div>
+      {detail}
+    </div>
+  );
+}
+
+/**
  * Step detail (T24, story 5) — Inngest's right-hand panel. The ask lives HERE rather than
  * floating in the thread, and the Run toggle keeps the run-level facts one click away.
  */
@@ -1342,10 +1454,10 @@ function RunView({ id }: { id: string }) {
           </div>
         )}
         {tab === "steps" ? (
-          <div className="steps-split">
-            <RunSteps timeline={detail.timeline} ask={ask} selected={selectedKey} now={now} onSelect={setPicked} mapping={detail.slice?.mapping} />
-            <StepDetail runId={id} row={selectedRow} detail={detail} ask={ask} now={now} onResolved={reload} />
-          </div>
+          <StepsSplit
+            list={<RunSteps timeline={detail.timeline} ask={ask} selected={selectedKey} now={now} onSelect={setPicked} mapping={detail.slice?.mapping} />}
+            detail={<StepDetail runId={id} row={selectedRow} detail={detail} ask={ask} now={now} onResolved={reload} />}
+          />
         ) : tab === "context" ? (
           <RunContext entries={detail.context} />
         ) : tab === "chat" ? (

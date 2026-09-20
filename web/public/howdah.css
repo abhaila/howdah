@@ -524,9 +524,45 @@ button.primary:disabled { opacity: 0.5; cursor: default; }
 .step-row:focus-visible { outline-offset: -2px; }
 
 .step-detail {
-  width: 420px; flex-shrink: 0; border-left: 1px solid var(--border);
+  width: var(--sd-w, 420px); flex-shrink: 0; border-left: 1px solid var(--border);
   display: flex; flex-direction: column; overflow: hidden;
 }
+/* Full width: the list stands down entirely rather than shrinking to a stub — a 120px
+   waterfall reads as a rendering bug, and the panel header still names the step. */
+.steps-split[data-detail="full"] .step-detail { width: auto; flex: 1 1 auto; border-left: 0; }
+
+/* The divider is a 9px hit target around a 1px line: comfortable to grab, invisible until
+   wanted. Shape before colour — it thickens on hover/focus, it does not light up. */
+.sd-resize {
+  position: relative; flex: 0 0 9px; cursor: col-resize; touch-action: none;
+  background: transparent;
+}
+.sd-resize::before {
+  content: ""; position: absolute; inset: 0 4px; background: var(--border);
+  transition: background var(--motion-fast, 120ms) ease, inset var(--motion-fast, 120ms) ease;
+}
+.sd-resize:hover::before, .sd-resize:focus-visible::before { inset: 0 3px; background: var(--border-strong); }
+.sd-resize:focus-visible { outline: none; }
+/* Full width keeps the divider as a real LANE rather than collapsing it to zero. A zero-width
+   anchor put the restore control on top of the panel's own scope tabs — an overlay that ate the
+   "S" of "Step". The lane is the width of the control plus its margins, so nothing can overlap
+   by construction, and the empty column reads as where the step list went. */
+.steps-split[data-detail="full"] .sd-resize { flex-basis: 33px; cursor: default; }
+.steps-split[data-detail="full"] .sd-resize::before { display: none; }
+
+.sd-full {
+  position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
+  display: flex; align-items: center; justify-content: center;
+  width: 17px; height: 17px; padding: 0; cursor: pointer;
+  border: 1px solid var(--border); border-radius: 4px;
+  background: var(--bg); color: var(--fg-faint);
+  opacity: 0; transition: opacity var(--motion-fast, 120ms) ease;
+}
+/* revealed on approach, but never hidden from the keyboard */
+.steps-split:hover .sd-full, .sd-full:focus-visible, .sd-resize:focus-visible .sd-full { opacity: 1; }
+/* In full width the control owns the lane: centred in it, always visible, over nothing. */
+.steps-split[data-detail="full"] .sd-full { opacity: 1; }
+.sd-full:hover { color: var(--fg); border-color: var(--border-strong); }
 .sd-scope { display: flex; gap: 6px; padding: 12px 16px; border-bottom: 1px solid var(--border); }
 .sd-head { display: flex; align-items: center; gap: 8px; padding: 13px 16px 0; }
 .sd-node { font-size: 13px; color: var(--fg); }
