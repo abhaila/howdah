@@ -18,6 +18,7 @@
  */
 import type { PromptId } from "../core/prompt-ids";
 import type { Harness } from "../core/graph";
+import type { DriftItem, DriftOutcome } from "../map/drift";
 
 /** fields the writer stamps on every event */
 export interface Stamped {
@@ -30,6 +31,42 @@ export type RunOutcome = "success" | "failed" | "aborted";
 export type ChunkKind = "text" | "thinking" | "tool_call" | "tool_result";
 
 export type AllowanceState = "ok" | "exhausted" | "unreachable" | "unavailable";
+
+/**
+ * system-map 0.2 — why a run parked. Each code has exactly one reply rule
+ * (engine/control.ts REPLY_RULES). The last three are raised by slice 1's approval flow;
+ * they are defined now so their refusal text exists before the first event carries them.
+ */
+export type ParkCode =
+  | "attempt-failed"
+  | "executor-threw"
+  | "max-visits"
+  | "no-edge"
+  | "max-steps"
+  | "ambiguous-effect"
+  | "awaiting-approval"
+  | "approval-missing"
+  | "stale-base";
+
+export type ResolutionSource = "operator" | "resume";
+
+/**
+ * system-map 1a (D18): the worktree identity a proposal was drawn against. Computed by
+ * engine/reconcile.ts fingerprint(); defined here because events carry it.
+ *   head       HEAD commit (null: no commit yet)
+ *   tracked    hash of `git status --porcelain` (tracked only) + worktree diff + staged diff
+ *   untracked  hash of the untracked, non-ignored files' NAMES AND CONTENTS
+ */
+export interface Fingerprint {
+  head: string | null;
+  tracked: string;
+  untracked: string;
+}
+
+/** Who resolved an ask. Legacy events carry no source: resume() always wrote reply "resume". */
+export function resolutionSource(e: { reply?: string; source?: ResolutionSource }): ResolutionSource {
+  return e.source ?? (e.reply === "resume" ? "resume" : "operator");
+}
 
 /** everything the engine and adapters may append — the closed union the viewer renders */
 export type RunEvent =
@@ -44,6 +81,11 @@ export type RunEvent =
       overrides?: { harness?: Harness; model?: string; effort?: string; permissionMode?: string; maxTurns?: number; skills?: string[] };
       /** prompt versions pinned at start (OV-2) — revisions apply to new runs only */
       pinned_prompts: Partial<Record<PromptId, number>>;
+      /**
+       * system-map 1c review: per pinned prompt that `{{> id }}`-includes others, the version of
+       * every prompt it included (transitively) — the pinned text is the expansion of all of them
+       */
+      pinned_includes?: Record<string, Record<string, number>>;
     }
   | { type: "node-started"; node: string; visit: number; attempt_id: string }
   | {
@@ -52,7 +94,7 @@ export type RunEvent =
       visit: number;
       prompt: PromptId;
       prompt_version: number;
-      /** hash of the fully rendered text — the join key for prompt-outcome */
+      /** hash of the full prompt as sent (suffixes included since system-map 0.1) — the join key for prompt-outcome */
       rendered_hash: string;
       /** exactly the context the template read, at render time (A5.1) */
       context_read: Record<string, unknown>;
@@ -60,6 +102,21 @@ export type RunEvent =
       harness?: Harness;
       model?: string;
       effort?: string;
+      /**
+       * system-map 0.1 — the suffix inputs, so reconstruction can rebuild the prompt AS SENT.
+       * Absent on pre-0.1 events, whose hash covered the template (+ jump suffix) only.
+       * `skills` is what the hint actually named (codex: always []).
+       */
+      skills?: string[];
+      /** the node's declared write keys, in order — the outputs contract's input */
+      output_keys?: string[];
+      /** which core/template.ts suffix builders produced the skill hint + outputs contract */
+      suffix_version?: number;
+      /**
+       * system-map 1c review: the prompts this one `{{> id }}`-included, with their pinned
+       * versions — prompt_version alone does not identify the text when an included prompt moved
+       */
+      includes?: Record<string, number>;
     }
   | {
       type: "chunk";
@@ -101,6 +158,12 @@ export type RunEvent =
       status: "succeeded" | "failed";
       /** the values written, keyed by context key — replay rebuilds context from these */
       writes: Record<string, unknown>;
+      /**
+       * system-map 1c: a failed attempt whose proposal the graph's validateProposal refused —
+       * the refusal text. Replay carries it to the node's next attempt, which renders it
+       * (core/template.ts refusalInstruction, suffix v3); reconstruction rebuilds it from here.
+       */
+      refused?: string;
     }
   | {
       /** written BEFORE a side-effecting step (OV-1) — intent without a matching done
@@ -138,9 +201,40 @@ export type RunEvent =
       type: "operator-jump";
       to: string;
       message?: string;
+      /**
+       * system-map 0.3: the operator took responsibility for the run, so every node's
+       * maxVisits budget restarts from its visit count at this event (a floor — visit
+       * NUMBERS never reset, they are attempt identity). Absent on legacy events, which
+       * replay with no floors.
+       */
+      reset_budgets?: boolean;
     }
-  | { type: "attention-raised"; node: string; visit: number; reason: string; ask?: unknown }
-  | { type: "attention-resolved"; node: string; visit: number; reply?: string }
+  | {
+      type: "attention-raised";
+      node: string;
+      visit: number;
+      /** human-readable; kept as free text so the thread reads the same as before 0.2 */
+      reason: string;
+      /**
+       * system-map 0.2: WHY the run parked, machine-readable — it decides what a reply may
+       * do (engine/control.ts resolveReply). Absent on legacy events and on mid-node
+       * harness permission asks, which keep their live reply path (executors/reply.ts).
+       */
+      code?: ParkCode;
+      ask?: unknown;
+    }
+  | {
+      type: "attention-resolved";
+      node: string;
+      visit: number;
+      reply?: string;
+      /**
+       * system-map 0.2: who resolved it. Only an `operator` reply can reach a prompt;
+       * resume()'s own resolution is bookkeeping. Absent on legacy events — read those
+       * through resolutionSource(), which treats `reply: "resume"` as resume.
+       */
+      source?: ResolutionSource;
+    }
   | {
       type: "allowance";
       harness: Harness;
@@ -150,6 +244,116 @@ export type RunEvent =
       resets_at?: string;
       /** raw payload (claude rate_limit_event / codex account/rateLimits/updated) */
       raw?: unknown;
+    }
+  /*
+   * system-map 1a — proposal rounds and the decisions on them (engine/slice-decision.ts is
+   * the only reader that answers "what is the current proposal, and what was decided?").
+   */
+  | {
+      /**
+       * A proposal ROUND opened: `node` wrote `approval`'s proposal key and the graph's
+       * validateProposal accepted it. `proposal_id` is this event's own seq, so an identical
+       * redraw is a new, decidable round. Named for 1c's ghosts; 1a treats `proposal` as opaque.
+       */
+      type: "ghost-proposed";
+      node: string;
+      /** the approval node that decides this round */
+      approval: string;
+      proposal_id: number;
+      proposal_hash: string;
+      /** the base snapshot's manifest_hash when the round opened — decisions bind to it */
+      manifest_hash: string | null;
+      /** the live worktree fingerprint when the round opened: tells "changed during the proposer" from "changed since" */
+      fingerprint: Fingerprint | null;
+      proposal: unknown;
+    }
+  | {
+      /** an operator comment pinned to an entity of the CURRENT round; sent with its feedback */
+      type: "comment-pinned";
+      id: string;
+      entity_id: string;
+      proposal_id: number;
+      text: string;
+    }
+  | {
+      type: "slice-feedback-sent";
+      proposal_id: number;
+      proposal_hash: string;
+      manifest_hash: string | null;
+      /** the round's comment-pinned ids, in pin order */
+      comment_ids: string[];
+    }
+  | { type: "slice-approved"; proposal_id: number; proposal_hash: string; manifest_hash: string | null }
+  | {
+      /**
+       * `redesign <run> <msg>`: written in ONE append with its operator-jump (reset_budgets)
+       * to `approval`'s redesignTo. Consumed when that redesignTo node next succeeds (it
+       * seeds the approval's feedback key), which is how the message reaches the proposer once.
+       */
+      type: "slice-redesign-requested";
+      /** the approval node whose proposer this message is for */
+      approval: string;
+      message: string;
+    }
+  /*
+   * system-map 1c — the map built-ins (engine/executors/map.ts). The manifests themselves live
+   * in runs/<id>/maps/<manifest_hash>.json and the objects in the content-addressed store;
+   * these events carry only bounded summaries, so the log stays small.
+   */
+  | {
+      /** a snapshot was extracted (map:extract / map:reextract) and its manifest written */
+      type: "map-extracted";
+      node: string;
+      visit: number;
+      manifest_hash: string;
+      /** the commit the snapshot's tracked files came from (HEAD; the worktree diff is on top) */
+      commit: string | null;
+      /** the worktree had uncommitted or untracked source changes: the snapshot is commit + those changes */
+      dirty: boolean;
+      /** the object store the snapshot's objects were written to — loaders assemble from it */
+      store: string;
+      /** the worktree fingerprint the snapshot was extracted at (D18) */
+      fingerprint: Fingerprint;
+      /** which extraction layers ran (SM-D4) — slice 1 runs tree-sitter only: ["syntactic"] */
+      tiers_run: string[];
+      /** counts, not lists: the manifest names each file and region */
+      unparsed: number;
+      skipped: number;
+      not_checked: number;
+      files: number;
+    }
+  | {
+      /** extraction progress, throttled — the viewer shows movement on a cold parse */
+      type: "map-progress";
+      node: string;
+      visit: number;
+      done: number;
+      total: number;
+      skipped: number;
+    }
+  | {
+      /**
+       * map:drift compared the approved ghosts with base vs after (D19). `commit` is the after
+       * snapshot's commit — what every `verified` refers to (D21). Items are capped (worst
+       * outcome first); `counts` covers every item.
+       */
+      type: "drift-detected";
+      node: string;
+      visit: number;
+      commit: string | null;
+      /** "<sha>" or "<sha> + uncommitted changes" — a dirty after snapshot reports nothing verified */
+      stamp: string;
+      dirty: boolean;
+      base_commit: string | null;
+      manifest_hash: string;
+      base_manifest_hash: string;
+      counts: Record<DriftOutcome, number>;
+      items: DriftItem[];
+      truncated: number;
+      /** the recorded base came from another extractor version and was re-extracted at its commit (base_manifest_hash is the new one) */
+      base_reextracted?: boolean;
+      /** base and after still come from different extractors (re-extraction impossible): every ghost item is not-checked */
+      extractor_mismatch?: { base: string; after: string };
     }
   | { type: "run-finished"; outcome: RunOutcome };
 

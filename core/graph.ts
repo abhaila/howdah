@@ -13,6 +13,7 @@
  *   command    runs a script/probe; declares the facts it emits
  *   worktree   create/remove an isolated checkout; emits facts (e.g. worktree.clean)
  *   wait       parks the run for a duration; writes nothing
+ *   approval   a human decision on a proposal (system-map 1a) — see ApprovalNodeDef
  *   terminal   ends the run with an outcome
  *
  * Routing: edges carry an optional typed condition + weight. Highest-weight passing
@@ -89,6 +90,39 @@ export interface OutputSpec {
 
 type Keys<C> = keyof C & string;
 
+/**
+ * system-map 1a (D3/2A, D6/5A, D15, D22) — a human gate on an agent's proposal.
+ *
+ *   proposal    the context key a proposer node writes; every successful write of it opens a
+ *               new proposal ROUND (`ghost-proposed`, engine/run.ts) that a decision binds to
+ *   base        the context key holding the snapshot the proposal was drawn against:
+ *               { manifest_hash, fingerprint, commit } (engine/slice-decision.ts BaseSnapshot)
+ *   decision    written every time the node finishes, scope `per-visit`:
+ *               { outcome: "approved" | "feedback" | "stale", proposal_id, proposal_hash, manifest_hash }
+ *   feedback    written every time the node finishes, scope `sticky`: the comments sent
+ *               ([] on approve and on stale) — what the proposer reads for its redraw
+ *   redesignTo  where `redesign <run> <msg>` jumps (budgets reset). On that node the
+ *               `feedback` key is ENGINE-OWNED: the graph adds the write (Graph.writesOf) and
+ *               the engine seeds it when the node succeeds (engine/run.ts
+ *               seedRedesignFeedback). The node must NOT declare it itself — its executor
+ *               never sees the key, so no outputs contract asks an agent for it and no
+ *               command's facts check demands it.
+ *
+ * The node never finishes while it waits: its executor returns `awaiting` and the run parks
+ * (`awaiting-approval`) until a decision event lands, so waiting never consumes a visit.
+ * Scopes are fixed by the kind — nodeWrites() derives them — so a graph cannot declare a
+ * decision that survives re-entry.
+ */
+export interface ApprovalNodeDef<C extends object> {
+  kind: "approval";
+  proposal: Keys<C>;
+  base: Keys<C>;
+  decision: Keys<C>;
+  feedback: Keys<C>;
+  redesignTo: string;
+  class?: string;
+}
+
 export type NodeDef<C extends object> =
   | ({
       kind: "agent";
@@ -97,6 +131,20 @@ export type NodeDef<C extends object> =
       writes?: Partial<Record<Keys<C>, OutputSpec>>;
       maxVisits?: number;
       class?: string;
+      /**
+       * system-map 1a (D3/2A): a pre-start gate — the node starts only while the named
+       * approval node's CURRENT proposal is approved, and (first attempt after that approval)
+       * the live worktree still matches the approved base. Checked before node-started, so a
+       * refusal consumes no visit. It exists because `jump` can move a stopped run straight
+       * past the approval node.
+       */
+      requires?: { approvalOf: string };
+      /**
+       * system-map 1a (D6/5A): a HARD constraint, not a default — the resolved permission
+       * mode is always "plan", whatever a run override, UI tuning or graph default says. A
+       * proposer that wrote files would move the fingerprint and invalidate its own proposal.
+       */
+      readOnly?: true;
     } & AgentConfig)
   | {
       kind: "command";
@@ -115,7 +163,24 @@ export type NodeDef<C extends object> =
       class?: string;
     }
   | { kind: "wait"; duration: string; class?: string }
+  | ApprovalNodeDef<C>
   | { kind: "terminal"; outcome: "success" | "failed" | "aborted"; label?: string };
+
+/** The context keys a node reads — the one answer the validator, engine and jump precheck share. */
+export function nodeReads(node: NodeDef<any>): string[] {
+  if (node.kind === "approval") return [node.proposal, node.base];
+  return "reads" in node && node.reads ? [...node.reads] : [];
+}
+
+/** The context keys a node writes, with scopes. Approval scopes are fixed by the kind. */
+export function nodeWrites(node: NodeDef<any>): Record<string, OutputSpec> {
+  if (node.kind === "approval")
+    return {
+      [node.decision]: { scope: "per-visit", description: "the operator's decision on the current proposal round" },
+      [node.feedback]: { scope: "sticky", description: "comments sent with the decision ([] on approve / stale)" },
+    };
+  return "writes" in node && node.writes ? ({ ...node.writes } as Record<string, OutputSpec>) : {};
+}
 
 export interface Condition<C extends object, K extends Keys<C> = Keys<C>> {
   /** the keys the test consumes — validated against out(from), and all the test may see */
@@ -143,6 +208,26 @@ export interface GraphDef<C extends object> {
   inputs: Keys<C>[];
   nodes: Record<string, NodeDef<C>>;
   edges: EdgeDef<C>[];
+  /**
+   * system-map 1a (hook for 1c's GhostSet validator): checks a proposal before it becomes a
+   * round. Called with the value a node wrote to an approval node's `proposal` key; a
+   * non-null result is the reason the write is refused — the proposer's attempt fails and
+   * the run parks `attempt-failed` with that message, so the agent can be told what to fix.
+   *
+   * system-map 1c: `run` says WHICH run the proposal belongs to, because a real validator
+   * (graphs/implement-slice.ts: GhostSet ids against the base snapshot) must load that run's
+   * base — `dir` is the run directory (manifests live in <dir>/maps/), `base` is the value of
+   * the approval node's `base` key at the proposer's exit (undefined if unreadable) and `cwd`
+   * is where the run works (its worktree once one exists).
+   */
+  validateProposal?: (proposal: unknown, approvalNode: string, run: ProposalRun) => string | null;
+}
+
+/** Which run a proposal is validated for (GraphDef.validateProposal). */
+export interface ProposalRun {
+  dir: string;
+  base: unknown;
+  cwd: string | undefined;
 }
 
 export class GraphError extends Error {}
@@ -150,13 +235,25 @@ export class GraphError extends Error {}
 export class Graph<C extends object> {
   constructor(readonly def: GraphDef<C>) {}
 
+  /**
+   * Everything a node publishes: its own declared writes (nodeWrites) plus the ENGINE-OWNED
+   * writes the graph adds — an approval node's feedback key on its redesignTo node. The
+   * executor-facing declaration (`def.writes`) stays the node's own.
+   */
+  writesOf(nodeId: string): Record<string, OutputSpec> {
+    const node = this.def.nodes[nodeId];
+    const out = node ? nodeWrites(node) : {};
+    for (const [, approval] of this.approvalNodes())
+      if (approval.redesignTo === nodeId)
+        out[approval.feedback] = { scope: "sticky", description: "engine-owned: unconsumed redesign messages (system-map D22)" };
+    return out;
+  }
+
   /** writers per key, derived from node declarations — feeds ContextStore's constructor. */
   declarations(): Record<string, { scope: Scope; writer: string[] }> {
     const out: Record<string, { scope: Scope; writer: string[] }> = {};
-    for (const [id, node] of Object.entries(this.def.nodes)) {
-      const writes = "writes" in node ? node.writes : undefined;
-      if (!writes) continue;
-      for (const [key, spec] of Object.entries(writes) as [string, OutputSpec][]) {
+    for (const id of Object.keys(this.def.nodes)) {
+      for (const [key, spec] of Object.entries(this.writesOf(id))) {
         const existing = out[key];
         if (existing) {
           // multi-writer is legal; conflicting scopes are not
@@ -178,10 +275,7 @@ export class Graph<C extends object> {
   toShape(): GraphShape {
     const nodes: GraphShape["nodes"] = {};
     for (const [id, n] of Object.entries(this.def.nodes)) {
-      nodes[id] = {
-        reads: "reads" in n && n.reads ? [...n.reads] : [],
-        writes: "writes" in n && n.writes ? Object.keys(n.writes) : [],
-      };
+      nodes[id] = { reads: nodeReads(n), writes: Object.keys(this.writesOf(id)) };
     }
     return {
       entry: this.def.entry,
@@ -199,6 +293,9 @@ export class Graph<C extends object> {
    *   4. at most one unconditional fallback edge per node (ambiguity)
    *   5. conflicting scope declarations (declarations() throws)
    *   6. every read has a writer on every path — incl. edge-condition reads (validateGraph)
+   *   7. approval wiring (system-map 1a): distinct decision/feedback keys, a real
+   *      redesignTo that does not itself declare the (engine-owned) feedback key, one
+   *      approval per proposal key, and every `requires.approvalOf` names an approval node
    */
   validate(): { structural: string[]; paths: Violation[] } {
     const structural: string[] = [];
@@ -219,10 +316,45 @@ export class Graph<C extends object> {
       if (fallback.length > 1) structural.push(`node "${id}" has ${fallback.length} unconditional edges (ambiguous fallback)`);
     }
 
+    structural.push(...this.approvalProblems());
+
     this.declarations(); // throws GraphError on scope conflicts
 
     const paths = validateGraph(this.toShape());
     return { structural, paths };
+  }
+
+  private approvalProblems(): string[] {
+    const problems: string[] = [];
+    const nodes = this.def.nodes;
+    const byProposal = new Map<string, string>();
+    for (const [id, node] of Object.entries(nodes)) {
+      if (node.kind === "approval") {
+        if (node.decision === node.feedback)
+          problems.push(`approval node "${id}" uses "${node.decision}" as both its decision and feedback key`);
+        const other = byProposal.get(node.proposal);
+        if (other) problems.push(`approval nodes "${other}" and "${id}" both decide proposal key "${node.proposal}"`);
+        byProposal.set(node.proposal, id);
+        const target = nodes[node.redesignTo];
+        if (!target) problems.push(`approval node "${id}" redesigns to unknown node "${node.redesignTo}"`);
+        else if (target.kind === "terminal") problems.push(`approval node "${id}" redesigns to terminal node "${node.redesignTo}"`);
+        else if (node.feedback in nodeWrites(target))
+          problems.push(
+            `node "${node.redesignTo}" declares "${node.feedback}", which is engine-owned there (approval "${id}" redesigns to it) — remove it from its writes`,
+          );
+      }
+      if (node.kind === "agent" && node.requires) {
+        const gate = nodes[node.requires.approvalOf];
+        if (!gate || gate.kind !== "approval")
+          problems.push(`node "${id}" requires approval of "${node.requires.approvalOf}", which is not an approval node`);
+      }
+    }
+    return problems;
+  }
+
+  /** The approval nodes of this graph, by id. */
+  approvalNodes(): Array<[string, ApprovalNodeDef<any>]> {
+    return Object.entries(this.def.nodes).filter((e): e is [string, ApprovalNodeDef<any>] => e[1].kind === "approval");
   }
 
   validateOrThrow(): void {

@@ -1,0 +1,1735 @@
+{
+  "blocks": [
+    {
+      "key": ":api/com.example.api",
+      "family": "jvm",
+      "buildRoot": "",
+      "gradleProject": ":api",
+      "package": "com.example.api",
+      "files": [
+        "api/src/main/kotlin/com/example/api/App.kt",
+        "api/src/main/kotlin/com/example/api/Audit.kt",
+        "api/src/main/kotlin/com/example/api/Handlers.kt",
+        "api/src/main/kotlin/com/example/api/Main.kt",
+        "api/src/main/kotlin/com/example/api/Orders.kt"
+      ],
+      "tier": "syntactic",
+      "evidence": "api/src/main/kotlin/com/example/api/App.kt:1"
+    },
+    {
+      "key": ":shared:core/com.example.core",
+      "family": "jvm",
+      "buildRoot": "",
+      "gradleProject": ":shared:core",
+      "package": "com.example.core",
+      "files": [
+        "shared/core/src/main/java/com/example/core/Greeter.java"
+      ],
+      "tier": "syntactic",
+      "evidence": "shared/core/src/main/java/com/example/core/Greeter.java:1"
+    },
+    {
+      "key": "web",
+      "family": "ts",
+      "packageDir": "web",
+      "files": [
+        "web/src/Users.tsx",
+        "web/src/api.ts",
+        "web/src/config.ts",
+        "web/src/legacy.ts"
+      ],
+      "tier": "syntactic",
+      "evidence": "web/src/Users.tsx:1"
+    }
+  ],
+  "entities": [
+    {
+      "key": "DELETE /api/v1/orders/{*}",
+      "kind": "route",
+      "name": "DELETE /api/v1/orders/{orderId:\\d+}",
+      "block": ":api/com.example.api",
+      "file": "api/src/main/kotlin/com/example/api/App.kt",
+      "line": 19,
+      "endLine": 19,
+      "tier": "syntactic",
+      "evidence": "api/src/main/kotlin/com/example/api/App.kt:19",
+      "contentHash": "cfcae30a4e7c2b78",
+      "route": {
+        "method": "DELETE",
+        "template": "/api/v1/orders/{*}",
+        "path": "/api/v1/orders/{orderId:\\d+}",
+        "handler": "deleteOrder"
+      }
+    },
+    {
+      "key": "GET /api/users/{*}",
+      "kind": "route",
+      "name": "GET /api/users/{id}",
+      "block": ":api/com.example.api",
+      "file": "api/src/main/kotlin/com/example/api/App.kt",
+      "line": 16,
+      "endLine": 16,
+      "tier": "syntactic",
+      "evidence": "api/src/main/kotlin/com/example/api/App.kt:16",
+      "contentHash": "c27a7a1e3c6981fe",
+      "route": {
+        "method": "GET",
+        "template": "/api/users/{*}",
+        "path": "/api/users/{id}",
+        "handler": "getUser"
+      }
+    },
+    {
+      "key": "GET /health",
+      "kind": "route",
+      "name": "GET /health",
+      "block": ":api/com.example.api",
+      "file": "api/src/main/kotlin/com/example/api/App.kt",
+      "line": 14,
+      "endLine": 14,
+      "tier": "syntactic",
+      "evidence": "api/src/main/kotlin/com/example/api/App.kt:14",
+      "contentHash": "2964da012e012966",
+      "route": {
+        "method": "GET",
+        "template": "/health",
+        "path": "/health",
+        "handler": "health"
+      }
+    },
+    {
+      "key": "GET /shop/orders",
+      "kind": "route",
+      "name": "GET /shop/orders",
+      "block": ":api/com.example.api",
+      "file": "api/src/main/kotlin/com/example/api/Orders.kt",
+      "line": 13,
+      "endLine": 13,
+      "tier": "syntactic",
+      "evidence": "api/src/main/kotlin/com/example/api/Orders.kt:13",
+      "contentHash": "65a20ab0a953f5be",
+      "route": {
+        "method": "GET",
+        "template": "/shop/orders",
+        "path": "/shop/orders",
+        "handler": "listOrders"
+      }
+    },
+    {
+      "key": "POST /api/users",
+      "kind": "route",
+      "name": "POST /api/users",
+      "block": ":api/com.example.api",
+      "file": "api/src/main/kotlin/com/example/api/App.kt",
+      "line": 17,
+      "endLine": 17,
+      "tier": "syntactic",
+      "evidence": "api/src/main/kotlin/com/example/api/App.kt:17",
+      "contentHash": "cf258f5ca86f56d8",
+      "route": {
+        "method": "POST",
+        "template": "/api/users",
+        "path": "/api/users",
+        "handler": "createUser"
+      }
+    },
+    {
+      "key": "com.example.api.<ext String>.slugify()",
+      "kind": "function",
+      "name": "slugify",
+      "block": ":api/com.example.api",
+      "file": "api/src/main/kotlin/com/example/api/Handlers.kt",
+      "line": 33,
+      "endLine": 33,
+      "tier": "syntactic",
+      "evidence": "api/src/main/kotlin/com/example/api/Handlers.kt:33",
+      "contentHash": "3a38972599e7bcaa",
+      "function": {
+        "language": "kotlin",
+        "container": [],
+        "params": [],
+        "receiver": "String"
+      }
+    },
+    {
+      "key": "com.example.api.<top>.adminRoutes()",
+      "kind": "function",
+      "name": "adminRoutes",
+      "block": ":api/com.example.api",
+      "file": "api/src/main/kotlin/com/example/api/App.kt",
+      "line": 26,
+      "endLine": 28,
+      "tier": "syntactic",
+      "evidence": "api/src/main/kotlin/com/example/api/App.kt:26",
+      "contentHash": "f51c144e8c3a6006",
+      "function": {
+        "language": "kotlin",
+        "container": [],
+        "params": []
+      }
+    },
+    {
+      "key": "com.example.api.<top>.app(Greeter)",
+      "kind": "function",
+      "name": "app",
+      "block": ":api/com.example.api",
+      "file": "api/src/main/kotlin/com/example/api/App.kt",
+      "line": 13,
+      "endLine": 24,
+      "tier": "syntactic",
+      "evidence": "api/src/main/kotlin/com/example/api/App.kt:13",
+      "contentHash": "f73f8de9795a400f",
+      "function": {
+        "language": "kotlin",
+        "container": [],
+        "params": [
+          "Greeter"
+        ]
+      }
+    },
+    {
+      "key": "com.example.api.<top>.createUser(Request)",
+      "kind": "function",
+      "name": "createUser",
+      "block": ":api/com.example.api",
+      "file": "api/src/main/kotlin/com/example/api/App.kt",
+      "line": 40,
+      "endLine": 40,
+      "tier": "syntactic",
+      "evidence": "api/src/main/kotlin/com/example/api/App.kt:40",
+      "contentHash": "00a573f717e081e2",
+      "function": {
+        "language": "kotlin",
+        "container": [],
+        "params": [
+          "Request"
+        ]
+      }
+    },
+    {
+      "key": "com.example.api.<top>.crudPath(String)",
+      "kind": "function",
+      "name": "crudPath",
+      "block": ":api/com.example.api",
+      "file": "api/src/main/kotlin/com/example/api/App.kt",
+      "line": 30,
+      "endLine": 30,
+      "tier": "syntactic",
+      "evidence": "api/src/main/kotlin/com/example/api/App.kt:30",
+      "contentHash": "53b9ef32295fc54e",
+      "function": {
+        "language": "kotlin",
+        "container": [],
+        "params": [
+          "String"
+        ]
+      }
+    },
+    {
+      "key": "com.example.api.<top>.deleteOrder(Request)",
+      "kind": "function",
+      "name": "deleteOrder",
+      "block": ":api/com.example.api",
+      "file": "api/src/main/kotlin/com/example/api/App.kt",
+      "line": 42,
+      "endLine": 45,
+      "tier": "syntactic",
+      "evidence": "api/src/main/kotlin/com/example/api/App.kt:42",
+      "contentHash": "6f34fb79e8e50c69",
+      "function": {
+        "language": "kotlin",
+        "container": [],
+        "params": [
+          "Request"
+        ]
+      }
+    },
+    {
+      "key": "com.example.api.<top>.getUser(Request)",
+      "kind": "function",
+      "name": "getUser",
+      "block": ":api/com.example.api",
+      "file": "api/src/main/kotlin/com/example/api/App.kt",
+      "line": 34,
+      "endLine": 38,
+      "tier": "syntactic",
+      "evidence": "api/src/main/kotlin/com/example/api/App.kt:34",
+      "contentHash": "94cb52ec4d1bbd74",
+      "function": {
+        "language": "kotlin",
+        "container": [],
+        "params": [
+          "Request"
+        ]
+      }
+    },
+    {
+      "key": "com.example.api.<top>.health(Request)",
+      "kind": "function",
+      "name": "health",
+      "block": ":api/com.example.api",
+      "file": "api/src/main/kotlin/com/example/api/Handlers.kt",
+      "line": 35,
+      "endLine": 40,
+      "tier": "syntactic",
+      "evidence": "api/src/main/kotlin/com/example/api/Handlers.kt:35",
+      "contentHash": "04cd0ac663026dcb",
+      "function": {
+        "language": "kotlin",
+        "container": [],
+        "params": [
+          "Request"
+        ]
+      }
+    },
+    {
+      "key": "com.example.api.<top>.helper(Int)",
+      "kind": "function",
+      "name": "helper",
+      "block": ":api/com.example.api",
+      "file": "api/src/main/kotlin/com/example/api/App.kt",
+      "line": 32,
+      "endLine": 32,
+      "tier": "syntactic",
+      "evidence": "api/src/main/kotlin/com/example/api/App.kt:32",
+      "contentHash": "85c650607e8c948b",
+      "function": {
+        "language": "kotlin",
+        "container": [],
+        "params": [
+          "Int"
+        ]
+      },
+      "ambiguous": true
+    },
+    {
+      "key": "com.example.api.<top>.helper(Int)",
+      "kind": "function",
+      "name": "helper",
+      "block": ":api/com.example.api",
+      "file": "api/src/main/kotlin/com/example/api/Handlers.kt",
+      "line": 42,
+      "endLine": 42,
+      "tier": "syntactic",
+      "evidence": "api/src/main/kotlin/com/example/api/Handlers.kt:42",
+      "contentHash": "febb12378f83bd02",
+      "function": {
+        "language": "kotlin",
+        "container": [],
+        "params": [
+          "Int"
+        ]
+      },
+      "ambiguous": true
+    },
+    {
+      "key": "com.example.api.<top>.listOrders(Request)",
+      "kind": "function",
+      "name": "listOrders",
+      "block": ":api/com.example.api",
+      "file": "api/src/main/kotlin/com/example/api/Orders.kt",
+      "line": 16,
+      "endLine": 16,
+      "tier": "syntactic",
+      "evidence": "api/src/main/kotlin/com/example/api/Orders.kt:16",
+      "contentHash": "a446c35242873875",
+      "function": {
+        "language": "kotlin",
+        "container": [],
+        "params": [
+          "Request"
+        ]
+      }
+    },
+    {
+      "key": "com.example.api.<top>.main()",
+      "kind": "function",
+      "name": "main",
+      "block": ":api/com.example.api",
+      "file": "api/src/main/kotlin/com/example/api/Main.kt",
+      "line": 7,
+      "endLine": 9,
+      "tier": "syntactic",
+      "evidence": "api/src/main/kotlin/com/example/api/Main.kt:7",
+      "contentHash": "9528b2b6a9738c5d",
+      "function": {
+        "language": "kotlin",
+        "container": [],
+        "params": []
+      }
+    },
+    {
+      "key": "com.example.api.<top>.orderRoutes()",
+      "kind": "function",
+      "name": "orderRoutes",
+      "block": ":api/com.example.api",
+      "file": "api/src/main/kotlin/com/example/api/Orders.kt",
+      "line": 12,
+      "endLine": 14,
+      "tier": "syntactic",
+      "evidence": "api/src/main/kotlin/com/example/api/Orders.kt:12",
+      "contentHash": "80e71ca7f1ce2350",
+      "function": {
+        "language": "kotlin",
+        "container": [],
+        "params": []
+      }
+    },
+    {
+      "key": "com.example.api.Logger.info(String)",
+      "kind": "function",
+      "name": "info",
+      "block": ":api/com.example.api",
+      "file": "api/src/main/kotlin/com/example/api/Audit.kt",
+      "line": 4,
+      "endLine": 4,
+      "tier": "syntactic",
+      "evidence": "api/src/main/kotlin/com/example/api/Audit.kt:4",
+      "contentHash": "bed54fcbab510f1a",
+      "function": {
+        "language": "kotlin",
+        "container": [
+          "Logger"
+        ],
+        "params": [
+          "String"
+        ]
+      }
+    },
+    {
+      "key": "com.example.api.Registry.lookup(String)",
+      "kind": "function",
+      "name": "lookup",
+      "block": ":api/com.example.api",
+      "file": "api/src/main/kotlin/com/example/api/Handlers.kt",
+      "line": 30,
+      "endLine": 30,
+      "tier": "syntactic",
+      "evidence": "api/src/main/kotlin/com/example/api/Handlers.kt:30",
+      "contentHash": "01c07437c7d0ceb8",
+      "function": {
+        "language": "kotlin",
+        "container": [
+          "Registry"
+        ],
+        "params": [
+          "String"
+        ]
+      }
+    },
+    {
+      "key": "com.example.api.Renderer.Companion.create()",
+      "kind": "function",
+      "name": "create",
+      "block": ":api/com.example.api",
+      "file": "api/src/main/kotlin/com/example/api/Handlers.kt",
+      "line": 25,
+      "endLine": 25,
+      "tier": "syntactic",
+      "evidence": "api/src/main/kotlin/com/example/api/Handlers.kt:25",
+      "contentHash": "4b90eceab87d383f",
+      "function": {
+        "language": "kotlin",
+        "container": [
+          "Renderer",
+          "Companion"
+        ],
+        "params": []
+      }
+    },
+    {
+      "key": "com.example.api.Renderer.Inner.describe(Map<String,Int>)",
+      "kind": "function",
+      "name": "describe",
+      "block": ":api/com.example.api",
+      "file": "api/src/main/kotlin/com/example/api/Handlers.kt",
+      "line": 18,
+      "endLine": 21,
+      "tier": "syntactic",
+      "evidence": "api/src/main/kotlin/com/example/api/Handlers.kt:18",
+      "contentHash": "5c92b6c27774a23e",
+      "function": {
+        "language": "kotlin",
+        "container": [
+          "Renderer",
+          "Inner"
+        ],
+        "params": [
+          "Map<String,Int>"
+        ]
+      }
+    },
+    {
+      "key": "com.example.api.Renderer.page(List<T>,Int)",
+      "kind": "function",
+      "name": "page",
+      "block": ":api/com.example.api",
+      "file": "api/src/main/kotlin/com/example/api/Handlers.kt",
+      "line": 15,
+      "endLine": 15,
+      "tier": "syntactic",
+      "evidence": "api/src/main/kotlin/com/example/api/Handlers.kt:15",
+      "contentHash": "f35abefb6a7c8886",
+      "function": {
+        "language": "kotlin",
+        "container": [
+          "Renderer"
+        ],
+        "params": [
+          "List<T>",
+          "Int"
+        ]
+      }
+    },
+    {
+      "key": "com.example.api.Renderer.render(Order)",
+      "kind": "function",
+      "name": "render",
+      "block": ":api/com.example.api",
+      "file": "api/src/main/kotlin/com/example/api/Handlers.kt",
+      "line": 13,
+      "endLine": 13,
+      "tier": "syntactic",
+      "evidence": "api/src/main/kotlin/com/example/api/Handlers.kt:13",
+      "contentHash": "156a79c11bac47ce",
+      "function": {
+        "language": "kotlin",
+        "container": [
+          "Renderer"
+        ],
+        "params": [
+          "Order"
+        ]
+      }
+    },
+    {
+      "key": "com.example.api.Renderer.render(User)",
+      "kind": "function",
+      "name": "render",
+      "block": ":api/com.example.api",
+      "file": "api/src/main/kotlin/com/example/api/Handlers.kt",
+      "line": 11,
+      "endLine": 11,
+      "tier": "syntactic",
+      "evidence": "api/src/main/kotlin/com/example/api/Handlers.kt:11",
+      "contentHash": "9b68de6f2444ecfc",
+      "function": {
+        "language": "kotlin",
+        "container": [
+          "Renderer"
+        ],
+        "params": [
+          "User"
+        ]
+      }
+    },
+    {
+      "key": "com.example.core.Greeter.<init>(String)",
+      "kind": "function",
+      "name": "<init>",
+      "block": ":shared:core/com.example.core",
+      "file": "shared/core/src/main/java/com/example/core/Greeter.java",
+      "line": 9,
+      "endLine": 11,
+      "tier": "syntactic",
+      "evidence": "shared/core/src/main/java/com/example/core/Greeter.java:9",
+      "contentHash": "819e3041a3261ab9",
+      "function": {
+        "language": "java",
+        "container": [
+          "Greeter"
+        ],
+        "params": [
+          "String"
+        ]
+      }
+    },
+    {
+      "key": "com.example.core.Greeter.Nested.run(String...)",
+      "kind": "function",
+      "name": "run",
+      "block": ":shared:core/com.example.core",
+      "file": "shared/core/src/main/java/com/example/core/Greeter.java",
+      "line": 28,
+      "endLine": 31,
+      "tier": "syntactic",
+      "evidence": "shared/core/src/main/java/com/example/core/Greeter.java:28",
+      "contentHash": "748e35d2f3f6e473",
+      "function": {
+        "language": "java",
+        "container": [
+          "Greeter",
+          "Nested"
+        ],
+        "params": [
+          "String..."
+        ]
+      }
+    },
+    {
+      "key": "com.example.core.Greeter.format(int,int)",
+      "kind": "function",
+      "name": "format",
+      "block": ":shared:core/com.example.core",
+      "file": "shared/core/src/main/java/com/example/core/Greeter.java",
+      "line": 23,
+      "endLine": 25,
+      "tier": "syntactic",
+      "evidence": "shared/core/src/main/java/com/example/core/Greeter.java:23",
+      "contentHash": "83eb5ea38746f087",
+      "function": {
+        "language": "java",
+        "container": [
+          "Greeter"
+        ],
+        "params": [
+          "int",
+          "int"
+        ]
+      }
+    },
+    {
+      "key": "com.example.core.Greeter.greet(Map<String,List<Integer>>,int)",
+      "kind": "function",
+      "name": "greet",
+      "block": ":shared:core/com.example.core",
+      "file": "shared/core/src/main/java/com/example/core/Greeter.java",
+      "line": 18,
+      "endLine": 21,
+      "tier": "syntactic",
+      "evidence": "shared/core/src/main/java/com/example/core/Greeter.java:18",
+      "contentHash": "9502545a35dac5aa",
+      "function": {
+        "language": "java",
+        "container": [
+          "Greeter"
+        ],
+        "params": [
+          "Map<String,List<Integer>>",
+          "int"
+        ]
+      }
+    },
+    {
+      "key": "com.example.core.Greeter.greet(Object)",
+      "kind": "function",
+      "name": "greet",
+      "block": ":shared:core/com.example.core",
+      "file": "shared/core/src/main/java/com/example/core/Greeter.java",
+      "line": 13,
+      "endLine": 16,
+      "tier": "syntactic",
+      "evidence": "shared/core/src/main/java/com/example/core/Greeter.java:13",
+      "contentHash": "4c9e16e87db6ecbb",
+      "function": {
+        "language": "java",
+        "container": [
+          "Greeter"
+        ],
+        "params": [
+          "Object"
+        ]
+      }
+    },
+    {
+      "key": "web/src/Users#UserCard",
+      "kind": "function",
+      "name": "UserCard",
+      "block": "web",
+      "file": "web/src/Users.tsx",
+      "line": 4,
+      "endLine": 16,
+      "tier": "syntactic",
+      "evidence": "web/src/Users.tsx:4",
+      "contentHash": "4f28e92a51971653",
+      "function": {
+        "language": "tsx",
+        "container": [],
+        "params": [
+          "{id:string}"
+        ],
+        "exported": true
+      }
+    },
+    {
+      "key": "web/src/Users#default",
+      "kind": "function",
+      "name": "Page",
+      "block": "web",
+      "file": "web/src/Users.tsx",
+      "line": 18,
+      "endLine": 20,
+      "tier": "syntactic",
+      "evidence": "web/src/Users.tsx:18",
+      "contentHash": "464e54024970a452",
+      "function": {
+        "language": "tsx",
+        "container": [],
+        "params": [],
+        "exported": true
+      }
+    },
+    {
+      "key": "web/src/api#ApiClient.constructor",
+      "kind": "function",
+      "name": "constructor",
+      "block": "web",
+      "file": "web/src/api.ts",
+      "line": 31,
+      "endLine": 31,
+      "tier": "syntactic",
+      "evidence": "web/src/api.ts:31",
+      "contentHash": "9e7cdd0f58189341",
+      "function": {
+        "language": "typescript",
+        "container": [
+          "ApiClient"
+        ],
+        "params": [
+          "{get(url:string):Promise<unknown>}"
+        ]
+      }
+    },
+    {
+      "key": "web/src/api#ApiClient.health",
+      "kind": "function",
+      "name": "health",
+      "block": "web",
+      "file": "web/src/api.ts",
+      "line": 33,
+      "endLine": 35,
+      "tier": "syntactic",
+      "evidence": "web/src/api.ts:33",
+      "contentHash": "cbad8e9d0b21247b",
+      "function": {
+        "language": "typescript",
+        "container": [
+          "ApiClient"
+        ],
+        "params": []
+      }
+    },
+    {
+      "key": "web/src/api#ApiClient.health|GET /health",
+      "kind": "fetch-site",
+      "name": "GET \"/health\"",
+      "block": "web",
+      "file": "web/src/api.ts",
+      "line": 34,
+      "endLine": 34,
+      "tier": "syntactic",
+      "evidence": "web/src/api.ts:34",
+      "contentHash": "733cb794c4fc8c15",
+      "fetch": {
+        "method": "GET",
+        "template": "/health",
+        "via": "client",
+        "urlKind": "literal",
+        "url": "\"/health\"",
+        "enclosing": "web/src/api#ApiClient.health"
+      }
+    },
+    {
+      "key": "web/src/api#createUser",
+      "kind": "function",
+      "name": "createUser",
+      "block": "web",
+      "file": "web/src/api.ts",
+      "line": 14,
+      "endLine": 16,
+      "tier": "syntactic",
+      "evidence": "web/src/api.ts:14",
+      "contentHash": "80a661482baaed6f",
+      "function": {
+        "language": "typescript",
+        "container": [],
+        "params": [
+          "User"
+        ],
+        "exported": true
+      }
+    },
+    {
+      "key": "web/src/api#createUser|POST /api/users",
+      "kind": "fetch-site",
+      "name": "POST API + \"/users\"",
+      "block": "web",
+      "file": "web/src/api.ts",
+      "line": 15,
+      "endLine": 15,
+      "tier": "syntactic",
+      "evidence": "web/src/api.ts:15",
+      "contentHash": "9b0b3ae95c57c037",
+      "fetch": {
+        "method": "POST",
+        "template": "/api/users",
+        "via": "fetch",
+        "urlKind": "literal",
+        "url": "API + \"/users\"",
+        "enclosing": "web/src/api#createUser"
+      }
+    },
+    {
+      "key": "web/src/api#deleteOrder",
+      "kind": "function",
+      "name": "deleteOrder",
+      "block": "web",
+      "file": "web/src/api.ts",
+      "line": 18,
+      "endLine": 20,
+      "tier": "syntactic",
+      "evidence": "web/src/api.ts:18",
+      "contentHash": "9c069420596b6d07",
+      "function": {
+        "language": "typescript",
+        "container": [],
+        "params": [
+          "number"
+        ],
+        "exported": true
+      }
+    },
+    {
+      "key": "web/src/api#deleteOrder|DELETE {*}/orders/{*}",
+      "kind": "fetch-site",
+      "name": "DELETE `${BASE_URL}/orders/${orderId}`",
+      "block": "web",
+      "file": "web/src/api.ts",
+      "line": 19,
+      "endLine": 19,
+      "tier": "syntactic",
+      "evidence": "web/src/api.ts:19",
+      "contentHash": "f2565d721b9c5d82",
+      "fetch": {
+        "method": "DELETE",
+        "template": "{*}/orders/{*}",
+        "via": "fetch",
+        "urlKind": "base",
+        "url": "`${BASE_URL}/orders/${orderId}`",
+        "enclosing": "web/src/api#deleteOrder",
+        "base": "BASE_URL"
+      }
+    },
+    {
+      "key": "web/src/api#fetchAnything",
+      "kind": "function",
+      "name": "fetchAnything",
+      "block": "web",
+      "file": "web/src/api.ts",
+      "line": 26,
+      "endLine": 28,
+      "tier": "syntactic",
+      "evidence": "web/src/api.ts:26",
+      "contentHash": "98ea052525b37199",
+      "function": {
+        "language": "typescript",
+        "container": [],
+        "params": [
+          "string"
+        ],
+        "exported": true
+      }
+    },
+    {
+      "key": "web/src/api#fetchAnything|GET {*}",
+      "kind": "fetch-site",
+      "name": "GET url",
+      "block": "web",
+      "file": "web/src/api.ts",
+      "line": 27,
+      "endLine": 27,
+      "tier": "syntactic",
+      "evidence": "web/src/api.ts:27",
+      "contentHash": "b0a20948f7b2032c",
+      "fetch": {
+        "method": "GET",
+        "template": "{*}",
+        "via": "fetch",
+        "urlKind": "unknown",
+        "url": "url",
+        "enclosing": "web/src/api#fetchAnything",
+        "base": "url"
+      }
+    },
+    {
+      "key": "web/src/api#getUser",
+      "kind": "function",
+      "name": "getUser",
+      "block": "web",
+      "file": "web/src/api.ts",
+      "line": 9,
+      "endLine": 12,
+      "tier": "syntactic",
+      "evidence": "web/src/api.ts:9",
+      "contentHash": "fd3013dbfaa025fd",
+      "function": {
+        "language": "typescript",
+        "container": [],
+        "params": [
+          "string"
+        ],
+        "exported": true
+      }
+    },
+    {
+      "key": "web/src/api#getUser|GET /api/users/{*}",
+      "kind": "fetch-site",
+      "name": "GET `/api/users/${id}`",
+      "block": "web",
+      "file": "web/src/api.ts",
+      "line": 10,
+      "endLine": 10,
+      "tier": "syntactic",
+      "evidence": "web/src/api.ts:10",
+      "contentHash": "1fbf14ff4c2a013e",
+      "fetch": {
+        "method": "GET",
+        "template": "/api/users/{*}",
+        "via": "fetch",
+        "urlKind": "template",
+        "url": "`/api/users/${id}`",
+        "enclosing": "web/src/api#getUser"
+      }
+    },
+    {
+      "key": "web/src/api#listThings",
+      "kind": "function",
+      "name": "listThings",
+      "block": "web",
+      "file": "web/src/api.ts",
+      "line": 22,
+      "endLine": 24,
+      "tier": "syntactic",
+      "evidence": "web/src/api.ts:22",
+      "contentHash": "a69bd16685cbaae8",
+      "function": {
+        "language": "typescript",
+        "container": [],
+        "params": [
+          "string"
+        ],
+        "exported": true
+      }
+    },
+    {
+      "key": "web/src/api#listThings|GET /api/{*}/list",
+      "kind": "fetch-site",
+      "name": "GET `/api/${kind}/list`",
+      "block": "web",
+      "file": "web/src/api.ts",
+      "line": 23,
+      "endLine": 23,
+      "tier": "syntactic",
+      "evidence": "web/src/api.ts:23",
+      "contentHash": "9c07f9c7526c3882",
+      "fetch": {
+        "method": "GET",
+        "template": "/api/{*}/list",
+        "via": "fetch",
+        "urlKind": "template",
+        "url": "`/api/${kind}/list`",
+        "enclosing": "web/src/api#listThings"
+      }
+    },
+    {
+      "key": "web/src/api#pick",
+      "kind": "function",
+      "name": "pick",
+      "block": "web",
+      "file": "web/src/api.ts",
+      "line": 38,
+      "endLine": 42,
+      "tier": "syntactic",
+      "evidence": "web/src/api.ts:38",
+      "contentHash": "85127e4cf1fe3cc1",
+      "function": {
+        "language": "typescript",
+        "container": [],
+        "params": [
+          "URLSearchParams"
+        ],
+        "exported": true
+      }
+    },
+    {
+      "key": "web/src/legacy#unbox",
+      "kind": "function",
+      "name": "unbox",
+      "block": "web",
+      "file": "web/src/legacy.ts",
+      "line": 5,
+      "endLine": 8,
+      "tier": "syntactic",
+      "evidence": "web/src/legacy.ts:5",
+      "contentHash": "9114d94fdf549683",
+      "function": {
+        "language": "typescript",
+        "container": [],
+        "params": [
+          "unknown"
+        ],
+        "exported": true
+      }
+    }
+  ],
+  "edges": [
+    {
+      "key": ":api/com.example.api→:shared:core/com.example.core:import",
+      "from": ":api/com.example.api",
+      "to": ":shared:core/com.example.core",
+      "kind": "import",
+      "tier": "syntactic",
+      "evidence": "api/src/main/kotlin/com/example/api/App.kt:3"
+    },
+    {
+      "key": "DELETE /api/v1/orders/{*}→com.example.api.<top>.deleteOrder(Request):route-handler",
+      "from": "DELETE /api/v1/orders/{*}",
+      "to": "com.example.api.<top>.deleteOrder(Request)",
+      "kind": "route-handler",
+      "tier": "syntactic",
+      "evidence": "api/src/main/kotlin/com/example/api/App.kt:19"
+    },
+    {
+      "key": "GET /api/users/{*}→com.example.api.<top>.getUser(Request):route-handler",
+      "from": "GET /api/users/{*}",
+      "to": "com.example.api.<top>.getUser(Request)",
+      "kind": "route-handler",
+      "tier": "syntactic",
+      "evidence": "api/src/main/kotlin/com/example/api/App.kt:16"
+    },
+    {
+      "key": "GET /health→com.example.api.<top>.health(Request):route-handler",
+      "from": "GET /health",
+      "to": "com.example.api.<top>.health(Request)",
+      "kind": "route-handler",
+      "tier": "syntactic",
+      "evidence": "api/src/main/kotlin/com/example/api/App.kt:14"
+    },
+    {
+      "key": "GET /shop/orders→com.example.api.<top>.listOrders(Request):route-handler",
+      "from": "GET /shop/orders",
+      "to": "com.example.api.<top>.listOrders(Request)",
+      "kind": "route-handler",
+      "tier": "syntactic",
+      "evidence": "api/src/main/kotlin/com/example/api/Orders.kt:13"
+    },
+    {
+      "key": "POST /api/users→com.example.api.<top>.createUser(Request):route-handler",
+      "from": "POST /api/users",
+      "to": "com.example.api.<top>.createUser(Request)",
+      "kind": "route-handler",
+      "tier": "syntactic",
+      "evidence": "api/src/main/kotlin/com/example/api/App.kt:17"
+    },
+    {
+      "key": "com.example.api.<top>.adminRoutes()→com.example.api.<top>.crudPath(String):call",
+      "from": "com.example.api.<top>.adminRoutes()",
+      "to": "com.example.api.<top>.crudPath(String)",
+      "kind": "call",
+      "tier": "syntactic",
+      "evidence": "api/src/main/kotlin/com/example/api/App.kt:27"
+    },
+    {
+      "key": "com.example.api.<top>.app(Greeter)→com.example.api.<top>.adminRoutes():call",
+      "from": "com.example.api.<top>.app(Greeter)",
+      "to": "com.example.api.<top>.adminRoutes()",
+      "kind": "call",
+      "tier": "syntactic",
+      "evidence": "api/src/main/kotlin/com/example/api/App.kt:22"
+    },
+    {
+      "key": "com.example.api.<top>.app(Greeter)→com.example.api.<top>.orderRoutes():call",
+      "from": "com.example.api.<top>.app(Greeter)",
+      "to": "com.example.api.<top>.orderRoutes()",
+      "kind": "call",
+      "tier": "syntactic",
+      "evidence": "api/src/main/kotlin/com/example/api/App.kt:23"
+    },
+    {
+      "key": "com.example.api.<top>.createUser(Request)→com.example.api.<top>.helper(Int):call",
+      "from": "com.example.api.<top>.createUser(Request)",
+      "to": "com.example.api.<top>.helper(Int)",
+      "kind": "call",
+      "tier": "syntactic",
+      "evidence": "api/src/main/kotlin/com/example/api/App.kt:40",
+      "ambiguous": true
+    },
+    {
+      "key": "com.example.api.<top>.main()→com.example.api.<top>.app(Greeter):call",
+      "from": "com.example.api.<top>.main()",
+      "to": "com.example.api.<top>.app(Greeter)",
+      "kind": "call",
+      "tier": "syntactic",
+      "evidence": "api/src/main/kotlin/com/example/api/Main.kt:8"
+    },
+    {
+      "key": "com.example.core.Greeter.greet(Map<String,List<Integer>>,int)→com.example.core.Greeter.format(int,int):call",
+      "from": "com.example.core.Greeter.greet(Map<String,List<Integer>>,int)",
+      "to": "com.example.core.Greeter.format(int,int)",
+      "kind": "call",
+      "tier": "syntactic",
+      "evidence": "shared/core/src/main/java/com/example/core/Greeter.java:20"
+    },
+    {
+      "key": "web/src/Users#UserCard→web/src/api#createUser:call",
+      "from": "web/src/Users#UserCard",
+      "to": "web/src/api#createUser",
+      "kind": "call",
+      "tier": "syntactic",
+      "evidence": "web/src/Users.tsx:6"
+    },
+    {
+      "key": "web/src/Users#UserCard→web/src/api#getUser:call",
+      "from": "web/src/Users#UserCard",
+      "to": "web/src/api#getUser",
+      "kind": "call",
+      "tier": "syntactic",
+      "evidence": "web/src/Users.tsx:5"
+    },
+    {
+      "key": "web/src/api#ApiClient.health|GET /health→GET /health:fe-be",
+      "from": "web/src/api#ApiClient.health|GET /health",
+      "to": "GET /health",
+      "kind": "fe-be",
+      "tier": "syntactic",
+      "evidence": "web/src/api.ts:34"
+    },
+    {
+      "key": "web/src/api#createUser|POST /api/users→POST /api/users:fe-be",
+      "from": "web/src/api#createUser|POST /api/users",
+      "to": "POST /api/users",
+      "kind": "fe-be",
+      "tier": "syntactic",
+      "evidence": "web/src/api.ts:15"
+    },
+    {
+      "key": "web/src/api#getUser|GET /api/users/{*}→GET /api/users/{*}:fe-be",
+      "from": "web/src/api#getUser|GET /api/users/{*}",
+      "to": "GET /api/users/{*}",
+      "kind": "fe-be",
+      "tier": "syntactic",
+      "evidence": "web/src/api.ts:10"
+    }
+  ],
+  "joins": [
+    {
+      "fetchSite": "web/src/api#ApiClient.health|GET /health",
+      "status": "exact",
+      "candidates": [
+        "GET /health"
+      ],
+      "tier": "syntactic",
+      "evidence": "web/src/api.ts:34"
+    },
+    {
+      "fetchSite": "web/src/api#createUser|POST /api/users",
+      "status": "exact",
+      "candidates": [
+        "POST /api/users"
+      ],
+      "tier": "syntactic",
+      "evidence": "web/src/api.ts:15"
+    },
+    {
+      "fetchSite": "web/src/api#deleteOrder|DELETE {*}/orders/{*}",
+      "status": "pattern-match",
+      "candidates": [
+        "DELETE /api/v1/orders/{*}"
+      ],
+      "reason": "base URL is non-literal (BASE_URL); 1 candidate",
+      "tier": "unresolved",
+      "evidence": "web/src/api.ts:19"
+    },
+    {
+      "fetchSite": "web/src/api#fetchAnything|GET {*}",
+      "status": "unresolved",
+      "candidates": [],
+      "reason": "URL is a non-literal expression: url",
+      "tier": "unresolved",
+      "evidence": "web/src/api.ts:27"
+    },
+    {
+      "fetchSite": "web/src/api#getUser|GET /api/users/{*}",
+      "status": "exact",
+      "candidates": [
+        "GET /api/users/{*}"
+      ],
+      "tier": "syntactic",
+      "evidence": "web/src/api.ts:10"
+    },
+    {
+      "fetchSite": "web/src/api#listThings|GET /api/{*}/list",
+      "status": "pattern-match",
+      "candidates": [
+        "GET /api/users/{*}"
+      ],
+      "reason": "dynamic path segments; 1 candidate",
+      "tier": "unresolved",
+      "evidence": "web/src/api.ts:23"
+    }
+  ],
+  "coverage": [
+    {
+      "file": "api/src/main/kotlin/com/example/api/App.kt",
+      "adapter": "http4k",
+      "status": "partial",
+      "candidates": 13,
+      "reasons": [
+        {
+          "line": 22,
+          "reason": "mounted `adminRoutes` has a routes group but no route with a literal path",
+          "evidence": "api/src/main/kotlin/com/example/api/App.kt:22"
+        },
+        {
+          "line": 27,
+          "reason": "bind path is not a string literal: crudPath(\"/admin\")",
+          "evidence": "api/src/main/kotlin/com/example/api/App.kt:27"
+        }
+      ]
+    },
+    {
+      "file": "api/src/main/kotlin/com/example/api/Audit.kt",
+      "adapter": "http4k",
+      "status": "partial",
+      "candidates": 0,
+      "reasons": [
+        {
+          "line": 7,
+          "reason": "unparsed region (lines 7-12): constructs there are not checked",
+          "evidence": "api/src/main/kotlin/com/example/api/Audit.kt:7"
+        }
+      ]
+    },
+    {
+      "file": "api/src/main/kotlin/com/example/api/Handlers.kt",
+      "adapter": "http4k",
+      "status": "full",
+      "candidates": 0,
+      "reasons": []
+    },
+    {
+      "file": "api/src/main/kotlin/com/example/api/Main.kt",
+      "adapter": "http4k",
+      "status": "full",
+      "candidates": 0,
+      "reasons": []
+    },
+    {
+      "file": "api/src/main/kotlin/com/example/api/Orders.kt",
+      "adapter": "http4k",
+      "status": "full",
+      "candidates": 2,
+      "reasons": []
+    },
+    {
+      "file": "web/src/Users.tsx",
+      "adapter": "fetch",
+      "status": "full",
+      "candidates": 0,
+      "reasons": []
+    },
+    {
+      "file": "web/src/Users.tsx",
+      "adapter": "react-query",
+      "status": "full",
+      "candidates": 2,
+      "reasons": []
+    },
+    {
+      "file": "web/src/api.ts",
+      "adapter": "fetch",
+      "status": "partial",
+      "candidates": 6,
+      "reasons": [
+        {
+          "line": 27,
+          "reason": "fetch URL is a non-literal expression: url",
+          "evidence": "web/src/api.ts:27"
+        }
+      ]
+    },
+    {
+      "file": "web/src/api.ts",
+      "adapter": "react-query",
+      "status": "full",
+      "candidates": 0,
+      "reasons": []
+    },
+    {
+      "file": "web/src/config.ts",
+      "adapter": "fetch",
+      "status": "full",
+      "candidates": 0,
+      "reasons": []
+    },
+    {
+      "file": "web/src/config.ts",
+      "adapter": "react-query",
+      "status": "full",
+      "candidates": 0,
+      "reasons": []
+    },
+    {
+      "file": "web/src/legacy.ts",
+      "adapter": "fetch",
+      "status": "full",
+      "candidates": 0,
+      "reasons": []
+    },
+    {
+      "file": "web/src/legacy.ts",
+      "adapter": "react-query",
+      "status": "full",
+      "candidates": 0,
+      "reasons": []
+    }
+  ],
+  "unparsed": [
+    {
+      "file": "api/src/main/kotlin/com/example/api/Audit.kt",
+      "evidence": "api/src/main/kotlin/com/example/api/Audit.kt:7",
+      "startLine": 7,
+      "endLine": 12,
+      "kind": "error"
+    }
+  ],
+  "casts": [
+    {
+      "file": "api/src/main/kotlin/com/example/api/App.kt",
+      "evidence": "api/src/main/kotlin/com/example/api/App.kt:43",
+      "line": 43,
+      "kind": "as",
+      "type": "String?"
+    },
+    {
+      "file": "api/src/main/kotlin/com/example/api/Handlers.kt",
+      "evidence": "api/src/main/kotlin/com/example/api/Handlers.kt:37",
+      "line": 37,
+      "kind": "as",
+      "type": "String"
+    },
+    {
+      "file": "api/src/main/kotlin/com/example/api/Handlers.kt",
+      "evidence": "api/src/main/kotlin/com/example/api/Handlers.kt:38",
+      "line": 38,
+      "kind": "as?",
+      "type": "Int"
+    },
+    {
+      "file": "shared/core/src/main/java/com/example/core/Greeter.java",
+      "evidence": "shared/core/src/main/java/com/example/core/Greeter.java:14",
+      "line": 14,
+      "kind": "cast",
+      "type": "String"
+    },
+    {
+      "file": "shared/core/src/main/java/com/example/core/Greeter.java",
+      "evidence": "shared/core/src/main/java/com/example/core/Greeter.java:30",
+      "line": 30,
+      "kind": "cast",
+      "type": "Object"
+    },
+    {
+      "file": "web/src/Users.tsx",
+      "evidence": "web/src/Users.tsx:7",
+      "line": 7,
+      "kind": "non-null",
+      "type": ""
+    },
+    {
+      "file": "web/src/Users.tsx",
+      "evidence": "web/src/Users.tsx:8",
+      "line": 8,
+      "kind": "as",
+      "type": "User|undefined"
+    },
+    {
+      "file": "web/src/api.ts",
+      "evidence": "web/src/api.ts:11",
+      "line": 11,
+      "kind": "as",
+      "type": "User"
+    },
+    {
+      "file": "web/src/legacy.ts",
+      "evidence": "web/src/legacy.ts:6",
+      "line": 6,
+      "kind": "angle",
+      "type": "Box"
+    }
+  ],
+  "names": [
+    {
+      "file": "api/src/main/kotlin/com/example/api/App.kt",
+      "name": "req",
+      "line": 16,
+      "enclosing": "com.example.api.<top>.app(Greeter)"
+    },
+    {
+      "file": "api/src/main/kotlin/com/example/api/App.kt",
+      "name": "id",
+      "line": 35,
+      "enclosing": "com.example.api.<top>.getUser(Request)"
+    },
+    {
+      "file": "api/src/main/kotlin/com/example/api/App.kt",
+      "name": "user",
+      "line": 36,
+      "enclosing": "com.example.api.<top>.getUser(Request)"
+    },
+    {
+      "file": "api/src/main/kotlin/com/example/api/App.kt",
+      "name": "n",
+      "line": 43,
+      "enclosing": "com.example.api.<top>.deleteOrder(Request)"
+    },
+    {
+      "file": "api/src/main/kotlin/com/example/api/Handlers.kt",
+      "name": "size",
+      "line": 19,
+      "enclosing": "com.example.api.Renderer.Inner.describe(Map<String,Int>)"
+    },
+    {
+      "file": "api/src/main/kotlin/com/example/api/Handlers.kt",
+      "name": "raw",
+      "line": 36,
+      "enclosing": "com.example.api.<top>.health(Request)"
+    },
+    {
+      "file": "api/src/main/kotlin/com/example/api/Handlers.kt",
+      "name": "text",
+      "line": 37,
+      "enclosing": "com.example.api.<top>.health(Request)"
+    },
+    {
+      "file": "api/src/main/kotlin/com/example/api/Handlers.kt",
+      "name": "maybe",
+      "line": 38,
+      "enclosing": "com.example.api.<top>.health(Request)"
+    },
+    {
+      "file": "shared/core/src/main/java/com/example/core/Greeter.java",
+      "name": "name",
+      "line": 14,
+      "enclosing": "com.example.core.Greeter.greet(Object)"
+    },
+    {
+      "file": "shared/core/src/main/java/com/example/core/Greeter.java",
+      "name": "total",
+      "line": 19,
+      "enclosing": "com.example.core.Greeter.greet(Map<String,List<Integer>>,int)"
+    },
+    {
+      "file": "shared/core/src/main/java/com/example/core/Greeter.java",
+      "name": "g",
+      "line": 29,
+      "enclosing": "com.example.core.Greeter.Nested.run(String...)"
+    },
+    {
+      "file": "web/src/Users.tsx",
+      "name": "query",
+      "line": 5,
+      "enclosing": "web/src/Users#UserCard"
+    },
+    {
+      "file": "web/src/Users.tsx",
+      "name": "save",
+      "line": 6,
+      "enclosing": "web/src/Users#UserCard"
+    },
+    {
+      "file": "web/src/Users.tsx",
+      "name": "el",
+      "line": 7,
+      "enclosing": "web/src/Users#UserCard"
+    },
+    {
+      "file": "web/src/Users.tsx",
+      "name": "user",
+      "line": 8,
+      "enclosing": "web/src/Users#UserCard"
+    },
+    {
+      "file": "web/src/Users.tsx",
+      "name": "legacy",
+      "line": 9,
+      "enclosing": "web/src/Users#UserCard"
+    },
+    {
+      "file": "web/src/api.ts",
+      "name": "res",
+      "line": 10,
+      "enclosing": "web/src/api#getUser"
+    },
+    {
+      "file": "web/src/api.ts",
+      "name": "r",
+      "line": 23,
+      "enclosing": "web/src/api#listThings"
+    },
+    {
+      "file": "web/src/api.ts",
+      "name": "cache",
+      "line": 39,
+      "enclosing": "web/src/api#pick"
+    },
+    {
+      "file": "web/src/legacy.ts",
+      "name": "b",
+      "line": 6,
+      "enclosing": "web/src/legacy#unbox"
+    }
+  ],
+  "skipped": [
+    {
+      "path": "web/dist/bundle.min.js",
+      "reason": "generated path (web/dist/)"
+    },
+    {
+      "path": "web/package-lock.json",
+      "reason": "lockfile"
+    },
+    {
+      "path": "web/src/generated/client.ts",
+      "reason": "generated path (generated/)"
+    },
+    {
+      "path": "web/src/huge-data.ts",
+      "reason": "too large (1049661 bytes > 1048576)"
+    }
+  ],
+  "notChecked": [],
+  "adapters": [
+    {
+      "name": "http4k",
+      "version": "3",
+      "languages": [
+        "kotlin"
+      ],
+      "covers": [
+        "route"
+      ],
+      "queries": [
+        "http4k-bind.scm",
+        "http4k-routes.scm"
+      ]
+    },
+    {
+      "name": "fetch",
+      "version": "2",
+      "languages": [
+        "typescript",
+        "tsx",
+        "javascript"
+      ],
+      "covers": [
+        "fetch-site"
+      ],
+      "queries": [
+        "fetch.scm",
+        "http-client.scm"
+      ]
+    },
+    {
+      "name": "react-query",
+      "version": "1",
+      "languages": [
+        "typescript",
+        "tsx",
+        "javascript"
+      ],
+      "covers": [
+        "query-hook"
+      ],
+      "queries": [
+        "react-query.scm"
+      ]
+    }
+  ],
+  "declarations": [
+    {
+      "file": "api/src/main/kotlin/com/example/api/Audit.kt",
+      "name": "Logger",
+      "kind": "interface",
+      "container": [],
+      "line": 3,
+      "evidence": "api/src/main/kotlin/com/example/api/Audit.kt:3"
+    },
+    {
+      "file": "api/src/main/kotlin/com/example/api/Handlers.kt",
+      "name": "User",
+      "kind": "class",
+      "container": [],
+      "line": 7,
+      "evidence": "api/src/main/kotlin/com/example/api/Handlers.kt:7"
+    },
+    {
+      "file": "api/src/main/kotlin/com/example/api/Handlers.kt",
+      "name": "Order",
+      "kind": "class",
+      "container": [],
+      "line": 8,
+      "evidence": "api/src/main/kotlin/com/example/api/Handlers.kt:8"
+    },
+    {
+      "file": "api/src/main/kotlin/com/example/api/Handlers.kt",
+      "name": "Renderer",
+      "kind": "class",
+      "container": [],
+      "line": 10,
+      "evidence": "api/src/main/kotlin/com/example/api/Handlers.kt:10"
+    },
+    {
+      "file": "api/src/main/kotlin/com/example/api/Handlers.kt",
+      "name": "Inner",
+      "kind": "class",
+      "container": [
+        "Renderer"
+      ],
+      "line": 17,
+      "evidence": "api/src/main/kotlin/com/example/api/Handlers.kt:17"
+    },
+    {
+      "file": "api/src/main/kotlin/com/example/api/Handlers.kt",
+      "name": "Companion",
+      "kind": "object",
+      "container": [
+        "Renderer"
+      ],
+      "line": 24,
+      "evidence": "api/src/main/kotlin/com/example/api/Handlers.kt:24"
+    },
+    {
+      "file": "api/src/main/kotlin/com/example/api/Handlers.kt",
+      "name": "Registry",
+      "kind": "object",
+      "container": [],
+      "line": 29,
+      "evidence": "api/src/main/kotlin/com/example/api/Handlers.kt:29"
+    },
+    {
+      "file": "shared/core/src/main/java/com/example/core/Greeter.java",
+      "name": "Greeter",
+      "kind": "class",
+      "container": [],
+      "line": 6,
+      "evidence": "shared/core/src/main/java/com/example/core/Greeter.java:6"
+    },
+    {
+      "file": "shared/core/src/main/java/com/example/core/Greeter.java",
+      "name": "prefix",
+      "kind": "property",
+      "container": [
+        "Greeter"
+      ],
+      "line": 7,
+      "evidence": "shared/core/src/main/java/com/example/core/Greeter.java:7"
+    },
+    {
+      "file": "shared/core/src/main/java/com/example/core/Greeter.java",
+      "name": "Nested",
+      "kind": "class",
+      "container": [
+        "Greeter"
+      ],
+      "line": 27,
+      "evidence": "shared/core/src/main/java/com/example/core/Greeter.java:27"
+    },
+    {
+      "file": "web/src/api.ts",
+      "name": "API",
+      "kind": "property",
+      "container": [],
+      "line": 3,
+      "evidence": "web/src/api.ts:3"
+    },
+    {
+      "file": "web/src/api.ts",
+      "name": "User",
+      "kind": "interface",
+      "container": [],
+      "line": 5,
+      "evidence": "web/src/api.ts:5"
+    },
+    {
+      "file": "web/src/api.ts",
+      "name": "ApiClient",
+      "kind": "class",
+      "container": [],
+      "line": 30,
+      "evidence": "web/src/api.ts:30"
+    },
+    {
+      "file": "web/src/config.ts",
+      "name": "BASE_URL",
+      "kind": "property",
+      "container": [],
+      "line": 1,
+      "evidence": "web/src/config.ts:1"
+    },
+    {
+      "file": "web/src/legacy.ts",
+      "name": "Box",
+      "kind": "interface",
+      "container": [],
+      "line": 1,
+      "evidence": "web/src/legacy.ts:1"
+    }
+  ],
+  "files": [
+    {
+      "path": "api/src/main/kotlin/com/example/api/App.kt",
+      "language": "kotlin",
+      "block": ":api/com.example.api"
+    },
+    {
+      "path": "api/src/main/kotlin/com/example/api/Audit.kt",
+      "language": "kotlin",
+      "block": ":api/com.example.api"
+    },
+    {
+      "path": "api/src/main/kotlin/com/example/api/Handlers.kt",
+      "language": "kotlin",
+      "block": ":api/com.example.api"
+    },
+    {
+      "path": "api/src/main/kotlin/com/example/api/Main.kt",
+      "language": "kotlin",
+      "block": ":api/com.example.api"
+    },
+    {
+      "path": "api/src/main/kotlin/com/example/api/Orders.kt",
+      "language": "kotlin",
+      "block": ":api/com.example.api"
+    },
+    {
+      "path": "shared/core/src/main/java/com/example/core/Greeter.java",
+      "language": "java",
+      "block": ":shared:core/com.example.core"
+    },
+    {
+      "path": "web/src/Users.tsx",
+      "language": "tsx",
+      "block": "web",
+      "module": "web/src/Users"
+    },
+    {
+      "path": "web/src/api.ts",
+      "language": "typescript",
+      "block": "web",
+      "module": "web/src/api"
+    },
+    {
+      "path": "web/src/config.ts",
+      "language": "typescript",
+      "block": "web",
+      "module": "web/src/config"
+    },
+    {
+      "path": "web/src/legacy.ts",
+      "language": "typescript",
+      "block": "web",
+      "module": "web/src/legacy"
+    }
+  ]
+}

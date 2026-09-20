@@ -1,0 +1,9 @@
+{
+  "recorded_at": "2026-09-20T00:58:17.061Z",
+  "cases": [
+    "fixture: delete-user slice"
+  ],
+  "schema_pass_rate": 100,
+  "ids_valid_pct": 100,
+  "comments_addressed_pct": 100
+}

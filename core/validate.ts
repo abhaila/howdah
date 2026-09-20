@@ -15,6 +15,10 @@
  *   The intersection makes it a MUST analysis: a key survives only if it is written on
  *   every incoming path. Cycles converge because sets only shrink from ⊤.
  *
+ *   Node kinds do not matter here: every node — including an `approval` node, whose reads
+ *   are its proposal + base keys and whose writes are its decision + feedback keys — is
+ *   projected to reads/writes by Graph.toShape() (core/graph.ts nodeReads/nodeWrites).
+ *
  *   Note on scopes: this proves a writer EXISTS on every path. Scope freshness (veiled /
  *   invalidated values inside loops) is a runtime property of ContextStore — a `per-visit`
  *   read inside a loop can still fail legally; declare such reads with that in mind.

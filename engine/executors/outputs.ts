@@ -1,22 +1,16 @@
 /**
  * The outputs contract between an agent turn and the typed context (T16).
  *
- * Prompts stay prose; the executor appends this contract so the agent's LAST line is a
+ * Prompts stay prose; a contract is appended so the agent's LAST line is a
  * machine-readable JSON object carrying exactly the node's declared writes. Orbital does
  * the same job with `outputs="name:type"` DOT attributes; here the graph declaration is
  * the source and the instruction is generated from it.
+ *
+ * system-map 0.1: the contract's WORDING now lives in core/template.ts (versioned, applied
+ * by the engine before hashing, so rendered_hash covers it). This file keeps the parsing
+ * side; the builder is re-exported for existing callers.
  */
-
-export function buildOutputInstruction(keys: string[]): string {
-  if (keys.length === 0)
-    return "\n\n## Output\nWhen your work is complete, end your reply with a one-line summary of what you did.";
-  return (
-    `\n\n## Output contract (required)\n` +
-    `When your work is complete, the LAST line of your reply must be a single JSON object of the form\n` +
-    `{"outputs": {${keys.map((k) => `"${k}": <value>`).join(", ")}}}\n` +
-    `containing exactly these keys: ${keys.join(", ")}. No markdown fence, no trailing text.`
-  );
-}
+export { buildOutputInstruction } from "../../core/template";
 
 /**
  * Asked as a follow-up turn when the final message arrived without the contract. Observed

@@ -157,3 +157,131 @@ describe("delivery repair routing", () => {
     }
   });
 });
+
+// ---- approval node kind (system-map 1a) ---------------------------------------------
+
+interface ApprovalCtx {
+  goal: string;
+  base: { manifest_hash: string | null; fingerprint: null };
+  proposal: unknown;
+  decision: { outcome: "approved" | "feedback" | "stale" };
+  feedback: unknown[];
+  summary: string;
+}
+
+function approvalGraph(over: { redesignTo?: string; requires?: string; decision?: keyof ApprovalCtx; extractDeclaresFeedback?: boolean } = {}) {
+  return defineGraph<ApprovalCtx>({
+    name: "approval-shape",
+    entry: "extract",
+    inputs: ["goal"],
+    nodes: {
+      extract: {
+        kind: "command",
+        run: "true",
+        reads: ["goal"],
+        writes: {
+          base: { scope: "sticky" },
+          ...(over.extractDeclaresFeedback ? { feedback: { scope: "sticky" as const } } : {}),
+        },
+      },
+      propose: { kind: "agent", prompt: "discover", readOnly: true, reads: ["goal", "base", "feedback"], writes: { proposal: { scope: "per-visit" } } },
+      approve: {
+        kind: "approval",
+        proposal: "proposal",
+        base: "base",
+        decision: (over.decision ?? "decision") as "decision",
+        feedback: "feedback",
+        redesignTo: over.redesignTo ?? "extract",
+      },
+      implement: {
+        kind: "agent",
+        prompt: "implementation.implement",
+        requires: { approvalOf: over.requires ?? "approve" },
+        reads: ["goal", "proposal", "decision"],
+        writes: { summary: { scope: "sticky" } },
+      },
+      done: { kind: "terminal", outcome: "success" },
+    },
+    edges: [
+      { from: "extract", to: "propose" },
+      { from: "propose", to: "approve" },
+      { from: "approve", to: "implement", condition: { reads: ["decision"], test: (v) => v.decision.outcome === "approved", label: "approved" } },
+      { from: "approve", to: "propose", condition: { reads: ["decision"], test: (v) => v.decision.outcome === "feedback", label: "feedback" } },
+      { from: "approve", to: "extract", condition: { reads: ["decision"], test: (v) => v.decision.outcome === "stale", label: "stale" } },
+      { from: "implement", to: "done" },
+    ],
+  });
+}
+
+describe("approval node (system-map 1a)", () => {
+  test("a well-wired approval graph validates; its writes carry the fixed scopes", () => {
+    const g = approvalGraph();
+    expect(g.validate()).toEqual({ structural: [], paths: [] });
+    const decl = g.declarations();
+    expect(decl["decision"]).toEqual({ scope: "per-visit", writer: ["approve"] });
+    // engine-owned on the redesign target: declared for the ContextStore, not in extract's own writes
+    expect(decl["feedback"]).toEqual({ scope: "sticky", writer: ["extract", "approve"] });
+    expect(Object.keys(g.writesOf("extract"))).toEqual(["base", "feedback"]);
+    expect(Object.keys((g.def.nodes.extract as { writes: object }).writes)).toEqual(["base"]);
+    expect(g.approvalNodes().map(([id]) => id)).toEqual(["approve"]);
+  });
+
+  test("the approval node's reads join the MUST-analysis: an unwritten proposal is a path violation", () => {
+    const g = defineGraph<ApprovalCtx>({
+      name: "approval-unwritten",
+      entry: "extract",
+      inputs: ["goal"],
+      nodes: {
+        extract: { kind: "command", run: "true", writes: { base: { scope: "sticky" } } },
+        approve: { kind: "approval", proposal: "proposal", base: "base", decision: "decision", feedback: "feedback", redesignTo: "extract" },
+        done: { kind: "terminal", outcome: "success" },
+      },
+      edges: [
+        { from: "extract", to: "approve" },
+        { from: "approve", to: "done" },
+      ],
+    });
+    expect(g.validate()).toEqual({ structural: [], paths: [{ node: "approve", key: "proposal", witness: ["extract", "approve"] }] });
+  });
+
+  test("the approval node's writes satisfy downstream reads (decision + feedback)", () => {
+    // implement reads decision; propose (on the feedback loop) reads feedback — both proven
+    expect(approvalGraph().validate().paths).toEqual([]);
+  });
+
+  test("another writer of the feedback key with a different scope is a scope conflict", () => {
+    const g = defineGraph<ApprovalCtx>({
+      name: "approval-scope",
+      entry: "extract",
+      inputs: ["goal"],
+      nodes: {
+        extract: { kind: "command", run: "true", writes: { base: { scope: "sticky" } } },
+        propose: { kind: "agent", prompt: "discover", reads: ["base"], writes: { proposal: { scope: "per-visit" } } },
+        approve: { kind: "approval", proposal: "proposal", base: "base", decision: "decision", feedback: "feedback", redesignTo: "extract" },
+        tidy: { kind: "command", run: "true", writes: { feedback: { scope: "cleared" } } },
+        done: { kind: "terminal", outcome: "success" },
+      },
+      edges: [
+        { from: "extract", to: "propose" },
+        { from: "propose", to: "approve" },
+        { from: "approve", to: "tidy" },
+        { from: "tidy", to: "done" },
+      ],
+    });
+    expect(() => g.validate()).toThrow(GraphError);
+  });
+
+  test("wiring mistakes are structural errors, each named", () => {
+    expect(approvalGraph({ redesignTo: "nowhere" }).validate().structural).toContain('approval node "approve" redesigns to unknown node "nowhere"');
+    expect(approvalGraph({ redesignTo: "done" }).validate().structural).toContain('approval node "approve" redesigns to terminal node "done"');
+    expect(approvalGraph({ extractDeclaresFeedback: true }).validate().structural).toContain(
+      'node "extract" declares "feedback", which is engine-owned there (approval "approve" redesigns to it) — remove it from its writes',
+    );
+    expect(approvalGraph({ requires: "propose" }).validate().structural).toContain(
+      'node "implement" requires approval of "propose", which is not an approval node',
+    );
+    expect(approvalGraph({ decision: "feedback" }).validate().structural).toContain(
+      'approval node "approve" uses "feedback" as both its decision and feedback key',
+    );
+  });
+});

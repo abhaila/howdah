@@ -1,15 +1,32 @@
 #!/usr/bin/env bun
 /**
- * Fake `codex app-server` for executor tests. It captures thread/start params and
- * emits the minimum JSON-RPC/notification sequence the executor expects.
+ * A fake `codex app-server` for executor tests: newline-delimited JSON-RPC over stdio,
+ * the same request shapes codex.ts sends (initialize → thread/start → turn/start), without
+ * spending tokens. On turn/start it replies, streams one agent message carrying the
+ * outputs contract it was asked for, and completes the turn. The thread stays open, so a
+ * second turn/start (the executor's in-session repair turn) is answered the same way.
+ *
+ * FAKE_CODEX_CAPTURE=<file> writes the thread/start params (sandbox, cwd, model) so tests
+ * can assert how the thread was opened.
+ * FAKE_CAPTURE=<file> appends the exact prompt text received in EVERY turn/start (one JSON
+ * string per line, in order) so tests can prove rendered_hash covers the bytes of the
+ * first turn (system-map 0.1); a repair turn lands on a later line.
+ * FAKE_CODEX_DROP_OUTPUTS=1 reproduces the live failure: a turn that ends in prose with no
+ * contract. The repair turn, which names itself, complies.
+ * FAKE_CODEX_NOTICE=1 also emits an error NOTIFICATION before the message — codex's startup
+ * noise, which must not stop the repair.
+ * FAKE_CODEX_RPC_FAULT=1 also answers turn/start with an error RESPONSE while still
+ * completing the turn — the app-server refused us, so no repair should be asked for.
  */
-import { writeFileSync } from "node:fs";
+import { appendFileSync, writeFileSync } from "node:fs";
 
 const out = (o: unknown) => process.stdout.write(JSON.stringify(o) + "\n");
-const capture = process.env.FAKE_CODEX_CAPTURE;
+const threadCapture = process.env.FAKE_CODEX_CAPTURE;
 
 const decoder = new TextDecoder();
 let buffer = "";
+let turns = 0;
+
 for await (const chunk of Bun.stdin.stream()) {
   buffer += decoder.decode(chunk, { stream: true });
   let nl;
@@ -17,23 +34,36 @@ for await (const chunk of Bun.stdin.stream()) {
     const line = buffer.slice(0, nl);
     buffer = buffer.slice(nl + 1);
     if (!line.trim()) continue;
-    const req = JSON.parse(line) as { id: number; method: string; params: Record<string, unknown> };
-    if (req.method === "initialize") {
-      out({ jsonrpc: "2.0", id: req.id, result: {} });
-    } else if (req.method === "thread/start") {
-      if (capture) writeFileSync(capture, JSON.stringify(req.params, null, 2));
-      out({ jsonrpc: "2.0", id: req.id, result: { threadId: "fake-thread" } });
-      out({ method: "thread/started", params: { threadId: "fake-thread" } });
-    } else if (req.method === "turn/start") {
-      const input = req.params.input as Array<{ text?: string }> | undefined;
-      const promptText = input?.[0]?.text ?? "";
-      const keys = [...promptText.matchAll(/"([\w.]+)": <value>/g)].map((m) => m[1]!);
-      const outputs = Object.fromEntries(keys.map((k) => [k, k === "review_verdict" ? "pass" : `fake ${k}`]));
-      const finalText = `All done.\n{"outputs": ${JSON.stringify(outputs)}}`;
-      out({ jsonrpc: "2.0", id: req.id, result: {} });
-      out({ method: "item/agentMessage/delta", params: { delta: "All done." } });
-      out({ method: "item/completed", params: { item: { type: "agentMessage", text: finalText } } });
-      out({ method: "turn/completed", params: { usage: { input_tokens: 1, output_tokens: 1 } } });
+    const msg = JSON.parse(line) as { id?: number; method?: string; params?: any };
+    switch (msg.method) {
+      case "initialize":
+        out({ jsonrpc: "2.0", id: msg.id, result: { userAgent: "fake-codex" } });
+        break;
+      case "thread/start":
+        if (threadCapture) writeFileSync(threadCapture, JSON.stringify(msg.params ?? {}, null, 2));
+        out({ jsonrpc: "2.0", id: msg.id, result: { thread: { id: "fake-thread-1" } } });
+        out({ jsonrpc: "2.0", method: "thread/started", params: { threadId: "fake-thread-1" } });
+        break;
+      case "turn/start": {
+        const turnId = `fake-turn-${++turns}`;
+        const promptText = String(msg.params?.input?.[0]?.text ?? "");
+        if (process.env.FAKE_CAPTURE) appendFileSync(process.env.FAKE_CAPTURE, JSON.stringify(promptText) + "\n");
+        if (process.env.FAKE_CODEX_RPC_FAULT === "1") out({ jsonrpc: "2.0", id: msg.id, error: { code: -32000, message: "fake app-server fault" } });
+        else out({ jsonrpc: "2.0", id: msg.id, result: { turn: { id: turnId } } });
+        if (process.env.FAKE_CODEX_NOTICE === "1")
+          out({ jsonrpc: "2.0", method: "error", params: { message: "MCP server auth expired" } });
+        const keys = [...promptText.matchAll(/"([\w.]+)": <value>/g)].map((m) => m[1]!);
+        const outputs = Object.fromEntries(keys.map((k) => [k, k === "review_verdict" ? (process.env.FAKE_CLAUDE_VERDICT ?? "pass") : `fake ${k}`]));
+        const isRepair = /did not end with the required outputs object/.test(promptText);
+        const drop = process.env.FAKE_CODEX_DROP_OUTPUTS === "1" && !isRepair;
+        const text = drop
+          ? "Verified the shared renderer and the affected integration cases. No files modified."
+          : `All done.\n{"outputs": ${JSON.stringify(outputs)}}`;
+        out({ jsonrpc: "2.0", method: "item/agentMessage/delta", params: { delta: text } });
+        out({ jsonrpc: "2.0", method: "item/completed", params: { item: { type: "agentMessage", text } } });
+        out({ jsonrpc: "2.0", method: "turn/completed", params: { turn: { id: turnId, status: "completed" } } });
+        break;
+      }
     }
   }
 }

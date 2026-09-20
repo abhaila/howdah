@@ -11,5 +11,6 @@
     "jsx": "react-jsx",
     "lib": ["ES2023", "DOM", "DOM.Iterable"]
   },
-  "include": ["core", "reviser", "graphs", "scripts", "prompts", "log", "adapter", "engine", "watchdog", "web", "cli", "config"]
+  "include": ["core", "reviser", "graphs", "scripts", "prompts", "log", "adapter", "engine", "watchdog", "web", "cli", "config", "map"],
+  "exclude": ["map/fixtures"]
 }

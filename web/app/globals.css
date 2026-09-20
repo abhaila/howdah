@@ -27,3 +27,82 @@
   --radius-md: var(--radius-sm);
   --radius-lg: var(--radius);
 }
+
+/* ---- system-map 1d: approval card, drift view, map progress ------------------------------
+   Rules from DESIGN.md: rows not cards (26px, hairline-separated), shape before colour, and
+   amber ONLY for the needs-you state of the approval card. The failure red appears only on
+   drift outcomes where the code disagrees with the approved design (`.problem`, from
+   engine/slice-map PROBLEM_OUTCOMES). */
+
+.approval-card {
+  border: 1px solid var(--border-strong); background: var(--bg-raised);
+  border-radius: var(--radius); padding: 12px 14px;
+}
+/* the needs-you moment: the .ask-card border; its entrance is shared in howdah.css */
+.approval-card.needs-you { border-color: var(--attention-border); }
+.approval-card h3 { margin: 0; font-size: 14px; font-weight: 600; }
+.ap-head { display: flex; align-items: baseline; gap: 10px; }
+.ap-round { margin-left: auto; font-size: 11px; color: var(--fg-muted); }
+.ap-explain { font-size: 13px; color: var(--fg-muted); margin: 6px 0 8px; line-height: 1.5; }
+.ap-tiers { display: flex; flex-wrap: wrap; gap: 12px; }
+.ap-tier { display: inline-flex; align-items: center; gap: 4px; font-family: var(--font-mono); font-size: 11px; }
+.ap-aside { text-transform: none; letter-spacing: 0; color: var(--fg-faint); font-weight: 400; margin-left: 6px; }
+.ap-actions { flex-wrap: wrap; margin-top: 12px; display: flex; gap: 8px; align-items: center; }
+.ap-block { font-family: var(--font-mono); }
+.ap-refusal { color: var(--fg); margin-top: 8px; }
+.ap-redesign { margin-top: 10px; }
+.ap-redesign .actions { display: flex; gap: 8px; margin-top: 8px; }
+
+.ghost-list { margin-top: 8px; }
+.ghost-group { border-top: 1px solid var(--border); }
+.ghost-children { padding-left: 16px; }
+.ghost-row { display: flex; align-items: center; gap: 7px; height: 26px; min-width: 0; color: var(--fg-muted); }
+.ghost-row .op-glyph, .ghost-row .tier-glyph { flex-shrink: 0; }
+.ghost-context .gr-id { color: var(--fg-faint); }
+.gr-tier { width: 9px; display: inline-flex; flex-shrink: 0; }
+.gr-id { font-size: 12px; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.gr-arrow { color: var(--fg-faint); }
+.gr-kind { font-size: 11px; color: var(--fg-faint); white-space: nowrap; }
+.gr-pin {
+  margin-left: auto; background: transparent; border: 0; padding: 0 4px; cursor: pointer;
+  font-size: 11px; color: var(--fg-faint); font-family: var(--font-display);
+}
+.gr-pin:hover { color: var(--fg); }
+.gr-sub { display: flex; flex-wrap: wrap; gap: 4px 12px; padding: 0 0 5px 34px; font-size: 11px; color: var(--fg-muted); }
+.gr-file { color: var(--fg-faint); }
+.gr-unverified { color: var(--fg-faint); font-style: italic; }
+.gr-pin-form { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 2px 0 8px 34px; }
+.gr-pin-form input { flex: 1 1 200px; }
+.ap-comment {
+  display: flex; gap: 8px; align-items: baseline; padding: 3px 0 3px 34px;
+  font-size: 12px; color: var(--fg); border-left: 2px solid var(--operator); margin-left: 14px;
+}
+.ap-orphans .ap-comment { margin-left: 0; padding-left: 10px; }
+.ap-comment-key { color: var(--fg-faint); font-size: 11px; }
+.ap-comment-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.ap-comment-meta { color: var(--fg-faint); font-size: 10px; white-space: nowrap; }
+.ap-trace { display: flex; flex-direction: column; padding: 3px 0; border-bottom: 1px solid var(--border); }
+.ap-trace-name { font-size: 12px; }
+.ap-trace-steps { font-size: 11px; color: var(--fg-muted); overflow-wrap: anywhere; }
+.ap-round-row { display: flex; gap: 10px; height: 26px; align-items: center; font-size: 12px; color: var(--fg-muted); border-bottom: 1px solid var(--border); }
+
+.drift-view .dv-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 8px; }
+.dv-title { font-weight: 600; font-size: 14px; }
+.dv-stamp { font-size: 11px; color: var(--fg-muted); }
+.dv-base { font-size: 11px; color: var(--fg-faint); margin-left: auto; }
+.dv-group-head { display: flex; align-items: center; gap: 6px; }
+.dv-count { color: var(--fg-muted); }
+.dv-item { border-bottom: 1px solid var(--border); }
+.dv-row { display: flex; align-items: center; gap: 7px; height: 26px; min-width: 0; }
+.dv-key { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.dv-kind { font-size: 11px; color: var(--fg-faint); margin-left: auto; white-space: nowrap; }
+.dv-sub { display: flex; flex-direction: column; gap: 2px; padding: 0 0 6px 19px; font-size: 12px; color: var(--fg-muted); }
+.dv-evidence { font-size: 11px; color: var(--fg-faint); }
+.drift-glyph, .op-glyph, .tier-glyph { color: var(--fg-muted); flex-shrink: 0; }
+/* the only colour in the drift view: the code disagrees with the approved design */
+.drift-glyph.problem { color: var(--status-failed-recoverable); }
+
+.map-progress { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--fg-muted); white-space: nowrap; }
+.mp-track { width: 48px; height: 3px; background: var(--bg-inset); border-radius: 1.5px; overflow: hidden; }
+.mp-fill { display: block; height: 3px; background: var(--status-running); }
+.mp-skipped { color: var(--fg-faint); }

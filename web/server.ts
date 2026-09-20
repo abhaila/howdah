@@ -7,21 +7,50 @@
  *   GET  /api/runs                 run summaries, needs-input first
  *   GET  /api/runs/:id             full detail (thread, timeline, usage, allowance, ask)
  *   GET  /api/runs/:id/events?since=N   SSE of events with seq > N
- *   POST /api/runs/:id/reply       {text} → attention-resolved into the log + record cleared
+ *   POST /api/runs/:id/reply       {text} → resolveReply (system-map 0.2): 200 + record cleared, or 409 naming the next step
+ *   POST /api/runs/:id/comments    {entity_id, text, proposal_id?} → pin a comment to the current proposal round
+ *   POST /api/runs/:id/approval    {approved, proposal_id} → approve, or send the round's comments as feedback
+ *   POST /api/runs/:id/redesign    {message} → re-extract and redraw (refused while a runner is live)
+ *   (system-map 1a: the same engine/control.ts functions as the CLI verbs; 400 on a malformed
+ *   body, 409 {error, code} on a refusal)
  *
  * Run layout: <runsDir>/<run-id>/run.jsonl (the engine's dir option).
+ *
+ * Local-only surface (system-map 0.4 / eng review issue 1). The reads expose run logs full
+ * of proprietary code and the writes can launch an autonomous agent run in any folder, so:
+ *   - the server binds 127.0.0.1 only — unbound, Bun listened on every interface (LAN);
+ *   - guardRequest() runs before EVERY route. Any request whose Host is not
+ *     localhost:<port> / 127.0.0.1:<port> is refused (DNS rebinding: a page on a hostname
+ *     that re-resolves to 127.0.0.1 is same-origin to itself, but still sends its own Host);
+ *   - a write carrying a foreign Origin is refused (CSRF); a write with NO Origin is a
+ *     non-browser client (the CLI, curl, tests) and passes;
+ *   - a write carrying a body must be application/json (415 otherwise). A cross-origin page
+ *     can POST text/plain or a form without a CORS preflight; it cannot send JSON without
+ *     one, and we answer no preflight — so this closes the no-preflight path even for
+ *     browsers that omit Origin.
+ * The port compared against is the BOUND one (server.port), so port 0 works and a port
+ * change cannot lock the UI out of its own writes.
  */
 import { existsSync, readFileSync, readdirSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import { homedir, tmpdir } from "node:os";
-import { EventLog, readLog } from "../log/write";
-import { deriveDetail, deriveSummary, deriveTimeline, runDigest, sortRuns, type RunSummary } from "./derive";
+import { readLog } from "../log/write";
+import { deriveDetail, deriveSummary, deriveTimeline, runDigest, snapshotIndex, sortRuns, type RunSummary, type SnapshotIndex } from "./derive";
+import { currentProposal } from "../engine/slice-decision";
+import { loadSnapshot } from "../engine/slice-map";
+import { MapStore, defaultStoreDir } from "../map/store";
+import type { AssembledMap } from "../map/types";
 import { AttentionCenter } from "../engine/attention";
 import { graphCatalog, GRAPHS } from "../graphs/index";
-import { ensureHowdahHome, loadConfig, saveConfig } from "../config/config";
+import { ensureHowdahHome, howdahHome, loadConfig, saveConfig } from "../config/config";
 import { listGithubRepos, registerGithubRepo } from "../config/github";
 import { loadTuning, saveTuning, pruneTuning } from "../config/tuning";
-import { writeControl, clearControl, interruptRunner } from "../engine/control";
+import {
+  writeControl, clearControl, interruptRunner, jumpRefusal, markPaused, resolveReply, runnerAlive, approve, sendFeedback, pinComment, redesign, afterDecision, wakeRunner,
+  clearAsks, runnerHolder, type DecisionResult,
+} from "../engine/control";
+import { resolveAgentConfig } from "../engine/run";
+import type { Graph } from "../core/graph";
 import { EventLog as ControlLog } from "../log/write";
 import { effectiveCwd, readWorktreeRecord } from "../engine/executors/worktree";
 import { PromptStore } from "../prompts/store";
@@ -30,7 +59,8 @@ import {
   type LibraryPaths,
 } from "../prompts/library";
 import { acceptProposal, listProposals, proposalsDir, rejectProposal, viewProposal } from "../prompts/proposals";
-import { resolveAgentConfigLayers, type AgentConfig } from "../core/graph";
+import { evidenceSource } from "../reviser/revise";
+import { isPartialId } from "../core/template";
 
 export interface ServerOpts {
   runsDir: string;
@@ -41,9 +71,61 @@ export interface ServerOpts {
   /** where prompts/, feedback/ and reviser/proposals/ live — overridable so tests that
    *  accept proposals and write feedback cannot mutate the real repo */
   repoRoot?: string;
+  /** the graph registry (default graphs/index.ts GRAPHS) — tests pass graphs of their own */
+  graphs?: Record<string, Graph<any>>;
+  /**
+   * starts a detached runner for a run (default: `bun cli/main.ts resume <id>`). Tests inject
+   * a recorder: the real one spawns an engine that may spend tokens.
+   */
+  resumeRun?: (id: string) => void;
+  /**
+   * starts the reviser detached with this argv (default: Bun.spawn, unref'd). Tests inject a
+   * recorder: the real reviser is an agent call that spends tokens.
+   */
+  spawnReviser?: (argv: string[]) => void;
 }
 
+/** A prompt id as the library names files (`prompts/<id>.md`) — no separators, no traversal. */
+const PROMPT_ID = /^[A-Za-z0-9_][A-Za-z0-9_-]*(\.[A-Za-z0-9_][A-Za-z0-9_-]*)*$/;
+
+type EngineTuning = NonNullable<Parameters<typeof resolveAgentConfig>[3]>["tuning"];
+
 const logPath = (runsDir: string, id: string) => join(runsDir, id, "run.jsonl");
+
+const json = (body: unknown, status = 200) =>
+  new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", "cache-control": "no-store" } });
+
+/** loopback only: see the header — this is the LAN half of system-map 0.4 */
+const LOOPBACK = "127.0.0.1";
+const WRITE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+
+/**
+ * The single request guard (system-map 0.4). Returns a response to short-circuit with, or
+ * null to let the request through. Order matters only for the error message: Host first
+ * (applies to reads too), then Origin, then the body's media type.
+ */
+export function guardRequest(req: Request, port: number): Response | null {
+  const ownHosts = [`localhost:${port}`, `${LOOPBACK}:${port}`];
+  const host = (req.headers.get("host") ?? "").toLowerCase();
+  if (!ownHosts.includes(host))
+    return json({ error: `foreign Host ${host || "(none)"} refused — the viewer only answers to ${ownHosts.join(" or ")}` }, 403);
+
+  if (!WRITE_METHODS.has(req.method)) return null;
+
+  const origin = req.headers.get("origin");
+  if (origin !== null && !ownHosts.some((h) => origin === `http://${h}`))
+    return json({ error: `foreign Origin ${origin} refused — writes are accepted only from the viewer itself` }, 403);
+
+  const length = Number(req.headers.get("content-length") ?? 0);
+  const hasBody = length > 0 || req.headers.has("transfer-encoding");
+  if (hasBody) {
+    const contentType = req.headers.get("content-type");
+    const mediaType = ((contentType ?? "").split(";")[0] ?? "").trim().toLowerCase();
+    if (mediaType !== "application/json")
+      return json({ error: `content-type ${contentType ?? "(none)"} refused — a write body must be application/json` }, 415);
+  }
+  return null;
+}
 
 /** prompts/, feedback/ and reviser/proposals/ come from the repo; runs come from the server's dir */
 const libraryPaths = (opts: ServerOpts): LibraryPaths => ({ root: opts.repoRoot ?? repoRoot(), runsDir: opts.runsDir });
@@ -51,19 +133,6 @@ const libraryPaths = (opts: ServerOpts): LibraryPaths => ({ root: opts.repoRoot 
 function listRunIds(runsDir: string): string[] {
   if (!existsSync(runsDir)) return [];
   return readdirSync(runsDir).filter((d) => existsSync(logPath(runsDir, d)));
-}
-
-function runnerAlive(runDir: string): boolean {
-  const pidFile = join(runDir, "runner.pid");
-  if (!existsSync(pidFile)) return false;
-  const pid = Number(readFileSync(pidFile, "utf8").trim());
-  if (!Number.isFinite(pid) || pid <= 0) return false;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 function withRunnerLiveness<T extends { status: RunSummary["status"] }>(summary: T, events: ReturnType<typeof readLog>, runDir: string): T {
@@ -78,26 +147,42 @@ export function createHowdahServer(opts: ServerOpts) {
   const home = dirname(opts.runsDir);
   ensureHowdahHome(home);
   const promptStore = new PromptStore(join(root, "prompts"));
+  const graphs = opts.graphs ?? GRAPHS;
+  const launchResume =
+    opts.resumeRun ??
+    ((id: string) =>
+      Bun.spawn(["bun", join(import.meta.dir, "..", "cli", "main.ts"), "resume", id], {
+        stdout: "ignore", stderr: "ignore", env: { ...process.env },
+      }).unref());
+  /** explicit operator resume: start a runner unless one is live */
   const spawnResume = (id: string) => {
-    // a live runner is already polling the log for the reply — don't double-run
-    const pidFile = join(opts.runsDir, id, "runner.pid");
-    if (existsSync(pidFile)) {
-      try {
-        const pid = Number(readFileSync(pidFile, "utf8").trim());
-        if (pid > 0) { process.kill(pid, 0); return; } // alive → it will pick the reply up
-      } catch { /* dead pid → resume below */ }
-    }
-    Bun.spawn(["bun", join(import.meta.dir, "..", "cli", "main.ts"), "resume", id], {
-      stdout: "ignore", stderr: "ignore", env: { ...process.env },
-    }).unref();
+    if (!runnerAlive(join(opts.runsDir, id))) launchResume(id);
   };
-  const json = (body: unknown, status = 200) =>
-    new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", "cache-control": "no-store" } });
-
+  /**
+   * after an answer (reply or decision): make a runner pick it up. Not a blind PID check — a
+   * runner exiting within the grace window without consuming the answer is resumed
+   * (engine/control.ts wakeRunner). Runs in the background so the response is not held.
+   */
+  const wake = (id: string) => void wakeRunner(join(opts.runsDir, id), () => launchResume(id)).catch(() => {});
+  const decisionResponse = (id: string, result: DecisionResult, status = 200) => {
+    if (!result.ok) return json({ error: result.message, code: result.code }, 409);
+    // background: wake the runner, then clear the answered asks' attention records
+    void afterDecision(join(opts.runsDir, id), result, { attentionDir: opts.attentionDir, spawn: () => launchResume(id) }).catch(() => {});
+    return json({ ok: true, proposal_id: result.proposal_id, idempotent: result.idempotent, comment_id: result.comment_id }, status);
+  };
+  /** a JSON object body, or null (the caller answers 400) */
+  const objectBody = async (req: Request): Promise<Record<string, unknown> | null> => {
+    const body: unknown = await req.json().catch(() => undefined);
+    return typeof body === "object" && body !== null && !Array.isArray(body) ? (body as Record<string, unknown>) : null;
+  };
   return Bun.serve({
     port: opts.port ?? 4711,
+    hostname: LOOPBACK,
     idleTimeout: 0,
-    async fetch(req) {
+    async fetch(req, server) {
+      // server.port is typed optional only for unix sockets; we always listen on TCP
+      const refused = guardRequest(req, server.port ?? opts.port ?? 4711);
+      if (refused) return refused;
       const url = new URL(req.url);
 
       if (url.pathname === "/api/app") {
@@ -115,7 +200,7 @@ export function createHowdahServer(opts: ServerOpts) {
       if (url.pathname === "/api/graphs") return json(graphCatalog());
       const gm = url.pathname.match(/^\/api\/graphs\/([^/]+)(\/tuning)?$/);
       if (gm) {
-        const g = GRAPHS[gm[1]!];
+        const g = graphs[gm[1]!];
         if (!g) return json({ error: "unknown graph" }, 404);
 
         if (gm[2] === "/tuning" && req.method === "PUT") {
@@ -132,11 +217,9 @@ export function createHowdahServer(opts: ServerOpts) {
 
         const tuning = loadTuning()[g.def.name] ?? {};
         const tsDefaults = g.def.defaults ?? {};
-        const effectiveOf = (id: string, n: (typeof g.def.nodes)[string]) => {
-          if (n.kind !== "agent") return undefined;
-          const base: AgentConfig = { harness: n.harness, model: n.model, effort: n.effort, permissionMode: n.permissionMode, maxTurns: n.maxTurns, skills: n.skills };
-          return resolveAgentConfigLayers([tuning.nodes?.[id], base, tuning.defaults, tsDefaults]);
-        };
+        // the engine's own resolution (no run override): what a run would get, readOnly included
+        const effectiveOf = (id: string, n: (typeof g.def.nodes)[string]) =>
+          n.kind === "agent" ? resolveAgentConfig(g, n, id, { tuning: tuning as EngineTuning }) : undefined;
         return json({
           name: g.def.name,
           description: g.def.description ?? "",
@@ -223,11 +306,23 @@ export function createHowdahServer(opts: ServerOpts) {
           // redraft: the reviser is a real agent call that spends tokens, so it is spawned
           // detached exactly like a run launch and the screen polls for the new proposal
           const view = viewProposal(dir, file, promptStore, root);
-          if (process.env.HOWDAH_STUB) return json({ ok: true, drafting: view.id, stubbed: true }, 202);
-          Bun.spawn(["bun", join(import.meta.dir, "..", "reviser", "revise.ts"), view.id], {
-            stdout: "ignore", stderr: "ignore", env: { ...process.env },
-          }).unref();
-          return json({ ok: true, drafting: view.id }, 202);
+          // A partial has no feedback of its own: revise.ts refuses it without --evidence-from
+          // <includer>. That refusal would happen in a detached child (exit 1, unseen) while the
+          // screen polls forever — so the rule is applied HERE, with revise.ts's own check.
+          const body = (await req.json().catch(() => ({}))) as { evidence_from?: unknown };
+          const evidenceFrom = body?.evidence_from;
+          if (evidenceFrom !== undefined && (typeof evidenceFrom !== "string" || !PROMPT_ID.test(evidenceFrom)))
+            return json({ error: "evidence_from must be a prompt id" }, 400);
+          if (isPartialId(view.id) && evidenceFrom === undefined)
+            return json({
+              error: `${view.id} is a partial; re-draft it from an includer: bun reviser/revise.ts ${view.id} --evidence-from <includer> (or POST {"evidence_from": "<includer>"})`,
+            }, 409);
+          evidenceSource(view.id, evidenceFrom, root); // throws (→ 409) when the includer does not include it
+          const argv = [process.execPath, join(import.meta.dir, "..", "reviser", "revise.ts"), view.id, ...(evidenceFrom ? ["--evidence-from", evidenceFrom] : [])];
+          if (opts.spawnReviser) opts.spawnReviser(argv);
+          else if (process.env.HOWDAH_STUB) return json({ ok: true, drafting: view.id, stubbed: true }, 202);
+          else Bun.spawn(argv, { stdout: "ignore", stderr: "ignore", env: { ...process.env } }).unref();
+          return json({ ok: true, drafting: view.id, ...(evidenceFrom ? { evidence_from: evidenceFrom } : {}) }, 202);
         } catch (err) {
           // stale base and undeclared reads are refusals, not bugs: 409 with the message
           return json({ error: err instanceof Error ? err.message : String(err) }, 409);
@@ -343,7 +438,7 @@ export function createHowdahServer(opts: ServerOpts) {
         return render ? json(render) : json({ error: "no such render, or its pinned prompt is gone" }, 404);
       }
 
-      const m = url.pathname.match(/^\/api\/runs(?:\/([^/]+)(?:\/(events|reply|open-ide|open-run-folder|resume|pause|abort|jump|ask))?)?$/);
+      const m = url.pathname.match(/^\/api\/runs(?:\/([^/]+)(?:\/(events|reply|open-ide|open-run-folder|resume|pause|abort|jump|ask|comments|approval|redesign))?)?$/);
       if (!m) {
         // static: /public assets by name, everything else → the app shell.
         // no-cache: this is a local app whose bundle changes constantly — the browser must
@@ -387,14 +482,59 @@ export function createHowdahServer(opts: ServerOpts) {
       }
 
       if (sub === "reply" && req.method === "POST") {
-        const body = (await req.json()) as { text?: string };
-        const events = readLog(path);
-        const ask = deriveSummary(id, events).status === "needs-input" ? deriveDetail(id, events).ask : null;
-        if (!ask) return json({ error: "nothing awaiting a reply" }, 409);
-        new EventLog(path).append({ type: "attention-resolved", node: ask.node, visit: ask.visit, reply: body.text ?? "" });
-        new AttentionCenter(opts.attentionDir, []).resolve(`${id}:${ask.node}:${ask.visit}`);
-        spawnResume(id); // the reply must MOVE the run, not just record the answer
-        return json({ ok: true });
+        const body: unknown = await req.json().catch(() => undefined);
+        if (typeof body !== "object" || body === null || Array.isArray(body))
+          return json({ error: "body must be a JSON object {text}" }, 400);
+        // absent text is the empty reply ("let it through" on a permission ask); anything
+        // other than a string is a malformed request, not a 500 from deep in the rules
+        const raw = (body as { text?: unknown }).text;
+        const text = raw === undefined ? "" : raw;
+        if (typeof text !== "string") return json({ error: "text must be a string" }, 400);
+        // system-map 0.2: one shared rule set with `howdah reply`; refusals name the next step
+        const result = resolveReply(join(opts.runsDir, id), text, { graphs });
+        if (!result.ok) return json({ error: result.message, code: result.code }, 409);
+        new AttentionCenter(opts.attentionDir, []).resolve(`${id}:${result.node}:${result.visit}`);
+        wake(id); // the reply must MOVE the run, not just record the answer
+        return json({ ok: true, rendered: result.rendered });
+      }
+
+      // ---- approval decisions (system-map 1a) ------------------------------------------
+      if (sub === "comments" && req.method === "POST") {
+        const body = await objectBody(req);
+        if (!body) return json({ error: "body must be a JSON object {entity_id, text, proposal_id?}" }, 400);
+        const { entity_id, text, proposal_id } = body;
+        if (typeof entity_id !== "string" || entity_id.trim() === "") return json({ error: "entity_id must be a non-empty string" }, 400);
+        if (typeof text !== "string" || text.trim() === "") return json({ error: "text must be a non-empty string" }, 400);
+        if (proposal_id !== undefined && !Number.isInteger(proposal_id)) return json({ error: "proposal_id must be an integer" }, 400);
+        const result = pinComment(join(opts.runsDir, id), entity_id, text, { proposalId: proposal_id as number | undefined });
+        if (!result.ok) return json({ error: result.message, code: result.code }, 409);
+        return json({ ok: true, proposal_id: result.proposal_id, comment_id: result.comment_id }, 201);
+      }
+
+      if (sub === "approval" && req.method === "POST") {
+        const body = await objectBody(req);
+        if (!body) return json({ error: "body must be a JSON object {approved, proposal_id}" }, 400);
+        const { approved, proposal_id } = body;
+        if (typeof approved !== "boolean") return json({ error: "approved must be a boolean" }, 400);
+        // required: the operator decides on the proposal they SAW, never whatever is current now
+        if (!Number.isInteger(proposal_id)) return json({ error: "proposal_id must be an integer" }, 400);
+        const runDir = join(opts.runsDir, id);
+        const decide = approved ? approve : sendFeedback;
+        return decisionResponse(id, decide(runDir, { proposalId: proposal_id as number }));
+      }
+
+      if (sub === "redesign" && req.method === "POST") {
+        const body = await objectBody(req);
+        if (!body) return json({ error: "body must be a JSON object {message}" }, 400);
+        const { message } = body;
+        if (typeof message !== "string" || message.trim() === "") return json({ error: "message must be a non-empty string" }, 400);
+        const runDir = join(opts.runsDir, id);
+        const result = redesign(runDir, message, { graphs });
+        if (!result.ok) return json({ error: result.message, code: result.code }, 409);
+        clearAsks(opts.attentionDir, runDir, result.asks);
+        clearControl(runDir); // like jump: the operator now owns where the run goes
+        launchResume(id);
+        return json({ ok: true, jumped_to: result.jumped_to }, 202);
       }
 
       if (sub === "resume" && req.method === "POST") {
@@ -406,10 +546,7 @@ export function createHowdahServer(opts: ServerOpts) {
       if (sub === "pause" && req.method === "POST") {
         const runDir = join(opts.runsDir, id);
         writeControl(runDir, "pause");
-        const events = readLog(path);
-        const paused = events.findLast((e) => e.type === "run-paused" || e.type === "run-resumed");
-        if (!events.some((e) => e.type === "run-finished") && paused?.type !== "run-paused")
-          new ControlLog(path).append({ type: "run-paused", by: "operator" });
+        markPaused(runDir);
         const interrupted = await interruptRunner(runDir);
         return json({ ok: true, interrupted, note: interrupted ? "paused and interrupted the live runner" : "pause recorded" }, 202);
       }
@@ -417,7 +554,12 @@ export function createHowdahServer(opts: ServerOpts) {
       if (sub === "abort" && req.method === "POST") {
         const runDir = join(opts.runsDir, id);
         writeControl(runDir, "abort");
-        // a live runner aborts at the boundary; a hung/mid-turn one is killed with its agents
+        // a live runner aborts at the boundary; a hung/mid-turn one is killed with its agents —
+        // interruptRunner signals ONLY a holder PROVEN to be this run's runner (start time
+        // matched, or a legacy lock whose argv is cli/main.ts … <this run>): a legacy runner.pid
+        // can name any bun process (the supervisor, a test run, another run's runner), and an
+        // unknown identity is never a licence to kill. Anything else is left alone; the control
+        // file stops a real runner at its next boundary.
         await interruptRunner(runDir);
         const events = readLog(path);
         if (!events.some((e) => e.type === "run-finished"))
@@ -428,12 +570,10 @@ export function createHowdahServer(opts: ServerOpts) {
       if (sub === "jump" && req.method === "POST") {
         const body = (await req.json()) as { node?: string; message?: string };
         if (!body.node) return json({ error: "node required" }, 400);
-        const events = readLog(path);
-        const started = events.find((e) => e.type === "run-started");
-        const graph = started?.type === "run-started" ? GRAPHS[started.graph] : undefined;
-        const node = graph?.def.nodes[body.node];
-        if (!node) return json({ error: `unknown node "${body.node}"` }, 400);
-        if (node.kind === "terminal") return json({ error: "cannot jump to a terminal node" }, 400);
+        // refuse in-process (the same precheck `howdah jump` runs) — the jump itself is spawned
+        // detached, so a refusal from it would never reach the operator
+        const check = jumpRefusal(join(opts.runsDir, id), body.node, graphs);
+        if (!check.ok) return json({ error: check.message }, 400);
         const cli = join(import.meta.dir, "..", "cli", "main.ts");
         const args = ["bun", cli, "jump", id, body.node, ...(body.message ? [body.message] : [])];
         Bun.spawn(args, { stdout: "ignore", stderr: "ignore", env: { ...process.env } }).unref();
@@ -447,7 +587,7 @@ export function createHowdahServer(opts: ServerOpts) {
 
         const events = readLog(path);
         const started = events.find((e) => e.type === "run-started");
-        const graph = started?.type === "run-started" ? GRAPHS[started.graph] : undefined;
+        const graph = started?.type === "run-started" ? graphs[started.graph] : undefined;
         let declarations = {};
         try { declarations = graph ? graph.declarations() : {}; } catch { /* still answerable */ }
         const digest = runDigest(id, events, declarations);
@@ -514,14 +654,14 @@ export function createHowdahServer(opts: ServerOpts) {
       // scopes and declared writers come from the graph, not the log: that is what lets the
       // Context tab list a key no step has reached yet instead of hiding it (CUR5)
       const started = events.find((e) => e.type === "run-started");
-      const graph = started?.type === "run-started" ? GRAPHS[started.graph] : undefined;
+      const graph = started?.type === "run-started" ? graphs[started.graph] : undefined;
       let declarations = {};
       try {
         declarations = graph ? graph.declarations() : {};
       } catch {
         /* a graph with conflicting scopes throws; the rest of the run view still renders */
       }
-      const detail = deriveDetail(id, events, declarations);
+      const detail = deriveDetail(id, events, declarations, { snapshot: baseIndex(join(opts.runsDir, id), events) });
       detail.summary = withRunnerLiveness(detail.summary, events, join(opts.runsDir, id));
       const target = effectiveCwd(path, detail.identity.cwd ?? undefined);
       const runDir = join(opts.runsDir, id);
@@ -540,6 +680,57 @@ export function createHowdahServer(opts: ServerOpts) {
       });
     },
   });
+}
+
+/**
+ * system-map 1d: the base snapshot of the current proposal round, indexed for tier glyphs.
+ *
+ * Everything here comes from the run log, so it is treated as untrusted before it touches the
+ * disk: the manifest hash must be a sha256 hex, and the object store (the store the round's
+ * `map-extracted` event names — taken from the events already read, so a GET never re-reads
+ * run.jsonl) must be the default store or inside $HOWDAH_HOME.
+ *
+ * Cost on the live-polling path: loadSnapshot keeps an LRU of assembled maps (manifests are
+ * immutable, content-addressed), the index is memoised per assembled map, and a snapshot that
+ * cannot be read is remembered as unreadable for UNREADABLE_TTL_MS (bounded), so a broken one is
+ * not retried per SSE tick yet a transient failure recovers without a viewer restart.
+ * Unreadable → null: the card says tiers are unknown rather than failing the run view.
+ */
+const MANIFEST_HASH = /^[0-9a-f]{64}$/;
+const indexes = new WeakMap<AssembledMap, SnapshotIndex>();
+/** key → when the "unreadable" verdict expires (ms since epoch) */
+const unreadable = new Map<string, number>();
+const UNREADABLE_MAX = 256;
+export const UNREADABLE_TTL_MS = 60_000;
+
+function allowedStore(dir: string): boolean {
+  const home = resolve(howdahHome());
+  return dir === resolve(defaultStoreDir()) || dir.startsWith(home + sep);
+}
+
+export function baseIndex(runDir: string, events: ReturnType<typeof readLog>, now: () => number = Date.now): SnapshotIndex | null {
+  const manifest = currentProposal(events)?.manifest_hash;
+  if (!manifest || !MANIFEST_HASH.test(manifest)) return null;
+  const extracted = events.findLast((e) => e.type === "map-extracted" && e.manifest_hash === manifest);
+  const recorded = extracted?.type === "map-extracted" && typeof extracted.store === "string" && extracted.store !== "" ? extracted.store : null;
+  const storeDir = resolve(recorded ?? defaultStoreDir());
+  if (!allowedStore(storeDir)) return null;
+  const key = `${resolve(runDir)}\0${storeDir}\0${manifest}`;
+  const until = unreadable.get(key);
+  if (until !== undefined) {
+    if (now() < until) return null;
+    unreadable.delete(key); // expired: try again
+  }
+  try {
+    const map = loadSnapshot(runDir, manifest, new MapStore(storeDir));
+    let index = indexes.get(map);
+    if (!index) indexes.set(map, (index = snapshotIndex(map)));
+    return index;
+  } catch {
+    if (unreadable.size >= UNREADABLE_MAX) unreadable.delete(unreadable.keys().next().value!);
+    unreadable.set(key, now() + UNREADABLE_TTL_MS);
+    return null;
+  }
 }
 
 /** bundle the React app (with Tailwind) to public/app.js + public/app.css artifacts */

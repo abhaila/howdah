@@ -3,7 +3,7 @@
  * Howdah reviser v0 — GEPA-method reflective prompt revision as a standalone script.
  * (Eng review D5: script first, graduates to a graph once the engine exists.)
  *
- *   bun reviser/revise.ts <prompt-id> [--instances <file>] [--out <dir>]
+ *   bun reviser/revise.ts <prompt-id> [--instances <file>] [--out <dir>] [--evidence-from <includer-id>]
  *
  * Pipeline (one model call, per GEPA: reflect over feedback + evidence, propose a mutation):
  *
@@ -13,28 +13,35 @@
  *
  * The proposal carries base_version (eng review D7): accept tooling must refuse a stale base.
  * Nothing changes behaviour until a human accepts the diff (shaping R2).
+ *
+ * Includes (system-map 1c review):
+ *   - A prompt that `{{> id }}`-includes others is revised as ITS OWN text only. The model sees
+ *     each included prompt's text in a clearly marked read-only block, and is told to keep every
+ *     `{{> id }}` line exactly. The proposal records `base_includes` (every included prompt's
+ *     version), so accepting it is refused if one of them moved since (prompts/store.ts), and
+ *     accepting a revision that changes the include lines is refused unless marked `fork: true`.
+ *   - A PARTIAL (`_`-prefixed id, e.g. `slice._design`) is never rendered on its own, so it has no
+ *     feedback of its own. Chosen rule: revising one is refused unless `--evidence-from
+ *     <includer-id>` names a prompt that includes it; that includer's feedback is the evidence,
+ *     and the model is told the feedback judged the includer's renders, of which the partial is
+ *     one part. (Aggregating every includer's feedback was rejected: feedback on unrelated parts
+ *     of each includer would drown the part the partial owns.)
  */
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join, dirname } from "node:path";
+import { expandIncludes, isPartialId, splitFrontMatter } from "../core/template";
 
 const ROOT = join(dirname(new URL(import.meta.url).pathname), "..");
 
-function parseArgs(argv: string[]) {
-  const [id, ...rest] = argv;
-  if (!id) {
-    console.error("usage: bun reviser/revise.ts <prompt-id> [--instances <file>] [--out <dir>]");
-    process.exit(2);
-  }
-  const get = (flag: string) => {
-    const i = rest.indexOf(flag);
-    return i >= 0 ? rest[i + 1] : undefined;
-  };
-  return { id, instances: get("--instances"), out: get("--out") ?? join(ROOT, "reviser", "proposals") };
+export interface PromptSource {
+  version: number;
+  body: string;
+  raw: string;
 }
 
-function loadPrompt(id: string): { version: number; body: string; raw: string } {
-  const raw = readFileSync(join(ROOT, "prompts", `${id}.md`), "utf8");
+export function loadPrompt(id: string, root = ROOT): PromptSource {
+  const raw = readFileSync(join(root, "prompts", `${id}.md`), "utf8");
   const m = raw.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
   if (!m || m[1] === undefined || m[2] === undefined) throw new Error(`prompts/${id}.md has no front-matter`);
   const vm = m[1].match(/^version:\s*(\d+)/m);
@@ -42,8 +49,8 @@ function loadPrompt(id: string): { version: number; body: string; raw: string } 
   return { version: Number(vm[1]), body: m[2], raw };
 }
 
-function loadFeedback(id: string): Array<Record<string, unknown>> {
-  const p = join(ROOT, "feedback", `${id}.jsonl`);
+export function loadFeedback(id: string, root = ROOT): Array<Record<string, unknown>> {
+  const p = join(root, "feedback", `${id}.jsonl`);
   if (!existsSync(p)) return [];
   return readFileSync(p, "utf8")
     .split("\n")
@@ -51,28 +58,84 @@ function loadFeedback(id: string): Array<Record<string, unknown>> {
     .map((l) => JSON.parse(l));
 }
 
-function buildReflection(id: string, version: number, body: string, feedback: Array<Record<string, unknown>>, instances?: string): string {
+/** A prompt this one includes: its id, current version and (expanded) text. */
+export interface IncludedPrompt {
+  id: string;
+  version: number;
+  text: string;
+}
+
+/** Every prompt `body` includes, transitively, in first-use order, with its expanded text. */
+export function includedPrompts(id: string, body: string, root = ROOT): IncludedPrompt[] {
+  const bodyOf = (i: string) => splitFrontMatter(readFileSync(join(root, "prompts", `${i}.md`), "utf8")).body;
+  const { included } = expandIncludes(body, bodyOf, [id]);
+  return included.map((i) => ({ id: i, version: loadPrompt(i, root).version, text: expandIncludes(bodyOf(i), bodyOf, [id, i]).text }));
+}
+
+/** Where the evidence for revising `id` comes from — itself, or (partials) a named includer. */
+export function evidenceSource(id: string, evidenceFrom: string | undefined, root = ROOT): string {
+  if (!isPartialId(id)) {
+    if (evidenceFrom !== undefined && evidenceFrom !== id) throw new Error(`--evidence-from is only for partials; ${id} has feedback of its own`);
+    return id;
+  }
+  if (evidenceFrom === undefined)
+    throw new Error(
+      `${id} is a partial: it is never rendered on its own, so it has no feedback of its own to revise from. ` +
+        `Run with --evidence-from <includer-id> — a prompt that includes it — to revise it from that prompt's feedback`,
+    );
+  const includer = loadPrompt(evidenceFrom, root);
+  if (!includedPrompts(evidenceFrom, includer.body, root).some((p) => p.id === id))
+    throw new Error(`--evidence-from ${evidenceFrom} does not include ${id}, so its feedback says nothing about it`);
+  return evidenceFrom;
+}
+
+export function buildReflection(
+  id: string,
+  version: number,
+  body: string,
+  feedback: Array<Record<string, unknown>>,
+  opts: { instances?: string; included?: IncludedPrompt[]; evidenceFrom?: string } = {},
+): string {
   const fb = feedback
     .map((f, i) => `FEEDBACK ${i + 1} (run ${f.run}, node ${f.node}@${f.visit}, verdict: ${f.verdict}):\n${f.note}`)
     .join("\n\n");
+  const included = opts.included ?? [];
+  const includesSection = included.length
+    ? `
+INCLUDED PROMPTS (read-only context). The current prompt contains \`{{> id }}\` lines; when a run starts, each is replaced by the named prompt's text, shown below. Those are SEPARATE prompts with their own versions and feedback:
+- keep every \`{{> id }}\` line in your revision EXACTLY as it is, where it is;
+- do not copy included text into your revision, and do not edit it here — a change it needs belongs in a revision of that prompt.
+${included.map((p) => `<<<INCLUDED ${p.id} v${p.version}\n${p.text}\nINCLUDED ${p.id}>>>`).join("\n")}
+`
+    : "";
+  const evidenceNote =
+    opts.evidenceFrom && opts.evidenceFrom !== id
+      ? `\nNOTE: ${id} is a partial — it is only ever rendered inside other prompts. The feedback below judged renders of ${opts.evidenceFrom}, which includes it: act only on the parts of that feedback that concern the text ${id} owns.\n`
+      : "";
   return `You are a prompt engineer improving one prompt in an agent workflow, using the GEPA method: reflect on what the current prompt produced, what the human's feedback says went wrong, and propose ONE revised prompt.
 
 RULES:
 - Preserve every existing constraint and behaviour of the current prompt that the feedback does not ask to change. Do not drop instructions, do not reorder sections without cause, do not change the declared outputs.
 - Apply the feedback precisely: encode what the human asked for as durable instructions, not as one-off patches.
 - Keep the prompt's voice and format consistent with the original.
-- Change as little as possible while fully satisfying the feedback.
+- Change as little as possible while fully satisfying the feedback.${included.length ? "\n- Keep every `{{> id }}` include line exactly (see INCLUDED PROMPTS)." : ""}
 
 CURRENT PROMPT (id: ${id}, version: ${version}):
 <<<PROMPT
 ${body}
 PROMPT>>>
-
+${includesSection}${evidenceNote}
 HUMAN FEEDBACK:
 ${fb}
-${instances ? `\nRENDERED INSTANCES AND OUTCOMES (evidence):\n${instances}\n` : ""}
+${opts.instances ? `\nRENDERED INSTANCES AND OUTCOMES (evidence):\n${opts.instances}\n` : ""}
 FIRST: in 3-5 bullet lines, reflect on exactly what the feedback demands and where in the prompt it belongs (this is your reasoning, shown to the human).
 THEN: output the complete revised prompt between the markers <<<REVISED and REVISED>>> with nothing else inside them.`;
+}
+
+/** The proposal file: front-matter (with base_includes when the prompt includes others) + body. */
+export function proposalFile(id: string, version: number, included: IncludedPrompt[], revised: string, created = new Date().toISOString()): string {
+  const baseIncludes = included.length ? `base_includes: ${JSON.stringify(Object.fromEntries(included.map((p) => [p.id, p.version])))}\n` : "";
+  return `---\nid: ${id}\nbase_version: ${version}\n${baseIncludes}proposed_version: ${version + 1}\nstatus: pending\ncreated: ${created}\n---\n${revised}`;
 }
 
 function runClaude(prompt: string): string {
@@ -99,38 +162,58 @@ function unifiedDiff(a: string, b: string, out: string): string {
   return res.stdout ?? "";
 }
 
-const { id, instances, out } = parseArgs(process.argv.slice(2));
-const { version, body } = loadPrompt(id);
-const feedback = loadFeedback(id);
-if (feedback.length === 0) {
-  console.error(`no feedback recorded for ${id} — nothing to revise from`);
-  process.exit(1);
+function parseArgs(argv: string[]) {
+  const [id, ...rest] = argv;
+  if (!id) {
+    console.error("usage: bun reviser/revise.ts <prompt-id> [--instances <file>] [--out <dir>] [--evidence-from <includer-id>]");
+    process.exit(2);
+  }
+  const get = (flag: string) => {
+    const i = rest.indexOf(flag);
+    return i >= 0 ? rest[i + 1] : undefined;
+  };
+  return { id, instances: get("--instances"), out: get("--out") ?? join(ROOT, "reviser", "proposals"), evidenceFrom: get("--evidence-from") };
 }
-const instancesText = instances ? readFileSync(instances, "utf8") : undefined;
 
-console.error(`revising ${id} v${version} from ${feedback.length} feedback entr${feedback.length === 1 ? "y" : "ies"}…`);
-const answer = runClaude(buildReflection(id, version, body, feedback, instancesText));
+if (import.meta.main) {
+  const { id, instances, out, evidenceFrom } = parseArgs(process.argv.slice(2));
+  let source: string;
+  try {
+    source = evidenceSource(id, evidenceFrom);
+  } catch (err) {
+    console.error(err instanceof Error ? err.message : String(err));
+    process.exit(1);
+  }
+  const { version, body } = loadPrompt(id);
+  const included = includedPrompts(id, body);
+  const feedback = loadFeedback(source);
+  if (feedback.length === 0) {
+    console.error(`no feedback recorded for ${source} — nothing to revise from`);
+    process.exit(1);
+  }
+  const instancesText = instances ? readFileSync(instances, "utf8") : undefined;
 
-const m = answer.match(/<<<REVISED\n?([\s\S]*?)\n?REVISED>>>/);
-if (!m || m[1] === undefined) {
-  console.error("model output contained no <<<REVISED>>> block:\n" + answer.slice(0, 800));
-  process.exit(1);
+  console.error(`revising ${id} v${version} from ${feedback.length} feedback entr${feedback.length === 1 ? "y" : "ies"}${source !== id ? ` on ${source}` : ""}…`);
+  const answer = runClaude(buildReflection(id, version, body, feedback, { instances: instancesText, included, evidenceFrom: source }));
+
+  const m = answer.match(/<<<REVISED\n?([\s\S]*?)\n?REVISED>>>/);
+  if (!m || m[1] === undefined) {
+    console.error("model output contained no <<<REVISED>>> block:\n" + answer.slice(0, 800));
+    process.exit(1);
+  }
+  const revised = m[1];
+  const reflection = answer.slice(0, answer.indexOf("<<<REVISED")).trim();
+
+  mkdirSync(out, { recursive: true });
+  const proposalPath = join(out, `${id}.v${version + 1}.proposal.md`);
+  writeFileSync(proposalPath, proposalFile(id, version, included, revised));
+  const diff = unifiedDiff(body, revised, proposalPath);
+  writeFileSync(join(out, `${id}.v${version + 1}.diff`), diff);
+  // the reflection is the model's stated reason for the change — the evidence a human judges
+  // the diff against, so it is persisted next to the proposal instead of only printed
+  writeFileSync(join(out, `${id}.v${version + 1}.reflection.md`), reflection + "\n");
+
+  console.log(`REFLECTION:\n${reflection}\n`);
+  console.log(`DIFF (current v${version} → proposed v${version + 1}):\n${diff}`);
+  console.log(`proposal: ${proposalPath}`);
 }
-const revised = m[1];
-const reflection = answer.slice(0, answer.indexOf("<<<REVISED")).trim();
-
-mkdirSync(out, { recursive: true });
-const proposalPath = join(out, `${id}.v${version + 1}.proposal.md`);
-writeFileSync(
-  proposalPath,
-  `---\nid: ${id}\nbase_version: ${version}\nproposed_version: ${version + 1}\nstatus: pending\ncreated: ${new Date().toISOString()}\n---\n${revised}`,
-);
-const diff = unifiedDiff(body, revised, proposalPath);
-writeFileSync(join(out, `${id}.v${version + 1}.diff`), diff);
-// the reflection is the model's stated reason for the change — the evidence a human judges
-// the diff against, so it is persisted next to the proposal instead of only printed
-writeFileSync(join(out, `${id}.v${version + 1}.reflection.md`), reflection + "\n");
-
-console.log(`REFLECTION:\n${reflection}\n`);
-console.log(`DIFF (current v${version} → proposed v${version + 1}):\n${diff}`);
-console.log(`proposal: ${proposalPath}`);

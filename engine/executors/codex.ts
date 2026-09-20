@@ -9,13 +9,18 @@
  * durable ask, human replies in the web card, executor answers the wire.
  *
  * PIN NOTE: the protocol is a moving target (S3-Q4). `howdah doctor` asserts the version.
+ *
+ * The prompt is sent UNCHANGED: the engine already appended the outputs contract before
+ * hashing (system-map 0.1), and codex gets no skill hint (core/template.ts skillsForHarness).
+ * The one in-session repair turn (buildRepairInstruction) is a follow-up turn on the same
+ * thread, outside rendered_hash by design — the hash covers the first turn only.
  */
 import { writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { Executor } from "../run";
 import { JsonlChunkParser } from "../../adapter/parse";
 import { mapCodexEvent, buildCodexApprovalResponse } from "../../adapter/codex";
-import { buildOutputInstruction, buildRepairInstruction, parseOutputs } from "./outputs";
+import { buildRepairInstruction, parseOutputs } from "./outputs";
 import { AttentionCenter, osNotifier, type Notifier } from "../attention";
 import { readLog } from "../../log/write";
 import { isAllowReply } from "./reply";
@@ -32,11 +37,22 @@ export interface CodexExecutorOpts {
   viewerBase?: string;
 }
 
+/**
+ * The thread's sandbox. Codex has no permission MODES, so the one mode that must hold is
+ * mapped here: "plan" (a `readOnly` node, system-map 1a D6/5A — resolveAgentConfig forces it
+ * over every override, and over the Claude→Codex fallback) opens a read-only sandbox, never
+ * the full-access default. Every other mode gets the configured sandbox.
+ */
+export function codexSandbox(permissionMode: string | undefined, configured?: string): string {
+  if (permissionMode === "plan") return "read-only";
+  return configured ?? "danger-full-access";
+}
+
 export function codexExecutor(opts: CodexExecutorOpts): Executor {
   return async ({ nodeId, def, visit, runId, cwd, log, renderedPrompt, agentConfig }) => {
     if (def.kind !== "agent") throw new Error("codexExecutor on non-agent node");
     const writeKeys = Object.keys(def.writes ?? {});
-    const prompt = (renderedPrompt ?? "") + buildOutputInstruction(writeKeys);
+    const prompt = renderedPrompt ?? ""; // exactly what rendered_hash covers (system-map 0.1)
 
     const proc = Bun.spawn([opts.binary ?? "codex", "app-server"], {
       cwd: effectiveCwd(log.path, cwd) ?? dirname(log.path),
@@ -64,7 +80,17 @@ export function codexExecutor(opts: CodexExecutorOpts): Executor {
     let finalMessage: string | undefined;
     let turnDone: () => void = () => {}; // reassigned when the turn begins
     let usage: { input_tokens?: number; output_tokens?: number } | undefined;
-    let turnError: string | undefined;
+    /**
+     * Two different things, deliberately NOT one variable (they were, and it made the repair
+     * guard below read as a missing check):
+     *   rpcFault  — an error RESPONSE to one of our own requests: the app-server refused us,
+     *               so the thread is not in a state worth asking anything else of.
+     *   notice    — an error NOTIFICATION. Codex emits these for startup noise (expired MCP
+     *               server auth, observed live) and keeps working, so it is not fatal on its
+     *               own; only a turn that never completes is.
+     */
+    let rpcFault: string | undefined;
+    let notice: string | undefined;
     let turnCompleted = false;
     const chunk = (kind: "text" | "thinking" | "tool_call" | "tool_result", content: string, tool?: { id?: string; name?: string }) =>
       log.append({ type: "chunk", node: nodeId, visit, turn: 1, index: index++, kind, content, tool_id: tool?.id, tool_name: tool?.name });
@@ -102,7 +128,7 @@ export function codexExecutor(opts: CodexExecutorOpts): Executor {
           if (raw.id !== undefined && raw.method === undefined) {
             pending.get(Number(raw.id))?.(raw.result ?? raw.error);
             pending.delete(Number(raw.id));
-            if (raw.error) turnError = String(raw.error.message ?? "codex rpc error");
+            if (raw.error) rpcFault = String(raw.error.message ?? "codex rpc error");
             continue;
           }
           // capture the completed agent message for the outputs contract
@@ -137,7 +163,7 @@ export function codexExecutor(opts: CodexExecutorOpts): Executor {
                 // MCP server auth, observed live) and keeps working. Record it; the turn
                 // fails only if it never completes.
                 chunk("text", `\n[codex notice: ${ev.message}]`);
-                turnError = ev.message;
+                notice = ev.message;
                 break;
             }
           }
@@ -151,7 +177,7 @@ export function codexExecutor(opts: CodexExecutorOpts): Executor {
       const thread = await request("thread/start", {
         cwd: effectiveCwd(log.path, cwd) ?? dirname(log.path),
         approvalPolicy: "on-request",
-        sandbox: opts.sandbox ?? "danger-full-access",
+        sandbox: codexSandbox(agentConfig?.permissionMode, opts.sandbox),
         ...((agentConfig?.model ?? opts.model) ? { model: agentConfig?.model ?? opts.model } : {}),
       });
       const threadId = thread?.threadId ?? thread?.thread?.id;
@@ -169,9 +195,13 @@ export function codexExecutor(opts: CodexExecutorOpts): Executor {
 
       await runTurn(prompt);
 
-      // one repair turn on the SAME thread when the contract is missing — the work is
-      // already done there, so this is far cheaper than parking and re-running the node
-      if (turnCompleted && writeKeys.length && !parseOutputs(finalMessage ?? accumulated, writeKeys).ok) {
+      // One repair turn on the SAME thread when the contract is missing — the work is already
+      // done there, so this is far cheaper than parking and re-running the node. Guarded the
+      // way THIS harness decides failure: the turn completed (claude's equivalent is
+      // !turnError, because for claude any turn error fails the attempt) and the app-server
+      // did not fault on us. A mere notice must not skip the repair, or benign startup noise
+      // would park a run whose work is already done.
+      if (turnCompleted && !rpcFault && writeKeys.length && !parseOutputs(finalMessage ?? accumulated, writeKeys).ok) {
         chunk("text", "\n[outputs object missing — asking for it]");
         finalMessage = undefined;
         accumulated = "";
@@ -188,7 +218,7 @@ export function codexExecutor(opts: CodexExecutorOpts): Executor {
 
     log.append({ type: "turn-finalized", node: nodeId, visit, turn: 1, usage });
     if (!turnCompleted) {
-      chunk("text", `\n[turn error: ${turnError ?? "app-server stream ended before turn/completed"}]`);
+      chunk("text", `\n[turn error: ${rpcFault ?? notice ?? "app-server stream ended before turn/completed"}]`);
       return { status: "failed", writes: {} };
     }
     const parsed = parseOutputs(finalMessage ?? accumulated, writeKeys);

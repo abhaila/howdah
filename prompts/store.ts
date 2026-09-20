@@ -10,11 +10,14 @@
  *     - base_version != current version (stale base: the prompt moved since drafting)
  *     - the revised template reads a context key some consuming node does not declare
  *       (template-read validation: a revision must never introduce an undeclared read)
+ *     - system-map 1c review, includes: an INCLUDED prompt's version moved since drafting
+ *       (base_includes — the text the reviser saw is no longer what runs), or the revision
+ *       changes the prompt's `{{> id }}` lines without being marked a fork
  */
 import { readFileSync, writeFileSync, readdirSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import type { Graph } from "../core/graph";
-import { templateReads } from "../core/template";
+import { expandIncludes, includeRefs, templateReads } from "../core/template";
 
 export interface PromptFile {
   id: string;
@@ -61,15 +64,36 @@ export class PromptStore {
    * Template-read validation (OV-3): every context/inputs key the revised template reads
    * must be declared (reads or inputs) by EVERY node that uses this prompt, in every graph.
    * PromptId checks names; this checks the reads a revision may have introduced.
+   *
+   * Through includes (system-map 1c review): reads are taken from the EXPANDED body, exactly as
+   * a run pins it (core/template.ts expandIncludes), and a node "uses" this prompt when its own
+   * prompt includes it, transitively — revising a partial is checked against every includer.
+   * An include the revision breaks (unknown id, cycle) is itself a problem.
    */
   validateTemplateReads(promptId: string, body: string, graphs: Graph<never>[] | Graph<any>[]): string[] {
     const problems: string[] = [];
-    const reads = PromptStore.templateReads(body);
+    const bodyOf = (id: string) => (id === promptId ? body : this.load(id).body);
     for (const g of graphs) {
       for (const [nodeId, node] of Object.entries(g.def.nodes)) {
-        if (node.kind !== "agent" || node.prompt !== promptId) continue;
+        if (node.kind !== "agent") continue;
+        let expanded: { text: string; included: string[] };
+        try {
+          expanded = expandIncludes(bodyOf(node.prompt), bodyOf, [node.prompt]);
+        } catch (err) {
+          // report it when THIS revision broke the includes (they expand with the stored bodies)
+          let brokeIt = node.prompt === promptId;
+          if (!brokeIt)
+            try {
+              brokeIt = expandIncludes(this.load(node.prompt).body, (id) => this.load(id).body, [node.prompt]).included.includes(promptId);
+            } catch {
+              brokeIt = false; // already broken before this revision: not this revision's problem
+            }
+          if (brokeIt) problems.push(`${g.def.name}/${nodeId}: ${err instanceof Error ? err.message : String(err)}`);
+          continue;
+        }
+        if (node.prompt !== promptId && !expanded.included.includes(promptId)) continue;
         const declared = new Set<string>([...(node.reads ?? []), ...g.def.inputs]);
-        for (const key of reads) {
+        for (const key of PromptStore.templateReads(expanded.text)) {
           if (!declared.has(key))
             problems.push(`${g.def.name}/${nodeId}: template reads "${key}" but the node does not declare it`);
         }
@@ -79,17 +103,49 @@ export class PromptStore {
   }
 
   /**
-   * Accept a proposal: refuse stale bases, refuse undeclared template reads, then bump the
-   * prompt file to the proposed version with provenance. Returns the new version.
+   * The include closure of a prompt as it stands now: every prompt it `{{> id }}`-includes
+   * (transitively), with its current version, in first-use order.
+   */
+  includeClosure(id: string, body = this.load(id).body): Record<string, number> {
+    const { included } = expandIncludes(body, (i) => this.load(i).body, [id]);
+    return Object.fromEntries(included.map((i) => [i, this.load(i).version]));
+  }
+
+  /**
+   * Why a proposal drafted against `base_version` + `base_includes` is stale now, or null. An
+   * absent base_includes on a prompt that has includes is stale: the draft never recorded which
+   * included text it saw.
+   */
+  staleness(id: string, baseVersion: number, baseIncludes: Record<string, number> | undefined): string | null {
+    const current = this.load(id);
+    if (current.version !== baseVersion)
+      return `stale base: proposal for ${id} was drafted against v${baseVersion} but the prompt is now v${current.version} — re-draft`;
+    const now = this.includeClosure(id, current.body);
+    if (baseIncludes === undefined)
+      return Object.keys(now).length ? `stale base: proposal for ${id} did not record the versions of the prompts it includes (${Object.keys(now).join(", ")}) — re-draft` : null;
+    const moved = [...new Set([...Object.keys(now), ...Object.keys(baseIncludes)])].filter((i) => now[i] !== baseIncludes[i]);
+    if (!moved.length) return null;
+    return `stale base: included prompt${moved.length > 1 ? "s" : ""} moved since ${id} was drafted (${moved.map((i) => `${i} v${baseIncludes[i] ?? "—"} → v${now[i] ?? "—"}`).join(", ")}) — re-draft`;
+  }
+
+  /**
+   * Accept a proposal: refuse stale bases (the prompt or anything it includes moved), refuse a
+   * changed include set unless the proposal is a fork, refuse undeclared template reads, then
+   * bump the prompt file to the proposed version with provenance. Returns the new version.
    */
   accept(
-    proposal: { id: string; base_version: number; body: string; provenance?: string },
+    proposal: { id: string; base_version: number; body: string; provenance?: string; base_includes?: Record<string, number>; fork?: boolean },
     consumingGraphs: Graph<any>[],
   ): number {
     const current = this.load(proposal.id);
-    if (current.version !== proposal.base_version)
+    const stale = this.staleness(proposal.id, proposal.base_version, proposal.base_includes);
+    if (stale) throw new PromptStoreError(stale);
+    const was = [...new Set(includeRefs(current.body))].sort();
+    const now = [...new Set(includeRefs(proposal.body))].sort();
+    if (!proposal.fork && was.join("\n") !== now.join("\n"))
       throw new PromptStoreError(
-        `stale base: proposal for ${proposal.id} was drafted against v${proposal.base_version} but the prompt is now v${current.version} — re-draft`,
+        `the revision changes ${proposal.id}'s includes (${was.join(", ") || "none"} → ${now.join(", ") || "none"}) — ` +
+          `keep every \`{{> id }}\` line, or mark the proposal \`fork: true\` to take over the included text deliberately`,
       );
     const readProblems = this.validateTemplateReads(proposal.id, proposal.body, consumingGraphs);
     if (readProblems.length)

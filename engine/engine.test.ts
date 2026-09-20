@@ -3,10 +3,13 @@ import { mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { defineGraph } from "../core/graph";
-import { Engine, type Executor, type AttemptResult } from "./run";
+import { Engine, type Executor, type AttemptResult, type EngineOpts } from "./run";
 import { replayState } from "./replay";
 import { PromptStore } from "../prompts/store";
 import { readLog } from "../log/write";
+import type { LoggedEvent } from "../log/events";
+import { buildOutputInstruction, renderedHash } from "../core/template";
+import { reconstructRender } from "../prompts/library";
 
 interface Ctx {
   goal: string;
@@ -50,6 +53,8 @@ function pipelineGraph() {
 
 const ok = (writes: Record<string, unknown> = {}): AttemptResult => ({ status: "succeeded", writes });
 
+const lastPark = (events: LoggedEvent[]) => events.filter((e) => e.type === "attention-raised").at(-1);
+
 describe("engine loop + routing", () => {
   test("runs the pipeline to terminal, taking the weighted conditional path", async () => {
     const verdicts: Ctx["verdict"][] = ["reject", "pass"]; // first review rejects, second passes
@@ -80,9 +85,9 @@ describe("engine loop + routing", () => {
       },
     });
     const result = await engine.start({ goal: "g", summary: "" });
-    expect(result).toMatchObject({ state: "parked", node: "implement" });
+    expect(result).toMatchObject({ state: "parked", node: "implement", code: "max-visits" });
     expect((result as any).reason).toContain("maxVisits");
-    expect(engine.log.read().some((e) => e.type === "attention-raised")).toBe(true);
+    expect(lastPark(engine.log.read())).toMatchObject({ node: "implement", visit: 4, code: "max-visits" });
   });
 
   test("failed attempt parks; context write is NOT published (publish-on-success)", async () => {
@@ -129,6 +134,43 @@ describe("engine loop + routing", () => {
     const finishes = engine.log.read().filter((e: any) => e.type === "node-finished" && e.node === "implement") as any[];
     expect(finishes.map((e) => e.status)).toEqual(["failed", "succeeded"]);
     expect(finishes[1].writes).toEqual({ summary: "codex did the work" });
+  });
+
+  // Rebase reconciliation (system-map 0.1 x upstream codex fallback): the fallback retry is
+  // a NEW visit rendered after the harness decision, so its prompt-rendered carries the
+  // harness actually used and that harness's skill hint, and both renders reconstruct VERIFIED.
+  test("a codex fallback re-renders for codex: harness, skills and hash match the attempt that ran", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "howdah-run-"));
+    const sent: Array<{ visit: number; harness?: string; prompt: string }> = [];
+    const engine = new Engine(pipelineGraph(), {
+      dir,
+      promptsDir: promptFixtures(),
+      tuning: { nodes: { implement: { skills: ["review"] } } },
+      executors: {
+        agent: async ({ nodeId, visit, agentConfig, log, renderedPrompt }) => {
+          if (nodeId === "implement") sent.push({ visit, harness: agentConfig?.harness, prompt: renderedPrompt ?? "" });
+          if (nodeId === "implement" && agentConfig?.harness === "claude") {
+            log.append({ type: "allowance", harness: "claude", state: "exhausted" });
+            return { status: "failed", writes: {} };
+          }
+          return nodeId === "review" ? ok({ verdict: "pass" }) : ok({ summary: "codex did the work" });
+        },
+        command: async () => ok(),
+      },
+    });
+
+    expect(await engine.start({ goal: "g", summary: "" })).toEqual({ state: "finished", outcome: "success" });
+
+    const renders = engine.log.read().filter((e) => e.type === "prompt-rendered" && e.node === "implement") as any[];
+    expect(renders.map((r) => [r.visit, r.harness, r.skills])).toEqual([
+      [1, "claude", ["review"]],
+      [2, "codex", []],
+    ]);
+    expect(sent.map((s) => [s.visit, s.harness])).toEqual([[1, "claude"], [2, "codex"]]);
+    expect(sent[0]!.prompt).toContain("/review");
+    expect(sent[1]!.prompt).not.toContain("Relevant installed skills");
+    sent.forEach((s, i) => expect(renderedHash(s.prompt)).toBe(renders[i].rendered_hash));
+    for (const r of renders) expect(reconstructRender(dir, r.rendered_hash)?.verified).toBe(true);
   });
 
   test("claude session-limit text falls back even when allowance says ok", async () => {
@@ -293,8 +335,10 @@ describe("exactly-once side effects (OV-1)", () => {
     const prCount = { n: 0 };
     await publishingEngine(dir, { crashDuringEffect: true, prCount }).start({ goal: "g", summary: "" });
     const r2 = await publishingEngine(dir, { probe: "unknown", prCount }).resume();
-    expect(r2).toMatchObject({ state: "parked" });
+    expect(r2).toMatchObject({ state: "parked", code: "ambiguous-effect" });
     expect((r2 as any).reason).toContain("ambiguous side effect");
+    // system-map 0.2: the logged ask carries the code a reply is judged by
+    expect(lastPark(publishingEngine(dir, { prCount }).log.read())).toMatchObject({ code: "ambiguous-effect", node: "publish" });
     expect(prCount.n).toBe(0);
   });
 });
@@ -331,6 +375,39 @@ describe("run pinning (OV-2)", () => {
     expect(renders.every((r) => r.prompt_version === 1)).toBe(true);
     expect(renders.every((r) => !String(r.rendered_hash).includes("REVISED"))).toBe(true);
   });
+});
+
+describe("render proof covers every suffix (system-map 0.1)", () => {
+  const skilled = (harness: "claude" | "codex" | "opencode") =>
+    defineGraph<Ctx>({
+      name: "mini-skilled",
+      entry: "implement",
+      inputs: ["goal", "summary"],
+      defaults: { harness },
+      nodes: {
+        implement: { kind: "agent", prompt: "implementation.implement", reads: ["goal", "summary"], writes: { summary: { scope: "sticky" } }, skills: ["review"] },
+        done: { kind: "terminal", outcome: "success" },
+      },
+      edges: [{ from: "implement", to: "done" }],
+    });
+
+  for (const harness of ["claude", "opencode", "codex"] as const) {
+    test(`${harness}: the prompt handed to the executor is exactly the hashed text`, async () => {
+      let handed = "";
+      const engine = new Engine(skilled(harness), {
+        dir: mkdtempSync(join(tmpdir(), "howdah-run-")),
+        promptsDir: promptFixtures(),
+        executors: { agent: async ({ renderedPrompt }) => ((handed = renderedPrompt!), ok({ summary: "s" })) },
+      });
+      await engine.start({ goal: "g", summary: "p" });
+      const render: any = engine.log.read().find((e) => e.type === "prompt-rendered");
+      expect(renderedHash(handed)).toBe(render.rendered_hash);
+      expect(handed.startsWith("Implement per g. Prior: p\n")).toBe(true);
+      expect(handed.endsWith(buildOutputInstruction(["summary"]))).toBe(true);
+      expect(handed.includes("/review")).toBe(harness !== "codex");
+      expect(render).toMatchObject({ skills: harness === "codex" ? [] : ["review"], output_keys: ["summary"], suffix_version: 3 });
+    });
+  }
 });
 
 describe("resume-by-replay (R7)", () => {
@@ -403,5 +480,61 @@ describe("resume-by-replay (R7)", () => {
     expect(s.visits).toEqual({ a: 1, b: 1 });
     expect(s.finishes).toHaveLength(1);
     expect(s.parked).toBeNull();
+  });
+});
+
+describe("every park carries its code (system-map 0.2)", () => {
+  const engineWith = (executors: EngineOpts["executors"], extra: { maxSteps?: number } = {}) =>
+    new Engine(pipelineGraph(), { dir: mkdtempSync(join(tmpdir(), "howdah-run-")), promptsDir: promptFixtures(), executors, ...extra });
+
+  test("a failed attempt parks with attempt-failed, reason text unchanged", async () => {
+    const engine = engineWith({ agent: async () => ({ status: "failed", writes: {} }) });
+    expect(await engine.start({ goal: "g", summary: "" })).toEqual({
+      state: "parked", node: "implement", reason: "attempt failed", code: "attempt-failed",
+    });
+    expect(lastPark(engine.log.read())).toMatchObject({ node: "implement", visit: 1, reason: "attempt failed", code: "attempt-failed" });
+  });
+
+  test("a throwing executor parks with executor-threw", async () => {
+    const engine = engineWith({ agent: async () => { throw new Error("boom"); } });
+    expect(await engine.start({ goal: "g", summary: "" })).toMatchObject({ state: "parked", code: "executor-threw", reason: "executor threw: boom" });
+    expect(lastPark(engine.log.read())).toMatchObject({ node: "implement", code: "executor-threw" });
+  });
+
+  test("a command node's failure carries the same code — the reply rule, not the engine, tells kinds apart", async () => {
+    const engine = engineWith({
+      agent: async ({ nodeId }) => (nodeId === "review" ? ok({ verdict: "pass" }) : ok({ summary: "s" })),
+      command: async () => ({ status: "failed", writes: {} }),
+    });
+    expect(await engine.start({ goal: "g", summary: "" })).toMatchObject({ state: "parked", node: "publish", code: "attempt-failed" });
+  });
+
+  test("exhausted conditions park with no-edge", async () => {
+    const engine = engineWith({ agent: async ({ nodeId }) => (nodeId === "review" ? ok({ verdict: "maybe" }) : ok({ summary: "s" })) });
+    expect(await engine.start({ goal: "g", summary: "" })).toMatchObject({ state: "parked", node: "review", code: "no-edge" });
+    expect(lastPark(engine.log.read())).toMatchObject({ code: "no-edge", reason: "no edge matched (conditions exhausted)" });
+  });
+
+  test("the step guard parks with max-steps", async () => {
+    const engine = engineWith({ agent: async ({ nodeId }) => (nodeId === "review" ? ok({ verdict: "reject" }) : ok({ summary: "s" })) }, { maxSteps: 2 });
+    expect(await engine.start({ goal: "g", summary: "" })).toMatchObject({ state: "parked", code: "max-steps", reason: "maxSteps reached (2)" });
+    expect(lastPark(engine.log.read())).toMatchObject({ code: "max-steps" });
+  });
+
+  test("resume()'s own resolution is marked source resume", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "howdah-run-"));
+    const promptsDir = promptFixtures();
+    const make = (fail: boolean) =>
+      new Engine(pipelineGraph(), {
+        dir, promptsDir,
+        executors: {
+          agent: async ({ nodeId }) => (fail ? { status: "failed", writes: {} } : nodeId === "review" ? ok({ verdict: "pass" }) : ok({ summary: "s" })),
+          command: async () => ok(),
+        },
+      });
+    await make(true).start({ goal: "g", summary: "" });
+    await make(false).resume();
+    const resolved = readLog(join(dir, "run.jsonl")).filter((e) => e.type === "attention-resolved");
+    expect(resolved).toEqual([expect.objectContaining({ node: "implement", visit: 1, reply: "resume", source: "resume" })]);
   });
 });
