@@ -76,6 +76,12 @@ export type RunEvent =
       type: "run-started";
       graph: string;
       inputs: Record<string, unknown>;
+      /**
+       * HOW-18: the operator's label for the run (core/run-name.ts normalizes it). Display
+       * only — the run id stays identity for the run dir, worktree and branch. Absent when no
+       * name was given, so a log written before this field reads exactly as it did.
+       */
+      name?: string;
       /** where the run works — recorded once; the reconciler probes it, the IDE button opens it */
       cwd?: string;
       folder_kind?: "repo" | "plain";

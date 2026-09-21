@@ -23,7 +23,7 @@ import type { CoalescedTurn } from "../../../log/coalesce";
 import { GraphDag, useGraphShape } from "../graph-dag";
 import { StatusBadge, askRowKey } from "../status";
 import { getJSON } from "@/lib/net";
-import { fmtDur, fmtWait, liveDuration } from "@/lib/format";
+import { fmtDur, fmtWait, liveDuration, runLabel } from "@/lib/format";
 import { useAttentionSurfaces, useNow } from "@/lib/hooks";
 import { usePanel } from "@/lib/panel";
 import { submitOnEnter } from "@/lib/keys";
@@ -367,7 +367,7 @@ export function RunView({ id, graceMs = OPEN_GRACE_MS }: { id: string; graceMs?:
       <div className="thread-col">
         <div className="topbar">
           <a className="topbar-back" href="/" aria-label="back to runs">←</a>
-          <h1>{summary.goal || id}</h1>
+          <h1>{runLabel({ ...summary, id })}</h1>
           <StatusBadge status={summary.status} />
           <span className="meta">{summary.graph}</span>
           <Tabs
@@ -459,6 +459,7 @@ export function RunView({ id, graceMs = OPEN_GRACE_MS }: { id: string; graceMs?:
         <section>
           <h2><Fingerprint size={12} /> Identity</h2>
           <div className="kv"><span className="k">run</span><span>{id}</span></div>
+          {summary.name && <div className="kv"><span className="k">name</span><span>{summary.name}</span></div>}
           <div className="kv"><span className="k">graph</span><span>{summary.graph}</span></div>
           {detail.persistence && <div className="kv"><span className="k">home</span><PathValue full={detail.persistence.home} /></div>}
           {detail.identity.cwd && <div className="kv"><span className="k">{detail.identity.folder_kind === "repo" ? "repo" : "folder"}</span><PathValue full={detail.identity.cwd} shown={detail.identity.cwd.split("/").slice(-2).join("/")} /></div>}

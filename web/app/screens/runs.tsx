@@ -11,7 +11,7 @@ import { useEffect, useState } from "react";
 import type { RunSummary } from "../../derive";
 import type { AppInfo } from "@/lib/types";
 import { getJSON } from "@/lib/net";
-import { fmtWait } from "@/lib/format";
+import { fmtWait, runLabel } from "@/lib/format";
 import { useAttentionSurfaces, useNow } from "@/lib/hooks";
 import { Badge } from "@/components/ui/badge";
 import { Row } from "@/components/ui/row";
@@ -54,7 +54,7 @@ export function RunsList() {
       {runs.map((r) => (
         <Row key={r.id} className="run-row" needsInput={r.status === "needs-input"} href={`/run/${r.id}`}>
           <StatusBadge status={r.status} />
-          <span className="run-goal">{r.goal || r.id}</span>
+          <span className="run-goal">{runLabel(r)}</span>
           <span className="run-meta">
             {r.status === "needs-input" && r.waiting_since
               ? <span className="wait-timer">waiting {fmtWait(r.waiting_since, now)}</span>

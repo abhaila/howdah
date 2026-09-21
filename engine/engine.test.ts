@@ -496,6 +496,48 @@ describe("exactly-once side effects (OV-1)", () => {
   });
 });
 
+describe("run name (HOW-18)", () => {
+  const engineFor = (dir: string, fail: { first: boolean }, name?: string) =>
+    new Engine(pipelineGraph(), {
+      dir,
+      promptsDir: promptFixtures(),
+      ...(name !== undefined ? { name } : {}),
+      executors: {
+        agent: async ({ nodeId }) => {
+          if (fail.first) { fail.first = false; return { status: "failed", writes: {} }; }
+          return nodeId === "review" ? ok({ verdict: "pass" }) : ok({ summary: "s" });
+        },
+        command: async () => ok(),
+      },
+    });
+
+  test("the name is stamped once on run-started and survives park + resume", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "howdah-run-"));
+    const fail = { first: true };
+    expect((await engineFor(dir, fail, "Fix login").start({ goal: "g", summary: "" })).state).toBe("parked");
+    // the resuming runner is built WITHOUT a name, as `howdah resume` builds it: the log keeps it
+    expect(await engineFor(dir, fail).resume()).toEqual({ state: "finished", outcome: "success" });
+    const events = readLog(join(dir, "run.jsonl"));
+    const starts = events.filter((e) => e.type === "run-started");
+    expect(starts).toHaveLength(1);
+    expect(starts[0]).toMatchObject({ type: "run-started", name: "Fix login", graph: "mini-pipeline", inputs: { goal: "g" } });
+    expect(replayState(events).started).toMatchObject({ name: "Fix login" });
+  });
+
+  test("an unnamed run writes no name key — the pre-HOW-18 event shape", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "howdah-run-"));
+    await engineFor(dir, { first: false }).start({ goal: "g", summary: "" });
+    const started = readLog(join(dir, "run.jsonl")).find((e) => e.type === "run-started")!;
+    expect("name" in started).toBe(false);
+  });
+
+  test("an empty name is treated as no name", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "howdah-run-"));
+    await engineFor(dir, { first: false }, "").start({ goal: "g", summary: "" });
+    expect("name" in readLog(join(dir, "run.jsonl")).find((e) => e.type === "run-started")!).toBe(false);
+  });
+});
+
 describe("run pinning (OV-2)", () => {
   test("a parked run keeps its pinned prompt versions across an accepted revision", async () => {
     const promptsDir = promptFixtures();

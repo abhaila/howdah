@@ -22,6 +22,14 @@ export function fmtWait(sinceIso: string, now: number): string {
   return `${Math.floor(m / 60)}h ${m % 60}m`;
 }
 
+/**
+ * HOW-18: what a run is called wherever it is labelled — the operator's name, else the goal,
+ * else the run id. One rule so the Runs list and the run heading cannot disagree.
+ */
+export function runLabel(s: { id: string; name?: string | null; goal?: string | null }): string {
+  return s.name || s.goal || s.id;
+}
+
 export function fmtWhen(iso: string | null): string {
   return iso ? new Date(iso).toLocaleString() : "—";
 }
