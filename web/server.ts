@@ -12,6 +12,7 @@
  *   POST /api/runs/:id/approval    {approved, proposal_id} → approve, or send the round's comments as feedback
  *   POST /api/runs/:id/redesign    {message} → re-extract and redraw (refused while a runner is live)
  *   POST /api/runs/:id/effects     {effect, verdict, node?} → HOW-3: attest to an ambiguous side effect
+ *   GET  /api/attention            HOW-20: the needs-you inbox — every pending ask with its run, reason and wait
  *   (system-map 1a: the same engine/control.ts functions as the CLI verbs; 400 on a malformed
  *   body, 409 {error, code} on a refusal)
  *
@@ -42,6 +43,7 @@ import { loadSnapshot } from "../engine/slice-map";
 import { MapStore, defaultStoreDir } from "../map/store";
 import type { AssembledMap } from "../map/types";
 import { AttentionCenter } from "../engine/attention";
+import { inboxItems } from "../engine/attention-inbox";
 import { graphCatalog, GRAPHS } from "../graphs/index";
 import { catalogOf, loadRegistry, type Registry } from "../graphs/registry";
 import { deleteLocalGraph, LOCAL_NAME, localGraphPath, readLocalSource, saveLocalSource } from "../graphs/local";
@@ -348,6 +350,15 @@ export function createHowdahServer(opts: ServerOpts) {
         }
         return json(promptDetail(libraryPaths(opts), Object.values(GRAPHS), id, promptStore));
       }
+
+      /**
+       * HOW-20's other half: the notification says a run needs you, this says WHICH and WHY.
+       * Read-only — a record leaves disk through the reply, approval and effect routes, never
+       * by being looked at — and it filters through the same `stillNeedsHuman` the watchdog
+       * rings by, so the screen's count and the banner's count cannot drift apart.
+       */
+      if (url.pathname === "/api/attention" && req.method === "GET")
+        return json(inboxItems({ runsDir: opts.runsDir, attentionDir: opts.attentionDir }));
 
       if (url.pathname === "/api/proposals") return json(listProposals(proposalsDir(root), promptStore, root));
       const prm = url.pathname.match(/^\/api\/proposals\/([^/]+)\/(accept|reject|redraft)$/);

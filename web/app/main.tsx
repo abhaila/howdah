@@ -11,8 +11,9 @@
 import "./globals.css";
 import { createRoot } from "react-dom/client";
 import { useCallback, useEffect, useState } from "react";
-import { Rows3, Plus, Workflow, Settings as SettingsIcon, Library, FileDiff, Sun, Moon, Monitor } from "lucide-react";
+import { Rows3, Plus, Workflow, Settings as SettingsIcon, Library, FileDiff, BellRing, Sun, Moon, Monitor } from "lucide-react";
 import type { ProposalView } from "../../prompts/proposals";
+import type { InboxItem } from "../../engine/attention-inbox";
 import { PROPOSALS_CHANGED } from "@/lib/types";
 import { getJSON } from "@/lib/net";
 import { Button } from "@/components/ui/button";
@@ -28,6 +29,7 @@ import { GraphsList } from "./screens/graphs";
 import { PromptsScreen } from "./screens/prompts";
 import { ProposalsScreen } from "./screens/proposals";
 import { Settings } from "./screens/settings";
+import { AttentionInbox } from "./screens/attention";
 
 const THEMES = ["dark", "light", "system"] as const;
 type Theme = (typeof THEMES)[number];
@@ -90,7 +92,8 @@ function App() {
   const isNew = path === "/new";
   const isSettings = path === "/settings";
   const isGraphs = path === "/graphs";
-  const isRuns = !runMatch && !isNew && !isGraphs && !isSettings && !promptMatch && !proposalMatch;
+  const isAttention = path === "/attention";
+  const isRuns = !runMatch && !isNew && !isGraphs && !isSettings && !promptMatch && !proposalMatch && !isAttention;
 
   // how many drafts are waiting for you to look — R2's whole point is that you look, so a
   // count that goes stale after an accept is worse than no count: it is a live-looking lie
@@ -106,6 +109,17 @@ function App() {
     return () => window.removeEventListener(PROPOSALS_CHANGED, countPending);
   }, [countPending, path]);
 
+  // how many runs are standing there waiting for a human (HOW-20). Polled, not counted from
+  // the runs list: this is the same read model the notifications ring by, so the badge and
+  // the banner can never say different numbers.
+  const [waiting, setWaiting] = useState(0);
+  useEffect(() => {
+    const load = () => getJSON<InboxItem[]>("/api/attention").then((i) => setWaiting(i.length)).catch(() => setWaiting(0));
+    load();
+    const t = setInterval(load, 5000);
+    return () => clearInterval(t);
+  }, [path]);
+
   return (
     <ToastProvider>
       <div className="shell" data-nav={nav.collapsed ? "rail" : "full"}>
@@ -117,6 +131,10 @@ function App() {
               the boot jingle belongs to an actual load, not to navigating back to Runs */}
           <a className="mark-btn" href="/" aria-label="Howdah — runs"><Mark className="mark" /><span className="wordmark">Howdah</span></a>
           <a className={`nav ${isRuns ? "active" : ""}`} href="/"><Rows3 size={15} /><span className="label">Runs</span></a>
+          <a className={`nav ${isAttention ? "active" : ""}`} href="/attention">
+            <BellRing size={15} /><span className="label">Needs you</span>
+            {waiting > 0 && <span className="nav-badge">{waiting}</span>}
+          </a>
           <a className={`nav ${isNew ? "active" : ""}`} href="/new"><Plus size={15} /><span className="label">New run</span></a>
           <a className={`nav ${isGraphs ? "active" : ""}`} href="/graphs"><Workflow size={15} /><span className="label">Graphs</span></a>
           <a className={`nav ${promptMatch ? "active" : ""}`} href="/prompts"><Library size={15} /><span className="label">Prompts</span></a>
@@ -133,6 +151,7 @@ function App() {
         </nav>
         <main>
           {runMatch ? <RunView id={runMatch[1]!} />
+            : isAttention ? <div className="runs"><AttentionInbox /></div>
             : isNew ? <StartRun />
             : isSettings ? <Settings />
             : isGraphs ? <GraphsList />
