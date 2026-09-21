@@ -6,7 +6,9 @@
  * Each tick:
  *   1. Heartbeat stale AND its pid dead  → raise a durable "harness died" attention.
  *      Heartbeat back  → resolve that record: the harness returning is the answer to it,
- *      and nothing else ever cleared it (HOW-20).
+ *      and nothing else ever cleared it (HOW-20). A FRESH heartbeat is the only thing that
+ *      clears it — a tick that cannot prove the harness dead (recycled pid, torn heartbeat)
+ *      has not proven it alive either, and must leave the record standing.
  *   2. Pending attention never delivered, or delivered longer than reNotifyAfterMs ago
  *      → (re-)notify. This is what makes `kill -9` with attention pending still ring:
  *      the record was written before the death; this process delivers it.
@@ -27,7 +29,6 @@ import {
   osNotifier,
   pidAlive,
   readHeartbeat,
-  type AttentionRecord,
   type Notifier,
 } from "../engine/attention";
 import { stillNeedsHuman } from "../engine/attention-inbox";
@@ -88,8 +89,12 @@ export async function check(opts: CheckOpts): Promise<CheckResult> {
 
   // 2. drop what no longer needs a human, then deliver what does — as ONE notification
   const before = new Set(center.pending().map((r) => r.id));
-  const alive = (r: AttentionRecord) => (r.node === HARNESS_NODE ? harnessDead : stillNeedsHuman(runsDir, r));
-  const due = await center.reRaise(reNotifyAfter, alive);
+  // the harness record is exempt from the log probe (engine/attention.ts RUNLESS_NODES) and so
+  // survives this step by construction. Deliberate: it may only be resolved on PROOF that the
+  // harness came BACK — the fresh-heartbeat branch above — never on a tick that merely failed
+  // to prove it dead. A recycled pid or a torn heartbeat (writeHeartbeat is not atomic) would
+  // otherwise delete the only durable "the supervisor is down" record while it still is.
+  const due = await center.reRaise(reNotifyAfter, (r) => stillNeedsHuman(runsDir, r));
   const after = new Set(center.pending().map((r) => r.id));
   for (const id of before) if (!after.has(id)) resolved.push(id);
   if (due.length > 0) await center.notify(due);

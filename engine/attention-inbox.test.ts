@@ -3,7 +3,7 @@
  * read model over it. Every case here is a way the old code kept ringing for nobody.
  */
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EventLog } from "../log/write";
@@ -57,6 +57,63 @@ describe("stillNeedsHuman", () => {
   test("the harness record has no run to replay, so it is never judged here", () => {
     expect(stillNeedsHuman(home(), { run: "howdah", node: "__harness__", visit: 1 })).toBe(true);
   });
+
+  /**
+   * The flood the ticket actually shows: park, resume, park again. Resuming appends
+   * attention-resolved but deletes no disk record, so the run owns a record per park, and
+   * "is the run parked?" — the question this used to ask — keeps every one of them.
+   */
+  test("an ask superseded by a later park is answered; only the standing one survives", () => {
+    const runs = home();
+    const log = parked(runs, "r1");
+    log.append({ type: "attention-resolved", node: "implement", visit: 1, reply: "resume", source: "resume" });
+    log.append({ type: "node-started", node: "implement", visit: 2, attempt_id: "implement#2" });
+    log.append({ type: "attention-raised", node: "implement", visit: 2, reason: "attempt failed again" });
+
+    expect(stillNeedsHuman(runs, { run: "r1", node: "implement", visit: 1 })).toBe(false);
+    expect(stillNeedsHuman(runs, { run: "r1", node: "implement", visit: 2 })).toBe(true);
+  });
+
+  test("a park on ANOTHER node is not this record's ask", () => {
+    const runs = home();
+    const log = parked(runs, "r1");
+    log.append({ type: "attention-resolved", node: "implement", visit: 1, reply: "go on", source: "operator" });
+    log.append({ type: "node-started", node: "review", visit: 1, attempt_id: "review#1" });
+    log.append({ type: "attention-raised", node: "review", visit: 1, reason: "needs your reply" });
+    expect(stillNeedsHuman(runs, { run: "r1", node: "implement", visit: 1 })).toBe(false);
+    expect(stillNeedsHuman(runs, { run: "r1", node: "review", visit: 1 })).toBe(true);
+  });
+
+  test("a run mid-flight with no standing park keeps nobody waiting", () => {
+    const runs = home();
+    const log = parked(runs, "r1");
+    log.append({ type: "attention-resolved", node: "implement", visit: 1, reply: "go on", source: "operator" });
+    expect(stillNeedsHuman(runs, { run: "r1", node: "implement", visit: 1 })).toBe(false);
+  });
+
+  /**
+   * The runner-lock record has no log event of its own, so the LOCK is what judges it: kept
+   * while a non-runner still holds it (`howdah up` re-raises it every tick, and its once-guard
+   * only holds while the record is there — dropping it would ring on every tick instead),
+   * dropped as soon as the lock is gone.
+   */
+  test("a runner-lock record lives and dies by the lock, not by the log", async () => {
+    const runs = home();
+    parked(runs, "wedged");
+    const runDir = join(runs, "wedged");
+    const record = { run: "wedged", node: "runner-lock", visit: 0 };
+    const bystander = Bun.spawn(["bun", "-e", "setInterval(()=>{},1e9)"]);
+    try {
+      await Bun.sleep(200);
+      writeFileSync(join(runDir, "runner.pid"), String(bystander.pid));
+      expect(stillNeedsHuman(runs, record)).toBe(true); // still wedged: `resume --force` is the fix
+      rmSync(join(runDir, "runner.pid"));
+      expect(stillNeedsHuman(runs, record)).toBe(false); // lock gone: nothing left to force
+    } finally {
+      bystander.kill(9);
+      await bystander.exited;
+    }
+  }, 30000);
 });
 
 describe("inboxItems", () => {
@@ -83,7 +140,20 @@ describe("inboxItems", () => {
       reason: "attempt failed",
       waited: "waiting 2h 11m",
       deep_link: "http://localhost:4711/run/run-old#needs-input",
+      href: "/run/run-old#needs-input",
     });
+  });
+
+  test("the harness row links at the inbox, because there is no /run/howdah to link at", async () => {
+    const base = home();
+    const runsDir = join(base, "runs");
+    const attentionDir = join(base, "attention");
+    const center = new AttentionCenter(attentionDir, []);
+    await center.raise({ run: "howdah", node: "__harness__", visit: 1, reason: "harness is dead — run `howdah up`" });
+
+    const [item] = inboxItems({ runsDir, attentionDir });
+    expect(item!.href).toBeNull(); // the row is text, not a link to a run that does not exist
+    expect(item!.deep_link).toBe("http://localhost:4711/attention");
   });
 
   test("drops what no longer needs a human, and does NOT delete it — reading is not resolving", async () => {

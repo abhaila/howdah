@@ -94,6 +94,22 @@ export function formatWait(sinceIso: string, now: Date): string {
  */
 export const NOTIFY_COOLDOWN_MS = 10 * 60_000;
 
+/** where the viewer lives when nobody says otherwise — the base of every deep link */
+export const DEFAULT_VIEWER_BASE = "http://localhost:4711";
+
+/**
+ * Nodes that name the HARNESS itself rather than a node of some run — `howdah:__harness__:1`,
+ * raised by watchdog/check.ts when the heartbeat goes stale with a dead pid.
+ *
+ * There is no run behind them, which decides two things. Nobody can judge them from a run log
+ * (engine/attention-inbox.ts leaves them to the heartbeat), and `/run/howdah#needs-input` is
+ * NOT a page: the run view renders "No run howdah — nothing was written to its log, so it
+ * probably failed to start". Since HOW-20 made the banner clickable, the one notification
+ * whose fix is `howdah up` would open a page asserting a launch failure — the same dead-end
+ * click the ticket reports. So a runless record links at the inbox, which does list it.
+ */
+export const RUNLESS_NODES: ReadonlySet<string> = new Set(["__harness__"]);
+
 export class AttentionCenter {
   constructor(
     readonly dir: string,
@@ -105,6 +121,10 @@ export class AttentionCenter {
 
   private now(): Date {
     return this.opts.clock?.() ?? new Date();
+  }
+
+  private viewerBase(): string {
+    return this.opts.viewerBase ?? DEFAULT_VIEWER_BASE;
   }
 
   private path(id: string): string {
@@ -126,7 +146,9 @@ export class AttentionCenter {
       id,
       ...input,
       raised_at: prior?.raised_at ?? this.now().toISOString(),
-      deep_link: `${this.opts.viewerBase ?? "http://localhost:4711"}/run/${input.run}#needs-input`,
+      deep_link: RUNLESS_NODES.has(input.node)
+        ? `${this.viewerBase()}/attention` // no /run/howdah exists to land on; see RUNLESS_NODES
+        : `${this.viewerBase()}/run/${input.run}#needs-input`,
       ...(prior?.notified_at ? { notified_at: prior.notified_at } : {}),
     };
     writeFileSync(this.path(id), JSON.stringify(record, null, 2));
@@ -162,7 +184,7 @@ export class AttentionCenter {
       : {
           title: `Howdah needs you — ${list.length} runs`,
           body: list.map((r) => `${one(r)} · ${formatWait(r.raised_at, this.now())}`).join(", "),
-          link: `${this.opts.viewerBase ?? "http://localhost:4711"}/attention`,
+          link: `${this.viewerBase()}/attention`,
         };
     for (const fire of this.notifiers) await fire(n);
     // stamped only after every notifier returned: a throw above leaves the records

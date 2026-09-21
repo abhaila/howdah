@@ -14,26 +14,43 @@
  *
  * The conservative direction is deliberate. A record is dropped only on PROOF that nobody is
  * waiting (the run finished, an operator action answered the park, the ask was superseded by
- * a later visit, the run dir is gone). A log that cannot be read keeps its record — losing a
+ * a later one, the run dir is gone). A log that cannot be read keeps its record — losing a
  * standing ask is far worse than one extra line in a list.
+ *
+ * "Proof" is about THIS record, not about its run: the question is whether the run's standing
+ * park is this exact `node:visit`, because a run that parked, was answered and parked again
+ * leaves a record for each and only the last one is a live ask. The two records with no log
+ * event of their own — the harness and a wedged runner lock — are judged by the thing they
+ * are about (the heartbeat, the lock), never by the log.
  */
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { readLog } from "../log/write";
 import { replayState } from "./replay";
-import { AttentionCenter, formatWait, type AttentionRecord } from "./attention";
+import { runnerHolder } from "./control";
+import { AttentionCenter, formatWait, RUNLESS_NODES, type AttentionRecord } from "./attention";
+
+/** re-exported from engine/attention.ts, which needs it to decide a record's deep link */
+export { RUNLESS_NODES };
 
 /**
- * Nodes that name the HARNESS rather than a node of some run (`howdah:__harness__:1`, raised
- * by watchdog/check.ts when the heartbeat goes stale with a dead pid). There is no run log to
- * replay, so this file does not judge them — the heartbeat does, back in the watchdog.
+ * The other record with no event of its own: `<run>:runner-lock:0` (engine/control.ts
+ * raiseRunnerLock) says a live process that is NOT the run's runner holds its lock, and
+ * `resume <run> --force` is the fix. Its run HAS a log, but the log never mentions the lock,
+ * so replaying it would answer about some other ask entirely. The lock itself is the proof.
  */
-export const RUNLESS_NODES: ReadonlySet<string> = new Set(["__harness__"]);
+export const RUNNER_LOCK_NODE = "runner-lock";
 
 export interface InboxItem {
   /** the record's id — `${run}:${node}:${visit}`, what `resolve()` takes */
   id: string;
   run: string;
+  /**
+   * the in-app path this row links to, or null when the record has no run page to link at
+   * (RUNLESS_NODES — the harness record's run id, "howdah", is not a run). Decided here so
+   * the screen never has to import this module's node-side code to ask.
+   */
+  href: string | null;
   /** the graph the run is of, from its run-started event; "" when the log cannot say */
   graph: string;
   node: string;
@@ -53,7 +70,15 @@ export interface InboxItem {
  */
 export function stillNeedsHuman(runsDir: string, record: Pick<AttentionRecord, "run" | "node" | "visit">): boolean {
   if (RUNLESS_NODES.has(record.node)) return true;
-  const path = join(runsDir, record.run, "run.jsonl");
+  const runDir = join(runsDir, record.run);
+  // the lock is its own evidence: kept while a non-runner still holds it (so `howdah up`'s
+  // once-guard keeps holding and it cannot re-ring every tick), dropped the moment it does
+  // not — which is exactly when `resume --force`, a pause or the holder's death fixed it
+  if (record.node === RUNNER_LOCK_NODE) {
+    const holder = runnerHolder(runDir);
+    return holder !== null && !holder.genuine;
+  }
+  const path = join(runDir, "run.jsonl");
   if (!existsSync(path)) return false; // the run was deleted; its ask went with it
   let events;
   try {
@@ -64,15 +89,23 @@ export function stillNeedsHuman(runsDir: string, record: Pick<AttentionRecord, "
   const state = replayState(events);
   if (!state.started) return true; // an empty or torn-from-the-top log cannot say
   if (state.finished) return false; // finished or aborted — nobody is waiting
-  if (state.answeredPark) return false; // an approval or an effect attestation answered it
-  if (state.parked) return true;
-  // No standing park. If the node has since been attempted again, this record's ask was
-  // answered and the run moved on; if it has not, the run is mid-flight and the record is
-  // the ask that resolved — either way there is nothing here for a human to answer. This is
-  // also what ages out a `runner-lock` record (engine/control.ts raiseRunnerLock), which has
-  // no log event of its own: it rings once, when it happens, and is not re-rung for a run
-  // that is otherwise fine.
-  return false;
+  /**
+   * The record is judged against its OWN identity, not the run's global mood (HOW-20
+   * review). "The run is parked" is the wrong question: a run that parked on implement#1,
+   * was resumed (which appends attention-resolved but never deletes the disk record) and
+   * then parked again as implement#2 has TWO records, and answering "is it parked?" keeps
+   * both — two inbox rows and a "2 runs need you" banner for one run, one of them showing a
+   * reason that was answered hours ago.
+   *
+   * So: keep it only while the STANDING park is this very ask. That one comparison also
+   * covers the rest — an ask an operator answered is no longer the standing park, a park a
+   * decision or an effect attestation answered leaves `parked` null (D17 / HOW-3), and a run
+   * mid-flight has no park at all. A later raise of the same node+visit (the permission ask
+   * answered, then the attempt fails and parks on the same visit) matches again, which is
+   * right: the record was rewritten with the new reason and is a live ask once more.
+   */
+  const standing = state.parked;
+  return standing !== null && standing.node === record.node && standing.visit === record.visit;
 }
 
 /**
@@ -93,6 +126,7 @@ export function inboxItems(opts: { runsDir: string; attentionDir: string; clock?
     items.push({
       id: r.id,
       run: r.run,
+      href: RUNLESS_NODES.has(r.node) ? null : `/run/${r.run}#needs-input`,
       graph: graphOf(opts.runsDir, r.run),
       node: r.node,
       visit: r.visit,

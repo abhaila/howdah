@@ -262,6 +262,65 @@ describe("watchdog check()", () => {
     expect(fired[0]!.link).toBe("http://localhost:4711/attention");
   });
 
+  /**
+   * The only durable record of "the supervisor is down" may not be deleted by a tick that
+   * merely FAILED TO PROVE the harness dead (HOW-20 review): a recycled pid, or a heartbeat
+   * torn by a kill mid-write (writeHeartbeat is a plain writeFileSync), both read as "not
+   * provably dead" while the harness is still very much down.
+   */
+  test("a tick that cannot prove the harness dead leaves its record standing", async () => {
+    const base = dir();
+    const attentionDir = join(base, "attention");
+    const heartbeat = join(base, "heartbeat.json");
+    const { fired, notifier } = capture();
+    const corpse = Bun.spawn(["sleep", "300"]);
+    writeHeartbeat(heartbeat, clockAt("2026-09-13T12:00:00Z"), corpse.pid);
+    corpse.kill(9);
+    await corpse.exited;
+    const opts = {
+      attentionDir,
+      runsDir: join(base, "runs"),
+      heartbeatPath: heartbeat,
+      notifiers: [notifier],
+      clock: clockAt("2026-09-13T12:10:00Z"),
+    };
+    expect((await check(opts)).harnessDead).toBe(true);
+
+    // the pid has been recycled: the heartbeat is STILL stale, but its pid now runs again
+    writeHeartbeat(heartbeat, clockAt("2026-09-13T12:00:00Z"), process.pid);
+    const recycled = await check(opts);
+    expect(recycled.harnessDead).toBe(false);
+    expect(recycled.resolved).toEqual([]);
+    expect(new AttentionCenter(attentionDir, []).pending().map((r) => r.id)).toEqual(["howdah:__harness__:1"]);
+
+    // and a heartbeat torn mid-write says nothing either way — still not proof of a return
+    writeFileSync(heartbeat, '{"pid":');
+    const torn = await check(opts);
+    expect(torn.resolved).toEqual([]);
+    expect(new AttentionCenter(attentionDir, []).pending().map((r) => r.id)).toEqual(["howdah:__harness__:1"]);
+    expect(fired).toHaveLength(1); // one ring for one situation, across all three ticks
+  });
+
+  test("the harness banner links the inbox — /run/howdah is not a page", async () => {
+    const base = dir();
+    const heartbeat = join(base, "heartbeat.json");
+    const { fired, notifier } = capture();
+    const corpse = Bun.spawn(["sleep", "300"]);
+    writeHeartbeat(heartbeat, clockAt("2026-09-13T12:00:00Z"), corpse.pid);
+    corpse.kill(9);
+    await corpse.exited;
+    await check({
+      attentionDir: join(base, "attention"),
+      runsDir: join(base, "runs"),
+      heartbeatPath: heartbeat,
+      notifiers: [notifier],
+      clock: clockAt("2026-09-13T12:10:00Z"),
+    });
+    expect(fired).toHaveLength(1);
+    expect(fired[0]!.body).toContain("howdah up");
+    expect(fired[0]!.link).toBe("http://localhost:4711/attention");
+  });
+
   test("the harness record is cleared once the heartbeat comes back", async () => {
     const base = dir();
     const attentionDir = join(base, "attention");

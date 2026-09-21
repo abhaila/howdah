@@ -24,6 +24,21 @@ const ITEM: InboxItem = {
   raised_at: "2026-09-20T12:00:00.000Z",
   waited: "waiting 2h 11m",
   deep_link: "http://localhost:4711/run/implement-ticket-mu9kvg39#needs-input",
+  href: "/run/implement-ticket-mu9kvg39#needs-input",
+};
+
+/** the one record that is about the harness, not a run — there is no /run/howdah to open */
+const HARNESS_ITEM: InboxItem = {
+  id: "howdah:__harness__:1",
+  run: "howdah",
+  graph: "",
+  node: "__harness__",
+  visit: 1,
+  reason: "harness process 41234 is dead (heartbeat stale) — run `howdah up`",
+  raised_at: "2026-09-20T12:00:00.000Z",
+  waited: "waiting 20m",
+  deep_link: "http://localhost:4711/attention",
+  href: null,
 };
 
 function serve(body: unknown, status = 200) {
@@ -58,6 +73,15 @@ describe("AttentionInbox", () => {
     expect(row.querySelector(".wait-timer")!.textContent).toBe("waiting 2h 11m");
     // the one row state allowed the alarm colour, straight off the shared Row primitive
     expect(row.className).toContain("var(--attention-bg)");
+  });
+
+  test("a record with no run page is readable text, not a link to a run that does not exist", async () => {
+    serve([HARNESS_ITEM]);
+    const el = await render();
+    expect(el.querySelectorAll("a")).toHaveLength(0); // /run/howdah says "No run howdah"
+    const row = el.querySelector(".run-row")!;
+    expect(row.textContent).toContain("howdah up"); // the fix is in the reason, where it reads
+    expect(row.querySelector(".wait-timer")!.textContent).toBe("waiting 20m");
   });
 
   test("nothing waiting says so", async () => {

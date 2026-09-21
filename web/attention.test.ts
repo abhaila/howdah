@@ -47,6 +47,7 @@ describe("GET /api/attention", () => {
       node: "implementation.plan",
       reason: "attempt failed",
       deep_link: "http://localhost:4711/run/run-waiting#needs-input",
+      href: "/run/run-waiting#needs-input",
     });
     expect(items[0].waited).toMatch(/just now|waiting/);
     expect(center.pending()).toHaveLength(2); // a GET is a read: both records are still there

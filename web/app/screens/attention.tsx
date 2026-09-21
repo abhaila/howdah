@@ -41,7 +41,11 @@ export function AttentionInbox() {
         <EmptyState mark={<Mark className="mark" />}>nothing needs you — every run is on its own</EmptyState>
       ) : (
         items.map((item) => (
-          <Row key={item.id} className="run-row" needsInput href={`/run/${item.run}#needs-input`}>
+          // href ?? undefined, never a guessed path: the harness record's "run" is the literal
+          // string "howdah", and /run/howdah is a page that says the run failed to start. The
+          // server decides what each row can link at (engine/attention-inbox.ts `href`); a row
+          // with nothing to link at reads as plain text, its reason already naming `howdah up`.
+          <Row key={item.id} className="run-row" needsInput href={item.href ?? undefined}>
             <Badge variant="attention">needs you</Badge>
             <span className="run-goal">{item.reason}</span>
             <span className="run-meta">
