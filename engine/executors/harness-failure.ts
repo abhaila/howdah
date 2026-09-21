@@ -16,6 +16,7 @@
  * change. That is why a miss degrades to `attempt-failed` WITH the stderr tail attached
  * rather than to a wrong diagnosis: an unrecognised message still reaches the human intact.
  */
+import { harnessSpec, harnessSpecForCommand, isHarness } from "../../core/harnesses";
 import type { ParkCode } from "../../log/events";
 
 /** how much of stderr is worth putting in front of a human (and into the run log) */
@@ -25,6 +26,11 @@ export const STDERR_TAIL_CHARS = 600;
  * Wording seen from `claude` and `codex` when credentials are missing or expired. Kept
  * deliberately broad: a false positive here names the wrong fix, but a false negative loses
  * nothing, because the fallback still shows the operator the raw text.
+ *
+ * HOW-17: nothing was added for cursor. cursor-agent is not installed here, so its
+ * logged-out wording has never been seen, and a pattern invented for it could only mislead.
+ * An unmatched message still degrades to attempt-failed WITH the stderr tail attached — the
+ * operator reads what the CLI said, which beats a confident wrong diagnosis.
  */
 const AUTH_PATTERNS = [
   /\/login\b/i,
@@ -75,10 +81,15 @@ export function classifyHarnessExit({ harness, exitCode, stderr, sawOutput }: Ha
 
   const tail = stderrTail(stderr);
   if (looksUnauthenticated(stderr)) {
+    // HOW-17: the login verb comes off the harness table, not a two-way ternary. `harness`
+    // is whatever the executor spawned — a name, a binary, or a test fake's path — so a
+    // command we do not recognise keeps the old generic wording rather than guessing.
+    const spec = harnessSpecForCommand(harness);
+    const login = spec ? `${spec.binary} ${spec.loginVerb}` : `${harness} auth login`;
     return {
       code: "harness-unauthenticated",
       reason:
-        `${harness} is not logged in (exit ${exitCode}). Log in with \`${harness} ${harness === "codex" ? "login" : "auth login"}\`, ` +
+        `${harness} is not logged in (exit ${exitCode}). Log in with \`${login}\`, ` +
         `then resume this run.` + (tail ? `\n\n${harness} said:\n${tail}` : ""),
       note: `\n[${harness} is not logged in — exit ${exitCode} before any output]${tail ? `\n${tail}` : ""}`,
     };
@@ -92,24 +103,28 @@ export function classifyHarnessExit({ harness, exitCode, stderr, sawOutput }: Ha
   };
 }
 
-/** the CLI subcommand that answers "am I logged in", without spending a token */
-export const AUTH_PROBES: Record<string, string[]> = {
-  claude: ["claude", "auth", "status"],
-  codex: ["codex", "login", "status"],
-};
-
 /**
  * Runs a harness's own auth-status subcommand. `claude auth status` prints JSON carrying
- * `loggedIn`; `codex login status` prints a line and exits non-zero when logged out. Both
- * are local and free, which is why this can be a `doctor` check rather than a test run.
+ * `loggedIn`; `codex login status` prints a line and exits non-zero when logged out; cursor
+ * declares `cursor-agent status`. All are local and free, which is why this can be a
+ * `doctor` check rather than a test run.
  *
- * `unknown` when the CLI is absent or the subcommand is not understood — an old CLI must not
- * be reported as logged out.
+ * `unknown` when the CLI is absent, has no probe on the table, or answers in wording we do
+ * not recognise — an old CLI must not be reported as logged out. Being on PATH is not being
+ * logged in, and that rule now holds for three harnesses: cursor-agent's own wording is
+ * unverified here, so its status output falls through to the generic exit-code reading
+ * rather than to an invented pattern.
  */
 export function probeAuth(harness: string, run = defaultRun): "in" | "out" | "unknown" {
-  const argv = AUTH_PROBES[harness];
+  // HOW-17: the argv is read off the harness table, so a new harness arrives here with its
+  // entry rather than through an edit nobody remembers to make. Three different "we cannot
+  // ask" cases end up with no argv, and all three must read as `unknown`: a name no entry
+  // answers to, an `internal` harness (probing opencode would spawn claude's own probe and
+  // report the answer under opencode's name), and a CLI with no auth-status subcommand.
+  const spec = isHarness(harness) ? harnessSpec(harness) : undefined;
+  const argv = spec && spec.status !== "internal" ? spec.authProbe : undefined;
   if (!argv) return "unknown";
-  const r = run(argv);
+  const r = run([...argv]);
   if (r === null) return "unknown";
   const text = `${r.stdout}\n${r.stderr}`;
   // claude: JSON with an explicit boolean, which beats guessing from the exit code

@@ -61,6 +61,23 @@ export const CAPABILITIES: Record<Harness, HarnessCapabilities> = {
     background: "no", // no --bg equivalent; app-server hosts sessions instead
     notes: "pin version; stderr carries full system prompts — never surface it",
   },
+  cursor: {
+    // HOW-17: cursor-agent is not installed on this machine, so nothing here has been probed
+    // against a live CLI. Everything the spike did not verify stays "untested" — a declared
+    // unknown is the point of this matrix, and claiming support we have not seen would make
+    // the viewer offer an affordance that dead-ends.
+    resume: "untested", // --resume <chat-id> is documented; the round-trip is unverified
+    fork: "untested",
+    permissions: "no", // print mode has no approval round-trip on the wire: it is --force or nothing
+    interrupt: "no",
+    steer: "no",
+    usage: "untested",
+    rate_limits: "untested", // no allowance event observed; the fallback falls back on text
+    live_diff: "no",
+    native_review: "no",
+    background: "untested",
+    notes: "unprobed: cursor-agent is not installed here. Approvals are a spawn-time flag, not a wire round-trip",
+  },
   opencode: {
     resume: "untested",
     fork: "untested",

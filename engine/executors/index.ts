@@ -9,11 +9,19 @@
  *
  * Read-only agent nodes (system-map 1a, D6/5A) resolve to permissionMode "plan"
  * (Engine.resolveAgentConfig). Claude honours that flag directly; codex ignores permission
- * modes, so a plan-mode codex turn runs in codex's read-only sandbox instead.
+ * modes, so a plan-mode codex turn runs in codex's read-only sandbox instead, and cursor
+ * (HOW-17) drops its auto-approve flag.
+ *
+ * HOW-17: the agent dispatch is a LOOKUP over every harness, not `!== "codex"`. That old
+ * test read "claude or anything else", which is why opencode already ran through the claude
+ * executor by accident of phrasing rather than by decision — and why a third harness would
+ * have silently spawned `claude` instead of failing loudly.
  */
 import type { Executor, EngineOpts } from "../run";
 import { claudeExecutor } from "./claude";
 import { codexExecutor } from "./codex";
+import { cursorExecutor } from "./cursor";
+import { defaultHarness, type HarnessName } from "../../core/harnesses";
 import { commandExecutor, worktreeExecutor } from "./worktree";
 import { approvalExecutor } from "./approval";
 import type { Notifier } from "../attention";
@@ -57,6 +65,7 @@ export interface LiveExecutorDeps {
   notifiers?: Notifier[];
   claudeBinary?: string;
   codexBinary?: string;
+  cursorBinary?: string;
 }
 
 /** the real registry: agent nodes dispatch on their declared harness (default claude) */
@@ -65,12 +74,19 @@ export function liveExecutors(deps: LiveExecutorDeps): EngineOpts["executors"] {
   const codexDeps = { attentionDir: deps.attentionDir, viewerBase: deps.viewerBase, notifiers: deps.notifiers, binary: deps.codexBinary };
   const codex = codexExecutor(codexDeps);
   const codexReadOnly = codexExecutor({ ...codexDeps, sandbox: "read-only" });
+  const cursor = cursorExecutor({ binary: deps.cursorBinary });
+  const cursorReadOnly = cursorExecutor({ binary: deps.cursorBinary, readOnly: true });
+  // opencode has no CLI of its own yet: it runs through the claude executor, as it always
+  // has (core/harnesses.ts marks it `internal` and points its binary at claude's)
+  const byHarness: Record<HarnessName, Executor> = { claude, opencode: claude, codex, cursor };
+  const readOnlyByHarness: Record<HarnessName, Executor> = { claude, opencode: claude, codex: codexReadOnly, cursor: cursorReadOnly };
   return {
     wait: waitExecutor,
     approval: approvalExecutor,
     agent: async (args) => {
-      if ((args.agentConfig?.harness ?? "claude") !== "codex") return claude(args);
-      return (args.agentConfig?.permissionMode === "plan" ? codexReadOnly : codex)(args);
+      const harness = args.agentConfig?.harness ?? defaultHarness();
+      const table = args.agentConfig?.permissionMode === "plan" ? readOnlyByHarness : byHarness;
+      return (table[harness] ?? claude)(args);
     },
     command: commandExecutor(),
     worktree: worktreeExecutor({

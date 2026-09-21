@@ -23,13 +23,15 @@
  * conditional sets over closed choice types are therefore legal and common.
  */
 import { validateGraph, formatViolations, type GraphShape, type Violation } from "./validate";
+import { defaultHarness, harnessNames, harnessSpec, isHarness, type HarnessName } from "./harnesses";
 import type { Scope } from "./context";
 import type { PromptId } from "./prompt-ids";
 
 /** The generated union from prompts/codegen.ts — an unknown id is a compile error. */
 export type PromptRef = PromptId;
 
-export type Harness = "claude" | "codex" | "opencode";
+/** HOW-17: the names, and every per-harness fact, live in core/harnesses.ts. */
+export type Harness = HarnessName;
 
 export type Effort = "low" | "medium" | "high" | "xhigh";
 export type PermissionMode = "manual" | "acceptEdits" | "auto" | "bypassPermissions" | "dontAsk" | "plan";
@@ -45,18 +47,41 @@ export interface AgentConfig {
   skills?: string[];
 }
 
-const CLAUDE_LIKE_MODEL = /claude|opus|sonnet|haiku|fable/i;
-const CODEX_LIKE_MODEL = /gpt|codex|terra|luna|^o\d/i;
-
+/**
+ * Would this model name reach this harness intact? A model name is harness-specific and a
+ * leaked one is an API 400, so a name that plainly belongs to ANOTHER harness is refused
+ * here rather than at the API. A name no harness claims is still allowed through — that is
+ * how a brand-new model works on the day it ships, before this table hears about it.
+ *
+ * HOW-17: the families are declared in core/harnesses.ts, not owned by a pair of regexes
+ * here, so a third harness is one table entry rather than a third branch. A name the table
+ * does not know (tuning.json is hand-editable and blind-cast on load) has no family to
+ * check against, so the model is allowed through rather than dereferenced into a throw —
+ * this function decides what to REFUSE, and it can only refuse on evidence.
+ */
 export function modelFitsHarness(harness: Harness, model: string): boolean {
-  const claudeLike = CLAUDE_LIKE_MODEL.test(model);
-  const codexLike = CODEX_LIKE_MODEL.test(model);
-  if (harness === "codex") return !claudeLike || codexLike;
-  if (harness === "claude") return !codexLike || claudeLike;
-  return true;
+  const spec = isHarness(harness) ? harnessSpec(harness) : undefined;
+  if (!spec) return true;
+  if (spec.modelFamily.test(model)) return true;
+  if (spec.acceptsForeignModels) return true; // cursor serves sonnet and gpt alike
+  return !harnessNames().some((other) => other !== harness && harnessSpec(other).modelFamily.test(model));
 }
 
-export function resolveAgentConfigLayers(layers: Array<AgentConfig | undefined>): AgentConfig {
+/**
+ * First set value wins, layer by layer. Two rules are not "first wins":
+ *   - the MODEL is the first one that fits the resolved harness, so a claude model in a lower
+ *     layer does not follow a node onto codex;
+ *   - the PERMISSION MODE is the harness's own when it declares one (claude always runs in
+ *     `auto`), and otherwise the first layer that set one — HOW-17: read off harnessSpec, so
+ *     cursor does not silently inherit claude's `auto`.
+ *
+ * `configuredDefaultHarness` is config.json's `defaultHarness` (the caller read it from
+ * disk); with none set the default is still claude.
+ */
+export function resolveAgentConfigLayers(
+  layers: Array<AgentConfig | undefined>,
+  opts: { configuredDefaultHarness?: string } = {},
+): AgentConfig {
   const pick = <K extends keyof AgentConfig>(k: K): AgentConfig[K] => {
     for (const layer of layers) {
       const value = layer?.[k];
@@ -64,7 +89,12 @@ export function resolveAgentConfigLayers(layers: Array<AgentConfig | undefined>)
     }
     return undefined;
   };
-  const harness = pick("harness") ?? "claude";
+  // tuning.json is hand-editable and `loadTuning` blind-casts it, so `pick` can hand back a
+  // string no harness table entry answers to. That degrades to the configured default the
+  // way it did before the table existed: a typo must not make every graph unrunnable, and a
+  // run parked as `executor-threw` would say nothing about which key to fix.
+  const picked = pick("harness");
+  const harness = isHarness(picked) ? picked : defaultHarness(opts.configuredDefaultHarness);
   let model: string | undefined;
   for (const layer of layers) {
     if (layer?.model && modelFitsHarness(harness, layer.model)) {
@@ -76,7 +106,7 @@ export function resolveAgentConfigLayers(layers: Array<AgentConfig | undefined>)
     harness,
     model,
     effort: pick("effort"),
-    permissionMode: harness === "claude" ? "auto" : pick("permissionMode"),
+    permissionMode: harnessSpec(harness).forcedPermissionMode ?? pick("permissionMode"),
     maxTurns: pick("maxTurns"),
     skills: pick("skills"),
   };

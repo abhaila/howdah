@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { Engine } from "../run";
 import { claudeExecutor } from "./claude";
 import { codexExecutor } from "./codex";
+import { cursorApprovalMode, cursorExecutor } from "./cursor";
 import { buildOutputInstruction, buildRepairInstruction, parseOutputs } from "./outputs";
 import { defineGraph } from "../../core/graph";
 import { EventLog } from "../../log/write";
@@ -15,6 +16,7 @@ import type { Harness } from "../../core/graph";
 
 const FAKE = join(import.meta.dir, "fake-claude.ts");
 const FAKE_CODEX = join(import.meta.dir, "fake-codex.ts");
+const FAKE_CURSOR = join(import.meta.dir, "fake-cursor.ts");
 
 interface Ctx {
   goal: string;
@@ -224,6 +226,124 @@ describe("codex executor over the fake app-server wire", () => {
   });
 });
 
+/**
+ * Cursor (HOW-17). The fake speaks the DOCUMENTED cursor-agent envelope, not a captured one
+ * (adapter/cursor.ts and fake-cursor.ts both say so), so what these pin is the executor's own
+ * behaviour — the flag policy, the chunking, the resumed repair turn and the exit
+ * classification — rather than that cursor-agent really talks this way.
+ */
+describe("cursor executor over the fake print-mode wire", () => {
+  const cursorGraph = (readOnly?: true) =>
+    defineGraph<Ctx>({
+      name: readOnly ? "mini-cursor-ro" : "mini-cursor",
+      entry: "draft",
+      inputs: ["goal"],
+      defaults: { harness: "cursor" },
+      nodes: {
+        draft: { kind: "agent", prompt: "doc.draft", ...(readOnly ? { readOnly } : {}), reads: ["goal"], writes: { doc_summary: { scope: "sticky" } } },
+        done: { kind: "terminal", outcome: "success" },
+      },
+      edges: [{ from: "draft", to: "done" }],
+    });
+
+  async function runCursor(graph: ReturnType<typeof cursorGraph>, opts: { readOnly?: boolean; env?: Record<string, string>; engineOpts?: any } = {}) {
+    const dir = mkdtempSync(join(tmpdir(), "howdah-cursor-"));
+    const capture = join(dir, "argv.jsonl");
+    chmodSync(FAKE_CURSOR, 0o755);
+    Object.assign(process.env, { FAKE_CURSOR_CAPTURE: capture, ...(opts.env ?? {}) });
+    try {
+      const engine = new Engine(graph, {
+        dir,
+        promptsDir: promptDir(),
+        ...(opts.engineOpts ?? {}),
+        executors: { agent: cursorExecutor({ binary: FAKE_CURSOR, readOnly: opts.readOnly }) },
+      });
+      const result = await engine.start({ goal: "cursor please" });
+      const spawns = readFileSync(capture, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l) as string[]);
+      return { result, spawns, engine };
+    } finally {
+      for (const k of ["FAKE_CURSOR_CAPTURE", ...Object.keys(opts.env ?? {})]) delete process.env[k];
+    }
+  }
+
+  test("one spawn per attempt: print mode, stream-json, prompt last, and the work lands", async () => {
+    const { result, spawns, engine } = await runCursor(cursorGraph());
+    expect(result).toEqual({ state: "finished", outcome: "success" });
+    expect(spawns).toHaveLength(1);
+    expect(spawns[0]!.slice(0, 3)).toEqual(["-p", "--output-format", "stream-json"]);
+    const finished: any = engine.log.read().findLast((e) => e.type === "node-finished");
+    expect(finished.writes).toEqual({ doc_summary: "fake doc_summary" });
+    // the stream reached the log as durable chunks, tool calls included
+    const kinds = new Set(engine.log.read().filter((e) => e.type === "chunk").map((e: any) => e.kind));
+    expect([...kinds]).toContain("tool_call");
+    expect([...kinds]).toContain("tool_result");
+  }, 15000);
+
+  // system-map 1a (D6/5A) — the hard constraint that must survive a fallback to cursor
+  test("a readOnly node never gets the auto-approve flag; an ordinary one does", async () => {
+    const plan = await runCursor(cursorGraph(true), { engineOpts: { overrides: { permissionMode: "bypassPermissions" } } });
+    expect(plan.result).toEqual({ state: "finished", outcome: "success" });
+    expect(plan.spawns[0]).not.toContain("--force");
+
+    const open = await runCursor(cursorGraph());
+    expect(open.spawns[0]).toContain("--force");
+  }, 20000);
+
+  test("the read-only executor variant refuses --force whatever the resolved mode says", async () => {
+    const { spawns } = await runCursor(cursorGraph(), { readOnly: true });
+    expect(spawns[0]).not.toContain("--force");
+  }, 15000);
+
+  test("approval flags map from the permission mode, not from a default", () => {
+    expect(cursorApprovalMode("plan")).toEqual([]);
+    expect(cursorApprovalMode("manual")).toEqual([]); // print mode has nobody to ask
+    expect(cursorApprovalMode("auto")).toEqual(["--force"]);
+    expect(cursorApprovalMode(undefined)).toEqual(["--force"]);
+  });
+
+  test("a missing outputs contract is repaired by RESUMING the same chat, not re-running the node", async () => {
+    const { result, spawns, engine } = await runCursor(cursorGraph(), { env: { FAKE_CURSOR_DROP_OUTPUTS: "1" } });
+    expect(result).toEqual({ state: "finished", outcome: "success" });
+    expect(spawns).toHaveLength(2);
+    expect(spawns[1]).toContain("--resume");
+    expect(spawns[1]![spawns[1]!.indexOf("--resume") + 1]).toBe("fake-cursor-chat-1");
+    expect(spawns[1]!.at(-1)).toBe(buildRepairInstruction(["doc_summary"]));
+    // one visit, not two: the repair is a turn, not a retry
+    expect(engine.log.read().filter((e) => e.type === "node-started" && e.node === "draft")).toHaveLength(1);
+  }, 20000);
+
+  test("a cursor-side turn error is a turn error, even when cursor says nothing about it", async () => {
+    // is_error with no words at all: the error text is empty at every level, and an empty
+    // error reads as NO error to the executor's truthiness check — which would fall through
+    // to parseOutputs and park the node as an output contract violation, blaming the model
+    // for a turn cursor itself failed. `classifyHarnessExit` cannot catch it either: the CLI
+    // spoke the protocol and exited 0, so the exit is not the failure.
+    const { result } = await runCursor(cursorGraph(), { env: { FAKE_CURSOR_ERROR: "1" } });
+    expect(result).toMatchObject({ state: "parked", code: "attempt-failed" });
+    const reason = (result as { reason: string }).reason;
+    expect(reason).toContain("turn error:");
+    expect(reason).toContain("cursor reported an error");
+    expect(reason).not.toContain("output contract violation");
+  }, 15000);
+
+  test("a logged-out cursor-agent parks on the login verb, not on the outputs contract", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "howdah-cursor-auth-"));
+    const bin = join(dir, "logged-out-cursor");
+    writeFileSync(bin, "#!/bin/sh\necho 'Please log in: run cursor-agent login' >&2\nexit 1\n");
+    chmodSync(bin, 0o755);
+    const engine = new Engine(cursorGraph(), {
+      dir,
+      promptsDir: promptDir(),
+      executors: { agent: cursorExecutor({ binary: bin }) },
+    });
+    const result = await engine.start({ goal: "no credentials" });
+    expect(result).toMatchObject({ state: "parked", code: "harness-unauthenticated" });
+    const reason = (result as { reason: string }).reason;
+    expect(reason).toContain("not logged in");
+    expect(reason).not.toContain("output contract");
+  }, 15000);
+});
+
 // system-map 0.1: rendered_hash must cover the bytes the CLI actually receives — the skill
 // hint and outputs contract included — for every harness the live registry dispatches.
 describe("the prompt proof covers what is sent (system-map 0.1)", () => {
@@ -253,7 +373,7 @@ describe("the prompt proof covers what is sent (system-map 0.1)", () => {
       const engine = new Engine(skilledGraph(harness), {
         dir,
         promptsDir: promptDir(),
-        executors: liveExecutors({ attentionDir: join(dir, "attn"), notifiers: [], claudeBinary: FAKE, codexBinary: FAKE_CODEX }),
+        executors: liveExecutors({ attentionDir: join(dir, "attn"), notifiers: [], claudeBinary: FAKE, codexBinary: FAKE_CODEX, cursorBinary: FAKE_CURSOR }),
       });
       const result = await engine.start({ goal: "prove the hash" });
       const sent = readFileSync(capture, "utf8").trim().split("\n").map((l) => JSON.parse(l) as string);
@@ -264,7 +384,7 @@ describe("the prompt proof covers what is sent (system-map 0.1)", () => {
     }
   }
 
-  for (const harness of ["claude", "opencode", "codex"] as const) {
+  for (const harness of ["claude", "opencode", "codex", "cursor"] as const) {
     test(`${harness}: hash(bytes sent to the CLI) === logged rendered_hash, every turn`, async () => {
       const { result, sent, renders } = await runCapturing(harness);
       expect(result).toEqual({ state: "finished", outcome: "success" });
@@ -285,18 +405,23 @@ describe("the prompt proof covers what is sent (system-map 0.1)", () => {
       expect(renders[0]!.skills).toEqual(["review", "qa"]);
       expect(sent[1]).not.toContain("Relevant installed skills"); // review declares none
     }
-    const { sent, renders } = await runCapturing("codex");
-    expect(sent[0]).not.toContain("Relevant installed skills");
-    expect(renders[0]!.skills).toEqual([]);
-  }, 30000);
+    // HOW-17: cursor joins codex on the no-hint side, and the LOGGED skills say so — a
+    // harness credited with a hint it never got makes every reconstruction of that turn lie
+    for (const harness of ["codex", "cursor"] as const) {
+      const { sent, renders } = await runCapturing(harness);
+      expect(sent[0]).not.toContain("Relevant installed skills");
+      expect(renders[0]!.skills).toEqual([]);
+    }
+  }, 45000);
 
   // Upstream 6a31486 added one in-session repair turn when the final message lacks the
   // contract. The repair is a follow-up user turn, so it is OUTSIDE rendered_hash by design:
   // the proof is over the FIRST turn of each attempt, and the repair asks for the same keys
   // the contract did.
-  for (const harness of ["claude", "codex"] as const) {
+  const DROP_VAR = { claude: "FAKE_CLAUDE_DROP_OUTPUTS", codex: "FAKE_CODEX_DROP_OUTPUTS", cursor: "FAKE_CURSOR_DROP_OUTPUTS" } as const;
+  for (const harness of ["claude", "codex", "cursor"] as const) {
     test(`${harness}: with a repair turn, hash(FIRST turn) === rendered_hash and the repair asks for the contract's keys`, async () => {
-      const dropVar = harness === "codex" ? "FAKE_CODEX_DROP_OUTPUTS" : "FAKE_CLAUDE_DROP_OUTPUTS";
+      const dropVar = DROP_VAR[harness];
       process.env[dropVar] = "1";
       try {
         const { result, sent, renders } = await runCapturing(harness);

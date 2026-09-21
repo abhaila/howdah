@@ -13,6 +13,8 @@ import { GitBranch, FolderGit2, SlidersHorizontal, RotateCcw as ResetIcon } from
 import type { GraphCatalog } from "@/lib/types";
 import { getJSON } from "@/lib/net";
 import { GraphDag, useGraphShape, type GraphShapeDto, type AgentConfigDto } from "../graph-dag";
+import { modelFitsHarness } from "../../../core/graph";
+import { defaultHarness, harnessNames, harnessSpec, isHarness } from "../../../core/harnesses";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -26,7 +28,13 @@ import { LoadingBlock } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useToast } from "@/components/ui/toast";
 
-const HARNESSES = ["", "claude", "codex"];
+/**
+ * HOW-17: the offered harnesses come from the harness table, not a literal here — adding a
+ * fourth must never mean remembering to edit a UI list. `internal` harnesses (opencode runs
+ * through claude's executor and binary) are not choices, so they are not offered.
+ * The leading "" is the inherit option.
+ */
+const HARNESSES = ["", ...harnessNames().filter((h) => harnessSpec(h).status !== "internal")];
 const EFFORTS = ["", "low", "medium", "high", "xhigh"];
 const PERMISSION_MODES = ["", "auto"];
 const MODEL_SUGGESTIONS = ["claude-opus-5", "claude-sonnet-5", "claude-haiku-5", "gpt-5", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"];
@@ -54,15 +62,16 @@ function mergeConfig(a: AgentConfigDto | undefined, b: AgentConfigDto): AgentCon
   return cleanConfig({ ...(a ?? {}), ...cleanConfig(b) }) ?? {};
 }
 
-function modelFitsHarness(harness: string, model: string): boolean {
-  const claudeLike = /claude|opus|sonnet|haiku|fable/i.test(model);
-  const codexLike = /gpt|codex|terra|luna|^o\d/i.test(model);
-  if (harness === "codex") return !claudeLike || codexLike;
-  if (harness === "claude") return !codexLike || claudeLike;
-  return true;
-}
-
-export function resolvePreview(layers: Array<AgentConfigDto | undefined>): AgentConfigDto {
+/**
+ * The tuner's live preview of the engine's resolution. It stays a separate function from
+ * core/graph.ts resolveAgentConfigLayers because it works on the UI's loose DTO (every field
+ * a string) rather than the typed AgentConfig — but the RULES it applies are the shared
+ * ones: modelFitsHarness and the harness table's own permission mode, imported, never
+ * re-declared. (HOW-17: this file used to carry a verbatim copy of core's regex pair, which
+ * would have needed cursor's family added a second time — and would have gone on answering
+ * the old way if anyone forgot.)
+ */
+export function resolvePreview(layers: Array<AgentConfigDto | undefined>, configuredDefault?: string): AgentConfigDto {
   const pick = (k: keyof AgentConfigDto) => {
     for (const layer of layers) {
       const value = layer?.[k];
@@ -70,10 +79,13 @@ export function resolvePreview(layers: Array<AgentConfigDto | undefined>): Agent
     }
     return undefined;
   };
-  const harness = String(pick("harness") ?? "claude");
+  const harness = String(pick("harness") ?? defaultHarness(configuredDefault));
+  // a harness the table does not know can only come from a hand-edited tuning.json: preview
+  // it as-is rather than filtering its model away on a rule we have no basis for
+  const spec = isHarness(harness) ? harnessSpec(harness) : undefined;
   let model: string | undefined;
   for (const layer of layers) {
-    if (layer?.model && modelFitsHarness(harness, layer.model)) {
+    if (layer?.model && (!spec || modelFitsHarness(spec.name, layer.model))) {
       model = layer.model;
       break;
     }
@@ -82,7 +94,7 @@ export function resolvePreview(layers: Array<AgentConfigDto | undefined>): Agent
     harness,
     model,
     effort: pick("effort") as string | undefined,
-    permissionMode: harness === "claude" ? "auto" : pick("permissionMode") as string | undefined,
+    permissionMode: spec?.forcedPermissionMode ?? (pick("permissionMode") as string | undefined),
     maxTurns: pick("maxTurns") as number | undefined,
     skills: pick("skills") as string[] | undefined,
   };
@@ -96,13 +108,16 @@ export function previewShape(shape: GraphShapeDto, tuning: GraphTuningDto): Grap
     nodes: shape.nodes.map((n) => {
       if (n.kind !== "agent") return n;
       const nodeTuning = tuning.nodes?.[n.id];
-      const effective = resolvePreview([nodeTuning, n.baseline, tuning.defaults, tsDefaults]);
+      const effective = resolvePreview([nodeTuning, n.baseline, tuning.defaults, tsDefaults], shape.default_harness);
       return { ...n, node_tuning: nodeTuning, effective, harness: effective.harness, model: effective.model, effort: effective.effort };
     }),
   };
 }
 
-export function ConfigFields({ value, baseline, onChange }: { value: AgentConfigDto; baseline?: AgentConfigDto; onChange: (v: AgentConfigDto) => void }) {
+export function ConfigFields(
+  { value, baseline, onChange, inheritedHarness }:
+  { value: AgentConfigDto; baseline?: AgentConfigDto; onChange: (v: AgentConfigDto) => void; inheritedHarness?: string },
+) {
   const ph = (k: keyof AgentConfigDto, fallback: string) => {
     const b = baseline?.[k];
     return b !== undefined && b !== null && String(b) !== "" ? `inherits: ${Array.isArray(b) ? b.join(", ") : b}` : fallback;
@@ -112,7 +127,8 @@ export function ConfigFields({ value, baseline, onChange }: { value: AgentConfig
       <Label>
         Harness
         <Select value={value.harness ?? ""} onChange={(e) => onChange({ ...value, harness: (e.target.value || undefined) as any })}>
-          {HARNESSES.map((x) => <option key={x} value={x}>{x || ph("harness", "inherit (claude)")}</option>)}
+          {/* HOW-17: what "inherit" resolves to is the operator's configured default, not a hard-coded claude */}
+          {HARNESSES.map((x) => <option key={x} value={x}>{x || ph("harness", `inherit (${inheritedHarness ?? defaultHarness()})`)}</option>)}
         </Select>
       </Label>
       <Label>
@@ -218,7 +234,7 @@ export function GraphTuner({ shape, onSaved }: { shape: GraphShapeDto; onSaved: 
             <CardDescription>Applies to every agent node unless the node sets its own. Cleared fields fall back to the graph file.</CardDescription>
           </CardHeader>
           <CardContent>
-            <ConfigFields value={tuning.defaults ?? {}} baseline={shape.defaults} onChange={(v) => { setTuning({ ...tuning, defaults: v }); setDirty(true); }} />
+            <ConfigFields value={tuning.defaults ?? {}} baseline={shape.defaults} inheritedHarness={shape.default_harness} onChange={(v) => { setTuning({ ...tuning, defaults: v }); setDirty(true); }} />
           </CardContent>
         </Card>
         <Card>
@@ -270,7 +286,7 @@ export function GraphTuner({ shape, onSaved }: { shape: GraphShapeDto; onSaved: 
                 <CardDescription>prompt: {node.prompt} · effective now: {node.effective?.harness}{node.effective?.model ? ` · ${node.effective.model}` : ""}{node.effective?.effort ? ` · ${node.effective.effort}` : ""}{node.effective?.permissionMode ? ` · ${node.effective.permissionMode}` : ""}</CardDescription>
               </CardHeader>
               <CardContent>
-                <ConfigFields value={tuning.nodes?.[node.id] ?? {}} baseline={node.baseline} onChange={(v) => setNodeCfg(node.id, v)} />
+                <ConfigFields value={tuning.nodes?.[node.id] ?? {}} baseline={node.baseline} inheritedHarness={shape.default_harness} onChange={(v) => setNodeCfg(node.id, v)} />
                 <Button variant="ghost" size="sm" className="self-start" onClick={() => clearNodeCfg(node.id)}><ResetIcon />Clear node override</Button>
               </CardContent>
             </>
