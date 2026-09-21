@@ -3,7 +3,8 @@
  * howdah — thin scripting verbs (design A9.2: the CLI is not a designed surface, the web
  * view is; these exist for scripts, launchd, and the start-run API).
  *
- *   howdah run <graph> [-i key=value]... [--workspace <name>] [--dir <path>] [--id <run-id>]
+ *   howdah run <graph> [-i key=value]... [--workspace <name>] [--dir <path>] [--id <run-id>] [--name <text>]
+ *     --name is a display label only (HOW-18); the run id stays identity
  *   howdah runs --json
  *   howdah reply <run-id> <text>
  *   howdah resolve-effect <run-id> <effect> happened|not-happened [--node <node>]
@@ -38,6 +39,7 @@ import { loadRegistry, catalogOf } from "../graphs/registry";
 import { promptSearchPath } from "../graphs/local";
 import { howdahHome, loadConfig, saveConfig, resolveWorkspace, repoNameFor, ensureHowdahHome } from "../config/config";
 import { loadTuning } from "../config/tuning";
+import { normalizeRunName } from "../core/run-name";
 import {
   readControl, writeControl, clearControl, interruptRunner, markPaused, resolveReply, runnerAlive, supervisorShouldResume, jumpMissingReads, jumpRefusal, forceReleaseRunner,
   runnerHolder, raiseRunnerLock,
@@ -94,10 +96,10 @@ function spawnResume(runId: string): void {
   Bun.spawn(["bun", import.meta.path, "resume", runId], { env: { ...process.env }, stdout: "ignore", stderr: "ignore" }).unref();
 }
 
-function parseRunArgs(argv: string[]) {
+export function parseRunArgs(argv: string[]) {
   const inputs: Record<string, string> = {};
   const overrides: import("../core/graph").AgentConfig = {};
-  let workspace: string | undefined, dir: string | undefined, id: string | undefined;
+  let workspace: string | undefined, dir: string | undefined, id: string | undefined, name: string | undefined;
   const [graphName, ...rest] = argv;
   for (let i = 0; i < rest.length; i++) {
     const a = rest[i]!;
@@ -109,6 +111,12 @@ function parseRunArgs(argv: string[]) {
     } else if (a === "--workspace") workspace = rest[++i];
     else if (a === "--dir") dir = rest[++i];
     else if (a === "--id") id = rest[++i];
+    else if (a === "--name") {
+      if (i + 1 >= rest.length) throw new Error("--name needs a value");
+      const r = normalizeRunName(rest[++i]);
+      if (!r.ok) throw new Error(r.error);
+      name = r.name;
+    }
     else if (a === "--model") overrides.model = rest[++i];
     else if (a === "--harness") {
       const name = rest[++i];
@@ -122,11 +130,11 @@ function parseRunArgs(argv: string[]) {
     else if (a === "--skills") overrides.skills = (rest[++i] ?? "").split(",").map((x) => x.trim()).filter(Boolean);
     else throw new Error(`unknown flag: ${a}`);
   }
-  return { graphName, inputs, workspace, dir, id, overrides };
+  return { graphName, inputs, workspace, dir, id, name, overrides };
 }
 
 export async function runCommand(argv: string[]): Promise<string> {
-  const { graphName, inputs, workspace, dir, id, overrides } = parseRunArgs(argv);
+  const { graphName, inputs, workspace, dir, id, name, overrides } = parseRunArgs(argv);
   // HOWDAH_MODEL is a run-level default so the RECORD shows what actually ran
   if (!overrides.model && process.env.HOWDAH_MODEL) overrides.model = process.env.HOWDAH_MODEL;
   // built-ins plus the operator's own from $HOWDAH_HOME; a local graph that does not load is
@@ -151,7 +159,7 @@ export async function runCommand(argv: string[]): Promise<string> {
   const runId = id ?? `${graphName}-${Date.now().toString(36)}`;
   const runDir = join(runsDir, runId);
   const engine: Engine = new Engine(graph, {
-    dir: runDir, executors: executors(), cwd, folderKind, overrides,
+    dir: runDir, executors: executors(), cwd, folderKind, name, overrides,
     promptsDir: promptSearchPath(base, ROOT),
     tuning: loadTuning(base)[graphName!],
     harnesses: harnessSettings(),
@@ -159,7 +167,7 @@ export async function runCommand(argv: string[]): Promise<string> {
     beforeNode: reconcilerHook(runDir, () => engine),
     whileHeld: raiseParkAttention(runId),
   });
-  console.log(`run ${runId} starting (${cwd ?? "no folder"})`);
+  console.log(`run ${runId}${name ? ` "${name}"` : ""} starting (${cwd ?? "no folder"})`);
   // the engine takes runner.pid as the run's runner lock (engine/control.ts claimRunner)
   const result = await engine.start(inputs);
   console.log(`run ${runId}: ${JSON.stringify(result)}`);

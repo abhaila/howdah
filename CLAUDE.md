@@ -39,7 +39,8 @@ bun node_modules/typescript/lib/tsc.js --noEmit                   # typecheck on
 CLI (there is no installed `howdah` binary — invoke the entrypoint):
 
 ```bash
-bun cli/main.ts run <graph> -i goal=... -i work=... --workspace <name> [--model/--harness/--effort/...]
+bun cli/main.ts run <graph> -i goal=... -i work=... --workspace <name> [--name <text>] [--model/--harness/--effort/...]
+                                             # --name: display label only (HOW-18); the run id stays identity
 bun cli/main.ts setup                        # create $HOWDAH_HOME's layout (config.json, runs/, repos/, attention/)
 bun cli/main.ts runs | graphs | doctor
 bun cli/main.ts reply <run-id> <text>        # answers the current ask, resumes if the runner died

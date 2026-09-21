@@ -143,6 +143,8 @@ export interface EngineOpts {
   /** where the run works (worktree or plain folder) — stamped on run-started */
   cwd?: string;
   folderKind?: "repo" | "plain";
+  /** HOW-18: the operator's display label, already normalized — stamped on run-started */
+  name?: string;
   /** runs before every non-terminal node — the reconciler's seat (A6.1) */
   beforeNode?: (nodeId: string, def: NodeDef<any>) => Promise<void>;
   /** run-level agent overrides — beat node settings, which beat graph defaults */
@@ -322,6 +324,7 @@ export class Engine {
     this.log.append({
       type: "run-started",
       graph: this.graph.def.name,
+      ...(this.opts.name ? { name: this.opts.name } : {}),
       inputs,
       pinned_prompts: pinned,
       ...(Object.keys(includes).length ? { pinned_includes: includes } : {}),

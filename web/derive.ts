@@ -41,6 +41,8 @@ export type RunStatus =
 export interface RunSummary {
   id: string;
   graph: string;
+  /** HOW-18: the operator's label from run-started; null for an unnamed (or older) run */
+  name: string | null;
   goal: string;
   status: RunStatus;
   started_at: string | null;
@@ -155,6 +157,7 @@ export function deriveSummary(id: string, events: LoggedEvent[]): RunSummary {
   return {
     id,
     graph: started?.type === "run-started" ? started.graph : "?",
+    name: started?.type === "run-started" ? started.name ?? null : null,
     goal: started?.type === "run-started" ? String((started.inputs as any)?.goal ?? "") : "",
     status,
     started_at: events[0]?.ts ?? null,

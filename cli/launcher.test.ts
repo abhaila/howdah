@@ -1,12 +1,13 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, mkdirSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, existsSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig, saveConfig, resolveWorkspace, configPath } from "../config/config";
 import { graphCatalog } from "../graphs/index";
 import { parseDuration } from "../engine/executors";
 import { readLog } from "../log/write";
-import { createHowdahServer } from "../web/server";
+import { createHowdahServer, launchArgs } from "../web/server";
+import { parseRunArgs } from "./main";
 
 describe("config", () => {
   test("round-trips and resolves workspaces by kind", () => {
@@ -94,6 +95,32 @@ describe("howdah run (CLI)", () => {
     expect(parked.reason).toContain("stub");
   });
 
+  test("--name is stamped on run-started; the run id is unchanged by it (HOW-18)", async () => {
+    const base = mkdtempSync(join(tmpdir(), "howdah-cli-"));
+    const proc = Bun.spawn(
+      ["bun", join(import.meta.dir, "main.ts"), "run", "write-doc",
+        "-i", "goal=named launch", "-i", "work=doc.md", "--name", "  My named run  ", "--id", "named-test"],
+      { env: { ...process.env, HOWDAH_HOME: base, HOWDAH_STUB: "1" }, stdout: "pipe", stderr: "pipe" },
+    );
+    await proc.exited;
+    expect(proc.exitCode).toBe(0);
+    expect(await new Response(proc.stdout).text()).toContain('run named-test "My named run" starting');
+    const started: any = readLog(join(base, "runs", "named-test", "run.jsonl")).find((e) => e.type === "run-started");
+    expect(started).toMatchObject({ graph: "write-doc", name: "My named run", inputs: { goal: "named launch" } });
+  });
+
+  test("a bad --name fails before anything is logged (HOW-18)", async () => {
+    const base = mkdtempSync(join(tmpdir(), "howdah-cli-"));
+    const bad = Bun.spawn(
+      ["bun", join(import.meta.dir, "main.ts"), "run", "write-doc", "-i", "goal=g", "-i", "work=w", "--name", "x".repeat(121), "--id", "bad-name"],
+      { env: { ...process.env, HOWDAH_HOME: base, HOWDAH_STUB: "1" }, stderr: "pipe" },
+    );
+    await bad.exited;
+    expect(bad.exitCode).toBe(1);
+    expect(await new Response(bad.stderr).text()).toContain("at most 120");
+    expect(existsSync(join(base, "runs", "bad-name"))).toBe(false);
+  });
+
   test("unknown graph and unknown workspace fail with useful errors", async () => {
     const base = mkdtempSync(join(tmpdir(), "howdah-cli-"));
     const bad = Bun.spawn(["bun", join(import.meta.dir, "main.ts"), "run", "nope"], {
@@ -108,6 +135,44 @@ describe("howdah run (CLI)", () => {
     });
     await badWs.exited;
     expect(await new Response(badWs.stderr).text()).toContain('unknown workspace "ghost"');
+  });
+});
+
+describe("parseRunArgs --name (HOW-18)", () => {
+  test("trims the name and leaves every other flag parsing as before", () => {
+    const parsed = parseRunArgs(["g", "-i", "goal=x", "--name", "  My run  ", "--workspace", "w", "--model", "m"]);
+    expect(parsed).toMatchObject({ graphName: "g", name: "My run", inputs: { goal: "x" }, workspace: "w", overrides: { model: "m" } });
+  });
+
+  test("no --name and a blank --name both mean no name", () => {
+    expect(parseRunArgs(["g"]).name).toBeUndefined();
+    expect(parseRunArgs(["g", "--name", "   "]).name).toBeUndefined();
+  });
+
+  test("refuses an over-long name, a multi-line one, and a missing value", () => {
+    expect(parseRunArgs(["g", "--name", "x".repeat(120)]).name).toHaveLength(120);
+    expect(() => parseRunArgs(["g", "--name", "x".repeat(121)])).toThrow("at most 120");
+    expect(() => parseRunArgs(["g", "--name", "two\nlines"])).toThrow("one line");
+    expect(() => parseRunArgs(["g", "--name"])).toThrow("--name needs a value");
+  });
+});
+
+describe("launchArgs (HOW-18)", () => {
+  test("forwards a name as --name, and nothing when there is none", () => {
+    const args = launchArgs({ graph: "research", name: "My run", inputs: { goal: "g" } }, "research-abc");
+    expect(args).toEqual(["run", "research", "--id", "research-abc", "-i", "goal=g", "--name", "My run"]);
+    expect(launchArgs({ graph: "research" }, "research-abc")).not.toContain("--name");
+    expect(launchArgs({ graph: "research", name: "" }, "research-abc")).not.toContain("--name");
+  });
+
+  test("keeps forwarding workspace, dir and every override", () => {
+    expect(launchArgs({
+      graph: "g", workspace: "ws", dir: "/d",
+      overrides: { model: "m", effort: "high", permissionMode: "plan", harness: "codex", maxTurns: 5, skills: ["a", "b"] },
+    }, "g-1")).toEqual([
+      "run", "g", "--id", "g-1", "--workspace", "ws", "--dir", "/d",
+      "--model", "m", "--effort", "high", "--permission-mode", "plan", "--harness", "codex", "--max-turns", "5", "--skills", "a,b",
+    ]);
   });
 });
 
@@ -146,6 +211,39 @@ describe("launch API", () => {
     }
     expect(started).toMatchObject({ graph: "research", inputs: { goal: "api launch" } });
     expect(r.status).toBe(202);
+  });
+
+  test("POST with a name records it; the id is still <graph>-<base36> (HOW-18)", async () => {
+    const r = await fetch(url("/api/runs"), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ graph: "research", name: "  Named from the web  ", inputs: { goal: "named api launch" } }),
+    });
+    expect(r.status).toBe(202);
+    const { id } = (await r.json()) as { id: string };
+    expect(id).toMatch(/^research-[0-9a-z]+$/);
+    let started: any;
+    for (let i = 0; i < 50 && !started; i++) {
+      await Bun.sleep(100);
+      const path = join(base, "runs", id, "run.jsonl");
+      if (existsSync(path)) started = readLog(path).find((e) => e.type === "run-started");
+    }
+    expect(started).toMatchObject({ graph: "research", name: "Named from the web", inputs: { goal: "named api launch" } });
+  });
+
+  test("a bad name is a 400 naming the rule, and nothing is spawned (HOW-18)", async () => {
+    const before = readdirSync(join(base, "runs")).length;
+    for (const [name, why] of [["x".repeat(121), "at most 120"], ["two\nlines", "one line"], [42, "must be a string"]] as const) {
+      const r = await fetch(url("/api/runs"), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ graph: "research", name, inputs: { goal: "g" } }),
+      });
+      expect(r.status).toBe(400);
+      expect(((await r.json()) as any).error).toContain(why);
+    }
+    await Bun.sleep(500);
+    expect(readdirSync(join(base, "runs")).length).toBe(before);
   });
 
   test("POST without a graph is a 400", async () => {

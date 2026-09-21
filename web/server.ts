@@ -6,6 +6,7 @@
  *
  *   GET  /api/runs                 run summaries, needs-input first
  *   GET  /api/runs/:id             full detail (thread, timeline, usage, allowance, ask)
+ *   POST /api/runs                 {graph, inputs, workspace?, name?, overrides?} → launch detached; a bad name is 400 before the spawn (HOW-18)
  *   GET  /api/runs/:id/events?since=N   SSE of events with seq > N
  *   POST /api/runs/:id/reply       {text} → resolveReply (system-map 0.2): 200 + record cleared, or 409 naming the next step
  *   POST /api/runs/:id/comments    {entity_id, text, proposal_id?} → pin a comment to the current proposal round
@@ -69,6 +70,35 @@ import {
 import { acceptProposal, listProposals, proposalsDir, rejectProposal, viewProposal } from "../prompts/proposals";
 import { evidenceSource } from "../reviser/revise";
 import { isPartialId } from "../core/template";
+import { normalizeRunName } from "../core/run-name";
+
+/** POST /api/runs body — what the Start-a-run form sends */
+export interface LaunchBody {
+  graph?: string; inputs?: Record<string, string>; workspace?: string; dir?: string;
+  /** HOW-18: optional display label; validated by core/run-name.ts before the spawn */
+  name?: unknown;
+  overrides?: { model?: string; effort?: string; permissionMode?: string; harness?: string; maxTurns?: number; skills?: string[] };
+}
+
+/**
+ * The `cli/main.ts run` argv for a launch — pure, so what the route forwards can be tested
+ * without spawning a real CLI. `name` must already be normalized (core/run-name.ts).
+ */
+export function launchArgs(body: LaunchBody & { graph: string; name?: string }, runId: string): string[] {
+  const args = ["run", body.graph, "--id", runId];
+  for (const [k, v] of Object.entries(body.inputs ?? {})) args.push("-i", `${k}=${v}`);
+  if (body.workspace) args.push("--workspace", body.workspace);
+  if (body.dir) args.push("--dir", body.dir);
+  if (body.name) args.push("--name", body.name);
+  const o = body.overrides ?? {};
+  if (o.model) args.push("--model", o.model);
+  if (o.effort) args.push("--effort", o.effort);
+  if (o.permissionMode) args.push("--permission-mode", o.permissionMode);
+  if (o.harness) args.push("--harness", o.harness);
+  if (o.maxTurns) args.push("--max-turns", String(o.maxTurns));
+  if (o.skills?.length) args.push("--skills", o.skills.join(","));
+  return args;
+}
 
 export interface ServerOpts {
   runsDir: string;
@@ -497,26 +527,17 @@ export function createHowdahServer(opts: ServerOpts) {
       }
       if (url.pathname === "/api/runs" && req.method === "POST") {
         // launch: hand off to the CLI, detached — the viewer never owns an engine loop
-        const body = (await req.json()) as {
-          graph?: string; inputs?: Record<string, string>; workspace?: string; dir?: string;
-          overrides?: { model?: string; effort?: string; permissionMode?: string; harness?: string; maxTurns?: number; skills?: string[] };
-        };
+        const body = (await req.json()) as LaunchBody;
         if (!body.graph) return json({ error: "graph required" }, 400);
+        // HOW-18: refuse a bad name HERE — past the spawn, the CLI's refusal is invisible
+        const named = normalizeRunName(body.name);
+        if (!named.ok) return json({ error: named.error }, 400);
         const runId = `${body.graph}-${Date.now().toString(36)}`;
-        const args = ["run", body.graph, "--id", runId];
-        for (const [k, v] of Object.entries(body.inputs ?? {})) args.push("-i", `${k}=${v}`);
-        if (body.workspace) args.push("--workspace", body.workspace);
-        if (body.dir) args.push("--dir", body.dir);
-        const o = body.overrides ?? {};
-        if (o.model) args.push("--model", o.model);
-        if (o.effort) args.push("--effort", o.effort);
-        if (o.permissionMode) args.push("--permission-mode", o.permissionMode);
         // validated against the table, not passed through: --harness reaches a spawn
-        if (o.harness !== undefined && !isHarness(o.harness))
-          return json({ error: `unknown harness "${o.harness}" — have: ${harnessNames().join(", ")}` }, 400);
-        if (o.harness) args.push("--harness", o.harness);
-        if (o.maxTurns) args.push("--max-turns", String(o.maxTurns));
-        if (o.skills?.length) args.push("--skills", o.skills.join(","));
+        const harness = body.overrides?.harness;
+        if (harness !== undefined && !isHarness(harness))
+          return json({ error: `unknown harness "${harness}" — have: ${harnessNames().join(", ")}` }, 400);
+        const args = launchArgs({ ...body, graph: body.graph, name: named.name }, runId);
         Bun.spawn(["bun", join(import.meta.dir, "..", "cli", "main.ts"), ...args], {
           stdout: "ignore", stderr: "ignore", env: { ...process.env },
         }).unref();

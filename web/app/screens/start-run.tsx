@@ -6,6 +6,9 @@
  *
  * The run-overrides disclosure was a `.linkish` span with an onClick — no role, no tabIndex,
  * no key handler (P2.8). It is a `Button variant="link"` carrying `aria-expanded`.
+ *
+ * The run name (HOW-18) is an optional display label; the server validates it with the same
+ * core/run-name.ts rule the CLI uses, and its refusal shows here like any launch error.
  */
 import { useEffect, useState } from "react";
 import { Play } from "lucide-react";
@@ -25,6 +28,7 @@ export function StartRun() {
   const [graphs, setGraphs] = useState<GraphInfo[]>([]);
   const [workspaces, setWorkspaces] = useState<Workspaces>({ repos: [], folders: [] });
   const [graph, setGraph] = useState<string>("");
+  const [name, setName] = useState<string>("");
   const [inputs, setInputs] = useState<Record<string, string>>({});
   const [workspace, setWorkspace] = useState<string>("");
   const [overrides, setOverrides] = useState<AgentConfigDto>({});
@@ -48,11 +52,11 @@ export function StartRun() {
       const r = await fetch("/api/runs", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ graph, inputs, workspace: workspace || undefined, overrides }),
+        body: JSON.stringify({ graph, name: name.trim() || undefined, inputs, workspace: workspace || undefined, overrides }),
       });
       if (!r.ok) throw new Error((await r.json() as any).error ?? "launch failed");
       const { id } = (await r.json()) as { id: string };
-      toast(`launched ${graph} as ${id}`);
+      toast(name.trim() ? `launched "${name.trim()}" as ${id}` : `launched ${graph} as ${id}`);
       location.assign(`/run/${id}`);
     } catch (e) {
       const why = e instanceof Error ? e.message : String(e);
@@ -75,6 +79,12 @@ export function StartRun() {
             </Select>
           </Label>
           {selected && <div className="field-hint">{selected.description}</div>}
+          {selected && (
+            <Label>
+              Run name (optional)
+              <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="shown in the runs list instead of the goal" />
+            </Label>
+          )}
           {selected?.inputs.map((k) => (
             <Label key={k}>
               {k}
