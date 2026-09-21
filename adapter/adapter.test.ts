@@ -253,6 +253,24 @@ describe("cursor adapter (shapes documented, not captured)", () => {
     expect(bad[0]).toMatchObject({ type: "turn_end", error: "it went wrong" });
   });
 
+  test("a failed result with NO words still carries an error — an empty one reads as no error", () => {
+    // the executor's `if (turn.turnError)` is a truthiness check, so `error: ""` would fall
+    // through to the outputs check and blame the model for a turn cursor said had failed
+    for (const record of [
+      { type: "result", subtype: "error", is_error: true },
+      { type: "result", subtype: "error", is_error: true, result: "" },
+      { type: "result", subtype: "success", is_error: true, result: { content: [] } },
+    ]) {
+      const [ev] = mapCursorEvent(record);
+      expect(ev).toMatchObject({ type: "turn_end" });
+      expect((ev as { error?: string }).error).toBe("cursor reported an error");
+    }
+    // an error RECORD with an empty message says the same rather than nothing
+    expect(mapCursorEvent({ type: "error", message: "" })).toEqual([{ type: "error", message: "cursor error" }]);
+    expect(mapCursorEvent({ type: "error", message: "", error: "real words" }))
+      .toEqual([{ type: "error", message: "real words" }]);
+  });
+
   test("unmapped record kinds are dropped, never guessed at", () => {
     expect(mapCursorEvent({ type: "mystery", text: "words" })).toEqual([]);
     expect(mapCursorEvent({ type: "tool_call", subtype: "unheard-of" })).toEqual([]);

@@ -312,6 +312,20 @@ describe("cursor executor over the fake print-mode wire", () => {
     expect(engine.log.read().filter((e) => e.type === "node-started" && e.node === "draft")).toHaveLength(1);
   }, 20000);
 
+  test("a cursor-side turn error is a turn error, even when cursor says nothing about it", async () => {
+    // is_error with no words at all: the error text is empty at every level, and an empty
+    // error reads as NO error to the executor's truthiness check — which would fall through
+    // to parseOutputs and park the node as an output contract violation, blaming the model
+    // for a turn cursor itself failed. `classifyHarnessExit` cannot catch it either: the CLI
+    // spoke the protocol and exited 0, so the exit is not the failure.
+    const { result } = await runCursor(cursorGraph(), { env: { FAKE_CURSOR_ERROR: "1" } });
+    expect(result).toMatchObject({ state: "parked", code: "attempt-failed" });
+    const reason = (result as { reason: string }).reason;
+    expect(reason).toContain("turn error:");
+    expect(reason).toContain("cursor reported an error");
+    expect(reason).not.toContain("output contract violation");
+  }, 15000);
+
   test("a logged-out cursor-agent parks on the login verb, not on the outputs contract", async () => {
     const dir = mkdtempSync(join(tmpdir(), "howdah-cursor-auth-"));
     const bin = join(dir, "logged-out-cursor");

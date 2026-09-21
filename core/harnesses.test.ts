@@ -140,3 +140,33 @@ describe("model families", () => {
     expect(modelFitsHarness("codex", "some-unreleased-thing")).toBe(true);
   });
 });
+
+/**
+ * A harness name that is not in the table is REACHABLE, not hypothetical: tuning.json is
+ * hand-editable and `loadTuning` blind-casts it, and the tuning PUT route accepts any
+ * non-empty string until it is checked. Before the table existed these three functions all
+ * degraded (`?? "claude"`, a ternary on `=== "claude"`); a table lookup that dereferences
+ * `undefined` would have turned that silent degrade into a throw — a 500 from
+ * `GET /api/graphs/:name` and an `executor-threw` park on every run of the graph.
+ */
+describe("a harness the table does not know", () => {
+  const bogus = "cursor-agent" as never; // the binary, not the harness name — an easy typo
+
+  test("resolves to the configured default instead of throwing", () => {
+    expect(resolveAgentConfigLayers([{ harness: bogus }]).harness).toBe("claude");
+    expect(resolveAgentConfigLayers([{ harness: bogus }], { configuredDefaultHarness: "codex" }).harness).toBe("codex");
+    // and it resolves the rest of the config too, rather than dying on permissionMode
+    expect(resolveAgentConfigLayers([{ harness: bogus, permissionMode: "acceptEdits" }]).permissionMode).toBe("auto");
+  });
+
+  test("leaves a model alone — this function refuses on evidence, and there is none", () => {
+    expect(modelFitsHarness(bogus, "gpt-5")).toBe(true);
+    expect(modelFitsHarness(bogus, "claude-opus-5")).toBe(true);
+  });
+
+  test("gets no skill hint: naming Claude Code skills to an unidentified CLI is the accident", () => {
+    expect(skillsForHarness(bogus, ["review"])).toEqual([]);
+    // an UNRESOLVED harness is a different thing from an unknown one and keeps the skills
+    expect(skillsForHarness(undefined, ["review"])).toEqual(["review"]);
+  });
+});

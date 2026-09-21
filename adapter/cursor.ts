@@ -123,7 +123,11 @@ export function mapCursorEvent(raw: unknown): AgentEvent[] {
       return [{
         type: "turn_end",
         result_text: text || undefined,
-        error: failed ? String(e.error ?? text ?? "cursor reported an error") : undefined,
+        // `||`, not `??`: a failed result with no words at all leaves both operands as the
+        // EMPTY STRING, and an empty error reads as no error downstream — the executor's
+        // `if (turn.turnError)` would fall through to the outputs check and blame the model
+        // for a turn cursor itself said had failed. A failure always carries a sentence.
+        error: failed ? String(e.error || text || "cursor reported an error") : undefined,
         usage: usage
           ? { input_tokens: usage.input_tokens ?? usage.inputTokens, output_tokens: usage.output_tokens ?? usage.outputTokens }
           : undefined,
@@ -131,7 +135,8 @@ export function mapCursorEvent(raw: unknown): AgentEvent[] {
     }
 
     case "error":
-      return [{ type: "error", message: String(e.message ?? e.error ?? "cursor error") }];
+      // `||` for the same reason as the result branch: an empty message is not a message
+      return [{ type: "error", message: String(e.message || e.error || "cursor error") }];
 
     default:
       return []; // unmapped record kinds are dropped, never guessed at

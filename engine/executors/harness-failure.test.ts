@@ -21,6 +21,7 @@ import { claudeExecutor } from "./claude";
 import { defineGraph } from "../../core/graph";
 import { REPLY_RULES } from "../control";
 import { classifyHarnessExit, looksUnauthenticated, probeAuth, stderrTail, type ProbeRun } from "./harness-failure";
+import { harnessNames, harnessSpec } from "../../core/harnesses";
 
 const exit = (over: Partial<Parameters<typeof classifyHarnessExit>[0]> = {}) =>
   classifyHarnessExit({ harness: "claude", exitCode: 1, stderr: "", sawOutput: false, ...over });
@@ -105,6 +106,34 @@ describe("probing whether a harness is logged in", () => {
     expect(probeAuth("claude", () => null)).toBe("unknown");
     expect(probeAuth("nonesuch", fake("whatever"))).toBe("unknown");
     expect(probeAuth("claude", fake("some future wording", 0))).toBe("unknown");
+  });
+
+  test("what is spawned is the table's declared probe, for every harness", () => {
+    // not a second list maintained here: cursor is probed because its entry says how to ask
+    const spawnedFor = (name: string): string[] | undefined => {
+      let spawned: string[] | undefined;
+      probeAuth(name, (argv) => {
+        spawned = argv;
+        return { code: 0, stdout: "", stderr: "" };
+      });
+      return spawned;
+    };
+    expect(spawnedFor("cursor")).toEqual(["cursor-agent", "status"]);
+    for (const name of harnessNames()) {
+      const spec = harnessSpec(name);
+      const expected = spec.status === "internal" ? undefined : (spec.authProbe as string[] | undefined);
+      expect(spawnedFor(name)).toEqual(expected);
+    }
+  });
+
+  test("a harness with no CLI of its own is never probed — opencode runs through claude's", () => {
+    // probing it would spawn `claude auth status` and report the answer under opencode's name
+    let spawned = false;
+    expect(probeAuth("opencode", () => {
+      spawned = true;
+      return { code: 0, stdout: '{"loggedIn": true}', stderr: "" };
+    })).toBe("unknown");
+    expect(spawned).toBe(false);
   });
 });
 

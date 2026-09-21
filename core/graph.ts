@@ -23,7 +23,7 @@
  * conditional sets over closed choice types are therefore legal and common.
  */
 import { validateGraph, formatViolations, type GraphShape, type Violation } from "./validate";
-import { defaultHarness, harnessNames, harnessSpec, type HarnessName } from "./harnesses";
+import { defaultHarness, harnessNames, harnessSpec, isHarness, type HarnessName } from "./harnesses";
 import type { Scope } from "./context";
 import type { PromptId } from "./prompt-ids";
 
@@ -54,10 +54,14 @@ export interface AgentConfig {
  * how a brand-new model works on the day it ships, before this table hears about it.
  *
  * HOW-17: the families are declared in core/harnesses.ts, not owned by a pair of regexes
- * here, so a third harness is one table entry rather than a third branch.
+ * here, so a third harness is one table entry rather than a third branch. A name the table
+ * does not know (tuning.json is hand-editable and blind-cast on load) has no family to
+ * check against, so the model is allowed through rather than dereferenced into a throw —
+ * this function decides what to REFUSE, and it can only refuse on evidence.
  */
 export function modelFitsHarness(harness: Harness, model: string): boolean {
-  const spec = harnessSpec(harness);
+  const spec = isHarness(harness) ? harnessSpec(harness) : undefined;
+  if (!spec) return true;
   if (spec.modelFamily.test(model)) return true;
   if (spec.acceptsForeignModels) return true; // cursor serves sonnet and gpt alike
   return !harnessNames().some((other) => other !== harness && harnessSpec(other).modelFamily.test(model));
@@ -85,7 +89,12 @@ export function resolveAgentConfigLayers(
     }
     return undefined;
   };
-  const harness = pick("harness") ?? defaultHarness(opts.configuredDefaultHarness);
+  // tuning.json is hand-editable and `loadTuning` blind-casts it, so `pick` can hand back a
+  // string no harness table entry answers to. That degrades to the configured default the
+  // way it did before the table existed: a typo must not make every graph unrunnable, and a
+  // run parked as `executor-threw` would say nothing about which key to fix.
+  const picked = pick("harness");
+  const harness = isHarness(picked) ? picked : defaultHarness(opts.configuredDefaultHarness);
   let model: string | undefined;
   for (const layer of layers) {
     if (layer?.model && modelFitsHarness(harness, layer.model)) {

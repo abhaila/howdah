@@ -279,6 +279,12 @@ export function createHowdahServer(opts: ServerOpts) {
           // only real node ids may be tuned — a typo must not silently no-op
           for (const id of Object.keys(body.nodes ?? {}))
             if (!g.def.nodes[id]) return json({ error: `unknown node "${id}"` }, 400);
+          // HOW-17: and only a harness the table knows. core/ degrades an unknown name to the
+          // configured default rather than throwing, so this is not a crash guard — it is so
+          // the operator learns their typo here instead of watching every run quietly ignore it.
+          for (const cfg of [body.defaults, ...Object.values(body.nodes ?? {})])
+            if (cfg?.harness !== undefined && !isHarness(cfg.harness))
+              return json({ error: `unknown harness "${cfg.harness}" — have: ${harnessNames().join(", ")}` }, 400);
           const all = loadTuning();
           if (Object.keys(body).length === 0) delete all[g.def.name];
           else all[g.def.name] = body;

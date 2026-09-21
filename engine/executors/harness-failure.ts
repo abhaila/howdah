@@ -16,7 +16,7 @@
  * change. That is why a miss degrades to `attempt-failed` WITH the stderr tail attached
  * rather than to a wrong diagnosis: an unrecognised message still reaches the human intact.
  */
-import { harnessNames, harnessSpec, harnessSpecForCommand } from "../../core/harnesses";
+import { harnessSpec, harnessSpecForCommand, isHarness } from "../../core/harnesses";
 import type { ParkCode } from "../../log/events";
 
 /** how much of stderr is worth putting in front of a human (and into the run log) */
@@ -104,32 +104,27 @@ export function classifyHarnessExit({ harness, exitCode, stderr, sawOutput }: Ha
 }
 
 /**
- * The CLI subcommand that answers "am I logged in", without spending a token — read off the
- * harness table (HOW-17), so a new harness arrives here with its entry rather than through
- * an edit nobody remembers to make. A harness with no such subcommand has no entry, and
- * probing it answers "unknown" rather than "out".
- */
-export const AUTH_PROBES: Record<string, string[]> = Object.fromEntries(
-  harnessNames()
-    .map((h) => harnessSpec(h))
-    .filter((spec) => spec.authProbe !== undefined && spec.status !== "internal")
-    .map((spec) => [spec.name, [...spec.authProbe!]]),
-);
-
-/**
  * Runs a harness's own auth-status subcommand. `claude auth status` prints JSON carrying
- * `loggedIn`; `codex login status` prints a line and exits non-zero when logged out. Both
- * are local and free, which is why this can be a `doctor` check rather than a test run.
+ * `loggedIn`; `codex login status` prints a line and exits non-zero when logged out; cursor
+ * declares `cursor-agent status`. All are local and free, which is why this can be a
+ * `doctor` check rather than a test run.
  *
- * `unknown` when the CLI is absent or the subcommand is not understood — an old CLI must not
- * be reported as logged out. Being on PATH is not being logged in, and that rule now holds
- * for three harnesses: cursor-agent's own wording is unverified here, so its status output
- * falls through to the generic exit-code reading rather than to an invented pattern.
+ * `unknown` when the CLI is absent, has no probe on the table, or answers in wording we do
+ * not recognise — an old CLI must not be reported as logged out. Being on PATH is not being
+ * logged in, and that rule now holds for three harnesses: cursor-agent's own wording is
+ * unverified here, so its status output falls through to the generic exit-code reading
+ * rather than to an invented pattern.
  */
 export function probeAuth(harness: string, run = defaultRun): "in" | "out" | "unknown" {
-  const argv = AUTH_PROBES[harness];
+  // HOW-17: the argv is read off the harness table, so a new harness arrives here with its
+  // entry rather than through an edit nobody remembers to make. Three different "we cannot
+  // ask" cases end up with no argv, and all three must read as `unknown`: a name no entry
+  // answers to, an `internal` harness (probing opencode would spawn claude's own probe and
+  // report the answer under opencode's name), and a CLI with no auth-status subcommand.
+  const spec = isHarness(harness) ? harnessSpec(harness) : undefined;
+  const argv = spec && spec.status !== "internal" ? spec.authProbe : undefined;
   if (!argv) return "unknown";
-  const r = run(argv);
+  const r = run([...argv]);
   if (r === null) return "unknown";
   const text = `${r.stdout}\n${r.stderr}`;
   // claude: JSON with an explicit boolean, which beats guessing from the exit code

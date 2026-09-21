@@ -36,7 +36,7 @@
  * the codegen check expand through the same function.
  */
 import { createHash } from "node:crypto";
-import { harnessSpec } from "./harnesses";
+import { harnessSpec, isHarness } from "./harnesses";
 import type { Harness } from "./graph";
 
 /** `{{ context.key }}` / `{{ inputs.key }}`, optional `| filter` tail, captured as (ns, key). */
@@ -171,10 +171,14 @@ export function buildOutputInstruction(keys: readonly string[]): string {
  * cannot run. The result is what gets LOGGED as `skills`, so this must answer for the
  * prompt that was actually sent — a harness handed a hint it never got would break
  * reconstruction. HOW-17: that answer is a declared field on harnessSpec, never a default,
- * so a new harness cannot inherit claude's by omission.
+ * so a new harness cannot inherit claude's by omission — and a name the table does not know
+ * (a hand-edited tuning.json) gets no hint rather than a throw, for the same reason: naming
+ * Claude Code skills to an unidentified CLI is exactly the accident this field prevents.
  */
 export function skillsForHarness(harness: Harness | undefined, skills: readonly string[] | undefined): string[] {
-  if (harness && !harnessSpec(harness).skillHint) return [];
+  if (harness === undefined) return [...(skills ?? [])];
+  if (!isHarness(harness)) return [];
+  if (!harnessSpec(harness).skillHint) return [];
   return [...(skills ?? [])];
 }
 

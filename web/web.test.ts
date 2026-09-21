@@ -503,6 +503,14 @@ describe("graph tuning API", () => {
       // unknown node refused — a typo must not silently no-op
       expect((await put({ nodes: { "doc.ghost": { model: "x" } } })).status).toBe(400);
 
+      // HOW-17: and an unknown HARNESS, at either level. core/ degrades one to the configured
+      // default rather than throwing, so a typo saved here would be invisible forever
+      expect((await put({ nodes: { "doc.draft": { harness: "cursor-agent" } } })).status).toBe(400);
+      const bad = await put({ defaults: { harness: "Cursor" } });
+      expect(bad.status).toBe(400);
+      expect(((await bad.json()) as any).error).toContain("cursor");
+      expect((await put({ defaults: { harness: "cursor" } })).status).toBe(200);
+
       // tune one node + graph defaults
       expect((await put({ defaults: { effort: "low" }, nodes: { "doc.draft": { model: "claude-opus-5", effort: "" } } })).status).toBe(200);
       const shape = (await (await fetch(url("/api/graphs/write-doc"))).json()) as any;

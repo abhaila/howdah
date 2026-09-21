@@ -17,6 +17,9 @@
  * rendered_hash covers the bytes of the first turn (system-map 0.1).
  * FAKE_CURSOR_DROP_OUTPUTS=1 ends the first turn in prose with no contract; the repair turn,
  * which names itself, complies.
+ * FAKE_CURSOR_ERROR=1 ends the turn the way a cursor-side failure does: is_error with no
+ * words at all — the shape whose error text is empty, which the executor must still read as
+ * a turn error rather than falling through to the outputs contract and blaming the model.
  */
 import { appendFileSync } from "node:fs";
 
@@ -33,6 +36,11 @@ out({ type: "assistant", message: { role: "assistant", content: [{ type: "text",
 out({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "doing the thing. 🐘" }] } });
 out({ type: "tool_call", subtype: "started", call_id: "call-1", tool_call: { readToolCall: { args: { path: "README.md" } } } });
 out({ type: "tool_call", subtype: "completed", call_id: "call-1", tool_call: { readToolCall: { args: { path: "README.md" }, result: "ok" } } });
+
+if (process.env.FAKE_CURSOR_ERROR === "1") {
+  out({ type: "result", subtype: "error", is_error: true, duration_ms: 3 });
+  process.exit(0);
+}
 
 const keys = [...promptText.matchAll(/"([\w.]+)": <value>/g)].map((m) => m[1]!);
 const outputs = Object.fromEntries(keys.map((k) => [k, k === "review_verdict" ? (process.env.FAKE_CLAUDE_VERDICT ?? "pass") : `fake ${k}`]));
