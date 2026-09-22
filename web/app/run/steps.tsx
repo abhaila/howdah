@@ -242,8 +242,11 @@ export function StepDetail({ runId, row, detail, ask, now, onResolved }: {
   const panes: Array<{ value: NonNullable<typeof pane>; label: string }> = [
     ...(askFirst ? [askPane] : []),
     ...slicePaneList,
-    ...(askFirst || decidedOnCard ? [] : [askPane]),
+    // Activity leads whenever nothing is waiting on you. It used to sit BEHIND the Ask pane,
+    // so opening any finished step landed on "this step is not waiting on you" — a dead pane
+    // as the default view, with the step's actual story one click to the right.
     { value: "activity", label: "Activity" },
+    ...(askFirst || decidedOnCard ? [] : [askPane]),
     { value: "prompt", label: "Prompt & context" },
     { value: "output", label: "Output" },
   ];

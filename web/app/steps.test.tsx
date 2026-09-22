@@ -91,7 +91,7 @@ describe("StepDetail pane routing on the approval step", () => {
     log.add({ type: "node-started", node: "map.drift", visit: 1, attempt_id: "map.drift#1" });
     log.add(drift([{ key: "a", outcome: "verified" }]));
     const el = renderStep(log, "map.drift", 1);
-    expect(tabLabels(el)).toEqual(["Drift", "Ask", "Activity", "Prompt & context", "Output"]);
+    expect(tabLabels(el)).toEqual(["Drift", "Activity", "Ask", "Prompt & context", "Output"]);
     expect(selected(el)).toBe("Drift");
     expect(el.querySelector(".drift-view")).not.toBeNull();
   });
