@@ -25,6 +25,7 @@
 import { validateGraph, formatViolations, type GraphShape, type Violation } from "./validate";
 import { defaultHarness, harnessNames, harnessSpec, isHarness, type HarnessName } from "./harnesses";
 import type { Scope } from "./context";
+import type { GraphSpec } from "./graph-spec";
 import type { PromptId } from "./prompt-ids";
 
 /** The generated union from prompts/codegen.ts — an unknown id is a compile error. */
@@ -251,6 +252,17 @@ export interface GraphDef<C extends object> {
    * is where the run works (its worktree once one exists).
    */
   validateProposal?: (proposal: unknown, approvalNode: string, run: ProposalRun) => string | null;
+  /**
+   * HOW-22: the declarative spec this graph was COMPILED from, when it was built in the
+   * viewer's graph builder rather than written by hand (core/graph-spec.ts buildGraph).
+   *
+   * It is carried here so the builder can re-open exactly what it wrote instead of
+   * reverse-engineering a spec out of TypeScript. Nothing in the engine reads it — a graph
+   * with a spec and the same graph written by hand behave identically — and a hand-written
+   * graph simply has none, which is how the viewer knows to offer the source editor instead.
+   * The import is type-only, so core/graph-spec.ts may import this module at runtime.
+   */
+  spec?: GraphSpec;
 }
 
 /** Which run a proposal is validated for (GraphDef.validateProposal). */

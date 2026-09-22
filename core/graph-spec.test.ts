@@ -1,0 +1,244 @@
+/**
+ * The spec model (HOW-22). Two things are being pinned here.
+ *
+ * The COMPILER: a spec becomes the same Graph a hand-written defineGraph would — same
+ * condition labels, same fallback semantics, same scopes — because a built graph that read
+ * differently in the DAG and the event log would be a second dialect to learn.
+ *
+ * The TRANSLATOR: specProblems() is the only thing standing between an operator and
+ * `validate()`'s vocabulary, so every message it produces has to name the STEP that owns the
+ * problem and say what to do about it. A problem that reaches the screen as
+ * `node "x" reads "y" but no writer covers every path` is the ticket's failure mode.
+ */
+import { describe, expect, test } from "bun:test";
+import {
+  buildGraph, compilePredicate, parseGraphSpec, predicateLabel, specProblems,
+  type GraphSpec, type Predicate,
+} from "./graph-spec";
+
+/** the smallest legal graph: one agent, one terminal */
+function minimal(over: Partial<GraphSpec> = {}): GraphSpec {
+  return {
+    version: 1,
+    name: "my-review",
+    description: "a built graph",
+    fields: [
+      { key: "goal", kind: "text", scope: "sticky" },
+      { key: "summary", kind: "text", scope: "sticky" },
+    ],
+    inputs: ["goal"],
+    entry: "draft",
+    nodes: [
+      { id: "draft", kind: "agent", title: "Draft the doc", prompt: "my-review.draft", reads: ["goal"], writes: ["summary"] },
+      { id: "done", kind: "terminal", outcome: "success" },
+    ],
+    edges: [{ from: "draft", to: "done" }],
+    ...over,
+  };
+}
+
+describe("buildGraph — a spec is a real Graph", () => {
+  test("it validates, and the spec comes back out for an exact round trip", () => {
+    const spec = minimal();
+    const g = buildGraph(spec);
+    expect(g.validate()).toEqual({ structural: [], paths: [] });
+    expect(g.def.spec).toEqual(spec);
+    expect(g.def.entry).toBe("draft");
+    expect(g.def.inputs).toEqual(["goal"]);
+  });
+
+  test("scope comes from the FIELD, so two writers can never disagree", () => {
+    const spec = minimal({
+      fields: [
+        { key: "goal", kind: "text", scope: "sticky" },
+        { key: "summary", kind: "text", scope: "cleared" },
+      ],
+      nodes: [
+        { id: "draft", kind: "agent", prompt: "my-review.draft", reads: ["goal"], writes: ["summary"] },
+        { id: "redraft", kind: "agent", prompt: "my-review.draft", reads: ["goal"], writes: ["summary"] },
+        { id: "done", kind: "terminal", outcome: "success" },
+      ],
+      edges: [{ from: "draft", to: "redraft" }, { from: "redraft", to: "done" }],
+    });
+    const g = buildGraph(spec);
+    expect(g.declarations()["summary"]).toEqual({ scope: "cleared", writer: ["draft", "redraft"] });
+  });
+
+  test("weight is row order: the first conditional row leaving a step wins", () => {
+    const spec = minimal({
+      fields: [
+        { key: "goal", kind: "text", scope: "sticky" },
+        { key: "summary", kind: "text", scope: "sticky" },
+        { key: "review_verdict", kind: "choice", scope: "cleared", choices: ["pass", "reject"] },
+      ],
+      nodes: [
+        { id: "draft", kind: "agent", prompt: "my-review.draft", reads: ["goal"], writes: ["summary", "review_verdict"] },
+        { id: "revise", kind: "agent", prompt: "my-review.draft", reads: ["goal"], writes: [] },
+        { id: "done", kind: "terminal", outcome: "success" },
+      ],
+      edges: [
+        { from: "draft", to: "revise", when: { op: "equals", key: "review_verdict", value: "reject" } },
+        { from: "draft", to: "done", when: { op: "equals", key: "review_verdict", value: "pass" } },
+        { from: "revise", to: "done" },
+      ],
+    });
+    const edges = buildGraph(spec).def.edges;
+    expect(edges[0]!.weight).toBe(2);
+    expect(edges[1]!.weight).toBe(1);
+    // the unconditional edge keeps no weight at all: it IS the weight-0 fallback
+    expect(edges[2]!.weight).toBeUndefined();
+    expect(edges[2]!.condition).toBeUndefined();
+  });
+});
+
+describe("predicates read like the hand-written graphs do", () => {
+  const cases: Array<[Predicate, string, Array<[unknown, boolean]>]> = [
+    [{ op: "equals", key: "review_verdict", value: "reject" }, "review_verdict == 'reject'", [["reject", true], ["pass", false]]],
+    [{ op: "not-equals", key: "review_verdict", value: "pass" }, "review_verdict != 'pass'", [["reject", true], ["pass", false]]],
+    [{ op: "one-of", key: "pr.state", values: ["MERGED", "CLOSED"] }, "pr.state in ['MERGED', 'CLOSED']", [["CLOSED", true], ["OPEN", false]]],
+    [{ op: "is-true", key: "worktree.clean" }, "worktree.clean == true", [[true, true], [false, false], ["yes", false]]],
+    [{ op: "is-false", key: "worktree.clean" }, "worktree.clean == false", [[false, true], [true, false]]],
+    [{ op: "is-empty", key: "notes" }, "notes is empty", [["", true], [[], true], [{}, true], [0, false], ["x", false]]],
+    [{ op: "is-not-empty", key: "notes" }, "notes is set", [["x", true], ["", false], [undefined, false]]],
+    [{ op: "equals", key: "slice.approval", path: "outcome", value: "approved" }, "slice.approval.outcome == 'approved'",
+      [[{ outcome: "approved" }, true], [{ outcome: "feedback" }, false], ["approved", false], [null, false]]],
+  ];
+  for (const [p, label, checks] of cases) {
+    test(label, () => {
+      expect(predicateLabel(p)).toBe(label);
+      const c = compilePredicate(p);
+      expect(c.reads).toEqual([p.key]);
+      for (const [value, want] of checks) expect(c.test({ [p.key]: value } as any)).toBe(want);
+    });
+  }
+});
+
+describe("specProblems speaks to the operator, not to the validator", () => {
+  test("a clean draft has nothing to say", () => {
+    expect(specProblems(minimal())).toEqual([]);
+  });
+
+  test("a missing writer names the STEP and what to do, not the node/key/witness form", () => {
+    const spec = minimal({
+      nodes: [
+        { id: "draft", kind: "agent", title: "Draft the doc", prompt: "my-review.draft", reads: ["goal", "summary"], writes: [] },
+        { id: "done", kind: "terminal", outcome: "success" },
+      ],
+    });
+    const problems = specProblems(spec);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]!.node).toBe("draft");
+    expect(problems[0]!.message).toContain("**Draft the doc** is given `summary`");
+    expect(problems[0]!.message).toContain("ask for it at launch");
+    expect(problems[0]!.message).not.toContain("no writer covers every path");
+  });
+
+  test("a dead end is attributed to the step that dead-ends", () => {
+    const spec = minimal({ edges: [] });
+    const problems = specProblems(spec);
+    expect(problems.map((p) => p.node)).toContain("draft");
+    expect(problems.find((p) => p.node === "draft")!.message).toContain("nowhere to go next");
+  });
+
+  test("two Otherwise rows on one step is one message about that step", () => {
+    const spec = minimal({
+      nodes: [
+        { id: "draft", kind: "agent", title: "Draft", prompt: "my-review.draft", reads: ["goal"], writes: ["summary"] },
+        { id: "other", kind: "terminal", outcome: "failed" },
+        { id: "done", kind: "terminal", outcome: "success" },
+      ],
+      edges: [{ from: "draft", to: "done" }, { from: "draft", to: "other" }],
+    });
+    const problems = specProblems(spec);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]!.node).toBe("draft");
+    expect(problems[0]!.message).toContain('more than one "Otherwise"');
+  });
+
+  test("a branch reading a key nothing writes is attributed to the step it leaves", () => {
+    const spec = minimal({
+      fields: [
+        { key: "goal", kind: "text", scope: "sticky" },
+        { key: "summary", kind: "text", scope: "sticky" },
+        { key: "verdict", kind: "choice", scope: "cleared", choices: ["pass"] },
+      ],
+      nodes: [
+        { id: "draft", kind: "agent", title: "Draft the doc", prompt: "my-review.draft", reads: ["goal"], writes: ["summary"] },
+        { id: "done", kind: "terminal", outcome: "success" },
+        { id: "stop", kind: "terminal", outcome: "failed" },
+      ],
+      edges: [
+        { from: "draft", to: "done", when: { op: "equals", key: "verdict", value: "pass" } },
+        { from: "draft", to: "stop" },
+      ],
+    });
+    const problems = specProblems(spec);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]!.node).toBe("draft");
+    expect(problems[0]!.message).toContain("The branch leaving **Draft the doc** is given `verdict`");
+  });
+
+  test("a key no field declares is caught before validate() ever runs", () => {
+    const spec = minimal({
+      nodes: [
+        { id: "draft", kind: "agent", title: "Draft", prompt: "my-review.draft", reads: ["goal"], writes: ["mystery"] },
+        { id: "done", kind: "terminal", outcome: "success" },
+      ],
+    });
+    expect(specProblems(spec)[0]!.message).toContain("`mystery`, which is not a field");
+  });
+
+  test("a dangling edge target does not throw its way out of the builder", () => {
+    const spec = minimal({ edges: [{ from: "draft", to: "ghost" }] });
+    const problems = specProblems(spec);
+    expect(problems[0]!.message).toContain('("ghost")');
+    expect(problems[0]!.node).toBe("draft");
+  });
+
+  test("a wait step with an unparseable duration says what one looks like", () => {
+    const spec = minimal({
+      nodes: [
+        { id: "draft", kind: "agent", prompt: "my-review.draft", reads: ["goal"], writes: ["summary"] },
+        { id: "hold", kind: "wait", title: "Cool off", duration: "a while" },
+        { id: "done", kind: "terminal", outcome: "success" },
+      ],
+      edges: [{ from: "draft", to: "hold" }, { from: "hold", to: "done" }],
+    });
+    expect(specProblems(spec)[0]!.message).toContain('duration like "30 s"');
+  });
+
+  test("a prompt with no file yet is a problem when the known set is supplied", () => {
+    expect(specProblems(minimal(), { knownPrompts: [] })[0]!.message).toContain("has no file yet");
+    expect(specProblems(minimal(), { knownPrompts: ["my-review.draft"] })).toEqual([]);
+  });
+});
+
+describe("parseGraphSpec refuses what it cannot vouch for", () => {
+  test("a good spec survives untouched", () => {
+    const parsed = parseGraphSpec(JSON.parse(JSON.stringify(minimal())));
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) expect(parsed.spec).toEqual(minimal());
+  });
+
+  test("unknown keys are dropped rather than carried onto disk", () => {
+    const parsed = parseGraphSpec({ ...minimal(), evil: "rm -rf", nodes: [{ id: "done", kind: "terminal", outcome: "success", evil: 1 }] });
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) {
+      expect("evil" in parsed.spec).toBe(false);
+      expect("evil" in parsed.spec.nodes[0]!).toBe(false);
+    }
+  });
+
+  test("a wrong version, a bad name and a malformed step are each refused by name", () => {
+    expect(parseGraphSpec({ ...minimal(), version: 2 })).toEqual({ ok: false, error: expect.stringContaining("unsupported spec version") } as any);
+    expect(parseGraphSpec({ ...minimal(), name: "../escape" })).toEqual({ ok: false, error: expect.stringContaining("kebab-case") } as any);
+    const bad = parseGraphSpec({ ...minimal(), nodes: [{ id: "x", kind: "agent", prompt: "../../etc/passwd" }] });
+    expect(bad.ok).toBe(false);
+  });
+
+  test("an unknown harness in a config is dropped, not written into the file", () => {
+    const parsed = parseGraphSpec({ ...minimal(), defaults: { harness: "sudo", model: "claude-opus-5" } });
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) expect(parsed.spec.defaults).toEqual({ model: "claude-opus-5" });
+  });
+});
