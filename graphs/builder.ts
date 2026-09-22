@@ -21,15 +21,14 @@
  */
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { SPEC_PROMPT_ID, type GraphSpec, type NodeSpec } from "../core/graph-spec";
+import { promptIdFor, SPEC_PROMPT_ID, type GraphSpec, type NodeSpec } from "../core/graph-spec";
 import { frontMatterField, splitFrontMatter, templateReads } from "../core/template";
 import { ensureLocalDirs, LOCAL_NAME, loadLocalGraph, localGraphPath, localPromptsDir } from "./local";
 import type { Graph } from "../core/graph";
 
-/** `my-review` + `draft` → `my-review.draft`: a prompt id no other graph can collide with. */
-export function promptIdFor(graphName: string, nodeId: string): string {
-  return `${graphName}.${nodeId}`;
-}
+// promptIdFor lives in core/graph-spec.ts (the builder needs it in the browser too) and is
+// re-exported here, where every other caller already looks for it.
+export { promptIdFor };
 
 /** The prompt file a builder graph's step owns, or null when it has none yet. */
 export function readLocalPrompt(home: string, id: string): string | null {

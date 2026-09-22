@@ -9,8 +9,9 @@
  * 1.5s, which nothing but a sighted operator watching that button could perceive.
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { GitBranch, FolderGit2, SlidersHorizontal, RotateCcw as ResetIcon } from "lucide-react";
+import { GitBranch, FolderGit2, SlidersHorizontal, Pencil, Plus, RotateCcw as ResetIcon } from "lucide-react";
 import type { GraphCatalog } from "@/lib/types";
+import { navigate } from "@/lib/nav";
 import { getJSON } from "@/lib/net";
 import { GraphDag, useGraphShape, type GraphShapeDto, type AgentConfigDto } from "../graph-dag";
 import { modelFitsHarness } from "../../../core/graph";
@@ -342,69 +343,6 @@ export function GraphTuner({ shape, onSaved }: { shape: GraphShapeDto; onSaved: 
 }
 
 /**
- * Creating a local graph (D9). The name is the file name AND the graph's own `name`, so it is
- * checked here before the round trip: kebab-case, and nothing that could escape the dir.
- */
-export function NewGraphForm({ onCreated }: { onCreated: (name: string) => void }) {
-  const [name, setName] = useState("");
-  const [kind, setKind] = useState("custom");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const { toast } = useToast();
-  const legal = /^[a-z][a-z0-9-]*$/.test(name);
-
-  const create = async () => {
-    setBusy(true);
-    setError(null);
-    try {
-      const r = await fetch("/api/graphs", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ name, kind }),
-      });
-      const body = (await r.json().catch(() => ({}))) as { error?: string };
-      if (!r.ok) throw new Error(body.error ?? "could not create the graph");
-      toast(`${name}.ts created under $HOWDAH_HOME/graphs`);
-      setName("");
-      onCreated(name);
-    } catch (e) {
-      const why = e instanceof Error ? e.message : String(e);
-      setError(why);
-      toast(why, "error");
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <Card className="new-graph-card">
-      <CardContent className="pt-5">
-        <Label>
-          New graph
-          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="my-review" />
-        </Label>
-        {name && !legal && <div className="field-error">kebab-case only: a letter, then letters, digits or hyphens</div>}
-        <Label>
-          Shape
-          <Select value={kind} onChange={(e) => setKind(e.target.value)}>
-            <option value="custom">custom — one agent, one terminal</option>
-            <option value="doc">doc — draft, review, revise</option>
-          </Select>
-        </Label>
-        <div className="actions">
-          <Button onClick={create} disabled={!legal || busy}>{busy ? "Creating…" : "Create"}</Button>
-        </div>
-        {error && <div className="field-error">{error}</div>}
-        <div className="field-hint">
-          Saved under <code>$HOWDAH_HOME/graphs</code>, not in the Howdah repo, so updating Howdah
-          never touches them.
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
-
-/**
  * Editing a local graph as what it is: TypeScript (D2). Save runs the same gate the launcher
  * trusts — import, `validate()`, and every agent node's prompt file must exist — and restores
  * the previous bytes when it fails, so what is on disk is always runnable.
@@ -501,7 +439,12 @@ export function GraphsList() {
   useEffect(() => { load(); }, [load, reloadKey]);
   const shape = useGraphShape(selected ? `${selected}?v=${reloadKey}` as any : undefined);
   const graphs = catalog?.graphs ?? [];
-  const isLocal = graphs.find((g) => g.name === selected)?.source === "local";
+  const current = graphs.find((g) => g.name === selected);
+  const isLocal = current?.source === "local";
+  // HOW-22: `builder` is true only for a local graph that still carries the spec it was
+  // built from. A hand-written one — or a built one since hand-edited past recognition —
+  // is false, and gets told so rather than opened half-understood.
+  const isBuilder = current?.builder === true;
 
   return (
     <div className="runs">
@@ -511,7 +454,7 @@ export function GraphsList() {
           {graphs.map((g) => (
             <Row key={g.name} className="run-row" selected={selected === g.name} onClick={() => setSelected(g.name)} aria-label={`the ${g.name} graph`}>
               <span className="run-goal">{g.name}</span>
-              {g.source === "local" && <Badge variant="outline">local</Badge>}
+              {g.source === "local" && <Badge variant="outline">{g.builder ? "built here" : "local"}</Badge>}
               <Badge variant="outline" className="ml-auto">{g.kind === "repo" ? <GitBranch /> : <FolderGit2 />}{g.kind}</Badge>
             </Row>
           ))}
@@ -523,15 +466,42 @@ export function GraphsList() {
               <div className="field-error problem-why">{p.error}</div>
             </Row>
           ))}
-          <NewGraphForm onCreated={(n) => { setReloadKey((k) => k + 1); setSelected(n); }} />
+          <div className="actions">
+            <Button onClick={() => navigate("/graphs/new")}><Plus />Build a graph</Button>
+          </div>
+          <div className="field-hint">
+            Built graphs are saved under <code>$HOWDAH_HOME/graphs</code>, not in the Howdah
+            repo, so updating Howdah never touches them.
+          </div>
         </div>
         <div>
           {shape ? (
             <>
               <div className="field-hint graph-description">{shape.description}</div>
-              {isLocal
-                ? <GraphSource name={selected!} onSaved={() => setReloadKey((k) => k + 1)} />
-                : <div className="field-hint">Built-in graph: edit it in the Howdah repo, where <code>bun run check</code> covers it.</div>}
+              {isBuilder && (
+                <div className="actions">
+                  <Button onClick={() => navigate(`/graphs/${selected}/build`)}><Pencil />Edit in builder</Button>
+                </div>
+              )}
+              {isLocal ? (
+                <>
+                  {/* HOW-22: the source editor is still here and still the escape hatch for a
+                      graph the builder's vocabulary cannot say — but it is no longer the FIRST
+                      thing a local graph offers, because reading TypeScript is now optional. */}
+                  {!isBuilder && (
+                    <div className="field-hint">
+                      This graph was not built in the builder, so the builder cannot open it — it
+                      never guesses a spec back out of TypeScript. Edit the source below.
+                    </div>
+                  )}
+                  <details className="graph-advanced">
+                    <summary>Advanced — source</summary>
+                    <GraphSource name={selected!} onSaved={() => setReloadKey((k) => k + 1)} />
+                  </details>
+                </>
+              ) : (
+                <div className="field-hint">Built-in graph: edit it in the Howdah repo, where <code>bun run check</code> covers it.</div>
+              )}
               <GraphTuner shape={shape} onSaved={() => setReloadKey((k) => k + 1)} />
             </>
           ) : <EmptyState>select a graph</EmptyState>}

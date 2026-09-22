@@ -43,7 +43,15 @@ export interface GraphShapeDto {
   default_harness?: string;
   tuning?: { defaults?: AgentConfigDto; nodes?: Record<string, AgentConfigDto> };
   nodes: Array<{
-    id: string; kind: string; class?: string; prompt?: string; run?: string;
+    id: string;
+    /**
+     * HOW-22: what to CALL this node in the picture. The graph builder sets it, because a
+     * step there carries an editable title while its id — which is run identity,
+     * `${node}#${visit}` — is frozen at creation. Everywhere else it is absent and the id is
+     * the name, unchanged.
+     */
+    title?: string;
+    kind: string; class?: string; prompt?: string; run?: string;
     model?: string; harness?: string; effort?: string; maxVisits?: number; outcome?: string; duration?: string;
     baseline?: AgentConfigDto; node_tuning?: AgentConfigDto; effective?: AgentConfigDto;
   }>;
@@ -253,8 +261,11 @@ export function GraphDag({
           const v = visits?.[n.id];
           const selectable = !!onSelect && canSelect(n);
           const sub = subtitle(n);
+          const shown = n.title?.trim() || n.id;
           const label = [
-            `${n.kind} node ${n.id}`,
+            // the id is spoken too when a title stands in for it: the id is what every other
+            // surface (the run DAG, the log, node@visit) calls this step
+            shown === n.id ? `${n.kind} node ${n.id}` : `${n.kind} step ${shown}, id ${n.id}`,
             sub,
             v !== undefined && v > 0 ? `${v} visit${v === 1 ? "" : "s"}` : "",
             n.node_tuning ? "has a node override" : "",
@@ -288,7 +299,7 @@ export function GraphDag({
             >
               <rect width="180" height="52" rx="9" />
               <text x="12" y="21" className="dag-title" aria-hidden>
-                {KIND_GLYPH[n.kind] ?? "?"} {n.id.length > 20 ? n.id.slice(0, 19) + "…" : n.id}
+                {KIND_GLYPH[n.kind] ?? "?"} {shown.length > 20 ? shown.slice(0, 19) + "…" : shown}
               </text>
               <text x="12" y="40" className="dag-sub" aria-hidden>{sub}</text>
               {v !== undefined && v > 0 && <g aria-hidden><rect x="150" y="-9" width="30" height="18" rx="9" className="dag-visits" /><text x="165" y="4" textAnchor="middle" className="dag-visits-text">×{v}</text></g>}

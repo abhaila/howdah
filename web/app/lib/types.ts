@@ -9,7 +9,12 @@ export interface AppInfo {
   supervisorHeartbeat: string | null;
 }
 
-export interface GraphInfo { name: string; description: string; inputs: string[]; kind: "repo" | "plain"; source: "builtin" | "local" }
+export interface GraphInfo {
+  name: string; description: string; inputs: string[];
+  kind: "repo" | "plain"; source: "builtin" | "local";
+  /** HOW-22: the graph builder can re-open this one — it still carries the spec it was built from */
+  builder: boolean;
+}
 /** a local graph that will not load is reported beside the catalog, never silently missing */
 export interface GraphProblem { name: string; error: string }
 export interface GraphCatalog { graphs: GraphInfo[]; problems: GraphProblem[] }

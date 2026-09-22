@@ -582,6 +582,14 @@ authoring + visualization, and the remaining screens.
   - `howdah new-graph`: scaffolder by kind (code / doc / research / custom) writing
     graphs/<name>.ts from a template + prompt stubs; gate stays tsc + validate — the
     TS-native decision stands, no visual editor in v1 (authoring UI = scaffold + your IDE).
+    **Superseded by HOW-22.** There is now a visual editor, and the reason this line gave
+    for not having one — "a visual editor to drift out of sync" — is answered rather than
+    overruled: the FILE is still the only artifact and `validate()` is still the only judge.
+    What changed is what a graph file may contain. A built graph is a `GraphSpec` literal
+    plus one `buildGraph()` call (`core/graph-spec.ts`), so the builder re-opens the spec
+    that was written instead of reverse-engineering one out of TypeScript, and a file the
+    builder cannot read back turns the builder off for that graph and says so. The
+    scaffolder, `howdah new-graph` and the source editor all stay for hand-written graphs.
   - Web: Graphs screen (list + SVG DAG render, class lanes); run view gains a Graph tab
     with current node + visit counts highlighted (Orbital / autoresearcherUI parity).
   - Verify: scaffold a new graph, launch it from the form, watch it advance on the Graph tab.

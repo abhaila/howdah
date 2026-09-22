@@ -285,16 +285,29 @@ export function buildGraph(spec: GraphSpec): Graph<any> {
 
 // ---- problems, in the operator's words ---------------------------------------------------
 
+/**
+ * Which pane of the builder fixes this problem. It is a required field rather than something
+ * the UI sniffs back out of the message, so every site that reports a problem has to say
+ * where the operator goes to answer it — and the rail's per-pane counts cannot drift from
+ * the wording. A whole-graph problem (the name, the starting step, anything thrown) belongs
+ * to `basics`, which is the pane that owns the graph itself.
+ */
+export type ProblemPane = "basics" | "fields" | "steps" | "branching";
+
 export interface SpecProblem {
   /** the step that owns the problem, so the rail can count it; absent = whole-graph */
   node?: string;
+  where: ProblemPane;
   message: string;
 }
 
-const titleOf = (spec: GraphSpec, id: string): string => {
+/** What a step is CALLED. The id is identity (`${node}#${visit}`) and never moves; the title
+ *  is the label an operator edits, and it is what every message about the step uses. */
+export const stepTitle = (spec: GraphSpec, id: string): string => {
   const n = spec.nodes.find((x) => x.id === id);
   return n?.title?.trim() ? n.title.trim() : id;
 };
+const titleOf = stepTitle;
 
 /** `node "step-two" has …` → `step-two`, so a structural string can be attributed to a step. */
 function firstQuoted(message: string): string | undefined {
@@ -313,22 +326,22 @@ function rewriteStructural(spec: GraphSpec, raw: string): SpecProblem {
   const id = firstQuoted(raw);
   const who = id ? `**${titleOf(spec, id)}**` : "This graph";
   if (/has no outgoing edge/.test(raw))
-    return { node: id, message: `${who} has nowhere to go next. Give it a "go to" in Branching, or make it a Finish step.` };
+    return { node: id, where: "branching", message: `${who} has nowhere to go next. Give it a "go to" in Branching, or make it a Finish step.` };
   if (/has outgoing edges/.test(raw))
-    return { node: id, message: `${who} is a Finish step, so nothing can follow it. Remove its outgoing rows in Branching.` };
+    return { node: id, where: "branching", message: `${who} is a Finish step, so nothing can follow it. Remove its outgoing rows in Branching.` };
   if (/unconditional edges \(ambiguous fallback\)/.test(raw))
-    return { node: id, message: `${who} has more than one "Otherwise" — only one is allowed. Keep one and give the others a condition.` };
+    return { node: id, where: "branching", message: `${who} has more than one "Otherwise" — only one is allowed. Keep one and give the others a condition.` };
   if (/redesigns to unknown node/.test(raw))
-    return { node: id, message: `${who} sends "ask for changes" to a step that no longer exists. Pick a step that does.` };
+    return { node: id, where: "steps", message: `${who} sends "ask for changes" to a step that no longer exists. Pick a step that does.` };
   if (/redesigns to terminal node/.test(raw))
-    return { node: id, message: `${who} sends "ask for changes" to a Finish step, which cannot redo anything. Pick a working step.` };
+    return { node: id, where: "steps", message: `${who} sends "ask for changes" to a Finish step, which cannot redo anything. Pick a working step.` };
   if (/which is engine-owned there/.test(raw))
-    return { node: firstQuoted(raw), message: `${who} produces the same field the approval step already hands it. Untick that field on this step — Howdah writes it.` };
+    return { node: firstQuoted(raw), where: "steps", message: `${who} produces the same field the approval step already hands it. Untick that field on this step — Howdah writes it.` };
   if (/both decide proposal key/.test(raw))
-    return { node: id, message: `Two approval steps decide the same field. Give one of them its own.` };
+    return { node: id, where: "steps", message: `Two approval steps decide the same field. Give one of them its own.` };
   if (/requires approval of/.test(raw))
-    return { node: id, message: `${who} waits for an approval step that is not one. Point it at a "Get my approval" step, or clear it.` };
-  return { node: id, message: raw };
+    return { node: id, where: "steps", message: `${who} waits for an approval step that is not one. Point it at a "Get my approval" step, or clear it.` };
+  return { node: id, where: "steps", message: raw };
 }
 
 /**
@@ -345,24 +358,25 @@ export function specProblems(spec: GraphSpec, opts: { knownPrompts?: readonly st
   const ids = new Set<string>();
   const fieldKeys = new Set(spec.fields.map((f) => f.key));
 
-  if (!SPEC_GRAPH_NAME.test(spec.name))
-    problems.push({ message: `The graph needs a name in kebab-case: a letter, then letters, digits or hyphens.` });
-  if (spec.nodes.length === 0) problems.push({ message: `A graph needs at least one step.` });
+  const namedYet = SPEC_GRAPH_NAME.test(spec.name);
+  if (!namedYet)
+    problems.push({ where: "basics", message: `The graph needs a name in kebab-case: a letter, then letters, digits or hyphens.` });
+  if (spec.nodes.length === 0) problems.push({ where: "steps", message: `A graph needs at least one step.` });
 
   for (const f of spec.fields) {
     if (!SPEC_FIELD_KEY.test(f.key))
-      problems.push({ message: `"${f.key}" is not a usable field name — use letters, digits and underscores, optionally dotted (\`pr.state\`).` });
+      problems.push({ where: "fields", message: `"${f.key}" is not a usable field name — use letters, digits and underscores, optionally dotted (\`pr.state\`).` });
     if (fieldKeys.has(f.key) && spec.fields.filter((x) => x.key === f.key).length > 1)
-      problems.push({ message: `Two fields are both called \`${f.key}\`. Rename one.` });
+      problems.push({ where: "fields", message: `Two fields are both called \`${f.key}\`. Rename one.` });
   }
   for (const key of spec.inputs)
-    if (!fieldKeys.has(key)) problems.push({ message: `\`${key}\` is asked for at launch but is not a field. Add it in "What it works with".` });
+    if (!fieldKeys.has(key)) problems.push({ where: "fields", message: `\`${key}\` is asked for at launch but is not a field. Add it in "What it works with".` });
 
   const knownPrompts = opts.knownPrompts ? new Set(opts.knownPrompts) : null;
   for (const n of spec.nodes) {
     const who = `**${titleOf(spec, n.id)}**`;
-    if (!SPEC_NODE_ID.test(n.id)) problems.push({ node: n.id, message: `"${n.id}" is not a usable step id.` });
-    if (ids.has(n.id)) problems.push({ node: n.id, message: `Two steps share the id "${n.id}".` });
+    if (!SPEC_NODE_ID.test(n.id)) problems.push({ node: n.id, where: "steps", message: `"${n.id}" is not a usable step id.` });
+    if (ids.has(n.id)) problems.push({ node: n.id, where: "steps", message: `Two steps share the id "${n.id}".` });
     ids.add(n.id);
 
     const declared = [
@@ -372,29 +386,34 @@ export function specProblems(spec: GraphSpec, opts: { knownPrompts?: readonly st
     ];
     for (const key of declared)
       if (!fieldKeys.has(key))
-        problems.push({ node: n.id, message: `${who} uses \`${key}\`, which is not a field. Add it in "What it works with", or fix the step.` });
+        problems.push({ node: n.id, where: "fields", message: `${who} uses \`${key}\`, which is not a field. Add it in "What it works with", or fix the step.` });
 
     if (n.kind === "agent") {
-      if (!SPEC_PROMPT_ID.test(n.prompt)) problems.push({ node: n.id, message: `${who} has no prompt file name.` });
-      else if (knownPrompts && !knownPrompts.has(n.prompt))
-        problems.push({ node: n.id, message: `${who} names the prompt "${n.prompt}", which has no file yet. Write its instructions.` });
+      // an agent's prompt id is DERIVED from the graph name (`<graph>.<step>`), so an unnamed
+      // draft makes every one of them illegal at once. Saying so on each step would bury the
+      // one thing to actually do — name the graph — under a pile of consequences, so the
+      // consequence is held back until the cause is fixed.
+      if (!SPEC_PROMPT_ID.test(n.prompt)) {
+        if (namedYet) problems.push({ node: n.id, where: "steps", message: `${who} has no prompt file name.` });
+      } else if (knownPrompts && !knownPrompts.has(n.prompt))
+        problems.push({ node: n.id, where: "steps", message: `${who} names the prompt "${n.prompt}", which has no file yet. Write its instructions.` });
       if (n.requires && !spec.nodes.some((x) => x.id === n.requires && x.kind === "approval"))
-        problems.push({ node: n.id, message: `${who} waits on an approval step that does not exist. Pick one, or clear it.` });
+        problems.push({ node: n.id, where: "steps", message: `${who} waits on an approval step that does not exist. Pick one, or clear it.` });
     }
-    if (n.kind === "command" && !n.run.trim()) problems.push({ node: n.id, message: `${who} has no command to run.` });
+    if (n.kind === "command" && !n.run.trim()) problems.push({ node: n.id, where: "steps", message: `${who} has no command to run.` });
     if (n.kind === "wait" && !/^\d+\s*(ms|s|m|h)$/.test(n.duration))
-      problems.push({ node: n.id, message: `${who} needs a duration like "30 s" or "2 m".` });
+      problems.push({ node: n.id, where: "steps", message: `${who} needs a duration like "30 s" or "2 m".` });
     if (n.kind === "approval" && n.decision === n.feedback)
-      problems.push({ node: n.id, message: `${who} uses one field for both the decision and the comments. Give them separate fields.` });
+      problems.push({ node: n.id, where: "steps", message: `${who} uses one field for both the decision and the comments. Give them separate fields.` });
   }
 
   if (!ids.has(spec.entry))
-    problems.push({ message: `The starting step is not in the graph. Pick which step runs first.` });
+    problems.push({ where: "basics", message: `The starting step is not in the graph. Pick which step runs first.` });
   for (const e of spec.edges) {
-    if (!ids.has(e.from)) problems.push({ message: `A "go to" starts from a step that no longer exists ("${e.from}"). Remove it.` });
-    else if (!ids.has(e.to)) problems.push({ node: e.from, message: `**${titleOf(spec, e.from)}** points at a step that no longer exists ("${e.to}"). Pick a step that does.` });
+    if (!ids.has(e.from)) problems.push({ where: "branching", message: `A "go to" starts from a step that no longer exists ("${e.from}"). Remove it.` });
+    else if (!ids.has(e.to)) problems.push({ node: e.from, where: "branching", message: `**${titleOf(spec, e.from)}** points at a step that no longer exists ("${e.to}"). Pick a step that does.` });
     else if (e.when && !fieldKeys.has(e.when.key))
-      problems.push({ node: e.from, message: `**${titleOf(spec, e.from)}** branches on \`${e.when.key}\`, which is not a field.` });
+      problems.push({ node: e.from, where: "branching", message: `**${titleOf(spec, e.from)}** branches on \`${e.when.key}\`, which is not a field.` });
   }
   if (problems.length) return problems;
 
@@ -405,7 +424,7 @@ export function specProblems(spec: GraphSpec, opts: { knownPrompts?: readonly st
     ({ structural, paths } = buildGraph(spec).validate());
   } catch (err) {
     // a GraphError (conflicting scopes) or anything validateGraph refuses outright
-    return [{ message: err instanceof Error ? err.message : String(err) }];
+    return [{ where: "basics", message: err instanceof Error ? err.message : String(err) }];
   }
   for (const s of structural) problems.push(rewriteStructural(spec, s));
   for (const v of paths) {
@@ -414,6 +433,7 @@ export function specProblems(spec: GraphSpec, opts: { knownPrompts?: readonly st
     const where = v.node.endsWith("(condition)") ? `The branch leaving **${titleOf(spec, owner)}**` : `**${titleOf(spec, owner)}**`;
     problems.push({
       node: owner,
+      where: v.node.endsWith("(condition)") ? "branching" : "steps",
       message:
         `${where} is given \`${v.key}\`, but nothing writes it on every path that reaches it${trail}. ` +
         `Add a step before it that produces \`${v.key}\`, or ask for it at launch.`,
@@ -445,7 +465,13 @@ const OUTCOMES = ["success", "failed", "aborted"] as const;
 const EFFORTS = ["low", "medium", "high", "xhigh"] as const;
 const PERMISSION_MODES = ["manual", "acceptEdits", "auto", "bypassPermissions", "dontAsk", "plan"] as const;
 
-function parseConfig(v: unknown): AgentConfig | undefined {
+/**
+ * An AgentConfig from anywhere untrusted — the network, or the builder's loose per-field DTO
+ * (the viewer's ConfigFields works in strings, because a `<select>` does). Exported because
+ * that widening/narrowing has to happen in ONE place: a harness or effort name the table
+ * does not know is dropped here rather than written into a graph file.
+ */
+export function parseAgentConfig(v: unknown): AgentConfig | undefined {
   if (!isObj(v)) return undefined;
   const out: AgentConfig = {};
   // an unknown harness name is DROPPED rather than carried: core/ degrades one to the
@@ -496,7 +522,7 @@ function parseNode(v: unknown): NodeSpec | undefined {
       const prompt = str(v.prompt);
       if (!prompt || !SPEC_PROMPT_ID.test(prompt)) return undefined;
       const requires = str(v.requires);
-      const config = parseConfig(v.config);
+      const config = parseAgentConfig(v.config);
       const maxVisits = posInt(v.maxVisits);
       return {
         ...base, kind: "agent", prompt, reads: strArray(v.reads), writes: strArray(v.writes),
@@ -580,7 +606,7 @@ export function parseGraphSpec(value: unknown): ParseResult {
     edges.push({ from, to, ...(when ? { when } : {}) });
   }
 
-  const defaults = parseConfig(value.defaults);
+  const defaults = parseAgentConfig(value.defaults);
   return {
     ok: true,
     spec: {
@@ -595,6 +621,11 @@ export function parseGraphSpec(value: unknown): ParseResult {
       edges,
     },
   };
+}
+
+/** `my-review` + `draft` → `my-review.draft`: a prompt id no other graph can collide with. */
+export function promptIdFor(graphName: string, nodeId: string): string {
+  return `${graphName}.${nodeId}`;
 }
 
 /** The spec a loaded graph was built from, or null when it was not built here (R1). */
