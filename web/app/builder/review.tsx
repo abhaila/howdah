@@ -73,9 +73,9 @@ export function ReviewPane({ draft, problems, saving, error, onSave }: {
           </div>
           {error && <div className="field-error wrap-pre">{error}</div>}
           <div className="field-hint">
-            Removing a step leaves its instructions file behind. That is harmless — a graph only
-            fails on a prompt that is MISSING, never on a spare one — and it means an undo costs
-            you nothing.
+            Removing a step removes its instructions too, and there is no undo — re-adding a
+            step with the same name starts from an empty box. A prompt file an earlier save
+            already wrote is left where it is until the next save rewrites the graph.
           </div>
           <div className="field-hint">
             Need a condition this vocabulary cannot say? Save, then edit the file under

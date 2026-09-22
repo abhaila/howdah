@@ -7,7 +7,7 @@
  * TypeScript — which is what makes re-opening it in the builder an exact round trip rather
  * than a parse.
  *
- * Two rules this file exists to keep:
+ * Three rules this file exists to keep:
  *
  *   WHAT IS ON DISK IS ALWAYS RUNNABLE. `saveLocalSource` already restores the graph file
  *   when the gate refuses. A builder save also writes PROMPT files, and a refused save that
@@ -18,10 +18,16 @@
  *   the client: it is recomputed here with `templateReads()` over the body being written, so
  *   the declaration and the text cannot disagree. (The builder computes the same thing live
  *   with the same function, for the "This step will be given…" line.)
+ *
+ *   ONE VERDICT, NOT TWO. The refusal below runs the same `specProblems()` the browser runs
+ *   on every keystroke, over the spec that is about to be WRITTEN. Before that, the browser
+ *   could call a draft clean while this file refused it — and the message the operator got
+ *   back was `validate()`'s own, naming a node id and a "writer-free path". Every blocking
+ *   defect in the HOW-22 review was one instance of that gap.
  */
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { promptIdFor, SPEC_PROMPT_ID, type GraphSpec, type NodeSpec } from "../core/graph-spec";
+import { promptIdFor, specProblems, SPEC_PROMPT_ID, type GraphSpec, type NodeSpec } from "../core/graph-spec";
 import { frontMatterField, splitFrontMatter, templateReads } from "../core/template";
 import { ensureLocalDirs, LOCAL_NAME, loadLocalGraph, localGraphPath, localPromptsDir } from "./local";
 import type { Graph } from "../core/graph";
@@ -140,16 +146,32 @@ export async function saveBuilderGraph(opts: {
   };
 
   const created = !existsSync(graphPath);
-  for (const [id, body] of Object.entries(prompts)) {
-    const path = join(localPromptsDir(home), `${id}.md`);
-    const previous = read(path);
-    files.push({ path, previous });
-    writeFileSync(path, promptFile(id, body, previous));
-  }
-  files.push({ path: graphPath, previous: read(graphPath) });
-  writeFileSync(graphPath, renderSpecModule(spec, repoRoot));
 
   try {
+    // THE SAME VERDICT THE BROWSER SHOWED. specProblems() is node-free precisely so both
+    // sides can run it; running it here too is what makes "Ready to save" and a 422 unable to
+    // disagree, and it answers a refusal in the operator's words instead of `validate()`'s.
+    // The server stays strictly STRONGER — the two checks above it need the filesystem, and
+    // loadLocalGraph still runs the real gate — but it never refuses something the browser
+    // called clean for a reason the browser could have known. It runs on the DERIVED spec,
+    // because that is what is about to be written.
+    const problems = specProblems(spec, {
+      knownPrompts: promptIdsOf(spec).filter((id) => bodyOf(id) !== null),
+    });
+    if (problems.length) return { ok: false, error: problems[0]!.message };
+
+    // the writes live INSIDE the try so restore() covers an IO failure (EACCES, ENOSPC) and
+    // not only a refusal: each snapshot is taken BEFORE its write, so a throw half way
+    // through the loop puts back exactly the files that had already moved
+    for (const [id, body] of Object.entries(prompts)) {
+      const path = join(localPromptsDir(home), `${id}.md`);
+      const previous = read(path);
+      files.push({ path, previous });
+      writeFileSync(path, promptFile(id, body, previous));
+    }
+    files.push({ path: graphPath, previous: read(graphPath) });
+    writeFileSync(graphPath, renderSpecModule(spec, repoRoot));
+
     const graph = await loadLocalGraph(home, spec.name, repoRoot);
     // the gate ran on what was imported; prove the spec survived the round trip too, so a
     // graph can never be listed as builder-editable while the builder cannot read it back

@@ -87,6 +87,34 @@ export type PredicateOp = (typeof PREDICATE_OPS)[number];
 /** ops that carry no operand — the form hides the value box for these */
 export const NULLARY_OPS: readonly PredicateOp[] = ["is-true", "is-false", "is-empty", "is-not-empty"];
 
+/**
+ * A typed operand from a form control. The FIELD's kind decides the type, so `count is 3`
+ * stores the number 3 and compares equal to what a command wrote — a string "3" would
+ * silently never match, which is the sort of bug a builder exists to make impossible.
+ *
+ * It lives here rather than in the branching pane because the kind can change LATER: a field
+ * flipped from text to Yes/no leaves every operand that named it at the old runtime type, and
+ * the rule that fixes that (recoercePredicate, run by the draft reducer) has to be the same
+ * rule the control uses. A number that will not parse becomes 0 rather than NaN — NaN
+ * serialises to `null`, and a spec that cannot round-trip through JSON is not a spec.
+ */
+export function coerceOperand(raw: string, kind: FieldKind | undefined): string | number | boolean {
+  if (kind === "number") {
+    const n = Number(raw.trim() === "" ? 0 : raw);
+    return Number.isFinite(n) ? n : 0;
+  }
+  if (kind === "boolean") return raw === "true";
+  return raw;
+}
+
+/** Every operand a predicate carries, re-typed for its field's kind. Nullary ops are returned
+ *  untouched — they compare against nothing, so there is nothing to coerce. */
+export function recoercePredicate(p: Predicate, kind: FieldKind | undefined): Predicate {
+  if (p.op === "equals" || p.op === "not-equals") return { ...p, value: coerceOperand(String(p.value), kind) };
+  if (p.op === "one-of") return { ...p, values: p.values.map((v) => coerceOperand(String(v), kind)) };
+  return p;
+}
+
 interface NodeBase {
   id: string;
   /** the editable label; the ID never moves, because `${node}#${visit}` is run identity */
@@ -134,6 +162,66 @@ export interface GraphSpec {
   entry: string;
   nodes: NodeSpec[];
   edges: EdgeSpec[];
+}
+
+// ---- what an executor can actually publish ----------------------------------------------
+
+/**
+ * What each built-in command produces — the executor emits exactly these and nothing else.
+ * `probe:pr` DROPS an undeclared key silently (engine/executors/worktree.ts) and the `map:*`
+ * built-ins throw (engine/executors/map.ts declaredWrites); either way a step declaring
+ * something else is wrong before it ever runs, which is what emittableWrites() is for.
+ */
+export const COMMAND_BUILTINS: Array<{ run: string; label: string; produces: string[] }> = [
+  { run: "probe:pr", label: "Check the pull request", produces: ["pr.state"] },
+  { run: "map:extract", label: "Extract the system map", produces: ["map.base", "map.neighbourhood", "slice.drift", "review_findings"] },
+  { run: "map:reextract", label: "Re-extract the system map", produces: ["map.after"] },
+  { run: "map:drift", label: "Compare the map against the approved design", produces: ["slice.drift"] },
+];
+
+/** A worktree CLEAN-UP step emits these two facts and no others (engine/executors/worktree.ts). */
+export const WORKTREE_FACTS = ["worktree.clean", "outcome"] as const;
+
+/** The built-in a command step runs, by its first word — `map:drift --since X` is still map:drift. */
+export function commandBuiltin(run: string): (typeof COMMAND_BUILTINS)[number] | undefined {
+  const head = run.trim().split(/\s+/)[0];
+  return COMMAND_BUILTINS.find((b) => b.run === head);
+}
+
+/**
+ * The facts a step's executor can actually publish, or `undefined` when anything the operator
+ * declares is legal.
+ *
+ * This is DATA in core/ rather than a filter in a form because it has four consumers that
+ * must not drift: the step form's picker, the draft reducer (which normalises on every step
+ * edit), specProblems() — the only one that also sees a spec arriving by PUT or hand-edited
+ * on disk — and the test that checks it still matches the executors themselves. It used to be
+ * one hand-written filter at ONE of the two call sites that needed it, and the one it missed
+ * shipped a graph that raises a ContextError at run time (HOW-22 review, finding 3).
+ *
+ *   worktree "create"  → nothing: engine/executors/worktree.ts returns `writes: {}` on both
+ *                        the fresh and the idempotent re-visit path.
+ *   worktree "remove"  → WORKTREE_FACTS.
+ *   command, built-in  → that built-in's `produces`.
+ *   command, a script  → undefined: its LAST line of JSON decides, at run time.
+ *   agent              → undefined: the outputs contract asks for whatever is declared.
+ */
+export function emittableWrites(n: NodeSpec): readonly string[] | undefined {
+  switch (n.kind) {
+    case "worktree":
+      return n.action === "remove" ? WORKTREE_FACTS : [];
+    case "command":
+      return commandBuiltin(n.run)?.produces;
+    default:
+      return undefined;
+  }
+}
+
+/** The keys a step declares that its executor could never publish. */
+export function undeliverableWrites(n: NodeSpec): string[] {
+  const only = emittableWrites(n);
+  if (!only || !("writes" in n)) return [];
+  return n.writes.filter((k) => !only.includes(k));
 }
 
 // ---- compiling a spec into a real Graph -------------------------------------------------
@@ -309,6 +397,19 @@ export const stepTitle = (spec: GraphSpec, id: string): string => {
 };
 const titleOf = stepTitle;
 
+/** Why a step cannot publish what it declared, in its own terms — the tail of the sentence
+ *  undeliverableWrites() opens. Only reached for the kinds emittableWrites() constrains. */
+function cannotEmit(n: NodeSpec): string {
+  if (n.kind === "worktree")
+    return n.action === "create"
+      ? `making a worktree reports nothing — it either succeeds or the run parks. Untick it, or switch the step to cleaning up.`
+      : `cleaning up a worktree only reports \`${WORKTREE_FACTS.join("` and `")}\`. Untick it.`;
+  const builtin = n.kind === "command" ? commandBuiltin(n.run) : undefined;
+  return builtin
+    ? `\`${builtin.run}\` only reports \`${builtin.produces.join("`, `")}\`. Untick it.`
+    : `its executor cannot report that. Untick it.`;
+}
+
 /** `node "step-two" has …` → `step-two`, so a structural string can be attributed to a step. */
 function firstQuoted(message: string): string | undefined {
   return message.match(/"([^"]+)"/)?.[1];
@@ -379,14 +480,31 @@ export function specProblems(spec: GraphSpec, opts: { knownPrompts?: readonly st
     if (ids.has(n.id)) problems.push({ node: n.id, where: "steps", message: `Two steps share the id "${n.id}".` });
     ids.add(n.id);
 
+    // an AGENT's reads come from its instructions and from nowhere else, so a read of a key
+    // that is not a field is a sentence to take out of the TEXT, not a declaration to fix —
+    // and the pane that holds the text is the one to send the operator to. Everything else a
+    // step declares is a tick-box, and belongs to the fields pane.
+    if (n.kind === "agent")
+      for (const key of n.reads)
+        if (!fieldKeys.has(key))
+          problems.push({
+            node: n.id, where: "steps",
+            message: `${who} still asks for \`${key}\` in its instructions, but \`${key}\` is no longer a field. Take it out of the instructions, or add the field back.`,
+          });
     const declared = [
-      ...("reads" in n ? n.reads : []),
+      ...(n.kind !== "agent" && "reads" in n ? n.reads : []),
       ...("writes" in n ? n.writes : []),
       ...(n.kind === "approval" ? [n.proposal, n.base, n.decision, n.feedback] : []),
     ];
     for (const key of declared)
       if (!fieldKeys.has(key))
         problems.push({ node: n.id, where: "fields", message: `${who} uses \`${key}\`, which is not a field. Add it in "What it works with", or fix the step.` });
+
+    // a declared fact the executor cannot publish is not a style question: the key is never
+    // written, so a surviving condition on it raises a ContextError at run time — the throw
+    // CLAUDE.md says means an engine bug, because the validator proved it cannot happen
+    for (const key of undeliverableWrites(n))
+      problems.push({ node: n.id, where: "steps", message: `${who} says it produces \`${key}\`, but ${cannotEmit(n)}` });
 
     if (n.kind === "agent") {
       // an agent's prompt id is DERIVED from the graph name (`<graph>.<step>`), so an unnamed

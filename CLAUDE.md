@@ -121,14 +121,26 @@ Break one of these and the design stops working, so check them before changing t
   imports, validates and gates exactly as before. `buildGraph` hangs the spec back on
   `GraphDef.spec` for an EXACT round trip — the builder never guesses a spec out of
   TypeScript, so a file it cannot re-parse reads as `builder: false` and is offered the
-  source editor instead. Two properties make the compiler unnecessary rather than bypassed:
+  source editor instead. There is ONE verdict, not two: `graphs/builder.ts` runs the same
+  `specProblems()` the browser runs, over the spec it is about to write and BEFORE it writes
+  anything, so "Ready to save" and a 422 cannot disagree and a refusal is phrased in the
+  operator's words rather than `validate()`'s. The server stays stronger only where it must
+  (a prompt id shadowing one of the repo's own; the real `loadLocalGraph` import).
+  Two properties make the compiler unnecessary rather than bypassed:
   nothing is typed free-hand (keys come from the field registry, predicates are data, prompt
   ids are generated from step ids), and `core/graph-spec.ts` is NODE-FREE, so
   `buildGraph(draft).validate()` runs in the browser on every keystroke and `specProblems()`
   rewrites each `Violation` into the operator's words, attributed to the step AND the pane
   that fixes it. An agent step's `reads` is never declared: it is derived from the prompt
   body with `templateReads()` — in the browser (`web/app/lib/spec-draft.ts`) and again on the
-  server (`graphs/builder.ts`), which is the authority.
+  server (`graphs/builder.ts`), which is the authority. So renaming a field rewrites the
+  reference in the body (`renameTemplateRef`, still the one regex in `core/template-refs.ts`,
+  so prose and a longer key that merely starts the same are untouched), and REMOVING a field
+  a body still names is reported rather than papered over by editing the step's reads behind
+  the text. What a step may declare it PRODUCES is data too (`emittableWrites`): the worktree
+  and command executors publish a fixed set, the draft reducer normalises to it on every step
+  edit, and `specProblems` refuses a declaration that could never be published — a
+  `worktree.clean` on a "make" step is a `ContextError` at run time, not a style question.
 - **Prompt ids are generated, not typed by hand.** `prompts/<id>.md` (front-matter `id` must
   equal the filename) → `bun prompts/codegen.ts` → the `PromptId` union in
   `core/prompt-ids.ts`. Inline prompt text in a graph is a compile error by design.

@@ -35,3 +35,26 @@ export function templateReads(body: string): string[] {
   }
   return [...reads].sort();
 }
+
+/**
+ * Rewrite every `{{ context.<from> }}` / `{{ inputs.<from> }}` to name `<to>` instead.
+ *
+ * The graph builder renames a field by editing ONE registry row, and the instructions that
+ * mention it have to follow — otherwise the body and the step's derived `reads` disagree, the
+ * browser calls the draft clean and the server refuses it (HOW-22 review, finding 2).
+ *
+ * It goes through templateRefPattern() rather than a string replace, and that is the whole
+ * point: there is still exactly ONE definition of what a reference is, so a field called
+ * `goal` cannot rewrite `goalkeeper` or the word "goal" in prose. Only the KEY inside the
+ * match is swapped, so the namespace, any `| filter` tail and the operator's own spacing come
+ * through verbatim, and `context.internal.*` — the engine's namespace, not a field — is left
+ * exactly as written.
+ */
+export function renameTemplateRef(body: string, from: string, to: string): string {
+  return body.replace(templateRefPattern(), (whole, ns: string, key: string) => {
+    if (key !== from || isEngineNamespace(ns, key)) return whole;
+    // a replacer FUNCTION, never a replacement string: `to` is whatever the operator has
+    // typed so far, and `$&`/`$1` in a replacement string are substitutions
+    return whole.replace(`${ns}.${key}`, () => `${ns}.${to}`);
+  });
+}

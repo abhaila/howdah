@@ -4,12 +4,15 @@
  * also writes, plus the round trip the builder depends on to re-open its own work.
  */
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { promptIdFor, readLocalPrompt, renderSpecModule, saveBuilderGraph } from "./builder";
+import { promptIdFor, promptIdsOf, readLocalPrompt, renderSpecModule, saveBuilderGraph } from "./builder";
 import { loadLocalGraph, localGraphPath, localPromptsDir, ensureLocalDirs } from "./local";
-import type { GraphSpec } from "../core/graph-spec";
+import { COMMAND_BUILTINS, WORKTREE_FACTS, type GraphSpec, type NodeSpec } from "../core/graph-spec";
+// the reducer is plain data over core/ — no React, no DOM — so the browser's verdict can be
+// driven from here and compared against this file's gate, which is the whole point below
+import { PRESETS, draftProblems, draftReducer, newStep, pickPrompts, type Draft, type DraftAction } from "../web/app/lib/spec-draft";
 
 const ROOT = join(import.meta.dir, "..");
 const home = () => mkdtempSync(join(tmpdir(), "howdah-builder-"));
@@ -139,7 +142,12 @@ describe("a refused save changes nothing — the graph OR its prompts", () => {
       prompts: Object.fromEntries(Object.keys(first).map((id) => [id, "REWRITTEN — must not survive"])),
     });
     expect(refused.ok).toBe(false);
-    if (!refused.ok) expect(refused.error).toContain("no-such-step");
+    // the refusal is specProblems()' wording, not validate()'s: the browser had already shown
+    // the operator this exact sentence, on the pane that fixes it
+    if (!refused.ok) {
+      expect(refused.error).toContain('sends "ask for changes" to a step that no longer exists');
+      expect(refused.error).not.toContain("redesigns to unknown node");
+    }
 
     expect(readFileSync(localGraphPath(h, "guarded"), "utf8")).toBe(graphBytes);
     for (const [id, bytes] of Object.entries(promptBytes))
@@ -208,5 +216,170 @@ describe("the rendered module", () => {
 
   test("the import is absolute, because a local graph is imported from a temp dir", () => {
     expect(renderSpecModule(everything(), ROOT)).toContain(JSON.stringify(join(ROOT, "core", "graph-spec")));
+  });
+});
+
+
+describe("an IO failure is still all-or-nothing (the writes live inside the try)", () => {
+  test("a prompt that cannot be created leaves every earlier file byte-identical", async () => {
+    const h = home();
+    const spec = everything("io-fail");
+    expect((await saveBuilderGraph({ home: h, repoRoot: ROOT, spec, prompts: bodies(spec) })).ok).toBe(true);
+
+    const graphBytes = readFileSync(localGraphPath(h, "io-fail"), "utf8");
+    const promptBytes = Object.fromEntries(
+      Object.keys(bodies(spec)).map((id) => [id, readFileSync(join(localPromptsDir(h), `${id}.md`), "utf8")]),
+    );
+
+    // a second save that ADDS a step, so the existing prompt files are rewritten (allowed —
+    // the files themselves are writable) and a new one has to be CREATED, which needs write
+    // permission on the directory. Taking that away makes the loop throw half way through:
+    // the exact failure restore() could not see while the writes sat outside the try.
+    const grown: GraphSpec = {
+      ...spec,
+      nodes: [...spec.nodes, { id: "extra", kind: "agent", title: "One more", prompt: promptIdFor("io-fail", "extra"), reads: [], writes: [] }],
+      edges: spec.edges.map((e) => (e.from === "settle" ? { ...e, to: "extra" } : e)).concat([{ from: "extra", to: "check-pr" }]),
+    };
+    const rewritten = {
+      ...Object.fromEntries(Object.keys(bodies(spec)).map((id) => [id, "REWRITTEN — must not survive"])),
+      [promptIdFor("io-fail", "extra")]: "never written",
+    };
+    chmodSync(localPromptsDir(h), 0o500);
+    try {
+      const refused = await saveBuilderGraph({ home: h, repoRoot: ROOT, spec: grown, prompts: rewritten });
+      expect(refused.ok).toBe(false);
+      if (!refused.ok) expect(refused.error).toMatch(/EACCES|permission denied/i);
+    } finally {
+      chmodSync(localPromptsDir(h), 0o700);
+    }
+
+    expect(readFileSync(localGraphPath(h, "io-fail"), "utf8")).toBe(graphBytes);
+    for (const [id, bytes] of Object.entries(promptBytes))
+      expect(readFileSync(join(localPromptsDir(h), `${id}.md`), "utf8")).toBe(bytes);
+    expect(readdirSync(localPromptsDir(h)).sort()).toEqual(Object.keys(promptBytes).map((id) => `${id}.md`).sort());
+  });
+});
+
+describe("what an executor can emit — the table checked against the executors themselves", () => {
+  const executor = (file: string) => readFileSync(join(ROOT, "engine", "executors", file), "utf8");
+
+  test("WORKTREE_FACTS is exactly what engine/executors/worktree.ts fills in", () => {
+    const src = executor("worktree.ts");
+    const facts = [...new Set([...src.matchAll(/declared\.has\("([^"]+)"\)/g)].map((m) => m[1]!))].sort();
+    // a rename in the executor that stopped matching this pattern would make the test vacuous
+    expect(facts.length).toBeGreaterThan(0);
+    expect(facts).toEqual([...WORKTREE_FACTS].sort());
+  });
+
+  test("probe:pr publishes exactly what the table claims", () => {
+    const facts = [...new Set([...executor("worktree.ts").matchAll(/declared\.includes\("([^"]+)"\)/g)].map((m) => m[1]!))].sort();
+    expect(facts.length).toBeGreaterThan(0);
+    expect(facts).toEqual([...COMMAND_BUILTINS.find((b) => b.run === "probe:pr")!.produces].sort());
+  });
+
+  test("every map:* built-in publishes exactly what the table claims", () => {
+    const src = executor("map.ts");
+    // each `declaredWrites(<builtin>, def, { … })`; where the first argument is `run.name`,
+    // the builtin is the nearest `run.name === "…"` guard above the call
+    const found: Record<string, string[]> = {};
+    for (const m of src.matchAll(/declaredWrites\(\s*(?:"([^"]+)"|run\.name)\s*,\s*def\s*,\s*\{([^}]*)\}/g)) {
+      const name = m[1] ?? [...src.slice(0, m.index).matchAll(/run\.name === "([^"]+)"/g)].at(-1)?.[1];
+      if (!name) continue;
+      const keys = [...m[2]!.matchAll(/(?:"([^"]+)"|([A-Za-z_]\w*))\s*:/g)].map((k) => k[1] ?? k[2]!);
+      found[name] = [...new Set([...(found[name] ?? []), ...keys])].sort();
+    }
+    const table = Object.fromEntries(
+      COMMAND_BUILTINS.filter((b) => b.run.startsWith("map:")).map((b) => [b.run, [...b.produces].sort()]),
+    );
+    expect(Object.keys(found).sort()).toEqual(Object.keys(table).sort());
+    expect(found).toEqual(table);
+  });
+});
+
+/**
+ * THE AGREEMENT TEST. Every blocking finding in the HOW-22 review was one draft on which the
+ * browser said "Ready to save" and this file said no — so what is pinned is that PROPERTY,
+ * not four examples of it:
+ *
+ *     draftProblems(draft) is empty  ⟺  saveBuilderGraph(draft) is ok
+ *
+ * and, when both refuse, that the server's message is one specProblems() produced rather than
+ * a raw `Violation` string. Reverting a correction turns a row of this matrix red, which is
+ * what makes it evidence rather than decoration.
+ */
+describe("the browser's verdict and the server's gate cannot disagree", () => {
+  const seq = (...actions: DraftAction[]) => (d: Draft) => actions.reduce(draftReducer, d);
+  const cleanupStep = (d: Draft) =>
+    d.spec.nodes.find((n): n is Extract<NodeSpec, { kind: "worktree" }> => n.kind === "worktree" && n.action === "remove");
+
+  /**
+   * `saves` is not redundant with the ⟺ above. Agreement alone is satisfied by BOTH sides
+   * refusing, so a correction that stops a legitimate edit from working — a rename whose
+   * bodies no longer follow, say — would keep the property while breaking the feature. Each
+   * row therefore also says what the right answer IS.
+   */
+  const MUTATIONS: Array<{ name: string; apply: (d: Draft) => Draft; saves: boolean; applies?: (d: Draft) => boolean }> = [
+    { name: "untouched", apply: (d) => d, saves: true },
+    {
+      name: "add an agent step, then remove it",
+      apply: (d) => {
+        const made = newStep(d.spec, "agent", "Extra");
+        return seq({ type: "add-step", ...made }, { type: "remove-step", id: made.node.id })(d);
+      },
+      saves: true,
+    },
+    { name: "rename a field its instructions use", apply: seq({ type: "update-field", key: "goal", patch: { key: "objective" } }), saves: true },
+    { name: "remove a field its instructions use", apply: seq({ type: "remove-field", key: "goal" }), saves: false },
+    {
+      name: "flip a worktree step from clean-up to make",
+      applies: (d) => cleanupStep(d) !== undefined,
+      apply: (d) => {
+        const wt = cleanupStep(d)!;
+        return draftReducer(d, { type: "update-step", id: wt.id, node: { ...wt, action: "create" } });
+      },
+      // the branch that tested `worktree.clean` survives, and nothing writes it any more
+      saves: false,
+    },
+    { name: "rename the graph before its first save", apply: seq({ type: "set-name", name: "renamed-here" }), saves: true },
+  ];
+
+  for (const preset of PRESETS) {
+    for (const mutation of MUTATIONS) {
+      const base = preset.build(`agree-${preset.id}`);
+      if (mutation.applies && !mutation.applies(base)) continue;
+      test(`${preset.id}: ${mutation.name}`, async () => {
+        const draft = mutation.apply(base);
+        const problems = draftProblems(draft);
+        const saved = await saveBuilderGraph({
+          home: home(), repoRoot: ROOT, spec: draft.spec, prompts: pickPrompts(draft),
+        });
+        expect(saved.ok, `browser said ${problems.length} problem(s); server said ${saved.ok ? "ok" : saved.error}`)
+          .toBe(problems.length === 0);
+        expect(saved.ok, saved.ok ? "" : saved.error).toBe(mutation.saves);
+        if (!saved.ok) {
+          // the operator's words, and a sentence the browser had already shown them
+          expect(problems.map((p) => p.message)).toContain(saved.error);
+          expect(saved.error).not.toContain("no writer covers every path");
+        }
+      });
+    }
+  }
+
+  test("a removed step leaves nothing behind for a later save to trip over", async () => {
+    // posted RAW — not through pickPrompts — so this fails if the reducer keeps the orphan,
+    // which is the shape the review found: one removal blocked every save for the session
+    const draft = PRESETS[0]!.build("orphan");
+    const made = newStep(draft.spec, "agent", "Extra");
+    const after = ([{ type: "add-step", ...made }, { type: "remove-step", id: made.node.id }] as DraftAction[])
+      .reduce(draftReducer, draft);
+    expect(Object.keys(after.prompts)).toEqual(promptIdsOf(after.spec));
+    const saved = await saveBuilderGraph({ home: home(), repoRoot: ROOT, spec: after.spec, prompts: after.prompts });
+    expect(saved.ok, saved.ok ? "" : saved.error).toBe(true);
+  });
+
+  test("the payload a save posts is derived from the spec, so an orphan body cannot reach it", () => {
+    const draft = PRESETS[0]!.build("orphan");
+    const withJunk: Draft = { ...draft, prompts: { ...draft.prompts, "orphan.ghost": "nobody names me" } };
+    expect(Object.keys(pickPrompts(withJunk))).toEqual(promptIdsOf(withJunk.spec));
   });
 });

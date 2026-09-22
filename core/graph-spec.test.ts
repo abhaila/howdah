@@ -12,8 +12,10 @@
  */
 import { describe, expect, test } from "bun:test";
 import {
-  buildGraph, compilePredicate, parseGraphSpec, predicateLabel, specProblems,
-  type GraphSpec, type Predicate,
+  COMMAND_BUILTINS, WORKTREE_FACTS,
+  buildGraph, coerceOperand, compilePredicate, emittableWrites, parseGraphSpec, predicateLabel,
+  recoercePredicate, specProblems,
+  type GraphSpec, type NodeSpec, type Predicate,
 } from "./graph-spec";
 
 /** the smallest legal graph: one agent, one terminal */
@@ -210,6 +212,140 @@ describe("specProblems speaks to the operator, not to the validator", () => {
   test("a prompt with no file yet is a problem when the known set is supplied", () => {
     expect(specProblems(minimal(), { knownPrompts: [] })[0]!.message).toContain("has no file yet");
     expect(specProblems(minimal(), { knownPrompts: ["my-review.draft"] })).toEqual([]);
+  });
+});
+
+describe("emittableWrites is the executors' own answer, not the form's", () => {
+  const worktree = (action: "create" | "remove"): NodeSpec => ({ id: "w", kind: "worktree", action, writes: [] });
+
+  test("making a worktree can publish NOTHING; cleaning one up publishes exactly two facts", () => {
+    // engine/executors/worktree.ts returns `writes: {}` on both create paths (the fresh one
+    // and the idempotent re-visit), and fills only the declared subset of WORKTREE_FACTS on
+    // remove. graphs/builder.test.ts checks this table still matches that file.
+    expect(emittableWrites(worktree("create"))).toEqual([]);
+    expect(emittableWrites(worktree("remove"))).toEqual(WORKTREE_FACTS);
+  });
+
+  test("a built-in command publishes its own list; a shell script is unconstrained", () => {
+    for (const b of COMMAND_BUILTINS)
+      expect(emittableWrites({ id: "c", kind: "command", run: b.run, reads: [], writes: [] }), b.run).toEqual(b.produces);
+    // arguments do not change which built-in it is
+    expect(emittableWrites({ id: "c", kind: "command", run: "map:drift --since abc123", reads: [], writes: [] })).toEqual(["slice.drift"]);
+    // and a script's facts are decided by its last line of output, at run time
+    expect(emittableWrites({ id: "c", kind: "command", run: "./ci.sh", reads: [], writes: [] })).toBeUndefined();
+  });
+
+  test("an agent is unconstrained — the outputs contract asks for whatever it declares", () => {
+    expect(emittableWrites({ id: "a", kind: "agent", prompt: "x.a", reads: [], writes: ["anything"] })).toBeUndefined();
+  });
+});
+
+describe("specProblems refuses a declaration the executor could never publish", () => {
+  test("a worktree step switched to MAKE is told its produced key is undeliverable", () => {
+    const spec = minimal({
+      fields: [
+        { key: "goal", kind: "text", scope: "sticky" },
+        { key: "summary", kind: "text", scope: "sticky" },
+        { key: "worktree.clean", kind: "boolean", scope: "per-visit" },
+      ],
+      nodes: [
+        { id: "draft", kind: "agent", title: "Draft the doc", prompt: "my-review.draft", reads: ["goal"], writes: ["summary"] },
+        { id: "clean", kind: "worktree", title: "Clean up", action: "create", writes: ["worktree.clean"] },
+        { id: "done", kind: "terminal", outcome: "success" },
+      ],
+      edges: [{ from: "draft", to: "clean" }, { from: "clean", to: "done" }],
+    });
+    const problem = specProblems(spec).find((p) => p.node === "clean")!;
+    expect(problem.where).toBe("steps");
+    expect(problem.message).toContain("**Clean up** says it produces `worktree.clean`");
+    expect(problem.message).toContain("making a worktree reports nothing");
+  });
+
+  test("a built-in command is told which facts it actually reports", () => {
+    const spec = minimal({
+      fields: [
+        { key: "goal", kind: "text", scope: "sticky" },
+        { key: "summary", kind: "text", scope: "sticky" },
+      ],
+      nodes: [
+        { id: "draft", kind: "agent", title: "Draft the doc", prompt: "my-review.draft", reads: ["goal"], writes: [] },
+        { id: "check", kind: "command", title: "Check the PR", run: "probe:pr", reads: [], writes: ["summary"] },
+        { id: "done", kind: "terminal", outcome: "success" },
+      ],
+      edges: [{ from: "draft", to: "check" }, { from: "check", to: "done" }],
+    });
+    const problem = specProblems(spec).find((p) => p.node === "check")!;
+    expect(problem.where).toBe("steps");
+    expect(problem.message).toContain("**Check the PR** says it produces `summary`");
+    expect(problem.message).toContain("`probe:pr` only reports `pr.state`");
+  });
+
+  test("a shell script's produced facts are NOT second-guessed — only run time knows", () => {
+    const spec = minimal({
+      nodes: [
+        { id: "draft", kind: "agent", title: "Draft", prompt: "my-review.draft", reads: ["goal"], writes: [] },
+        { id: "run", kind: "command", title: "Run it", run: "./ci.sh", reads: [], writes: ["summary"] },
+        { id: "done", kind: "terminal", outcome: "success" },
+      ],
+      edges: [{ from: "draft", to: "run" }, { from: "run", to: "done" }],
+    });
+    expect(specProblems(spec)).toEqual([]);
+  });
+});
+
+describe("an agent's instructions and its reads are one statement, not two", () => {
+  test("a body still asking for a removed field is a STEPS problem naming both", () => {
+    // the reducer does not edit an agent's reads, because they ARE the instructions: this is
+    // what the operator sees instead of graphs/builder.ts's "writer-free path" refusal
+    const spec = minimal({
+      fields: [{ key: "summary", kind: "text", scope: "sticky" }],
+      inputs: [],
+    });
+    const problems = specProblems(spec);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]!.node).toBe("draft");
+    expect(problems[0]!.where).toBe("steps");
+    expect(problems[0]!.message).toContain("**Draft the doc** still asks for `goal` in its instructions");
+    expect(problems[0]!.message).toContain("add the field back");
+  });
+
+  test("a non-agent step's undeclared key is still the fields pane's — it is a tick-box", () => {
+    const spec = minimal({
+      nodes: [
+        { id: "draft", kind: "agent", title: "Draft", prompt: "my-review.draft", reads: ["goal"], writes: ["summary"] },
+        { id: "run", kind: "command", title: "Run it", run: "./ci.sh", reads: ["mystery"], writes: [] },
+        { id: "done", kind: "terminal", outcome: "success" },
+      ],
+      edges: [{ from: "draft", to: "run" }, { from: "run", to: "done" }],
+    });
+    const problem = specProblems(spec).find((p) => p.message.includes("mystery"))!;
+    expect(problem.where).toBe("fields");
+  });
+});
+
+describe("a field's kind owns the operands that compare against it", () => {
+  test("coerceOperand types the value the way the field says", () => {
+    expect(coerceOperand("3", "number")).toBe(3);
+    expect(coerceOperand("", "number")).toBe(0);
+    // NaN would serialise to `null` and make the spec unparseable, so it never happens
+    expect(coerceOperand("reject", "number")).toBe(0);
+    expect(coerceOperand("true", "boolean")).toBe(true);
+    expect(coerceOperand("reject", "boolean")).toBe(false);
+    expect(coerceOperand("reject", "text")).toBe("reject");
+    expect(coerceOperand("reject", undefined)).toBe("reject");
+  });
+
+  test("recoercePredicate re-types every operand-carrying op and leaves the nullary ones", () => {
+    expect(recoercePredicate({ op: "equals", key: "v", value: "reject" }, "boolean")).toEqual({ op: "equals", key: "v", value: false });
+    expect(recoercePredicate({ op: "not-equals", key: "v", value: "3" }, "number")).toEqual({ op: "not-equals", key: "v", value: 3 });
+    expect(recoercePredicate({ op: "one-of", key: "v", values: ["1", "2"] }, "number")).toEqual({ op: "one-of", key: "v", values: [1, 2] });
+    const nullary: Predicate = { op: "is-true", key: "v" };
+    expect(recoercePredicate(nullary, "number")).toEqual(nullary);
+  });
+
+  test("the path a predicate reaches through is kept", () => {
+    expect(recoercePredicate({ op: "equals", key: "v", path: "outcome", value: "true" }, "boolean"))
+      .toEqual({ op: "equals", key: "v", path: "outcome", value: true });
   });
 });
 

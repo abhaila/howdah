@@ -3,11 +3,23 @@
  * own, and every edit to them as a pure reducer.
  *
  * It is a reducer rather than a dozen setState closures because the edits are COUPLED, and
- * quietly so: removing a step also removes the edges that named it and may orphan the entry;
- * renaming the graph (before its first save) moves every agent step's prompt id and the
- * bodies with it; removing a field has to take the branch rows that tested it. Each of those
- * is one action here, and one test, instead of a rule that has to be remembered at four call
- * sites.
+ * quietly so: removing a step also removes the edges that named it, the instructions it owned
+ * and may orphan the entry; renaming the graph (before its first save) moves every agent
+ * step's prompt id and the bodies with it; renaming a FIELD has to follow the key into the
+ * prompt bodies that reference it and re-type the operands that compare against it; removing
+ * one has to take the branch rows that tested it. Each of those is one action here, and one
+ * test, instead of a rule that has to be remembered at four call sites.
+ *
+ * Two invariants every action must leave standing, because they are what stops the browser's
+ * verdict and the server's gate from disagreeing (HOW-22 review):
+ *
+ *   For every agent step, `reads` === templateReads(the body it names). graphs/builder.ts
+ *   derives exactly that when it writes the file, so any action that edits one without the
+ *   other ships a draft that looks clean here and is refused there.
+ *
+ *   For every step, `writes` ⊆ emittableWrites(step) — what its executor can actually
+ *   publish. That is normalised HERE rather than in a form, because there are two forms and
+ *   only one of them used to remember.
  *
  * Nothing here touches the network. The draft is validated in the browser by
  * `specProblems()` (core/graph-spec.ts is node-free precisely so it can be), and the server
@@ -15,10 +27,10 @@
  * round trip, and still cannot be the thing that decides a graph is legal.
  */
 import {
-  predicateLabel, promptIdFor, specProblems, stepTitle,
+  emittableWrites, predicateLabel, promptIdFor, recoercePredicate, specProblems, stepTitle,
   type FieldKind, type FieldSpec, type GraphSpec, type NodeSpec, type Predicate, type ProblemPane, type SpecProblem,
 } from "../../../core/graph-spec";
-import { templateReads } from "../../../core/template-refs";
+import { renameTemplateRef, templateReads } from "../../../core/template-refs";
 import type { AgentConfig } from "../../../core/graph";
 import type { Scope } from "../../../core/context";
 import type { GraphShapeDto } from "../graph-dag";
@@ -57,17 +69,6 @@ export const FIELD_KINDS: Array<{ kind: FieldKind; label: string }> = [
   { kind: "boolean", label: "Yes / no" },
   { kind: "json", label: "Structured (JSON)" },
 ];
-
-/** What each built-in command produces — the executor emits exactly these and nothing else. */
-export const COMMAND_BUILTINS: Array<{ run: string; label: string; produces: string[] }> = [
-  { run: "probe:pr", label: "Check the pull request", produces: ["pr.state"] },
-  { run: "map:extract", label: "Extract the system map", produces: ["map.base", "map.neighbourhood", "slice.drift", "review_findings"] },
-  { run: "map:reextract", label: "Re-extract the system map", produces: ["map.after"] },
-  { run: "map:drift", label: "Compare the map against the approved design", produces: ["slice.drift"] },
-];
-
-/** A worktree step emits these two facts and no others (engine/executors/worktree.ts). */
-export const WORKTREE_FACTS = ["worktree.clean", "outcome"] as const;
 
 // ---- ids -------------------------------------------------------------------------------
 
@@ -151,19 +152,40 @@ export function draftReducer(draft: Draft, action: DraftAction): Draft {
     }
     case "update-field": {
       const patch = action.patch;
+      const was = spec.fields.find((f) => f.key === action.key);
       const renamed = patch.key !== undefined && patch.key !== action.key ? patch.key : null;
+      const kind = patch.kind !== undefined && patch.kind !== was?.kind ? patch.kind : null;
       // a rename has to follow the key everywhere it is used, or the draft silently breaks
       const rename = (k: string) => (renamed && k === action.key ? renamed : k);
       const fields = spec.fields.map((f) => (f.key === action.key ? { ...f, ...patch } : f));
-      if (!renamed) return { ...draft, spec: { ...spec, fields } };
+      if (!renamed && !kind) return { ...draft, spec: { ...spec, fields } };
+
+      // THE BODIES FOLLOW THE RENAME. An agent's `reads` is read out of its instructions, so
+      // swapping the declaration without the text would leave the two contradicting each
+      // other — the draft would look clean here and be refused at save. renameTemplateRef()
+      // rewrites through the template grammar, never by string replace, so `goalkeeper` and
+      // the word "goal" in prose are untouched (core/template-refs.ts).
+      const prompts = renamed
+        ? Object.fromEntries(Object.entries(draft.prompts).map(([id, body]) => [id, renameTemplateRef(body, action.key, renamed)]))
+        : draft.prompts;
+      const renamedNodes = renamed ? spec.nodes.map((n) => renameInNode(n, action.key, renamed)) : spec.nodes;
       return {
         ...draft,
+        prompts,
         spec: {
           ...spec,
           fields,
-          inputs: spec.inputs.map(rename),
-          nodes: spec.nodes.map((n) => renameInNode(n, action.key, renamed)),
-          edges: spec.edges.map((e) => (e.when && e.when.key === action.key ? { ...e, when: { ...e.when, key: renamed } } : e)),
+          inputs: renamed ? spec.inputs.map(rename) : spec.inputs,
+          // ...and `reads` comes back off the rewritten body, not off the swap above, so the
+          // invariant holds after every action: reads === templateReads(its body)
+          nodes: renamedNodes.map((n) => (n.kind === "agent" ? withDerivedReads(n, prompts[n.prompt]) : n)),
+          edges: spec.edges.map((e) => {
+            if (!e.when || e.when.key !== action.key) return e;
+            // a field flipped to Yes/no leaves `value: "reject"` comparing a string against a
+            // boolean — displayed as "is yes", never matching. The kind owns its operands.
+            const keyed = renamed ? { ...e.when, key: renamed } : e.when;
+            return { ...e, when: kind ? recoercePredicate(keyed, kind) : keyed };
+          }),
         },
       };
     }
@@ -188,7 +210,7 @@ export function draftReducer(draft: Draft, action: DraftAction): Draft {
     }
 
     case "add-step": {
-      const nodes = [...spec.nodes, withDerivedReads(action.node, action.body)];
+      const nodes = [...spec.nodes, withEmittableWrites(withDerivedReads(action.node, action.body))];
       const entry = spec.nodes.length === 0 ? action.node.id : spec.entry;
       const prompts = action.body !== undefined && action.node.kind === "agent"
         ? { ...draft.prompts, [action.node.prompt]: action.body }
@@ -200,11 +222,20 @@ export function draftReducer(draft: Draft, action: DraftAction): Draft {
       return { ...draft, prompts, spec: { ...spec, nodes, entry, fields } };
     }
     case "update-step":
-      return { ...draft, spec: { ...spec, nodes: spec.nodes.map((n) => (n.id === action.id ? action.node : n)) } };
+      return { ...draft, spec: { ...spec, nodes: spec.nodes.map((n) => (n.id === action.id ? withEmittableWrites(action.node) : n)) } };
     case "remove-step": {
       const nodes = spec.nodes.filter((n) => n.id !== action.id);
+      // the step's instructions go with it. graphs/builder.ts refuses a prompt body no step
+      // names — rightly, since the id is a file path — so a body left behind here blocked
+      // every later save with a message naming a step that was already gone. Two steps MAY
+      // share one prompt id, so the body only goes when nothing still names it.
+      const gone = spec.nodes.find((n) => n.id === action.id);
+      const prompts = { ...draft.prompts };
+      if (gone?.kind === "agent" && !nodes.some((n) => n.kind === "agent" && n.prompt === gone.prompt))
+        delete prompts[gone.prompt];
       return {
         ...draft,
+        prompts,
         spec: {
           ...spec,
           nodes,
@@ -251,6 +282,20 @@ function withDerivedReads(n: NodeSpec, body: string | undefined): NodeSpec {
   return n.kind === "agent" && body !== undefined ? { ...n, reads: templateReads(body) } : n;
 }
 
+/**
+ * The writes a step is allowed to declare, applied on every step edit. It is the REDUCER's
+ * job rather than a form's because a form fix leaves the next call site to remember: the
+ * command form had this filter and the worktree form did not, so flipping a clean-up step to
+ * "make" kept a fact the create branch never publishes — and the form then hid it, because it
+ * only offered the keys the NEW action emits (HOW-22 review, finding 3).
+ */
+function withEmittableWrites(n: NodeSpec): NodeSpec {
+  const only = emittableWrites(n);
+  if (!only || !("writes" in n)) return n;
+  const writes = n.writes.filter((k) => only.includes(k));
+  return writes.length === n.writes.length ? n : { ...n, writes };
+}
+
 /** The same rule over a whole draft — what a preset is normalised through. */
 export function deriveDraftReads(draft: Draft): Draft {
   return {
@@ -281,6 +326,11 @@ function renameInNode(n: NodeSpec, from: string, to: string): NodeSpec {
 function dropKeyFromNode(n: NodeSpec, key: string): NodeSpec {
   switch (n.kind) {
     case "agent":
+      // an agent's `reads` is the instructions' own list and is not ours to edit. There is no
+      // correct rewrite of a body that asks for a field that no longer exists, so it is a
+      // problem to REPORT (specProblems, in the steps pane) rather than one to paper over by
+      // quietly disagreeing with the text the server will read.
+      return { ...n, writes: withoutKey(n.writes, key) };
     case "command":
       return { ...n, reads: withoutKey(n.reads, key), writes: withoutKey(n.writes, key) };
     case "worktree":
@@ -302,6 +352,20 @@ function dropKeyFromNode(n: NodeSpec, key: string): NodeSpec {
 export function problemsByPane(problems: SpecProblem[]): Record<ProblemPane, SpecProblem[]> {
   const out: Record<ProblemPane, SpecProblem[]> = { basics: [], fields: [], steps: [], branching: [] };
   for (const p of problems) out[p.where].push(p);
+  return out;
+}
+
+/**
+ * The bodies the spec's own agent steps name — what a save POSTS, rather than `draft.prompts`
+ * wholesale. graphs/builder.ts refuses an id no step names (the id is a file path, so an id
+ * from the network that nothing asked for has no business existing); deriving the payload
+ * from the spec makes that refusal structurally unreachable instead of merely defended
+ * against, whatever a future reducer path leaves in the map.
+ */
+export function pickPrompts(draft: Draft): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const n of draft.spec.nodes)
+    if (n.kind === "agent" && draft.prompts[n.prompt] !== undefined) out[n.prompt] = draft.prompts[n.prompt]!;
   return out;
 }
 

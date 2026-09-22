@@ -8,7 +8,9 @@
  *     own templateReads(), and shown as "This step will be given: …" — so the declaration
  *     and the instructions cannot disagree, and there is nothing to keep in sync by hand.
  *   - a worktree step offers exactly the two facts its executor emits, because a declared
- *     fact the executor never writes fails the attempt at run time.
+ *     fact the executor never writes fails the attempt at run time. WHICH facts those are is
+ *     core/graph-spec.ts's emittableWrites(), enforced by the draft reducer — the form only
+ *     renders it, so the picker and the validator cannot say different things.
  *   - a built-in command offers exactly what that built-in produces. A shell script cannot
  *     be constrained, so the form does not pretend to: it says, in those words, that the
  *     script's last line of output must be JSON with these keys.
@@ -20,8 +22,11 @@
 import { useMemo, useState } from "react";
 import { Plus, Trash2 } from "lucide-react";
 import { templateReads } from "../../../core/template-refs";
-import { parseAgentConfig, SPEC_FIELD_KEY, type FieldSpec, type GraphSpec, type NodeSpec } from "../../../core/graph-spec";
-import { COMMAND_BUILTINS, WORKTREE_FACTS, type Draft, type DraftAction } from "@/lib/spec-draft";
+import {
+  COMMAND_BUILTINS, WORKTREE_FACTS, commandBuiltin, parseAgentConfig, SPEC_FIELD_KEY,
+  type FieldSpec, type GraphSpec, type NodeSpec,
+} from "../../../core/graph-spec";
+import type { Draft, DraftAction } from "@/lib/spec-draft";
 import { ConfigFields } from "../screens/graphs";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -55,7 +60,11 @@ function Produces({
   hint: string;
 }) {
   const [fresh, setFresh] = useState("");
-  const candidates = only ? [...only] : spec.fields.map((f) => f.key);
+  // `only ∪ value`, never `only` alone: a key that is declared but not emittable must stay
+  // VISIBLE so it can be unticked. The reducer keeps value ⊆ only, so this is a safety net
+  // rather than a mechanism — and a net is exactly what was missing when a stale
+  // `worktree.clean` became invisible-and-unremovable (HOW-22 review, finding 3).
+  const candidates = only ? [...new Set([...only, ...value])] : spec.fields.map((f) => f.key);
   const toggle = (key: string) => onChange(value.includes(key) ? value.filter((k) => k !== key) : [...value, key]);
   const legal = SPEC_FIELD_KEY.test(fresh) && !spec.fields.some((f) => f.key === fresh);
   return (
@@ -172,7 +181,7 @@ export function StepForm({ draft, id, dispatch, onClose }: {
         )}
 
         {node.kind === "command" && (() => {
-          const builtin = COMMAND_BUILTINS.find((b) => node.run.trim().split(/\s+/)[0] === b.run);
+          const builtin = commandBuiltin(node.run);
           return (
             <>
               <Label>
@@ -180,10 +189,11 @@ export function StepForm({ draft, id, dispatch, onClose }: {
                 <Select
                   value={builtin?.run ?? "shell"}
                   onChange={(e) => {
+                    // switching kinds drops produced keys the new one cannot emit — but that
+                    // is the REDUCER's rule now (lib/spec-draft.ts withEmittableWrites), for
+                    // both forms at once, rather than a filter only this one remembered
                     const next = COMMAND_BUILTINS.find((b) => b.run === e.target.value);
-                    // switching kinds drops produced keys the new one cannot emit, rather
-                    // than keeping a declaration that would fail the attempt at run time
-                    set({ ...node, run: next ? next.run : "", writes: next ? node.writes.filter((k) => next.produces.includes(k)) : node.writes });
+                    set({ ...node, run: next ? next.run : "" });
                   }}
                 >
                   {COMMAND_BUILTINS.map((b) => <option key={b.run} value={b.run}>{b.label} ({b.run})</option>)}

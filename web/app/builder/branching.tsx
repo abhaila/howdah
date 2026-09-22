@@ -21,7 +21,10 @@
  */
 import { ArrowDown, ArrowUp, Plus, Trash2 } from "lucide-react";
 import {
-  NULLARY_OPS,
+  // coerceOperand lives in core beside Predicate and FieldKind, because a field's kind can
+  // change AFTER a row is written and the reducer has to re-type the operand with the very
+  // same rule this control used (HOW-22 review, finding 4)
+  NULLARY_OPS, coerceOperand,
   type EdgeSpec, type FieldSpec, type GraphSpec, type Predicate, type PredicateOp, type SpecProblem,
 } from "../../../core/graph-spec";
 import type { Draft, DraftAction } from "@/lib/spec-draft";
@@ -44,17 +47,6 @@ const OP_LABELS: Array<{ op: PredicateOp; label: string }> = [
 
 const isNullary = (op: PredicateOp) => NULLARY_OPS.includes(op);
 
-/**
- * A typed operand from a form control. The field's KIND decides the type, so `count is 3`
- * stores the number 3 and compares equal to what a command wrote — a string "3" would
- * silently never match, which is the sort of bug a builder exists to make impossible.
- */
-function coerce(raw: string, field: FieldSpec | undefined): string | number | boolean {
-  if (field?.kind === "number") return raw.trim() === "" ? 0 : Number(raw);
-  if (field?.kind === "boolean") return raw === "true";
-  return raw;
-}
-
 const operandText = (p: Predicate): string =>
   p.op === "one-of" ? p.values.join(", ") : p.op === "equals" || p.op === "not-equals" ? String(p.value) : "";
 
@@ -67,8 +59,8 @@ function repredicate(p: Predicate, over: { op?: PredicateOp; key?: string; path?
   const text = over.text !== undefined ? over.text : operandText(p);
   const base = { key, ...(path ? { path } : {}) };
   if (op === "one-of")
-    return { ...base, op, values: text.split(",").map((x) => x.trim()).filter(Boolean).map((x) => coerce(x, field)) };
-  if (op === "equals" || op === "not-equals") return { ...base, op, value: coerce(text, field) };
+    return { ...base, op, values: text.split(",").map((x) => x.trim()).filter(Boolean).map((x) => coerceOperand(x, field?.kind)) };
+  if (op === "equals" || op === "not-equals") return { ...base, op, value: coerceOperand(text, field?.kind) };
   return { ...base, op };
 }
 

@@ -31,7 +31,7 @@ import { GraphDag, type GraphShapeDto } from "../graph-dag";
 import type { GraphSpec, ProblemPane } from "../../../core/graph-spec";
 import { parseGraphSpec } from "../../../core/graph-spec";
 import {
-  PRESETS, draftProblems, draftReducer, problemsByPane, specToShape, type Draft,
+  PRESETS, draftProblems, draftReducer, pickPrompts, problemsByPane, specToShape, type Draft,
 } from "@/lib/spec-draft";
 import { BasicsPane } from "../builder/basics";
 import { BranchingPane } from "../builder/branching";
@@ -126,7 +126,10 @@ export function GraphBuilder({ name }: { name?: string }) {
       const r = await fetch(`/api/graphs/${draft.spec.name}/builder`, {
         method: "PUT",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ spec: draft.spec, prompts: draft.prompts }),
+        // pickPrompts, not draft.prompts: the payload is DERIVED from the spec, so a body
+        // for a step that no longer exists cannot reach the server — which refuses one, and
+        // used to refuse every save for the rest of the session over it (HOW-22 review)
+        body: JSON.stringify({ spec: draft.spec, prompts: pickPrompts(draft) }),
       });
       const body = (await r.json().catch(() => ({}))) as { error?: string };
       if (!r.ok) {

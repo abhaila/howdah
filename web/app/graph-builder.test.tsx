@@ -2,10 +2,14 @@
  * The graph builder (HOW-22), pinned at the two layers that carry the ticket.
  *
  * THE DRAFT (no DOM). The reducer's job is the edits that are COUPLED, and coupled quietly:
- * removing a step has to take the edges that named it, removing a field has to take the
- * branch rows that tested it, and renaming the graph before its first save has to move every
- * agent step's prompt id AND the body filed under it. Each of those, missed, leaves a draft
- * that looks fine and saves into a graph that will not load.
+ * removing a step has to take the edges that named it AND the instructions it owned, removing
+ * a field has to take the branch rows that tested it, renaming a field has to follow the key
+ * into the prompt bodies that reference it and re-type the operands that compare against it,
+ * and renaming the graph before its first save has to move every agent step's prompt id AND
+ * the body filed under it. Each of those, missed, leaves a draft that looks fine here and is
+ * refused at save — which is what the HOW-22 review found, four times over. The whole-draft
+ * form of that property (browser verdict ⟺ server gate) lives in graphs/builder.test.ts,
+ * where the real save can be run; what is pinned here is each coupled edit on its own.
  *
  * THE WIZARD (DOM). What the ticket actually asked for — "the user shouldn't be concerned
  * with typescript checks" — is only true if three things hold, so all three are asserted
@@ -20,9 +24,11 @@ import { createRoot, type Root } from "react-dom/client";
 import { buildGraph, specProblems, type GraphSpec, type NodeSpec } from "../../core/graph-spec";
 import { templateReads } from "../../core/template-refs";
 import {
-  PRESETS, draftProblems, draftReducer, newStep, problemsByPane, specToShape, type Draft, type DraftAction,
+  PRESETS, draftProblems, draftReducer, newStep, pickPrompts, problemsByPane, specToShape,
+  type Draft, type DraftAction,
 } from "./lib/spec-draft";
 import { GraphBuilder } from "./screens/graph-builder";
+import { StepForm } from "./builder/step-form";
 import { ToastProvider } from "./components/ui/toast";
 
 // ---- the draft ---------------------------------------------------------------------------
@@ -69,6 +75,101 @@ describe("the draft keeps itself consistent, because the edits are coupled", () 
     expect(after.spec.edges.some((e) => e.when?.key === "verdict")).toBe(true);
     expect(after.spec.nodes.find((n) => n.id === "review")).toMatchObject({ writes: ["verdict", "review_findings"] });
     expect(draftProblems(after)).toEqual([]);
+  });
+
+  test("renaming a field follows it into the INSTRUCTIONS that reference it", () => {
+    // the one the review caught: the declaration moved and the body did not, so the draft
+    // read as clean here and was refused at save with a message naming the old key
+    const before = doc();
+    expect(before.prompts["my-review.draft"]).toContain("{{ context.goal }}");
+    const after = apply(before, { type: "update-field", key: "goal", patch: { key: "objective" } });
+    expect(after.prompts["my-review.draft"]).toContain("{{ context.objective }}");
+    expect(after.prompts["my-review.draft"]).not.toContain("context.goal");
+    // and `reads` comes back off the rewritten body, so the two cannot contradict each other
+    for (const n of after.spec.nodes)
+      if (n.kind === "agent") expect(n.reads, n.id).toEqual(templateReads(after.prompts[n.prompt] ?? ""));
+    expect(after.spec.inputs).toContain("objective");
+    expect(draftProblems(after)).toEqual([]);
+  });
+
+  test("removing a field its instructions still ask for is REPORTED, in the steps pane", () => {
+    // there is no correct rewrite of a body that asks for something that no longer exists, so
+    // the disagreement is surfaced rather than papered over by editing the step's reads
+    const after = apply(doc(), { type: "remove-field", key: "goal" });
+    const problems = draftProblems(after);
+    const orphan = problems.find((p) => p.message.includes("still asks for `goal`"))!;
+    expect(orphan).toBeDefined();
+    expect(orphan.where).toBe("steps");
+    expect(orphan.node).toBe("draft");
+  });
+
+  test("removing a step takes its instructions with it, so a later save is not blocked", () => {
+    const before = doc();
+    const made = newStep(before.spec, "agent", "Extra");
+    const added = apply(before, { type: "add-step", ...made });
+    expect(added.prompts[(made.node as Extract<NodeSpec, { kind: "agent" }>).prompt]).toBeDefined();
+    const after = apply(added, { type: "remove-step", id: made.node.id });
+    expect(Object.keys(after.prompts)).toEqual(Object.keys(before.prompts));
+  });
+
+  test("a body two steps share survives the removal of one of them", () => {
+    const shared = apply(doc(), {
+      type: "add-step",
+      node: { id: "second-draft", kind: "agent", title: "Draft again", prompt: "my-review.draft", reads: [], writes: ["summary"] },
+    });
+    const after = apply(shared, { type: "remove-step", id: "second-draft" });
+    expect(after.prompts["my-review.draft"]).toBeDefined();
+  });
+
+  test("removing a non-agent step leaves the prompt map alone", () => {
+    const withWait = apply(doc(), { type: "add-step", node: { id: "hold", kind: "wait", duration: "30 s" } });
+    const after = apply(withWait, { type: "remove-step", id: "hold" });
+    expect(after.prompts).toEqual(doc().prompts);
+  });
+
+  test("a worktree step flipped from clean-up to make drops the facts it can no longer emit", () => {
+    // through the SAME update-step the form issues — the rule belongs to the reducer, so
+    // both step forms get it rather than only the one that remembered to filter
+    const code = PRESETS.find((p) => p.id === "code")!.build("my-code");
+    const cleanup = code.spec.nodes.find((n) => n.id === "clean-up") as Extract<NodeSpec, { kind: "worktree" }>;
+    expect(cleanup.writes).toEqual(["worktree.clean"]);
+    const after = apply(code, { type: "update-step", id: "clean-up", node: { ...cleanup, action: "create" } });
+    expect((after.spec.nodes.find((n) => n.id === "clean-up") as Extract<NodeSpec, { kind: "worktree" }>).writes).toEqual([]);
+  });
+
+  test("switching a command to another built-in drops produced keys the new one cannot emit", () => {
+    const base = apply(doc(), {
+      type: "add-step",
+      node: { id: "probe", kind: "command", title: "Check the PR", run: "probe:pr", reads: [], writes: [] },
+    });
+    const withWrite = apply(base, {
+      type: "add-field", patch: { key: "pr.state", kind: "text", scope: "per-visit" },
+    }, {
+      type: "update-step", id: "probe",
+      node: { id: "probe", kind: "command", title: "Check the PR", run: "probe:pr", reads: [], writes: ["pr.state"] },
+    });
+    expect((withWrite.spec.nodes.find((n) => n.id === "probe") as Extract<NodeSpec, { kind: "command" }>).writes).toEqual(["pr.state"]);
+    const switched = apply(withWrite, {
+      type: "update-step", id: "probe",
+      node: { ...(withWrite.spec.nodes.find((n) => n.id === "probe") as Extract<NodeSpec, { kind: "command" }>), run: "map:drift" },
+    });
+    expect((switched.spec.nodes.find((n) => n.id === "probe") as Extract<NodeSpec, { kind: "command" }>).writes).toEqual([]);
+  });
+
+  test("changing a field's kind re-types every operand that compares against it", () => {
+    const before = doc();
+    expect(before.spec.edges.find((e) => e.when?.key === "review_verdict")!.when).toMatchObject({ value: "reject" });
+    const after = apply(before, { type: "update-field", key: "review_verdict", patch: { kind: "boolean" } });
+    for (const e of after.spec.edges) {
+      if (e.when?.key !== "review_verdict") continue;
+      if (e.when.op === "equals" || e.when.op === "not-equals") expect(typeof e.when.value).toBe("boolean");
+    }
+    // a nullary op has no operand to re-type, and is returned untouched
+    const nullary = apply(
+      apply(before, { type: "set-branching", from: "review", edges: [{ to: "done", when: { op: "is-true", key: "review_verdict" } }] }),
+      { type: "update-field", key: "review_verdict", patch: { kind: "number" } },
+    );
+    expect(nullary.spec.edges.find((e) => e.from === "review")!.when).toEqual({ op: "is-true", key: "review_verdict" });
   });
 
   test("renaming the graph before its first save moves the prompt ids and the bodies with them", () => {
@@ -371,6 +472,26 @@ describe("the wizard, end to end (AC3)", () => {
     expect(body.spec.nodes.find((n) => n.id === "ask-an-agent")).toMatchObject({ reads: ["goal"] });
   });
 
+  test("a step added and then removed is not posted — and the save is not blocked by it", async () => {
+    const calls = serve();
+    const el = await mount();
+    type(el.querySelector('input[placeholder="my-review"]') as HTMLInputElement, "my-review");
+    goTo(el, "Steps");
+    click(byText(el, "Ask an agent"));
+    type(el.querySelector('textarea[aria-label="the agent\'s instructions"]') as HTMLTextAreaElement, "Summarise {{ context.goal }}");
+    click(byText(el, "Remove this step"));
+    goTo(el, "Review");
+    await act(async () => { byText(el, "Save and add to the catalog")!.click(); });
+
+    const body = calls.find((c) => c.method === "PUT")!.body as { spec: GraphSpec; prompts: Record<string, string> };
+    expect(Object.keys(body.prompts)).not.toContain("my-review.ask-an-agent");
+    // and what IS posted is exactly what the spec's own steps name — the server refuses any
+    // other id, and used to refuse every save for the rest of the session over one
+    expect(Object.keys(body.prompts).sort()).toEqual(
+      body.spec.nodes.filter((n) => n.kind === "agent").map((n) => (n as Extract<NodeSpec, { kind: "agent" }>).prompt).sort(),
+    );
+  });
+
   test("a refused save says why, in the server's words, and keeps the draft open", async () => {
     serve({ status: 422, body: { error: 'node "work" has nowhere to go next' } });
     const el = await mount();
@@ -403,5 +524,60 @@ describe("nothing in the builder asks anyone to write TypeScript or JSON (AC2)",
     expect([...ops!.options].map((o) => o.textContent)).toEqual([
       "is", "is not", "is one of", "is yes", "is no", "has a value", "is empty",
     ]);
+  });
+});
+
+
+describe("a declared fact is never invisible-and-unremovable", () => {
+  /** the step form on its own, over a draft that already carries the awkward declaration */
+  async function openStep(draft: Draft): Promise<HTMLElement> {
+    host = document.createElement("div");
+    document.body.appendChild(host);
+    root = createRoot(host);
+    await act(async () => {
+      root!.render(<ToastProvider><StepForm draft={draft} id="clean" dispatch={() => {}} onClose={() => {}} /></ToastProvider>);
+    });
+    return host;
+  }
+
+  /** the Checkbox primitive ties its text to the box by `for`, not by wrapping it */
+  const tickboxes = (el: HTMLElement) =>
+    ([...el.querySelectorAll("input[type=checkbox]")] as HTMLInputElement[]).map((box) => ({
+      box,
+      label: el.querySelector(`label[for="${box.id}"]`)?.textContent ?? "",
+    }));
+
+  const withWorktree = (action: "create" | "remove", writes: string[]): Draft => ({
+    saved: false,
+    prompts: {},
+    spec: {
+      version: 1, name: "wt", description: "",
+      fields: [{ key: "worktree.clean", kind: "boolean", scope: "per-visit" }],
+      inputs: [], entry: "clean",
+      nodes: [{ id: "clean", kind: "worktree", title: "Clean up", action, writes }, { id: "done", kind: "terminal", outcome: "success" }],
+      edges: [{ from: "clean", to: "done" }],
+    },
+  });
+
+  test("a key a MAKE step should not produce is still shown, ticked, so it can be unticked", async () => {
+    // the reducer keeps writes ⊆ emittable, so this state only arrives from a hand-edited
+    // file or a PUT — which is exactly when the operator most needs to see it. Rendering
+    // `only` alone hid it behind a picker that offered nothing (HOW-22 review, finding 3).
+    const el = await openStep(withWorktree("create", ["worktree.clean"]));
+    const row = tickboxes(el).find((t) => t.label.includes("worktree.clean"));
+    expect(row).toBeDefined();
+    expect(row!.box.checked).toBe(true);
+  });
+
+  test("a clean-up step still offers exactly the two facts its executor emits", async () => {
+    const el = await openStep(withWorktree("remove", ["worktree.clean"]));
+    const labels = tickboxes(el).map((t) => t.label).filter((t) => t.includes("worktree.clean") || t.includes("outcome"));
+    expect(labels).toHaveLength(2);
+  });
+
+  test("a make step with nothing declared offers nothing, and says why", async () => {
+    const el = await openStep(withWorktree("create", []));
+    expect(el.querySelector("dialog")!.textContent).toContain("Making a worktree reports nothing");
+    expect(tickboxes(el).filter((t) => t.label.includes("worktree."))).toHaveLength(0);
   });
 });
