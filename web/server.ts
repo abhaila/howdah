@@ -13,6 +13,8 @@
  *   POST /api/runs/:id/approval    {approved, proposal_id} → approve, or send the round's comments as feedback
  *   POST /api/runs/:id/redesign    {message} → re-extract and redraw (refused while a runner is live)
  *   POST /api/runs/:id/effects     {effect, verdict, node?} → HOW-3: attest to an ambiguous side effect
+ *   PUT  /api/graphs/:name/builder {spec, prompts} → HOW-22: save a graph built in the viewer (201 new / 200 updated / 409 a built-in owns the name / 422 the gate refused)
+ *   GET  /api/local-prompts/:id    HOW-22: the body of a prompt a builder graph owns
  *   GET  /api/attention            HOW-20: the needs-you inbox — every pending ask with its run, reason and wait
  *   (system-map 1a: the same engine/control.ts functions as the CLI verbs; 400 on a malformed
  *   body, 409 {error, code} on a refusal)
@@ -50,6 +52,8 @@ import { catalogOf, loadRegistry, type Registry } from "../graphs/registry";
 import { deleteLocalGraph, LOCAL_NAME, localGraphPath, readLocalSource, saveLocalSource } from "../graphs/local";
 import { typecheckLocalGraph } from "../graphs/typecheck";
 import { newGraph, type GraphKind } from "../cli/new-graph";
+import { readLocalPrompt, saveBuilderGraph } from "../graphs/builder";
+import { parseGraphSpec, specOf, SPEC_PROMPT_ID } from "../core/graph-spec";
 import { ensureHowdahHome, howdahHome, loadConfig, saveConfig } from "../config/config";
 import { listGithubRepos, registerGithubRepo } from "../config/github";
 import { loadTuning, saveTuning, pruneTuning } from "../config/tuning";
@@ -272,6 +276,54 @@ export function createHowdahServer(opts: ServerOpts) {
         }
       }
 
+      /**
+       * HOW-22: save a graph the builder made. Separate from the source route because that
+       * one 404s on a graph that does not exist yet, and this is also how one is CREATED.
+       *
+       * The spec arrives from the network and is written into a module, so nothing is
+       * trusted: parseGraphSpec() rebuilds it field by field and drops everything it did not
+       * put there, and the built-in collision is refused BEFORE any write — the registry
+       * only reports that shadowing after the fact, which is too late to be useful while you
+       * are still naming the thing.
+       */
+      const bm = url.pathname.match(/^\/api\/graphs\/([^/]+)\/builder$/);
+      if (bm) {
+        const name = bm[1]!;
+        if (req.method !== "PUT") return json({ error: "method not allowed" }, 405);
+        if (!LOCAL_NAME.test(name)) return json({ error: `graph name must be kebab-case: "${name}"` }, 400);
+        if (name in GRAPHS) return json({ error: `"${name}" is one of Howdah's own graphs — pick another name` }, 409);
+        const body = await objectBody(req);
+        if (!body) return json({ error: "expected a JSON object" }, 400);
+        const parsed = parseGraphSpec(body.spec);
+        if (!parsed.ok) return json({ error: parsed.error }, 400);
+        if (parsed.spec.name !== name) return json({ error: `the spec is named "${parsed.spec.name}" but the path says "${name}"` }, 400);
+        const prompts: Record<string, string> = {};
+        const rawPrompts = body.prompts;
+        if (rawPrompts !== undefined) {
+          if (typeof rawPrompts !== "object" || rawPrompts === null || Array.isArray(rawPrompts))
+            return json({ error: "prompts must be an object of id → body" }, 400);
+          for (const [id, value] of Object.entries(rawPrompts as Record<string, unknown>)) {
+            if (typeof value !== "string") return json({ error: `the body of "${id}" must be text` }, 400);
+            prompts[id] = value;
+          }
+        }
+        const existed = existsSync(localGraphPath(home, name));
+        const saved = await saveBuilderGraph({ home, repoRoot: root, spec: parsed.spec, prompts });
+        return saved.ok ? json({ ok: true, name }, existed ? 200 : 201) : json({ error: saved.error }, 422);
+      }
+
+      /**
+       * HOW-22: the instructions a builder step owns. Only $HOWDAH_HOME/prompts is read —
+       * the id is a file name, so it must look like one and can carry no path.
+       */
+      const lpm = url.pathname.match(/^\/api\/local-prompts\/([^/]+)$/);
+      if (lpm) {
+        const id = decodeURIComponent(lpm[1]!);
+        if (!SPEC_PROMPT_ID.test(id)) return json({ error: `"${id}" is not a prompt id` }, 400);
+        const promptBody = readLocalPrompt(home, id);
+        return promptBody === null ? json({ error: "no such local prompt", id }, 404) : json({ id, body: promptBody });
+      }
+
       const sm = url.pathname.match(/^\/api\/graphs\/([^/]+)\/(source|typecheck)$/);
       if (sm) {
         const name = sm[1]!;
@@ -336,6 +388,11 @@ export function createHowdahServer(opts: ServerOpts) {
           entry: g.def.entry,
           inputs: g.def.inputs,
           defaults: tsDefaults,
+          // HOW-22: the spec the builder can re-open, and whether it can. `specOf` re-parses
+          // rather than trusting `def.spec`, so a hand-edited file that no longer holds a
+          // readable spec reads as `builder: false` instead of opening half-understood.
+          spec: specOf(g),
+          builder: (await registry()).source[name] === "local" && specOf(g) !== null,
           // what "inherit" means in the tuner, so it names the operator's default rather than
           // a hard-coded "claude"
           default_harness: defaultHarness(configuredDefaultHarness),
