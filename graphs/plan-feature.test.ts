@@ -22,7 +22,7 @@ import { EventLog } from "../log/write";
 import type { LoggedEvent } from "../log/events";
 import { saveConfig, type HowdahConfig } from "../config/config";
 import { sliceRepo, commitAll, SLICE_GOAL, SLICE_WORK } from "./slice-fixture";
-import type { WorkspaceLookup } from "../engine/executors/launch";
+import { LAUNCH_PRODUCES, LAUNCH_READS, type WorkspaceLookup } from "../engine/executors/launch";
 
 const PROMPTS = join(dirname(import.meta.dir), "prompts");
 const ok = (writes: Record<string, unknown> = {}): AttemptResult => ({ status: "succeeded", writes });
@@ -132,6 +132,18 @@ describe("the graph itself", () => {
     const launch = planFeature.def.nodes["runs.launch"];
     expect(launch?.kind === "command" && launch.run).toBe("runs:launch");
     expect(launch?.kind === "command" && launch.reads).toEqual(["plan.slices", "tickets"]);
+  });
+
+  /**
+   * HOW-23 review. The built-in now refuses a node whose declaration it cannot honour, BEFORE
+   * it spawns anything — so the shipped graph has to satisfy both halves, or the one workflow
+   * the ticket is about would park on its most expensive step.
+   */
+  test("the launch step declares exactly what the built-in reads and exactly what it produces", () => {
+    const launch = planFeature.def.nodes["runs.launch"];
+    if (launch?.kind !== "command") throw new Error("runs.launch must be a command node");
+    for (const key of LAUNCH_READS) expect(launch.reads, key).toContain(key);
+    expect(Object.keys(launch.writes ?? {})).toEqual([...LAUNCH_PRODUCES]);
   });
 });
 

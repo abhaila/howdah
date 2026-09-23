@@ -17,10 +17,17 @@
  *
  * Exactly-once, three guards deep, because a half-finished fan-out is the failure that costs
  * real money:
- *   1. NOTHING IS SPAWNED UNTIL EVERYTHING CHECKS OUT. The plan is re-validated, slices and
- *      tickets must match one-to-one, and every resolved workspace must be a registered repo.
- *      A failure here fails the attempt with the reason — the run parks with nothing launched,
- *      rather than three good slices started and a fourth that can never be.
+ *   1. NOTHING IS SPAWNED UNTIL EVERYTHING CHECKS OUT — the NODE'S OWN DECLARATION included.
+ *      The keys it says it reads and the keys it says it PRODUCES are checked first (they are
+ *      the cheapest refusals and they are pure graph bugs), then the plan is re-validated,
+ *      slices and tickets must match one-to-one, and every resolved workspace must be a
+ *      registered repo. A failure here fails the attempt with the reason — the run parks with
+ *      nothing launched, rather than three good slices started and a fourth that can never be.
+ *      The declaration has to be checked HERE because `declaredWrites()` below THROWS on a key
+ *      this built-in cannot produce and it runs after the loop: a node declaring anything but
+ *      `launched` spawned every child and only then parked `executor-threw`, and every retry
+ *      threw again, so the node could never succeed after having spent N runs (HOW-23 review,
+ *      finding 1).
  *   2. DETERMINISTIC CHILD IDS (`<parent>--<slice id>`, which is why the slice id grammar in
  *      graphs/slice-plan.ts is a path-safe slug). A re-attempt sees the child's run directory
  *      and records it as skipped instead of starting a second run on the same ticket —
@@ -61,6 +68,17 @@ export const CHILD_GRAPH = "implement-ticket";
  */
 export const PLAN_KEY = "plan.slices";
 export const TICKETS_KEY = "tickets";
+
+/**
+ * The two halves of this built-in's contract, as DATA, because three places must agree and
+ * nothing else could tell them apart: the `declaredWrites()` call below, precheck()'s two
+ * refusals, and core/graph-spec.ts's COMMAND_BUILTINS — which is what the HOW-22 builder gates
+ * a step against in the browser and again at the save. core/ is node-free and cannot import an
+ * executor, so it repeats the strings and graphs/builder.test.ts pins the repetition.
+ */
+export const LAUNCH_READS = [PLAN_KEY, TICKETS_KEY] as const;
+/** The ONLY fact this built-in publishes — the object handed to `declaredWrites()` below. */
+export const LAUNCH_PRODUCES = ["launched"] as const;
 
 export function isLaunchBuiltin(run: string): boolean {
   return run.trim().split(/\s+/)[0] === LAUNCH_BUILTIN;
@@ -175,9 +193,20 @@ function precheck(
   parentCwd: string | undefined,
 ): { plan: SlicePlan; targets: Target[] } | Failed {
   const declared = ((def.reads ?? []) as readonly string[]);
-  for (const key of [PLAN_KEY, TICKETS_KEY])
+  for (const key of LAUNCH_READS)
     if (!declared.includes(key))
       return failed(`${LAUNCH_BUILTIN} reads "${key}", which this node does not declare (it declares: ${declared.join(", ") || "nothing"})`);
+
+  // …and what it says it PRODUCES. `declaredWrites()` would throw on an unproducible key, but
+  // only after the fan-out; refusing here is the difference between a graph bug reported with
+  // nothing spent and N agent runs started against a node that can never succeed.
+  const producible = LAUNCH_PRODUCES as readonly string[];
+  const unproducible = Object.keys(def.writes ?? {}).filter((k) => !producible.includes(k));
+  if (unproducible.length)
+    return failed(
+      `${LAUNCH_BUILTIN} cannot produce ${unproducible.join(", ")} — it publishes only ` +
+        `${producible.join(", ")}. NOTHING WAS LAUNCHED.`,
+    );
 
   // the plan was already validated when the round opened; checking it again is what makes an
   // operator jump straight onto this node safe, and costs one pass over at most 8 slices

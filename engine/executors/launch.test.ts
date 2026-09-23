@@ -14,7 +14,7 @@ import { join } from "node:path";
 import { EventLog } from "../../log/write";
 import type { LoggedEvent } from "../../log/events";
 import { commandExecutor } from "./worktree";
-import { childRunId, isLaunchBuiltin, launchOrder, type LaunchResult, type WorkspaceLookup } from "./launch";
+import { childRunId, isLaunchBuiltin, launchOrder, LAUNCH_PRODUCES, LAUNCH_READS, type LaunchResult, type WorkspaceLookup } from "./launch";
 import type { AttemptResult } from "../run";
 import type { NodeDef } from "../../core/graph";
 
@@ -387,6 +387,64 @@ describe("nothing is launched until everything checks out", () => {
     const r = await h.run({ goal: "g" }, { def });
     expect(r.status).toBe("failed");
     expect(r.reason).toContain('runs:launch reads "plan.slices", which this node does not declare');
+  });
+
+  /**
+   * HOW-23 review, finding 1. `declaredWrites()` throws on a key this built-in cannot produce,
+   * and it runs AFTER the loop — so a node declaring one used to start every child and only
+   * then park `executor-threw`, with every retry throwing again (the run-dir guard skips the
+   * children, so the unknown key is still unproducible). The node could never succeed, having
+   * spent N agent runs. What these pin is the SPEND: zero spawns, and no claimed intent.
+   */
+  describe("a node declaring a fact this built-in cannot produce is refused before any spawn", () => {
+    const three = {
+      "plan.slices": { feature: "f", slices: [slice(), slice({ id: "second" }), slice({ id: "third" })] },
+      tickets: { tickets: [ticket(), ticket({ slice_id: "second", identifier: "HOW-32" }), ticket({ slice_id: "third", identifier: "HOW-33" })] },
+    };
+    const declaring = (writes: Record<string, unknown>): NodeDef<any> =>
+      ({ kind: "command", run: "runs:launch", reads: ["plan.slices", "tickets"], writes } as NodeDef<any>);
+
+    test("an extra key alongside `launched` costs nothing — three slices, zero spawns", async () => {
+      const h = harness();
+      const r = await h.run(three, { def: declaring({ launched: { scope: "sticky" }, pr: { scope: "sticky" } }) });
+      expect(r.status).toBe("failed");
+      expect(r.reason).toContain("runs:launch cannot produce pr");
+      expect(r.reason).toContain("it publishes only launched");
+      expect(r.reason).toContain("NOTHING WAS LAUNCHED");
+      expect(h.spawned).toEqual([]);
+      expect(h.events().some((e) => e.type === "side-effect-intent")).toBe(false);
+    });
+
+    test("a node declaring only the wrong key is refused the same way", async () => {
+      const h = harness();
+      const r = await h.run(three, { def: declaring({ pr: { scope: "sticky" } }) });
+      expect(r.status).toBe("failed");
+      expect(r.reason).toContain("runs:launch cannot produce pr");
+      expect(h.spawned).toEqual([]);
+    });
+
+    test("the refusal is not an accident of ordering — the retry spawns nothing either", async () => {
+      const h = harness();
+      const def = declaring({ launched: { scope: "sticky" }, pr: { scope: "sticky" } });
+      expect((await h.run(three, { def })).status).toBe("failed");
+      expect((await h.run(three, { def })).status).toBe("failed");
+      expect(h.spawned).toEqual([]);
+      expect(h.events().some((e) => e.type === "run-spawned")).toBe(false);
+    });
+
+    test("declaring NOTHING is still legal and still launches — the check is symmetric with declaredWrites", async () => {
+      const h = harness();
+      const r = await h.run(three, { def: declaring({}) });
+      expect(r.status).toBe("succeeded");
+      expect(r.writes).toEqual({});
+      expect(h.spawned.length).toBe(3);
+    });
+
+    test("the contract the refusals are written from is the contract the node declares", () => {
+      const node = NODE as Extract<NodeDef<any>, { kind: "command" }>;
+      expect([...LAUNCH_READS] as string[]).toEqual([...(node.reads ?? [])] as string[]);
+      expect([...LAUNCH_PRODUCES] as string[]).toEqual(Object.keys(node.writes ?? {}));
+    });
   });
 });
 
