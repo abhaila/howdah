@@ -23,6 +23,7 @@ import { codexExecutor } from "./codex";
 import { cursorExecutor } from "./cursor";
 import { defaultHarness, type HarnessName } from "../../core/harnesses";
 import { commandExecutor, worktreeExecutor } from "./worktree";
+import type { WorkspaceLookup } from "./launch";
 import { approvalExecutor } from "./approval";
 import type { Notifier } from "../attention";
 import { join } from "node:path";
@@ -61,6 +62,10 @@ export interface LiveExecutorDeps {
   reposDir?: string;
   /** repo path → the folder name its worktrees live under (default: the directory name) */
   repoName?: (repoPath: string) => string;
+  /** HOW-23: $HOWDAH_HOME/runs — where `runs:launch` checks whether a child already exists */
+  runsDir?: string;
+  /** HOW-23: the workspace registry `runs:launch` resolves a slice's workspace through */
+  workspaces?: WorkspaceLookup;
   viewerBase?: string;
   notifiers?: Notifier[];
   claudeBinary?: string;
@@ -88,7 +93,12 @@ export function liveExecutors(deps: LiveExecutorDeps): EngineOpts["executors"] {
       const table = args.agentConfig?.permissionMode === "plan" ? readOnlyByHarness : byHarness;
       return (table[harness] ?? claude)(args);
     },
-    command: commandExecutor(),
+    command: commandExecutor({
+      launch: {
+        runsDir: deps.runsDir ?? join(deps.attentionDir, "..", "runs"),
+        ...(deps.workspaces ? { workspaces: deps.workspaces } : {}),
+      },
+    }),
     worktree: worktreeExecutor({
       reposDir: deps.reposDir ?? join(deps.attentionDir, "..", "repos"),
       repoName: deps.repoName,

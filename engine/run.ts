@@ -145,6 +145,8 @@ export interface EngineOpts {
   folderKind?: "repo" | "plain";
   /** HOW-18: the operator's display label, already normalized — stamped on run-started */
   name?: string;
+  /** HOW-23: the run that launched this one — stamped on run-started as lineage, never routed on */
+  parent?: string;
   /** runs before every non-terminal node — the reconciler's seat (A6.1) */
   beforeNode?: (nodeId: string, def: NodeDef<any>) => Promise<void>;
   /** run-level agent overrides — beat node settings, which beat graph defaults */
@@ -325,6 +327,7 @@ export class Engine {
       type: "run-started",
       graph: this.graph.def.name,
       ...(this.opts.name ? { name: this.opts.name } : {}),
+      ...(this.opts.parent ? { parent: this.opts.parent } : {}),
       inputs,
       pinned_prompts: pinned,
       ...(Object.keys(includes).length ? { pinned_includes: includes } : {}),

@@ -728,6 +728,52 @@ run view gets built once inside a system that has been agreed, and T23 is UI-ind
     font host with JetBrains Mono, so it is a candidate to keep; settle it in DESIGN.md.
   - Remaining: reference research for T24's surfaces, then DESIGN.md.
 
+- [x] **HOW-23 (P1) — graphs — One feature, many graphs: `plan-feature`** ✅ 2026-09-23
+  - Trigger: "The current slice node is not helpful. So the intention with it was maybe better
+    as a skill." The `implement-slice` ceremony asks the operator to review identity keys
+    before any code exists; what they actually want to decide about a large, multi-repo feature
+    is which vertical slices it breaks into. So the unit of work moves from one graph to MANY:
+    plan once, approve the decomposition, raise a Linear ticket per slice, and launch an
+    independent `implement-ticket` run per ticket — one small PR each.
+  - Decision (user, from the ticket): **multi-graph fan-out**, not a richer single graph. A
+    slice that is its own run gets its own worktree, branch, PR, park and reply — every
+    facility the harness already has — instead of a parallelism the engine would have had to
+    grow. `plan-feature` reuses `implement-slice`'s proven approval shape (map.extract →
+    propose → approve, with stale detection and redesign) and changes only the payload and the
+    ending.
+  - "Maybe better as a skill" is honoured in the PROMPT, not the graph: `plan.propose` opens
+    with the installed-skills line, so a shaping/decomposition skill does the work. Declaring
+    `skills:` on the node was rejected — `doctor` asserts declared skills exist, so it would
+    fail on a machine that lacks them.
+  - Rejected, deliberately, and each is a follow-up rather than a gap:
+    - **The parent supervising its children** (wave-gating a dependent slice on its
+      prerequisite's merge). It would turn a run that finishes in minutes into one that lives
+      for days, and the failure modes are all new. `depends_on` orders the launches and is
+      recorded in the ticket body as prose instead.
+    - **Retiring `implement-slice` in the same change.** It drags in `map/ghosts.ts`,
+      `map/drift.ts`, `cli/metrics.ts`'s slice-vs-ticket comparison and the ghost half of the
+      approval card. Nothing in HOW-23 depends on that decision; make it once the new workflow
+      has proved out.
+    - **Cross-repo map extraction.** `map/` is single-project by design (cross-project
+      resolution is SCIP, slice 2). The map grounds the primary repo; slices in other
+      registered workspaces are planned from the brief, and the prompt says so.
+  - Two rules carry weight beyond well-formedness. The slice ID GRAMMAR, because the id becomes
+    part of the child run id and its git branch — identity, not a label. And the CAP of 8
+    slices, because approving a plan launches every slice at once: it is a review and a bill,
+    and a bigger feature is asked for as a smaller first tranche rather than refused.
+  - The fan-out is exactly-once three guards deep (precheck before any spawn, deterministic
+    child ids, `effects.claim`/`done`) because a half-launched fan-out costs duplicate PRs and
+    a second harness allowance. See CLAUDE.md's multi-graph fan-out invariant.
+  - Review correction (2026-09-23). The precheck now covers the NODE'S OWN DECLARATION as well
+    as the plan: `declaredWrites` throws on a key the built-in cannot publish and it ran after
+    the spawn loop, so a node declaring anything but `launched` started every child and only
+    then parked — and every retry threw again, so it could never succeed. And `runs:launch`
+    joined `core/graph-spec.ts`'s `COMMAND_BUILTINS`, which it had never been added to, so the
+    HOW-22 builder can offer it and refuses the same declaration in the browser. That table now
+    carries a built-in's READS as well as its writes, because this is the one built-in that
+    reads context by name and a command step has no reads control to fix it with; a test pins
+    that every built-in the command executor dispatches has a row.
+
 ## GSTACK REVIEW REPORT
 
 | Review | Trigger | Why | Runs | Status | Findings |

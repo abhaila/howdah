@@ -980,6 +980,51 @@ describe("log rows carry the stored event", () => {
   });
 });
 
+describe("the plan-feature fan-out is visible from both ends (HOW-23)", () => {
+  function parent(dir: string): EventLog {
+    const log = new EventLog(join(dir, "p", "run.jsonl"), fixedClock());
+    log.append({ type: "run-started", graph: "plan-feature", inputs: { goal: "ship things" }, pinned_prompts: {} });
+    log.append({ type: "node-started", node: "runs.launch", visit: 1, attempt_id: "runs.launch#1" });
+    log.append({ type: "run-spawned", node: "runs.launch", visit: 1, child: "p--api", graph: "implement-ticket", slice_id: "api", ticket: "HOW-31", workspace: "api" });
+    log.append({ type: "run-spawned", node: "runs.launch", visit: 1, child: "p--web", graph: "implement-ticket", slice_id: "web", ticket: "HOW-32" });
+    return log;
+  }
+
+  test("the parent lists its children in launch order, with the slice and ticket each came from", () => {
+    const dir = mkdtempSync(join(tmpdir(), "howdah-fanout-"));
+    const events = parent(dir).read();
+    const detail = deriveDetail("p", events);
+    expect(detail.children).toMatchObject([
+      { run_id: "p--api", slice_id: "api", ticket: "HOW-31", graph: "implement-ticket", workspace: "api" },
+      { run_id: "p--web", slice_id: "web", ticket: "HOW-32", workspace: null },
+    ]);
+    // `at` is the launch's own timestamp, so the card can order a fan-out without the child's log
+    expect(detail.children.map((c) => c.at)).toEqual(events.filter((e) => e.type === "run-spawned").map((e) => e.ts));
+  });
+
+  test("a run that launched nothing has no children — no fan-out card for an ordinary run", () => {
+    const dir = mkdtempSync(join(tmpdir(), "howdah-fanout-"));
+    expect(deriveDetail("r1", seedParkedRun(dir, "r1").read()).children).toEqual([]);
+  });
+
+  test("the child names its parent; a run an operator started does not", () => {
+    const dir = mkdtempSync(join(tmpdir(), "howdah-fanout-"));
+    const child = new EventLog(join(dir, "p--api", "run.jsonl"), fixedClock());
+    child.append({ type: "run-started", graph: "implement-ticket", inputs: { goal: "g" }, pinned_prompts: {}, parent: "p" });
+    expect(deriveSummary("p--api", child.read()).parent).toBe("p");
+    expect(deriveSummary("r1", seedParkedRun(mkdtempSync(join(tmpdir(), "howdah-fanout-")), "r1").read()).parent).toBeNull();
+  });
+
+  test("a launch reads as one log row naming the child, the slice and the ticket", () => {
+    const dir = mkdtempSync(join(tmpdir(), "howdah-fanout-"));
+    const rows = deriveLogRows(parent(dir).read()).filter((r) => r.type === "run-spawned");
+    expect(rows).toHaveLength(2);
+    expect(rows[0]!.summary).toBe("launched implement-ticket run p--api for slice api (HOW-31) in api");
+    expect(rows[0]).toMatchObject({ node: "runs.launch", visit: 1, kind: "engine" });
+    expect(rows[1]!.summary).toBe("launched implement-ticket run p--web for slice web (HOW-32)");
+  });
+});
+
 // ---- context table (stories 9 + 10) -----------------------------------------------
 
 const DECL = {

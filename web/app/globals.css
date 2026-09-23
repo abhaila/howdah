@@ -99,6 +99,15 @@
 .ap-trace-steps { font-size: var(--type-xs); color: var(--fg-muted); overflow-wrap: anywhere; }
 .ap-round-row { display: flex; gap: 10px; height: 26px; align-items: center; font-size: var(--type-sm); color: var(--fg-muted); border-bottom: 1px solid var(--border); }
 
+/* HOW-23: a slice plan reuses the ghost row's frame — the same shape, without the glyphs,
+   because a slice is judged as prose and a ghost is judged against the map */
+.plan-list { margin-top: 8px; }
+.plan-feature { margin-bottom: 8px; }
+.plan-slice { border-top: 1px solid var(--border); padding-top: 3px; }
+.plan-n { width: 16px; flex-shrink: 0; font-size: var(--type-xs); color: var(--fg-faint); }
+.plan-sub { padding-left: 16px; }
+.plan-deps { color: var(--fg-muted); }
+
 .drift-view .dv-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 8px; }
 .dv-title { font-weight: 600; font-size: var(--type-md); }
 .dv-stamp { font-size: var(--type-xs); color: var(--fg-muted); }

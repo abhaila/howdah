@@ -82,6 +82,13 @@ export type RunEvent =
        * name was given, so a log written before this field reads exactly as it did.
        */
       name?: string;
+      /**
+       * HOW-23: the run that launched this one (`plan-feature`'s `runs:launch`). Lineage and
+       * display only — exactly like `name`, the run id stays identity, and nothing in the
+       * engine routes on it: a child is an ordinary independent run whose parent does not
+       * supervise it. Absent for a run an operator started, so an older log reads unchanged.
+       */
+      parent?: string;
       /** where the run works — recorded once; the reconciler probes it, the IDE button opens it */
       cwd?: string;
       folder_kind?: "repo" | "plain";
@@ -379,6 +386,29 @@ export type RunEvent =
       base_reextracted?: boolean;
       /** base and after still come from different extractors (re-extraction impossible): every ghost item is not-checked */
       extractor_mismatch?: { base: string; after: string };
+    }
+  | {
+      /**
+       * HOW-23: this run launched a child run — one `implement-ticket` per approved slice of a
+       * `plan-feature` decomposition (`runs:launch`, engine/executors/launch.ts).
+       *
+       * It is a FACT about the fan-out, recorded once per child, beside the
+       * `side-effect-intent` / `side-effect-done` pair that makes the spawn exactly-once. The
+       * child's own log is the authority on what the child did — this event only says that it
+       * exists, and which slice and ticket it came from, so the viewer can link the two without
+       * a sidecar record of a relationship the logs already imply.
+       */
+      type: "run-spawned";
+      node: string;
+      visit: number;
+      /** the child's run id (`<parent>--<slice id>`, deterministic so a retry cannot double-launch) */
+      child: string;
+      /** the graph the child runs — `implement-ticket` today, named so it stays readable if that changes */
+      graph: string;
+      slice_id: string;
+      /** the tracker identifier the slice was raised as, when there is one */
+      ticket?: string;
+      workspace?: string;
     }
   | { type: "run-finished"; outcome: RunOutcome };
 

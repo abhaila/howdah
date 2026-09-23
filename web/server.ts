@@ -75,6 +75,7 @@ import { acceptProposal, listProposals, proposalsDir, rejectProposal, viewPropos
 import { evidenceSource } from "../reviser/revise";
 import { isPartialId } from "../core/template";
 import { normalizeRunName } from "../core/run-name";
+import { launchArgs } from "../core/launch-args";
 
 /** POST /api/runs body — what the Start-a-run form sends */
 export interface LaunchBody {
@@ -85,24 +86,11 @@ export interface LaunchBody {
 }
 
 /**
- * The `cli/main.ts run` argv for a launch — pure, so what the route forwards can be tested
- * without spawning a real CLI. `name` must already be normalized (core/run-name.ts).
+ * The `cli/main.ts run` argv for a launch. HOW-23 moved the builder to core/launch-args.ts,
+ * because the `runs:launch` built-in starts runs too and the two must not drift apart; it is
+ * re-exported here so this route and everything importing it read exactly as before.
  */
-export function launchArgs(body: LaunchBody & { graph: string; name?: string }, runId: string): string[] {
-  const args = ["run", body.graph, "--id", runId];
-  for (const [k, v] of Object.entries(body.inputs ?? {})) args.push("-i", `${k}=${v}`);
-  if (body.workspace) args.push("--workspace", body.workspace);
-  if (body.dir) args.push("--dir", body.dir);
-  if (body.name) args.push("--name", body.name);
-  const o = body.overrides ?? {};
-  if (o.model) args.push("--model", o.model);
-  if (o.effort) args.push("--effort", o.effort);
-  if (o.permissionMode) args.push("--permission-mode", o.permissionMode);
-  if (o.harness) args.push("--harness", o.harness);
-  if (o.maxTurns) args.push("--max-turns", String(o.maxTurns));
-  if (o.skills?.length) args.push("--skills", o.skills.join(","));
-  return args;
-}
+export { launchArgs } from "../core/launch-args";
 
 export interface ServerOpts {
   runsDir: string;

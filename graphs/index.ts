@@ -6,6 +6,7 @@
 import type { Graph } from "../core/graph";
 import { implementTicket } from "./implement-ticket";
 import { implementSlice } from "./implement-slice";
+import { planFeature } from "./plan-feature";
 import { improveCodebase } from "./improve-codebase";
 import { reviewTeammatePr } from "./review-teammate-pr";
 import { writeDoc } from "./write-doc";
@@ -15,6 +16,7 @@ import { quickTask } from "./quick-task";
 export const GRAPHS: Record<string, Graph<any>> = {
   [implementTicket.def.name]: implementTicket,
   [implementSlice.def.name]: implementSlice,
+  [planFeature.def.name]: planFeature,
   [improveCodebase.def.name]: improveCodebase,
   [reviewTeammatePr.def.name]: reviewTeammatePr,
   [writeDoc.def.name]: writeDoc,

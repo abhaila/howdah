@@ -23,7 +23,7 @@ import { currentProposal, decisionAnswers, decisionKind, findDecision } from "..
 import { replayState } from "../engine/replay";
 import type { Scope } from "../core/context";
 import { coalesce, outcomesByHash, type CoalescedTurn, type JoinedOutcome } from "../log/coalesce";
-import { ghostEdgeId, orphanedComments, OPS, type GhostSet, type GhostTrace, type Op } from "../map/ghosts";
+import { ghostEdgeId, ghostEntityIds, orphanedComments, OPS, type GhostSet, type GhostTrace, type Op } from "../map/ghosts";
 import { DRIFT_OUTCOMES, type DriftItem, type DriftOutcome } from "../map/drift";
 import { PROBLEM_OUTCOMES, snapshotStamp } from "../engine/slice-map";
 import type { AssembledMap, EntityKind, Tier } from "../map/types";
@@ -43,6 +43,11 @@ export interface RunSummary {
   graph: string;
   /** HOW-18: the operator's label from run-started; null for an unnamed (or older) run */
   name: string | null;
+  /**
+   * HOW-23: the run that launched this one (a `plan-feature` fan-out), or null for a run an
+   * operator started. Lineage only — a child is an ordinary independent run.
+   */
+  parent: string | null;
   goal: string;
   status: RunStatus;
   started_at: string | null;
@@ -109,6 +114,13 @@ export interface RunDetail {
    * is a row the operator can attest to in the viewer.
    */
   ambiguous_effects: Array<{ node: string; visit: number; effect: string; attempt_id: string }>;
+  /**
+   * HOW-23: the runs this one launched, in launch order, folded from `run-spawned`. Empty for
+   * every run that is not a `plan-feature` parent. What each child DID is its own log's to
+   * say — this is only the link, so the viewer never invents a status for a run it is not
+   * reading.
+   */
+  children: Array<{ run_id: string; slice_id: string; ticket: string | null; graph: string; workspace: string | null; at: string }>;
   events_seq: number;
 }
 
@@ -158,6 +170,7 @@ export function deriveSummary(id: string, events: LoggedEvent[]): RunSummary {
     id,
     graph: started?.type === "run-started" ? started.graph : "?",
     name: started?.type === "run-started" ? started.name ?? null : null,
+    parent: started?.type === "run-started" ? started.parent ?? null : null,
     goal: started?.type === "run-started" ? String((started.inputs as any)?.goal ?? "") : "",
     status,
     started_at: events[0]?.ts ?? null,
@@ -308,6 +321,11 @@ export function deriveDetail(
     context: deriveContextTable(events, declarations),
     identity,
     slice: deriveSlice(events, opts.snapshot ?? null),
+    children: events.flatMap((e) =>
+      e.type === "run-spawned"
+        ? [{ run_id: e.child, slice_id: e.slice_id, ticket: e.ticket ?? null, graph: e.graph, workspace: e.workspace ?? null, at: e.ts }]
+        : [],
+    ),
     ambiguous_effects:
       ask?.code === "ambiguous-effect"
         ? replayState(events).pendingIntents.map((i) => ({ node: i.node, visit: i.visit, effect: i.effect, attempt_id: i.attempt_id }))
@@ -450,6 +468,9 @@ export function deriveLogRows(events: LoggedEvent[]): LogRow[] {
       case "map-extracted":
         return { ...base, ...at(e.node, e.visit), kind: "engine", depth: 0,
           summary: `map ${e.manifest_hash.slice(0, 12)} @ ${e.commit?.slice(0, 12) ?? "(no commit)"}${e.dirty ? " + uncommitted changes" : ""} · ${e.files} files · ${e.skipped} skipped · ${e.not_checked} not-checked · ${e.unparsed} unparsed` };
+      case "run-spawned":
+        return { ...base, ...at(e.node, e.visit), kind: "engine", depth: 0,
+          summary: `launched ${e.graph} run ${e.child} for slice ${e.slice_id}${e.ticket ? ` (${e.ticket})` : ""}${e.workspace ? ` in ${e.workspace}` : ""}` };
       case "map-progress":
         return { ...base, ...at(e.node, e.visit), kind: "engine", depth: 1, summary: `extracting ${e.done}/${e.total} (skipped ${e.skipped})` };
       case "drift-detected": {
@@ -708,6 +729,12 @@ export interface SliceProposal {
   node: string;
   /** null when the proposal is not a ghost set (another graph's opaque proposal) */
   ghosts: GhostSet | null;
+  /**
+   * HOW-23: null unless the proposal is a plan-feature SLICE PLAN. A proposal is one or the
+   * other or neither — the card shows the ghost rows, the slice rows, or the raw JSON, and
+   * never guesses.
+   */
+  plan: SlicePlanView | null;
   raw: unknown;
   groups: GhostGroup[];
   traces: GhostTrace[];
@@ -798,6 +825,46 @@ export function asGhostSet(v: unknown): GhostSet | null {
   };
 }
 
+/**
+ * HOW-23: a slice plan as the approval card shows it. Tolerant in the same spirit as
+ * `asGhostSet` — the graph's validator already accepted what a plan-feature run proposes, and
+ * anything else is null so the card falls back to the raw JSON rather than rendering half a
+ * plan as if it were whole. `id` is the row key, so a pinned comment attaches to a SLICE the
+ * same way it attaches to a ghost.
+ */
+export interface SlicePlanView {
+  feature: string;
+  slices: Array<{ id: string; title: string; goal: string; workspace: string | null; verify: string; work: string; depends_on: string[] }>;
+  out_of_scope: string[];
+  risks: string[];
+}
+
+export function asSlicePlan(v: unknown): SlicePlanView | null {
+  if (!isRecord(v) || !Array.isArray(v.slices) || v.slices.length === 0) return null;
+  const str = (x: unknown): x is string => typeof x === "string";
+  const text = (x: unknown): string => (str(x) ? x : "");
+  const slices = v.slices.flatMap((s) =>
+    isRecord(s) && str(s.id)
+      ? [{
+          id: s.id,
+          title: text(s.title),
+          goal: text(s.goal),
+          workspace: str(s.workspace) ? s.workspace : null,
+          verify: text(s.verify),
+          work: text(s.work),
+          depends_on: Array.isArray(s.depends_on) ? s.depends_on.filter(str) : [],
+        }]
+      : [],
+  );
+  if (slices.length !== v.slices.length) return null; // half a plan is not a plan
+  return {
+    feature: text(v.feature),
+    slices,
+    out_of_scope: Array.isArray(v.out_of_scope) ? v.out_of_scope.filter(str) : [],
+    risks: Array.isArray(v.risks) ? v.risks.filter(str) : [],
+  };
+}
+
 /** Group a ghost set block → entities → edges, in declaration order. */
 export function groupGhosts(g: GhostSet, snapshot: SnapshotIndex | null): GhostGroup[] {
   const groups = new Map<string, GhostGroup>();
@@ -871,6 +938,7 @@ export function deriveSlice(events: LoggedEvent[], snapshot: SnapshotIndex | nul
 
   if (current) {
     const ghosts = asGhostSet(current.proposal);
+    const plan = asSlicePlan(current.proposal);
     const groups = ghosts ? groupGhosts(ghosts, snapshot) : [];
     const rows = groups.flatMap((g) => [...(g.row ? [g.row] : []), ...g.entities, ...g.edges]);
     const tier_counts: Partial<Record<Tier, number>> = {};
@@ -883,6 +951,7 @@ export function deriveSlice(events: LoggedEvent[], snapshot: SnapshotIndex | nul
       at: current.ts,
       node: current.node,
       ghosts,
+      plan,
       raw: current.proposal,
       groups,
       traces: ghosts?.trace ?? [],
@@ -898,7 +967,11 @@ export function deriveSlice(events: LoggedEvent[], snapshot: SnapshotIndex | nul
         ? [{ id: e.id, entity_id: e.entity_id, text: e.text, proposal_id: e.proposal_id, round: roundOf.get(e.proposal_id)!, at: e.ts, sent: sentIds.has(e.id) }]
         : [],
     );
-    orphaned = ghosts ? orphanedComments(all, ghosts) : [];
+    // every id a comment on THIS round can still point at: a ghost set's keys, or a slice
+    // plan's slice ids (HOW-23 — the same redraw-dropped-my-key rule, a different vocabulary).
+    // An opaque proposal has no id set, so nothing can honestly be called orphaned.
+    const pinnable = ghosts ? ghostEntityIds(ghosts) : plan ? plan.slices.map((s) => s.id) : null;
+    orphaned = pinnable ? orphanedComments(all, pinnable) : [];
     const orphanIds = new Set(orphaned.map((c) => c.id));
     for (const c of all) if (!orphanIds.has(c.id)) (comments[c.entity_id] ??= []).push(c);
 

@@ -22,7 +22,8 @@
  * `responsibility` and `names` are prose: shown, never verified, and labelled that way (1d).
  *
  * Comments pin to ghost ids (`comment-pinned.entity_id`); `orphanedComments` lists those whose
- * key a redraw dropped — they are shown as orphaned, never discarded.
+ * key a redraw dropped — they are shown as orphaned, never discarded. It takes ids rather than
+ * a ghost set, because HOW-23's slice plans pin comments too and the rule is the same one.
  */
 
 import { edgeKey, EDGE_KINDS, parseKey, tsModulePath, type ParsedKey } from "./keys";
@@ -392,10 +393,14 @@ export function ghostEntityIds(g: GhostSet): string[] {
 }
 
 /**
- * Comments whose pinned key a redraw no longer contains. They are shown as orphaned, never
+ * Comments whose pinned id a redraw no longer contains. They are shown as orphaned, never
  * dropped (1c "Comments across redraws"); input order is kept.
+ *
+ * It takes the IDS rather than the ghost set, because the rule is about comments and ids and
+ * not about ghosts: HOW-23's slice plans pin comments to slice ids and a redraw drops those
+ * the same way. A ghost-set caller passes `ghostEntityIds(ghosts)`.
  */
-export function orphanedComments<C extends { entity_id: string }>(comments: readonly C[], ghosts: GhostSet): C[] {
-  const ids = new Set(ghostEntityIds(ghosts));
+export function orphanedComments<C extends { entity_id: string }>(comments: readonly C[], pinnable: Iterable<string>): C[] {
+  const ids = new Set(pinnable);
   return comments.filter((c) => !ids.has(c.entity_id));
 }

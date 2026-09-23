@@ -52,6 +52,22 @@ export function ghostsV2() {
   return { ...v1, entities: v1.entities.filter((e) => e.id === ROUTE || e.id === FIND), blocks: v1.blocks.slice(0, 1), trace: [] };
 }
 
+/**
+ * HOW-23: a plan-feature proposal — a SLICE PLAN rather than a ghost set. Nothing in it is an
+ * identity key, which is the point: the operator judges the decomposition, not the map.
+ */
+export function planV1() {
+  return {
+    feature: "let users delete their account",
+    slices: [
+      { id: "api-route", title: "DELETE /api/users/{id}", goal: "the route exists", work: "add the route", verify: "curl it", depends_on: [] },
+      { id: "web-client", title: "Call it from the web", workspace: "web", goal: "the client can delete", work: "add deleteUser", verify: "click delete", depends_on: ["api-route"] },
+    ],
+    out_of_scope: ["the admin UI"],
+    risks: ["the delete is not reversible"],
+  };
+}
+
 /** The base snapshot the tiers come from (a slice of an AssembledMap). */
 export const SNAPSHOT = {
   blocks: [{ key: "api", tier: "syntactic" }, { key: "web/src", tier: "syntactic" }],

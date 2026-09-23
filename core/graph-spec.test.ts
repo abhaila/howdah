@@ -13,7 +13,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   COMMAND_BUILTINS, WORKTREE_FACTS,
-  buildGraph, coerceOperand, compilePredicate, emittableWrites, parseGraphSpec, predicateLabel,
+  buildGraph, builtinReads, coerceOperand, compilePredicate, emittableWrites, missingBuiltinReads, parseGraphSpec, predicateLabel,
   keepPath, recoercePredicate, specProblems, unmatchableOperand,
   type GraphSpec, type NodeSpec, type Predicate,
 } from "./graph-spec";
@@ -393,6 +393,34 @@ describe("emittableWrites is the executors' own answer, not the form's", () => {
   test("an agent is unconstrained — the outputs contract asks for whatever it declares", () => {
     expect(emittableWrites({ id: "a", kind: "agent", prompt: "x.a", reads: [], writes: ["anything"] })).toBeUndefined();
   });
+
+  // HOW-23 review, finding 2: the fan-out built-in was dispatched by the command executor but
+  // was never in the table, so the browser had no answer for it at all — nothing to offer in
+  // the picker, and nothing to refuse with when a step declared what it cannot publish.
+  test("the fan-out built-in publishes exactly one fact", () => {
+    expect(emittableWrites({ id: "c", kind: "command", run: "runs:launch", reads: [], writes: [] })).toEqual(["launched"]);
+  });
+});
+
+describe("builtinReads — the other half of a built-in's contract", () => {
+  const launch = (reads: string[]): NodeSpec => ({ id: "c", kind: "command", run: "runs:launch", reads, writes: [] });
+
+  test("runs:launch works from the plan and its tickets, by name", () => {
+    expect(builtinReads(launch([]))).toEqual(["plan.slices", "tickets"]);
+    expect(missingBuiltinReads(launch([]))).toEqual(["plan.slices", "tickets"]);
+    expect(missingBuiltinReads(launch(["tickets"]))).toEqual(["plan.slices"]);
+  });
+
+  test("an EXTRA read stays legal — engine/executors/launch.ts only checks inclusion", () => {
+    expect(missingBuiltinReads(launch(["plan.slices", "tickets", "goal"]))).toEqual([]);
+  });
+
+  test("every other built-in works from its cwd, so its reads are the operator's own business", () => {
+    for (const b of COMMAND_BUILTINS.filter((x) => x.run !== "runs:launch"))
+      expect(builtinReads({ id: "c", kind: "command", run: b.run, reads: [], writes: [] }), b.run).toBeUndefined();
+    expect(builtinReads({ id: "c", kind: "command", run: "./ci.sh", reads: [], writes: [] })).toBeUndefined();
+    expect(builtinReads({ id: "a", kind: "agent", prompt: "x.a", reads: [], writes: [] })).toBeUndefined();
+  });
 });
 
 describe("specProblems refuses a declaration the executor could never publish", () => {
@@ -433,6 +461,38 @@ describe("specProblems refuses a declaration the executor could never publish", 
     expect(problem.where).toBe("steps");
     expect(problem.message).toContain("**Check the PR** says it produces `summary`");
     expect(problem.message).toContain("`probe:pr` only reports `pr.state`");
+  });
+
+  test("the fan-out built-in is told the same way, and told what it is missing", () => {
+    const spec = (reads: string[], writes: string[]): GraphSpec => minimal({
+      fields: [
+        { key: "goal", kind: "text", scope: "sticky" },
+        { key: "plan.slices", kind: "json", scope: "sticky" },
+        { key: "tickets", kind: "json", scope: "sticky" },
+        { key: "launched", kind: "json", scope: "sticky" },
+        { key: "pr.state", kind: "choice", scope: "per-visit", choices: ["MERGED"] },
+      ],
+      nodes: [
+        { id: "draft", kind: "agent", title: "Draft the plan", prompt: "my-review.draft", reads: ["goal"], writes: ["plan.slices", "tickets"] },
+        { id: "fan-out", kind: "command", title: "Fan it out", run: "runs:launch", reads, writes },
+        { id: "done", kind: "terminal", outcome: "success" },
+      ],
+      edges: [{ from: "draft", to: "fan-out" }, { from: "fan-out", to: "done" }],
+    });
+
+    const undeliverable = specProblems(spec(["plan.slices", "tickets"], ["pr.state"])).find((p) => p.message.includes("produces"))!;
+    expect(undeliverable.node).toBe("fan-out");
+    expect(undeliverable.message).toContain("**Fan it out** says it produces `pr.state`");
+    expect(undeliverable.message).toContain("`runs:launch` only reports `launched`");
+
+    // the other half: the step is wired to nothing, which the EXECUTOR refuses at run time
+    const unwired = specProblems(spec([], ["launched"])).find((p) => p.message.includes("works from"))!;
+    expect(unwired.node).toBe("fan-out");
+    expect(unwired.where).toBe("steps");
+    expect(unwired.message).toContain("**Fan it out** works from `plan.slices` and `tickets`, but this step does not use them");
+
+    // …and a step that is wired up, plus a key of its own, is not refused at all
+    expect(specProblems(spec(["plan.slices", "tickets", "goal"], ["launched"]))).toEqual([]);
   });
 
   test("a shell script's produced facts are NOT second-guessed — only run time knows", () => {
