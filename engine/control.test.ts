@@ -517,6 +517,80 @@ describe("resolveReply refuses what a reply cannot fix (system-map 0.2)", () => 
     expect(seen.get("one@2")).not.toContain("use the v2 API");
   });
 
+  /**
+   * HOW-25 — answering a question park. The structured pick and the typed sentence are two
+   * ways into the SAME resolution: `reply` always carries the answer as prose, which is why
+   * nothing downstream of `reply` (the thread, the digest, `howdah reply`) had to change.
+   */
+  describe("a user-question park (HOW-25)", () => {
+    const QUESTIONS = [
+      {
+        question: "Which approach should I take?",
+        header: "Approach",
+        multiSelect: false,
+        options: [{ label: "Approach A", description: "Take A." }, { label: "Approach B" }],
+      },
+      { question: "Which files?", header: "Scope", multiSelect: true, options: [{ label: "src" }, { label: "tests" }] },
+    ];
+    const parkedOnQuestion = () =>
+      parkedOn("one", undefined, {
+        ask: { kind: "user-question", request_id: "r1", tool_name: "AskUserQuestion", questions: QUESTIONS },
+      });
+
+    test("a structured answer lands once, carrying BOTH the picks and the prose", () => {
+      const { dir } = parkedOnQuestion();
+      const r = resolveReply(dir, { text: "", answers: [{ id: "q0", selected: ["Approach B"] }, { id: "q1", selected: ["src", "tests"] }] }, { graphs: REPLY_GRAPHS });
+      expect(r).toMatchObject({ ok: true, node: "one", visit: 1 });
+      const resolutions = readLog(join(dir, "run.jsonl")).filter((e) => e.type === "attention-resolved");
+      expect(resolutions).toHaveLength(1);
+      expect(resolutions[0]).toMatchObject({
+        source: "operator",
+        reply: "Approach: Approach B\nScope: src, tests",
+        answers: [{ id: "q0", selected: ["Approach B"] }, { id: "q1", selected: ["src", "tests"] }],
+      });
+    });
+
+    test("a typed reply still works and records no answers — the CLI stays first-class", () => {
+      const { dir } = parkedOnQuestion();
+      expect(resolveReply(dir, "Approach A", { graphs: REPLY_GRAPHS })).toMatchObject({ ok: true });
+      const resolved: any = readLog(join(dir, "run.jsonl")).find((e) => e.type === "attention-resolved");
+      expect(resolved.reply).toBe("Approach A"); // the executor does the label match, at the wire
+      expect(resolved.answers).toBeUndefined();
+    });
+
+    test("an answer that does not fit the questions is refused as the CALLER's error", () => {
+      for (const bad of [
+        [{ id: "q9", selected: ["Approach A"] }],        // no such question
+        [{ id: "q0", selected: ["Approach C"] }],        // no such option
+        [{ id: "q0", selected: ["Approach A", "Approach B"] }], // two on a single-select
+        [{ id: "q0", selected: [] }],                    // answers nothing
+        "not even an array",
+      ]) {
+        const { dir } = parkedOnQuestion();
+        const r = resolveReply(dir, { text: "", answers: bad }, { graphs: REPLY_GRAPHS });
+        expect(r).toMatchObject({ ok: false, malformed: true });
+        // and NOTHING was appended — a refused answer must not consume the park
+        expect(readLog(join(dir, "run.jsonl")).filter((e) => e.type === "attention-resolved")).toHaveLength(0);
+      }
+    });
+
+    test("answers sent to a park that is not asking a question are refused, not coerced", () => {
+      const { dir } = parkedOn("one", undefined, { ask: { kind: "can_use_tool", request_id: "r1", tool_name: "Bash" } });
+      const r = resolveReply(dir, { text: "", answers: [{ id: "q0", selected: ["Approach A"] }] }, { graphs: REPLY_GRAPHS });
+      expect(r).toMatchObject({ ok: false, malformed: true });
+      expect(r).toMatchObject({ message: expect.stringContaining("not asking a question") });
+    });
+
+    test("two racing answers land exactly one", () => {
+      const { dir } = parkedOnQuestion();
+      const first = resolveReply(dir, { text: "", answers: [{ id: "q0", selected: ["Approach A"] }] }, { graphs: REPLY_GRAPHS });
+      const second = resolveReply(dir, { text: "", answers: [{ id: "q0", selected: ["Approach B"] }] }, { graphs: REPLY_GRAPHS });
+      expect(first.ok).toBe(true);
+      expect(second).toEqual({ ok: false, message: NOTHING_AWAITING });
+      expect(readLog(join(dir, "run.jsonl")).filter((e) => e.type === "attention-resolved")).toHaveLength(1);
+    });
+  });
+
   test("a mid-node harness permission ask (no code) keeps its live path: accepted, not rendered", () => {
     const { dir } = parkedOn("one", undefined, { ask: { kind: "can_use_tool", request_id: "r1", tool_name: "Bash" } });
     expect(resolveReply(dir, "allow", { graphs: REPLY_GRAPHS })).toMatchObject({ ok: true, rendered: false });

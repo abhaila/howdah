@@ -1,12 +1,14 @@
 /**
- * The needs-input surface, one file (HOW-16 P1): the Ask card, the Effect card (HOW-3), the
- * harness-login escape hatch the Ask card sometimes carries, and the rule for reading WHY a
- * step parked out of its turn. Which card a park gets is RunThread's choice, not this file's.
+ * The needs-input surface, one file (HOW-16 P1): the Ask card, the Question card (HOW-25),
+ * the Effect card (HOW-3), the harness-login escape hatch the Ask card sometimes carries, and
+ * the rule for reading WHY a step parked out of its turn. Which card a park gets is the
+ * caller's choice, not this file's — it is decided by `ask.kind` where the cards are drawn.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Send } from "lucide-react";
 import type { RunDetail } from "../../derive";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Textarea } from "@/components/ui/textarea";
 import { submitOnEnter } from "@/lib/keys";
 import { useToast } from "@/components/ui/toast";
@@ -129,6 +131,145 @@ export function AskCard({ runId, ask, detail, onResolved }: { runId: string; ask
         <Button onClick={send} disabled={state === "sending" || state === "delivered"}>
           <Send />{state === "sending" ? "Sending…" : state === "delivered" ? "Delivered" : "Reply"}
         </Button>
+        {state === "failed" && (
+          <span className="send-state">
+            failed — <Button variant="link" size="inline" onClick={send}>retry</Button>
+          </span>
+        )}
+      </div>
+      {state === "refused" && refusal && <div className="send-state" role="alert">{refusal}</div>}
+    </div>
+  );
+}
+
+
+/**
+ * HOW-25 — the card for a question the agent is asking the OPERATOR, and the reason this
+ * ticket exists. Before it, a question parked as "AskUserQuestion needs permission" and drew
+ * a bare text box: the question, its options and their descriptions were all in the log and
+ * none of them were on screen, so the only way to answer was to guess what was being asked.
+ *
+ * It renders the ask as itself — one group per question, the header as the label, every
+ * option with its own description, single- or multi-select exactly as the asking tool
+ * declared — plus a free-text box, because "neither, do this instead" is a real answer and
+ * the harness accepts it.
+ *
+ * Everything AskCard established is kept, because the run view depends on it: the
+ * sending → delivered → collapsing lifecycle (the authored motion moment), a 409 shown
+ * VERBATIM rather than collapsed into "failed", a toast beside the inline error, and
+ * `id="needs-input"` so a notification's deep link lands on the control. A 400 is new and
+ * distinct: it means this card sent something the park could not accept, which is a bug here
+ * rather than something the operator can fix by retrying, so it says so.
+ */
+export function AskQuestionCard({ runId, ask, questions, onResolved }: {
+  runId: string;
+  ask: NonNullable<RunDetail["ask"]>;
+  questions: NonNullable<RunDetail["ask_questions"]>;
+  onResolved: () => void;
+}) {
+  const [picked, setPicked] = useState<Record<string, string[]>>({});
+  const [other, setOther] = useState<Record<string, string>>({});
+  const [state, setState] = useState<"idle" | "sending" | "delivered" | "failed" | "refused">("idle");
+  const [refusal, setRefusal] = useState<string | null>(null);
+  const first = useRef<HTMLButtonElement>(null);
+  const { toast } = useToast();
+  useEffect(() => { if (location.hash === "#needs-input") first.current?.focus(); }, []);
+
+  const toggle = (q: (typeof questions)[number], label: string) =>
+    setPicked((p) => {
+      const was = p[q.id] ?? [];
+      if (!q.multiSelect) return { ...p, [q.id]: was[0] === label ? [] : [label] };
+      return { ...p, [q.id]: was.includes(label) ? was.filter((l) => l !== label) : [...was, label] };
+    });
+
+  // the same shape core/ask.ts validateAnswers accepts — a question nobody touched is left out
+  const answers = questions.flatMap((q) => {
+    const selected = picked[q.id] ?? [];
+    const text = (other[q.id] ?? "").trim();
+    if (selected.length === 0 && text === "") return [];
+    return [{ id: q.id, selected, ...(text ? { other: text } : {}) }];
+  });
+
+  const send = useCallback(async () => {
+    setState("sending");
+    setRefusal(null);
+    try {
+      const r = await fetch(`/api/runs/${runId}/reply`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ answers }),
+      });
+      if (r.status === 409 || r.status === 400) {
+        const body = (await r.json().catch(() => ({}))) as { error?: string };
+        const why = body.error ?? "This park can't take this answer.";
+        setRefusal(why);
+        setState("refused");
+        toast(why, "error");
+        return;
+      }
+      if (!r.ok) throw new Error(await r.text());
+      setState("delivered");
+      toast(`answer delivered to ${ask.node}@${ask.visit}`);
+      setTimeout(onResolved, 420); // the collapse plays, then the thread takes over
+    } catch {
+      setState("failed");
+      toast("the answer did not reach the runner", "error");
+    }
+  }, [runId, answers, onResolved, toast, ask.node, ask.visit]);
+
+  const busy = state === "sending" || state === "delivered";
+  return (
+    <div className={`ask-card ${state === "delivered" ? "collapsing" : ""}`} id="needs-input">
+      <h3>Needs you — {ask.node}@{ask.visit}</h3>
+      {questions.map((q, qi) => (
+        <div key={q.id} className="auq-group" role="group" aria-label={q.header}>
+          <div className="auq-header">{q.header}</div>
+          <div className="auq-question">{q.question}</div>
+          {q.options.length > 0 && (
+            <div className="auq-options">
+              {q.options.map((o, oi) =>
+                q.multiSelect ? (
+                  <div key={o.label} className="auq-option">
+                    <Checkbox
+                      label={o.label}
+                      checked={(picked[q.id] ?? []).includes(o.label)}
+                      disabled={busy}
+                      onChange={() => toggle(q, o.label)}
+                    />
+                    {o.description && <div className="auq-desc">{o.description}</div>}
+                  </div>
+                ) : (
+                  <div key={o.label} className="auq-option">
+                    <Button
+                      ref={qi === 0 && oi === 0 ? first : undefined}
+                      variant={(picked[q.id] ?? []).includes(o.label) ? "default" : "outline"}
+                      size="sm"
+                      disabled={busy}
+                      aria-pressed={(picked[q.id] ?? []).includes(o.label)}
+                      onClick={() => toggle(q, o.label)}
+                    >
+                      {o.label}
+                    </Button>
+                    {o.description && <div className="auq-desc">{o.description}</div>}
+                  </div>
+                ),
+              )}
+            </div>
+          )}
+          <Textarea
+            aria-label={`other answer for ${q.header}`}
+            value={other[q.id] ?? ""}
+            disabled={busy}
+            onChange={(e) => setOther((o) => ({ ...o, [q.id]: e.target.value }))}
+            placeholder={q.options.length ? "Something else…" : "Your answer…"}
+          />
+        </div>
+      ))}
+      <div className="actions">
+        <Button onClick={send} disabled={busy || answers.length === 0}>
+          <Send />{state === "sending" ? "Sending…" : state === "delivered" ? "Delivered" : "Answer"}
+        </Button>
+        {answers.length === 0 && state === "idle" && <span className="send-state">pick an option or type an answer</span>}
         {state === "failed" && (
           <span className="send-state">
             failed — <Button variant="link" size="inline" onClick={send}>retry</Button>

@@ -247,7 +247,9 @@ const OPEN_POLL_MS = 300;
 /** `graceMs` is a seam for the component test (web/app/runview.test.tsx); nothing else sets it. */
 export function RunView({ id, graceMs = OPEN_GRACE_MS }: { id: string; graceMs?: number }) {
   const [detail, setDetail] = useState<DetailDto | null>(null);
-  const [tab, setTab] = useState<RunTab>("steps");
+  // HOW-25: Chat leads. The thing that needs interacting with — the agent's question — lives
+  // in the conversation, and the ticket was filed because it had nowhere to be seen.
+  const [tab, setTab] = useState<RunTab>("chat");
   const [picked, setPicked] = useState<string | null>(null);
   const [bannerAction, setBannerAction] = useState<"resume" | null>(null);
   const [bannerError, setBannerError] = useState<string | null>(null);
@@ -374,10 +376,10 @@ export function RunView({ id, graceMs = OPEN_GRACE_MS }: { id: string; graceMs?:
             value={tab}
             onValueChange={(v) => setTab(v as RunTab)}
             items={[
+              { value: "chat", label: "Chat", icon: <MessagesSquare /> },
               { value: "steps", label: "Steps", icon: <Rows3 /> },
               { value: "context", label: "Context", icon: <Fingerprint /> },
               { value: "logs", label: "Logs", icon: <ScrollText /> },
-              { value: "chat", label: "Chat", icon: <MessagesSquare /> },
               { value: "graph", label: "Graph", icon: <Workflow /> },
             ]}
           />
@@ -436,7 +438,7 @@ export function RunView({ id, graceMs = OPEN_GRACE_MS }: { id: string; graceMs?:
         {tab === "context" ? (
           <RunContext entries={detail.context} />
         ) : tab === "chat" ? (
-          <RunChat runId={id} detail={detail} ask={ask} onPickStep={(k) => { setPicked(k); setTab("steps"); }} />
+          <RunChat runId={id} detail={detail} ask={ask} onResolved={reload} onPickStep={(k) => { setPicked(k); setTab("steps"); }} />
         ) : tab === "logs" ? (
           <RunLogs rows={detail.log_rows} />
         ) : tab === "graph" ? (

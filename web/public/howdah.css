@@ -171,6 +171,19 @@ main { flex: 1; min-width: 0; min-height: 0; overflow: hidden; display: flex; fl
    The verdict buttons are Buttons now, so this rule keeps only the row's own geometry. */
 .effect-row { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border); }
 .effect-row code { font-family: var(--font-mono); font-size: var(--type-base); }
+/* HOW-25: a question the agent is asking YOU. One group per question — the header labels it,
+   the question is the sentence, each option carries its own description — so the ask renders
+   as itself instead of as a text box beside the words "needs permission". */
+.auq-group { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
+.auq-group:first-of-type { border-top: 0; padding-top: 4px; }
+.auq-header {
+  font-size: var(--type-2xs); letter-spacing: 0.09em; text-transform: uppercase;
+  color: var(--fg-faint); margin-bottom: 5px;
+}
+.auq-question { font-family: var(--font-display); font-size: var(--type-md); color: var(--fg); margin-bottom: 10px; }
+.auq-options { display: flex; flex-direction: column; gap: 9px; margin-bottom: 10px; }
+.auq-option { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; }
+.auq-desc { font-size: var(--type-xs); color: var(--fg-muted); line-height: 1.5; padding-left: 2px; }
 .send-state { color: var(--fg-muted); font-size: var(--type-sm); }
 
 /* rail sections — one continuous inspector, not cards */
@@ -761,6 +774,24 @@ main { flex: 1; min-width: 0; min-height: 0; overflow: hidden; display: flex; fl
 .chat-error { color: var(--status-failed-recoverable); }
 .chat-cite { margin: 0 3px; }
 .chat-cost { margin-left: 8px; font-size: var(--type-2xs); color: var(--fg-faint); }
+.chat-modes { display: flex; gap: 4px; margin-left: auto; }
+/* HOW-25 the transcript: the run read as one conversation. Each step announces itself, the
+   agent's prose and tool beats reuse the Activity renderers, and the two human rows — what
+   you were asked, what you answered — are indented the other way so a glance separates them. */
+.cv-step { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 20px 0 8px; }
+.cv-step-key { flex-shrink: 0; }
+.cv-prompt { display: inline-flex; align-items: center; gap: 6px; font-size: var(--type-2xs); color: var(--fg-faint); }
+.cv-read { color: var(--fg-faint); }
+.cv-agent { padding-left: 10px; border-left: 2px solid var(--border); }
+.cv-asked, .cv-answered {
+  display: flex; align-items: flex-start; gap: 7px; margin: 8px 0;
+  padding: 7px 10px; border-radius: var(--radius-sm); font-size: var(--type-sm); line-height: 1.5;
+}
+.cv-asked { background: var(--bg-inset); color: var(--fg-muted); }
+.cv-answered { background: var(--bg-raised); border: 1px solid var(--border-strong); color: var(--fg); }
+.cv-wrote { display: flex; align-items: center; gap: 7px; margin: 8px 0 4px; font-size: var(--type-2xs); color: var(--fg-faint); }
+/* the standing park sits at the foot of the conversation — where the ticket wanted it */
+.cv-standing { margin-top: 10px; }
 .chat-input { border-top: 1px solid var(--border); padding: 11px 4px; }
 .chat-note { font-size: var(--type-2xs); color: var(--fg-faint); margin-top: 7px; line-height: 1.5; }
 

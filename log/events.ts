@@ -16,6 +16,7 @@
  * Events are never mutated or deleted. Sequence numbers are per-run and assigned by the
  * writer; wall-clock ts is informational.
  */
+import type { AskAnswer } from "../core/ask";
 import type { PromptId } from "../core/prompt-ids";
 import type { Harness } from "../core/graph";
 import type { DriftItem, DriftOutcome } from "../map/drift";
@@ -266,6 +267,14 @@ export type RunEvent =
        * through resolutionSource(), which treats `reply: "resume"` as resume.
        */
       source?: ResolutionSource;
+      /**
+       * HOW-25: the STRUCTURED answer to a `user-question` ask — which options were picked,
+       * per question. Additive, exactly like `code` and `source` before it: `reply` still
+       * carries the same answer as prose (core/ask.ts answersToReplyText), so every existing
+       * reader of `reply` — the thread, the digest, deriveLogRows, `howdah reply` — is
+       * untouched. Absent on every other kind of resolution.
+       */
+      answers?: AskAnswer[];
     }
   | {
       type: "allowance";

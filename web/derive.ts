@@ -18,6 +18,7 @@
  * the map-progress line — proposal rounds, decisions, pinned comments (orphans included),
  * redesign requests, extraction progress and drift reports, all folded from the log.
  */
+import { askQuestions, type UserQuestion } from "../core/ask";
 import type { LoggedEvent, RunOutcome } from "../log/events";
 import { currentProposal, decisionAnswers, decisionKind, findDecision } from "../engine/slice-decision";
 import { replayState } from "../engine/replay";
@@ -95,6 +96,12 @@ export interface RunDetail {
   allowance: Extract<LoggedEvent, { type: "allowance" }>[];
   /** the unresolved ask, if any — drives the pinned banner + reply card */
   ask: Extract<LoggedEvent, { type: "attention-raised" }> | null;
+  /**
+   * HOW-25: the questions a `user-question` park is asking, normalized ONCE here and null for
+   * every other kind of park. Server-side on purpose: the payload is untrusted harness output,
+   * and a component should never be the thing parsing `unknown`.
+   */
+  ask_questions: UserQuestion[] | null;
   pinned_prompts: Record<string, number>;
   /** latest reconciler observation (repo runs) — the GIT rail section */
   git: Extract<LoggedEvent, { type: "reconciled" }> | null;
@@ -314,6 +321,7 @@ export function deriveDetail(
     usage: { ...usage, cost_usd: Math.round(usage.cost_usd * 1e6) / 1e6 },
     allowance: [...allowanceByHarness.values()],
     ask,
+    ask_questions: askQuestions(ask),
     pinned_prompts: pinned,
     git,
     pull_requests: [...prs.values()],

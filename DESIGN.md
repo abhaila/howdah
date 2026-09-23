@@ -37,6 +37,28 @@ issue. Verified: amber and the failure red stay separable under deuteranopia (wo
 Never use emoji or dingbats (`✓`, `▲`) as status glyphs. They render differently per platform
 and cannot be recoloured.
 
+## Asking the operator something
+
+A park is one card, and the card is the ask — not a label beside a text box. Whatever the run
+is waiting on renders as itself: a question shows its header, its sentence, and every option
+with the description the asking tool wrote, single- or multi-select exactly as declared, plus a
+free-text box because "neither, do this instead" is a real answer (HOW-25). An ambiguous side
+effect shows its two verdicts with their consequences spelled out, because they are not
+symmetric. A prose park shows a reply box.
+
+Three rules hold across all of them, and they are why the cards share one shell:
+
+- **The park sits in the conversation**, at the foot of the transcript, where the operator is
+  already reading. It is not a tab to go and find.
+- **A refusal is shown verbatim.** A server that says which verb WOULD work has said something
+  useful; collapsing it into "failed" throws that away.
+- **One authored motion moment**, the needs-you entrance, and its mirror on the way out
+  (sending → delivered → collapsing). Nothing else animates.
+
+No new token was needed: the card reuses `--attention-border`, the type scale and the two
+motion tokens. A question's header is the same uppercase micro-label the rail sections use,
+so a question reads as part of the same system rather than as a new kind of surface.
+
 ## Chrome
 
 Density comes from removing chrome, not from shrinking text.

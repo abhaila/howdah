@@ -277,6 +277,24 @@ Break one of these and the design stops working, so check them before changing t
   human logging in (`claude -p` has no TTY to do it through) and the run has to say so.
   `doctor` asks each harness `auth status` / `login status` — being on PATH is not being
   logged in.
+- **A harness question reaches a human, or the run says why it did not (HOW-25).** An
+  `AskUserQuestion` is NOT a permission: it arrives as a `can_use_tool` carrying
+  `requires_user_interaction`, and the CLI's response schema (`allow` + `updatedInput`, or
+  `deny` + `message`) has no result field, so the operator's choice travels in the deny
+  `message` — answering `allow` runs the tool with nobody to ask and silently returns "The
+  user did not answer the questions." `core/ask.ts` is the ONE place that payload is read and
+  an answer is written back; it is node-free because the browser draws the card from it, and
+  every parser returns `null` instead of throwing, so a harness that changes shape degrades to
+  the free-text reply rather than crashing a run or a render. The question goes INTO the park,
+  so the banner, the notification and the attention inbox quote what is being asked instead of
+  "AskUserQuestion needs permission". Answering is mid-turn on the same session: the agent
+  carries on rather than restarting the node. And nothing waits in silence — `awaitOperator`
+  (engine/executors/claude.ts) is the single wait behind both kinds of mid-turn ask and ends
+  in exactly one of an answer, a harness that exited underneath it, or a configured ceiling.
+  The wire shapes are pinned in `adapter/fixtures/claude-ask-user-question.jsonl` and probed
+  against claude 2.1.278; the CLI's own `request_user_dialog` channel is NOT used, because
+  under `-p` it belongs to its cloud host and declaring a kind we cannot draw is worse than
+  declaring none.
 - **Attention is durable before it is delivered.** `engine/attention.ts` writes the record,
   then notifies; `watchdog/check.ts` runs outside the process (launchd, 60s) so `kill -9`
   with an ask pending still rings, and a stale heartbeat is itself an attention event.
@@ -352,7 +370,7 @@ Break one of these and the design stops working, so check them before changing t
 
 | Path | Role |
 |---|---|
-| `core/` | graph schema (`graph.ts`), path validator (`validate.ts`), context store, template/render contract (`template.ts`) + its node-free reference grammar (`template-refs.ts`), the graph-as-data model the builder writes (`graph-spec.ts`), the harness table (`harnesses.ts`), generated `prompt-ids.ts` |
+| `core/` | graph schema (`graph.ts`), path validator (`validate.ts`), context store, template/render contract (`template.ts`) + its node-free reference grammar (`template-refs.ts`), the graph-as-data model the builder writes (`graph-spec.ts`), the harness table (`harnesses.ts`), the ask-the-human model (`ask.ts`, HOW-25), generated `prompt-ids.ts` |
 | `graphs/` | the runnable graphs + `index.ts` registry, `local.ts` (the operator's own, from `$HOWDAH_HOME`), `registry.ts` (merged catalog), `typecheck.ts` (tsc gate), `builder.ts` (HOW-22: renders a GraphSpec into a module and saves it transactionally over the graph AND its prompts); `implement-ticket`, `implement-slice` (design on the map → approve → build → drift), `plan-feature` (HOW-23: decompose → approve → ticket each → launch a run each) with its pure `slice-plan.ts` contract, `improve-codebase`, `review-teammate-pr`, `write-doc`, `research`, `quick-task`; `delivery.ts` shared publish/repair half |
 | `map/` | the code-derived system map (syntactic tier): tree-sitter extraction (`extract.ts`, `facts.ts`, `adapters.ts` + `queries/`), content-addressed store, `assemble.ts` (identity keys, MountResolver), `ghosts.ts` (GhostSet validator), `drift.ts`, `neighbourhood.ts` |
 | `prompts/` | one `.md` per prompt (front-matter `id`/`version`), codegen, `store.ts` (load/list/accept with stale-base + undeclared-read guards), `proposals.ts` (lifecycle + review view), `library.ts` (read model: consumers, feedback, outcome join, render reconstruction) |
@@ -361,7 +379,7 @@ Break one of these and the design stops working, so check them before changing t
 | `engine/` | `run.ts` (loop, routing, pinning, effects, attribution), `replay.ts`, `reconcile.ts` (git probes + worktree fingerprint), `attention.ts`, `control.ts` (replies, decisions, runner lock), `slice-decision.ts`, `slice-map.ts`, `executors/` |
 | `cli/` | `main.ts` verbs, `new-graph.ts` scaffolder (writes into `$HOWDAH_HOME`) |
 | `config/` | `config.json` workspaces + settings, `tuning.json` overlay, GitHub repo registration |
-| `web/` | Bun server (read model + reply/launch/control writes, SSE), `derive.ts` read model, React app in `app/`: `main.tsx` is the shell/nav/router only, screens in `app/screens/`, run-detail panes in `app/run/`, builder in `app/builder/` (HOW-24: `canvas.tsx` + `node-card.tsx` + `edge.tsx` + `palette.tsx` + `properties.tsx`, with `step-form.tsx`/`branching.tsx`/`fields.tsx` as the panel bodies), primitives in `app/components/ui/`, helpers in `app/lib/` |
+| `web/` | Bun server (read model + reply/launch/control writes, SSE), `derive.ts` read model, React app in `app/`: `main.tsx` is the shell/nav/router only, screens in `app/screens/`, run-detail panes in `app/run/` (Chat is the default: `run/chat.tsx` folds the run into one conversation and carries the standing ask inline, HOW-25), builder in `app/builder/` (HOW-24: `canvas.tsx` + `node-card.tsx` + `edge.tsx` + `palette.tsx` + `properties.tsx`, with `step-form.tsx`/`branching.tsx`/`fields.tsx` as the panel bodies), primitives in `app/components/ui/`, helpers in `app/lib/` |
 | `reviser/` | GEPA-method revision script, eval case, generated proposals |
 | `watchdog/` | out-of-process heartbeat/attention checker + launchd plist |
 | `research/` | Orbital spec, feedback doc, DOT exports, UI captures — the inputs this design was built from |
@@ -413,7 +431,12 @@ served an entire old UI.
 
 UI conventions worth preserving: one canonical `RunStatus` enum with one renderer, and
 **needs-input outranks failed** — a parked run waiting on a human is never shown as merely
-failed. Design tokens (palette, type scale, motion) live in `web/public/tokens.css` +
+failed. Which card a park gets is decided by the ask's OWN kind where the cards are drawn
+(`run/chat.tsx` StandingAsk): a question gets `AskQuestionCard`, an ambiguous effect gets
+`EffectCard`, everything else is answered in prose by `AskCard`. All three keep the same
+contract — the sending → delivered → collapsing motion moment, a refusal shown VERBATIM rather
+than collapsed into "failed", and `id="needs-input"` so a notification's deep link lands on the
+control. Design tokens (palette, type scale, motion) live in `web/public/tokens.css` +
 `app/globals.css` and are decided in `shaping.md`'s Design section; tokens.css is the ONLY
 place a hex or a `font-size: Npx` may appear. The components are shadcn patterns vendored and
 rewritten onto those tokens — one file each under `app/components/ui/`, wired to `shadcn add`

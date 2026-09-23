@@ -4,7 +4,9 @@
  * button, steer box, native review); the viewer greys out what a harness cannot do.
  *
  * Sources: agent-deck/spike-findings.md (claude 2.1.233, codex 0.137.0 — pin and re-verify
- * on upgrade), opencode entries are conservative until probed.
+ * on upgrade), opencode entries are conservative until probed. `user_questions` was probed
+ * separately against claude 2.1.278 (HOW-25); re-verify it on the next claude upgrade, since
+ * the question shapes it stands on are the ones pinned in fixtures/claude-ask-user-question.jsonl.
  */
 import type { Harness } from "../core/graph";
 
@@ -17,6 +19,13 @@ export interface HarnessCapabilities {
   fork: Support;
   /** answerable permission/approval round-trip over the protocol (S2) */
   permissions: Support;
+  /**
+   * HOW-25: can this harness ask the OPERATOR a question mid-turn, and can the answer get
+   * back in? Declared rather than discovered, because a harness that silently cannot be asked
+   * is exactly the freeze this field was added for: a graph whose prompt leans on an
+   * ask-the-user skill should pin `harness: "claude"` on that node.
+   */
+  user_questions: Support;
   /** interrupt/cancel a running turn */
   interrupt: Support;
   /** steer a running turn with new input */
@@ -39,6 +48,9 @@ export const CAPABILITIES: Record<Harness, HarnessCapabilities> = {
     resume: "yes", // --session-id / --resume round-trips headless↔interactive (S1)
     fork: "yes", // --fork-session
     permissions: "yes", // --permission-prompt-tool stdio + can_use_tool/control_response (S2)
+    // AskUserQuestion arrives as can_use_tool + requires_user_interaction and is answered in
+    // the deny `message` — captured from 2.1.278 into fixtures/claude-ask-user-question.jsonl
+    user_questions: "yes",
     interrupt: "yes", // control_request interrupt
     steer: "no", // no mid-turn steering; queue a follow-up turn instead
     usage: "yes", // result event: usage + total_cost_usd
@@ -52,6 +64,7 @@ export const CAPABILITIES: Record<Harness, HarnessCapabilities> = {
     resume: "yes", // thread/resume recovers prior turns (S1); resume by explicit id, not the picker
     fork: "yes", // thread/fork
     permissions: "yes", // item/*/requestApproval answered {decision} (S2)
+    user_questions: "no", // adapter/codex.ts carries only */requestApproval — no question channel
     interrupt: "yes", // turn/interrupt
     steer: "yes", // turn/steer
     usage: "yes", // thread/tokenUsage/updated + turn/completed
@@ -69,6 +82,7 @@ export const CAPABILITIES: Record<Harness, HarnessCapabilities> = {
     resume: "untested", // --resume <chat-id> is documented; the round-trip is unverified
     fork: "untested",
     permissions: "no", // print mode has no approval round-trip on the wire: it is --force or nothing
+    user_questions: "no", // follows from permissions: with no round-trip there is nothing to ask on
     interrupt: "no",
     steer: "no",
     usage: "untested",
@@ -82,6 +96,7 @@ export const CAPABILITIES: Record<Harness, HarnessCapabilities> = {
     resume: "untested",
     fork: "untested",
     permissions: "untested",
+    user_questions: "untested",
     interrupt: "untested",
     steer: "no",
     usage: "untested",

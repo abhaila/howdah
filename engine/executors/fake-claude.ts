@@ -9,6 +9,7 @@
  * (one JSON string per line, in order) so tests can prove rendered_hash covers the bytes
  * of the first turn (system-map 0.1); an in-session repair turn lands on a later line.
  * FAKE_CLAUDE_DROP_OUTPUTS=1 ends the first turn in prose with no contract.
+ * FAKE_CLAUDE_QUESTION asks the OPERATOR a question (HOW-25) — see the block below.
  *
  * FAKE_CLAUDE_SCRIPT=<file.json> scripts whole turns (system-map 1c E2E): a list of turns,
  * each `{ match, outputs?, edits?, commit? }`. A turn applies when `match` is one of the output
@@ -72,6 +73,61 @@ if (process.env.FAKE_CLAUDE_ASK === "1") {
     if (line.type === "control_response" && line.response?.request_id === "req-42") {
       const behavior = line.response?.response?.behavior;
       out({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: behavior === "allow" ? " Permission granted, wrote the file." : " Denied, skipping the write." } } });
+      break;
+    }
+  }
+}
+
+/**
+ * HOW-25: an AskUserQuestion, in the exact envelope the real CLI sends — captured into
+ * adapter/fixtures/claude-ask-user-question.jsonl. It is a `can_use_tool` carrying
+ * `requires_user_interaction`, NOT a permission, and the only channel back is the deny
+ * `message`, so the fake asserts what the real one does: it blocks until answered, and it
+ * echoes the message it was given so a test can prove the operator's words got through.
+ *
+ * FAKE_CLAUDE_QUESTION=1        one single-select question
+ * FAKE_CLAUDE_QUESTION=multi    two questions, the second multi-select
+ * FAKE_CLAUDE_QUESTION_DIE=1    exit while the question is still pending (the freeze case)
+ */
+if (process.env.FAKE_CLAUDE_QUESTION) {
+  const multi = process.env.FAKE_CLAUDE_QUESTION === "multi";
+  const questions = [
+    {
+      question: "Which approach should I take?",
+      header: "Approach",
+      options: [
+        { label: "Approach A", description: "Take Approach A." },
+        { label: "Approach B", description: "Take Approach B." },
+      ],
+      multiSelect: false,
+    },
+    ...(multi
+      ? [{
+          question: "Which files may I touch?",
+          header: "Scope",
+          options: [{ label: "src" }, { label: "tests" }],
+          multiSelect: true,
+        }]
+      : []),
+  ];
+  const toolUseId = "toolu_fake_auq_01";
+  out({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: toolUseId, name: "AskUserQuestion", input: { questions } }] } });
+  out({
+    type: "control_request",
+    request_id: "req-auq",
+    request: {
+      subtype: "can_use_tool", tool_name: "AskUserQuestion", display_name: "AskUserQuestion",
+      input: { questions }, tool_use_id: toolUseId, requires_user_interaction: true,
+    },
+  });
+  if (process.env.FAKE_CLAUDE_QUESTION_DIE === "1") process.exit(7); // nobody will ever answer
+  for (;;) {
+    const line = JSON.parse(await nextLine()) as any;
+    if (line.type === "control_response" && line.response?.request_id === "req-auq") {
+      const message = String(line.response?.response?.message ?? "");
+      if (process.env.FAKE_CAPTURE_ANSWER) writeFileSync(process.env.FAKE_CAPTURE_ANSWER, message);
+      out({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: toolUseId, content: message, is_error: true }] } });
+      out({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: ` Got it: ${message}` } } });
       break;
     }
   }

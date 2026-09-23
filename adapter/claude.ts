@@ -4,6 +4,24 @@
  * normalized AgentEvents. Wire shapes verified in agent-deck/spike-findings.md (S2):
  * the permission round-trip REQUIRES --permission-prompt-tool stdio; `manual` alone is
  * a dead end that emits permission_denied and ends the turn.
+ *
+ * HOW-25 — how a question for the HUMAN arrives, captured from claude 2.1.278 into
+ * adapter/fixtures/claude-ask-user-question.jsonl. It does NOT arrive on a dialog channel.
+ * The CLI does carry one (`request_user_dialog`, whose kinds a host declares with
+ * `supportedDialogKinds` on an `initialize` control_request), but under `-p` that channel
+ * belongs to the cloud host: declaring `ask_user_question` and having the declaration
+ * ACKNOWLEDGED still routed the question here, as an ordinary
+ *
+ *   control_request { subtype: "can_use_tool", tool_name: "AskUserQuestion",
+ *                     input: { questions: [...] }, tool_use_id, requires_user_interaction: true }
+ *
+ * so that is the shape this file maps, and `requires_user_interaction` is the flag that tells
+ * an ask-the-human apart from an ordinary permission. The answer channel is narrow to match:
+ * the response schema is `{behavior:"allow", updatedInput?}` or `{behavior:"deny", message}`
+ * and has no result field, so the operator's choice travels in the deny `message` — answering
+ * `allow` runs the tool with no one to ask and returns "The user did not answer the
+ * questions." Both halves were probed against the live CLI before this was written.
+ * Re-verify on upgrade; the meaning of the payload lives in core/ask.ts.
  */
 import type { AgentEvent } from "./events";
 
@@ -72,6 +90,8 @@ export function mapClaudeEvent(raw: unknown): AgentEvent[] {
           tool_name: String(e.request.tool_name),
           input: e.request.input,
           suggestions: e.request.permission_suggestions,
+          ...(typeof e.request.tool_use_id === "string" ? { tool_use_id: e.request.tool_use_id } : {}),
+          ...(e.request.requires_user_interaction === true ? { requires_user_interaction: true } : {}),
         }];
       return [];
 
