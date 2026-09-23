@@ -1,60 +1,56 @@
 /**
- * The graph builder (HOW-22) — build a complete, runnable Howdah graph from forms.
+ * The graph builder (HOW-22), rebuilt as a canvas (HOW-24).
  *
  * shaping.md's D2 said authoring stays TS-native because "there is no visual editor to drift
  * out of sync". This is the editor, and the way it avoids the drift is that there is still
  * only ONE artifact: a `.ts` file in `$HOWDAH_HOME/graphs` that `graphs/local.ts` imports,
- * validates and gates exactly as before. What changed is what the file may contain — a
- * GraphSpec literal plus one `buildGraph()` call — which is why re-opening this reads the
- * spec that was written rather than guessing one back out of TypeScript.
+ * validates and gates exactly as before. What changed in HOW-22 was what the file may contain
+ * — a GraphSpec literal plus one `buildGraph()` call. What changed in HOW-24 is only how you
+ * type it.
+ *
+ * HOW-24 replaced a five-pane wizard, and the complaint the ticket made about it was
+ * structural. ONE step was split across three panes — its identity in Steps, the values it
+ * passes in Fields, what happens after it in Branching — so every question about a step was
+ * answered in three places and re-united by the operator. The picture could only be read. And
+ * "this step, then that one" was said in a `<select>` row under the fourth tab. Here the
+ * picture IS the editor, and a step is one thing in one place.
  *
  * The shell owns three things and delegates the rest:
  *
  *   THE DRAFT. One reducer (lib/spec-draft.ts), because the edits are coupled — removing a
- *   step takes its edges, renaming the graph moves its prompt ids.
+ *   step takes its edges and its instructions, renaming the graph moves its prompt ids. Every
+ *   canvas gesture dispatches one of those same actions; there is no second edit path.
  *
  *   THE VERDICT, LIVE. `draftProblems()` runs `Graph.validate()` IN THE BROWSER on every
- *   keystroke (core/graph-spec.ts is node-free for this reason alone) and the rail counts
- *   them per pane, so nothing is discovered only at Save. There is no validation route and
- *   no debounce to tune; the server still runs the real gate when saving, so this is
- *   belt-and-braces rather than a second truth.
+ *   change (core/graph-spec.ts is node-free for this reason alone), and a problem is drawn on
+ *   the step that owns it, so nothing is discovered only at Save. There is no validation route
+ *   and no debounce to tune; the server still runs the same `specProblems()` when saving, so
+ *   this is belt-and-braces rather than a second truth.
  *
- *   THE PICTURE. The same GraphDag the tuner and the run view draw, fed straight off the
- *   draft. It moves with the typing because it costs one pure function, not a fetch.
+ *   THE SELECTION. What the right-hand panel is showing: a step, a route, or the graph. It
+ *   lives here rather than in React Flow's store, so it survives a re-render, a rename and an
+ *   edge being renumbered.
  */
 import { useCallback, useEffect, useMemo, useReducer, useState } from "react";
-import { ArrowLeft, ArrowRight, CircleAlert, CircleCheck } from "lucide-react";
+import { ReactFlowProvider } from "@xyflow/react";
+import { CircleAlert, CircleCheck, Save } from "lucide-react";
 import type { GraphCatalog } from "@/lib/types";
 import { navigate } from "@/lib/nav";
 import { getJSON } from "@/lib/net";
-import { GraphDag, type GraphShapeDto } from "../graph-dag";
-import type { GraphSpec, ProblemPane } from "../../../core/graph-spec";
+import { autoLayout } from "@/lib/layout";
+import type { GraphSpec, Point } from "../../../core/graph-spec";
 import { parseGraphSpec } from "../../../core/graph-spec";
 import {
-  PRESETS, draftProblems, draftReducer, pickPrompts, problemsByPane, specToShape, type Draft,
+  PRESETS, STEP_KINDS, draftProblems, draftReducer, newStep, pickPrompts, type Draft, type StepKind,
 } from "@/lib/spec-draft";
-import { BasicsPane } from "../builder/basics";
-import { BranchingPane } from "../builder/branching";
-import { FieldsPane } from "../builder/fields";
-import { ReviewPane } from "../builder/review";
-import { StepForm } from "../builder/step-form";
-import { StepsPane } from "../builder/steps";
+import { GraphCanvas, type Selection } from "../builder/canvas";
+import { Palette } from "../builder/palette";
+import { Properties } from "../builder/properties";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { LoadingBlock } from "@/components/ui/skeleton";
-import { Row } from "@/components/ui/row";
 import { useToast } from "@/components/ui/toast";
-
-/** the wizard's five panes; the first four are where problems are ANSWERED, Review is where
- *  they are all counted once (which is why it carries no `pane` of its own) */
-const PANES: Array<{ id: ProblemPane | "review"; label: string; blurb: string }> = [
-  { id: "basics", label: "Basics", blurb: "name it and pick where it starts" },
-  { id: "fields", label: "What it works with", blurb: "the values steps pass between them" },
-  { id: "steps", label: "Steps", blurb: "what the run actually does" },
-  { id: "branching", label: "Branching", blurb: "what happens after each step" },
-  { id: "review", label: "Review & save", blurb: "the verdict, and what gets written" },
-];
 
 /** A brand-new draft. `blank` is the preset the ticket's core demo starts from. */
 const freshDraft = (name: string): Draft => PRESETS[0]!.build(name);
@@ -63,9 +59,12 @@ const freshDraft = (name: string): Draft => PRESETS[0]!.build(name);
  * An existing builder graph, read back. The prompt bodies are fetched one per agent step —
  * they are not on the graph DTO, because a graph's shape and its prompt text are separate
  * read models everywhere else in this app and joining them here would be the only place.
+ *
+ * A graph built before HOW-24 carries no positions, so it is laid out on the way in. Nothing
+ * is written by that: the arrangement becomes part of the spec at the next save.
  */
 async function loadDraft(name: string): Promise<Draft | { unopenable: string }> {
-  const dto = await getJSON<GraphShapeDto & { spec?: unknown; builder?: boolean }>(`/api/graphs/${name}`);
+  const dto = await getJSON<{ spec?: unknown; builder?: boolean }>(`/api/graphs/${name}`);
   const parsed = parseGraphSpec(dto.spec);
   if (!parsed.ok)
     return { unopenable: `${name} was not built here, so the builder cannot open it: ${parsed.error}` };
@@ -80,13 +79,15 @@ async function loadDraft(name: string): Promise<Draft | { unopenable: string }> 
         if (got) prompts[n.prompt] = got.body;
       }),
   );
-  return { spec: parsed.spec, prompts, saved: true };
+  return { spec: autoLayout(parsed.spec), prompts, saved: true };
 }
 
 export function GraphBuilder({ name }: { name?: string }) {
   const [draft, dispatch] = useReducer(draftReducer, undefined, () => freshDraft(name ?? ""));
-  const [pane, setPane] = useState<(typeof PANES)[number]["id"]>("basics");
-  const [openStep, setOpenStep] = useState<string | null>(null);
+  const [selection, setSelection] = useState<Selection>(null);
+  // every wholesale replacement of the draft — a preset, a graph read back — so the canvas can
+  // refit to what just arrived without refitting on every ordinary edit
+  const [generation, setGeneration] = useState(0);
   const [loading, setLoading] = useState(!!name);
   const [unopenable, setUnopenable] = useState<string | null>(null);
   const [taken, setTaken] = useState<string[]>([]);
@@ -108,7 +109,7 @@ export function GraphBuilder({ name }: { name?: string }) {
       .then((got) => {
         if (!live) return;
         if ("unopenable" in got) setUnopenable(got.unopenable);
-        else dispatch({ type: "load", draft: got });
+        else { dispatch({ type: "load", draft: got }); setGeneration((g) => g + 1); }
       })
       .catch(() => live && setUnopenable(`Could not read ${name}.`))
       .finally(() => live && setLoading(false));
@@ -116,10 +117,25 @@ export function GraphBuilder({ name }: { name?: string }) {
   }, [name]);
 
   // `taken` is the catalog, and the one fact a spec cannot carry: it turns a create that
-  // would land on an existing graph into a counted Basics problem rather than a silent save
+  // would land on an existing graph into a counted problem rather than a silent save
   const problems = useMemo(() => draftProblems(draft, { taken }), [draft, taken]);
-  const byPane = useMemo(() => problemsByPane(problems), [problems]);
-  const shape = useMemo(() => specToShape(draft.spec), [draft.spec]);
+
+  // a selection that no longer exists is not an error to report but a panel to close: a step
+  // can be deleted from the canvas and an edge renumbered by a reorder
+  const live: Selection =
+    selection?.kind === "step" && !draft.spec.nodes.some((n) => n.id === selection.id) ? null
+    : selection?.kind === "edge" && selection.index >= draft.spec.edges.length ? null
+    : selection;
+
+  const onSelect = useCallback((sel: Selection) => setSelection(sel), []);
+
+  /** One way to add a step, whichever gesture asked for it (D7) — palette click or drop. */
+  const addStep = useCallback((kind: StepKind, at?: Point) => {
+    // the palette's own label seeds the title, and the title seeds the id — one vocabulary
+    const made = newStep(draft.spec, kind, STEP_KINDS.find((k) => k.kind === kind)!.label);
+    dispatch({ type: "add-step", ...made, ...(at ? { position: at } : {}) });
+    setSelection({ kind: "step", id: made.node.id });
+  }, [draft.spec]);
 
   const save = useCallback(async () => {
     setSaving(true);
@@ -169,77 +185,42 @@ export function GraphBuilder({ name }: { name?: string }) {
     );
   }
 
-  const index = PANES.findIndex((p) => p.id === pane);
-  const countFor = (id: (typeof PANES)[number]["id"]) => (id === "review" ? problems.length : byPane[id].length);
-
   return (
     <div className="runs builder">
-      <h1>{draft.saved ? `Editing ${draft.spec.name}` : "Build a graph"}</h1>
-      <div className="builder-layout">
-        <div className="builder-rail" role="list" aria-label="Builder steps">
-          {PANES.map((p) => {
-            const n = countFor(p.id);
-            return (
-              <Row
-                key={p.id} role="listitem" className="builder-rail-item" selected={pane === p.id}
-                aria-label={`${p.label}${n ? `, ${n} to sort out` : ", nothing outstanding"}`}
-                onClick={() => setPane(p.id)}
-              >
-                <span className="flex flex-col">
-                  <span className="builder-rail-label">{p.label}</span>
-                  <span className="field-hint">{p.blurb}</span>
-                </span>
-                <Badge variant={n ? "attention" : "outline"} className="ml-auto">
-                  {n ? <><CircleAlert size={11} />{n}</> : <CircleCheck size={11} />}
-                </Badge>
-              </Row>
-            );
-          })}
-        </div>
-
-        <div className="builder-main">
-          {pane === "basics" && (
-            <BasicsPane
-              draft={draft} dispatch={dispatch}
-              onPreset={(id) => {
-                const preset = PRESETS.find((x) => x.id === id);
-                if (preset) dispatch({ type: "load", draft: preset.build(draft.spec.name) });
-              }}
-            />
-          )}
-          {pane === "fields" && <FieldsPane draft={draft} dispatch={dispatch} />}
-          {pane === "steps" && <StepsPane draft={draft} dispatch={dispatch} problems={byPane.steps} onOpen={setOpenStep} />}
-          {pane === "branching" && <BranchingPane draft={draft} dispatch={dispatch} problems={byPane.branching} />}
-          {pane === "review" && <ReviewPane draft={draft} problems={problems} saving={saving} error={error} onSave={save} />}
-
-          {/* the basics pane owns the name, so its problems are printed with it */}
-          {pane === "basics" && byPane.basics.map((p, i) => <div key={i} className="field-error">{p.message}</div>)}
-          {pane === "fields" && byPane.fields.map((p, i) => <div key={i} className="field-error">{p.message}</div>)}
-
-          <div className="actions">
-            <Button variant="outline" size="sm" disabled={index === 0} onClick={() => setPane(PANES[index - 1]!.id)}><ArrowLeft />Back</Button>
-            <Button variant="outline" size="sm" disabled={index === PANES.length - 1} onClick={() => setPane(PANES[index + 1]!.id)}>Next<ArrowRight /></Button>
-          </div>
-        </div>
-
-        <div className="builder-preview">
-          <div className="field-hint">What you have so far. Click a step to edit it.</div>
-          {draft.spec.nodes.length === 0
-            ? <EmptyState>nothing to draw yet</EmptyState>
-            : (
-              <GraphDag
-                shape={shape}
-                // the tuner only lets you click an agent, because only an agent has a model
-                // to tune; here every step has a form, so every step is a way in
-                canSelect={() => true}
-                onSelect={(id) => { setPane("steps"); setOpenStep(id); }}
-                selected={openStep ?? undefined}
-              />
-            )}
-        </div>
+      <div className="gb-bar">
+        <h1>{draft.saved ? `Editing ${draft.spec.name}` : "Build a graph"}</h1>
+        <Badge
+          variant={problems.length ? "attention" : "outline"}
+          aria-label={problems.length ? `${problems.length} to sort out` : "nothing outstanding"}
+        >
+          {problems.length ? <><CircleAlert size={11} />{problems.length} to sort out</> : <><CircleCheck size={11} />Ready to save</>}
+        </Badge>
+        <Button className="ml-auto" onClick={save} disabled={saving}>
+          <Save />{saving ? "Saving…" : draft.saved ? "Save changes" : "Save and add to the catalog"}
+        </Button>
       </div>
+      {error && <div className="field-error wrap-pre">{error}</div>}
 
-      {openStep && <StepForm draft={draft} id={openStep} dispatch={dispatch} onClose={() => setOpenStep(null)} />}
+      <ReactFlowProvider>
+        <div className="gb">
+          <Palette onAdd={addStep} />
+          <GraphCanvas
+            draft={draft} dispatch={dispatch} problems={problems} generation={generation}
+            selection={live} onSelect={onSelect} onAdd={addStep}
+          />
+          <Properties
+            draft={draft} dispatch={dispatch} problems={problems} selection={live} onSelect={onSelect}
+            onPreset={(id) => {
+              const preset = PRESETS.find((x) => x.id === id);
+              if (preset) {
+                dispatch({ type: "load", draft: preset.build(draft.spec.name) });
+                setSelection(null);
+                setGeneration((g) => g + 1);
+              }
+            }}
+          />
+        </div>
+      </ReactFlowProvider>
     </div>
   );
 }

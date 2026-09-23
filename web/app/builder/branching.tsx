@@ -1,5 +1,6 @@
 /**
- * Step 4 of the builder (HOW-22): what happens next.
+ * What happens after a step (HOW-22), now docked beside the canvas rather than buried in a
+ * wizard tab (HOW-24).
  *
  * This is the pane that has to replace an arrow function. A hand-written graph says
  * `condition: { reads: ["review_verdict"], test: (c) => c.review_verdict === "reject" }`;
@@ -18,19 +19,28 @@
  *   semantics — no matching edge parks the run — rather than an omission. The row says so in
  *   those words, because a graph that parks on purpose and one that forgot an edge look
  *   identical in the file.
+ *
+ * HOW-24 splits it in two, for the two things the operator can now have selected:
+ *
+ *   `StepRoutes` is a STEP's whole outgoing list, and edits it with `set-branching` — which
+ *   replaces all of that step's edges at once, so reordering rows (= priority) is one action.
+ *   This is the keyboard path to what dragging a wire does (D7).
+ *
+ *   `ConditionEditor` is ONE edge, reached by clicking its wire, and edits it by INDEX
+ *   (`update-edge` / `remove-edge`), which nothing else can renumber while it is open. The two
+ *   are never on screen together — the right panel shows a step or an edge, never both — which
+ *   is what keeps "addressed by index" safe.
  */
 import { ArrowDown, ArrowUp, Plus, Trash2 } from "lucide-react";
 import {
   // coerceOperand lives in core beside Predicate and FieldKind, because a field's kind can
   // change AFTER a row is written and the reducer has to re-type the operand with the very
   // same rule this control used (HOW-22 review, finding 4)
-  NULLARY_OPS, coerceOperand, keepPath,
+  NULLARY_OPS, keepPath, coerceOperand,
   type EdgeSpec, type FieldSpec, type GraphSpec, type Predicate, type PredicateOp, type SpecProblem,
 } from "../../../core/graph-spec";
-import type { Draft, DraftAction } from "@/lib/spec-draft";
+import { seedPredicate, type Draft, type DraftAction } from "@/lib/spec-draft";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { useTypedText } from "@/lib/hooks";
@@ -121,19 +131,134 @@ function Operand({ p, field, onText }: { p: Predicate; field: FieldSpec | undefi
   return <OperandInput p={p} field={field} onText={onText} />;
 }
 
-function StepBranching({ spec, from, problems, onChange }: {
+/**
+ * ONE condition, as the sentence it is: When <field> [inside <part>] <op> <value>. The `nth`
+ * only names the controls — every aria-label in the suite says "row N" — so the same component
+ * serves a row in a step's list and the single row of the selected-edge panel.
+ */
+function ConditionControls({ spec, when, nth, onChange }: {
   spec: GraphSpec;
+  when: Predicate;
+  nth: number;
+  onChange: (next: Predicate) => void;
+}) {
+  const field = spec.fields.find((f) => f.key === when.key);
+  return (
+    <>
+      <span className="field-hint">When</span>
+      <Select
+        value={when.key} aria-label={`the field row ${nth} tests`}
+        onChange={(ev) => onChange(repredicate(when, { key: ev.target.value, text: "" }, spec.fields))}
+      >
+        {spec.fields.map((f) => <option key={f.key} value={f.key}>{f.key}</option>)}
+        {!field && <option value={when.key}>{when.key} — no longer a field</option>}
+      </Select>
+      {field?.kind === "json" && (
+        <Input
+          value={when.path ?? ""} placeholder="inside (e.g. outcome)"
+          aria-label={`which part of ${when.key} row ${nth} tests`}
+          onChange={(ev) => onChange(repredicate(when, { path: ev.target.value }, spec.fields))}
+        />
+      )}
+      <Select
+        value={when.op} aria-label={`how row ${nth} compares`}
+        onChange={(ev) => onChange(repredicate(when, { op: ev.target.value as PredicateOp }, spec.fields))}
+      >
+        {OP_LABELS.map((o) => <option key={o.op} value={o.op}>{o.label}</option>)}
+      </Select>
+      <Operand p={when} field={field} onText={(text) => onChange(repredicate(when, { text }, spec.fields))} />
+    </>
+  );
+}
+
+/** Every step is a legal target, a Finish included — that is what ends a run. */
+function TargetPicker({ spec, value, label, onChange }: {
+  spec: GraphSpec;
+  value: string;
+  label: string;
+  onChange: (id: string) => void;
+}) {
+  return (
+    <Select value={value} aria-label={label} onChange={(e) => onChange(e.target.value)}>
+      <option value="">pick a step</option>
+      {spec.nodes.map((n) => <option key={n.id} value={n.id}>{n.title?.trim() || n.id}</option>)}
+    </Select>
+  );
+}
+
+/**
+ * ONE edge, the panel a selected wire opens (HOW-24). Addressed by its index in `spec.edges`,
+ * which is what `add-edge` appended and what the canvas draws as `e<i>`.
+ */
+export function ConditionEditor({ draft, index, dispatch }: {
+  draft: Draft;
+  index: number;
+  dispatch: (a: DraftAction) => void;
+}) {
+  const { spec } = draft;
+  const edge = spec.edges[index];
+  if (!edge) return null;
+  const from = spec.nodes.find((n) => n.id === edge.from);
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="field-hint">
+        Leaving <strong>{from?.title?.trim() || edge.from}</strong>. The first condition that fits decides;
+        "Otherwise" is what happens when none do.
+      </div>
+      <div className="builder-branch-row">
+        {edge.when
+          ? <ConditionControls spec={spec} when={edge.when} nth={1} onChange={(when) => dispatch({ type: "update-edge", index, patch: { when } })} />
+          : <span className="field-hint">Otherwise</span>}
+        <span className="field-hint">go to</span>
+        <TargetPicker spec={spec} value={edge.to} label="where row 1 goes" onChange={(to) => dispatch({ type: "update-edge", index, patch: { to } })} />
+      </div>
+      <div className="actions">
+        {edge.when
+          ? (
+            <Button
+              variant="outline" size="sm"
+              onClick={() => dispatch({ type: "update-edge", index, patch: { when: null } })}
+            >
+              Make this the "Otherwise"
+            </Button>
+          )
+          : (
+            <Button
+              variant="outline" size="sm" disabled={spec.fields.length === 0}
+              onClick={() => dispatch({ type: "update-edge", index, patch: { when: seedPredicate(spec) } })}
+            >
+              <Plus />Give it a condition
+            </Button>
+          )}
+        <Button variant="destructive" size="sm" aria-label="remove this route" onClick={() => dispatch({ type: "remove-edge", index })}>
+          <Trash2 />Remove this route
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * A STEP's whole outgoing list — the keyboard path to what dragging a wire does (D7), and the
+ * only place row ORDER (= priority) can be changed. Edits with `set-branching`, which replaces
+ * all of this step's edges at once, so a reorder is one action rather than two renumberings.
+ */
+export function StepRoutes({ draft, from, problems, dispatch }: {
+  draft: Draft;
   from: string;
   problems: SpecProblem[];
-  onChange: (edges: Array<{ to: string; when?: Predicate }>) => void;
+  dispatch: (a: DraftAction) => void;
 }) {
+  const { spec } = draft;
   const mine = spec.edges.filter((e) => e.from === from);
   const conditional = mine.filter((e) => e.when) as Array<EdgeSpec & { when: Predicate }>;
   const fallback = mine.find((e) => !e.when);
-  // every step is a legal target, a Finish included — that is what ends a run
-  const targets = spec.nodes;
   const emit = (rows: Array<EdgeSpec & { when: Predicate }>, other: string | null) =>
-    onChange([...rows.map((r) => ({ to: r.to, when: r.when })), ...(other ? [{ to: other }] : [])]);
+    dispatch({
+      type: "set-branching",
+      from,
+      edges: [...rows.map((r) => ({ to: r.to, when: r.when })), ...(other !== null ? [{ to: other }] : [])],
+    });
 
   const setRow = (i: number, patch: Partial<EdgeSpec & { when: Predicate }>) =>
     emit(conditional.map((r, j) => (j === i ? { ...r, ...patch } : r)), fallback?.to ?? null);
@@ -145,115 +270,50 @@ function StepBranching({ spec, from, problems, onChange }: {
     emit(next, fallback?.to ?? null);
   };
 
-  // the operand is seeded through coerceOperand, the same rule a KIND change already went
-  // through: a bare "" is a row that can never fire on a yes/no or number field, and it saved
-  // clean while showing a blank operand (HOW-22 review, finding 3). On a text or choice field
-  // it is still "" — and specProblems now says so, which is the nagging that makes an
-  // unfinished row visible instead of silently dead.
-  const firstField = spec.fields[0];
+  // the operand is seeded by seedPredicate, the same rule a drawn wire goes through: a bare ""
+  // is a row that can never fire on a yes/no or number field, and it saved clean while showing
+  // a blank operand (HOW-22 review, finding 3).
   const addRow = () =>
-    emit(
-      [...conditional, { from, to: targets[0]?.id ?? "", when: { op: "equals", key: firstField?.key ?? "", value: coerceOperand("", firstField?.kind) } }],
-      fallback?.to ?? null,
-    );
+    emit([...conditional, { from, to: spec.nodes[0]?.id ?? "", when: seedPredicate(spec) }], fallback?.to ?? null);
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>After {spec.nodes.find((n) => n.id === from)?.title?.trim() || from}</CardTitle>
-        <CardDescription>The first row that fits decides. Drag order is priority — the top one wins.</CardDescription>
-      </CardHeader>
-      <CardContent>
-        {conditional.length === 0 && !fallback && <div className="field-hint">No routes yet.</div>}
-        {conditional.map((e, i) => {
-          const field = spec.fields.find((f) => f.key === e.when.key);
-          return (
-            <div key={i} className="builder-branch-row">
-              <span className="field-hint">When</span>
-              <Select
-                value={e.when.key} aria-label={`the field row ${i + 1} tests`}
-                onChange={(ev) => setRow(i, { when: repredicate(e.when, { key: ev.target.value, text: "" }, spec.fields) })}
-              >
-                {spec.fields.map((f) => <option key={f.key} value={f.key}>{f.key}</option>)}
-                {!field && <option value={e.when.key}>{e.when.key} — no longer a field</option>}
-              </Select>
-              {field?.kind === "json" && (
-                <Input
-                  value={e.when.path ?? ""} placeholder="inside (e.g. outcome)"
-                  aria-label={`which part of ${e.when.key} row ${i + 1} tests`}
-                  onChange={(ev) => setRow(i, { when: repredicate(e.when, { path: ev.target.value }, spec.fields) })}
-                />
-              )}
-              <Select
-                value={e.when.op} aria-label={`how row ${i + 1} compares`}
-                onChange={(ev) => setRow(i, { when: repredicate(e.when, { op: ev.target.value as PredicateOp }, spec.fields) })}
-              >
-                {OP_LABELS.map((o) => <option key={o.op} value={o.op}>{o.label}</option>)}
-              </Select>
-              <Operand p={e.when} field={field} onText={(text) => setRow(i, { when: repredicate(e.when, { text }, spec.fields) })} />
-              <span className="field-hint">go to</span>
-              <Select value={e.to} aria-label={`where row ${i + 1} goes`} onChange={(ev) => setRow(i, { to: ev.target.value })}>
-                <option value="">pick a step</option>
-                {targets.map((n) => <option key={n.id} value={n.id}>{n.title?.trim() || n.id}</option>)}
-              </Select>
-              <Button variant="ghost" size="icon" aria-label={`move row ${i + 1} up`} disabled={i === 0} onClick={() => move(i, -1)}><ArrowUp size={13} /></Button>
-              <Button variant="ghost" size="icon" aria-label={`move row ${i + 1} down`} disabled={i === conditional.length - 1} onClick={() => move(i, 1)}><ArrowDown size={13} /></Button>
-              <Button
-                variant="ghost" size="icon" aria-label={`remove row ${i + 1}`}
-                onClick={() => emit(conditional.filter((_, j) => j !== i), fallback?.to ?? null)}
-              ><Trash2 size={13} /></Button>
-            </div>
-          );
-        })}
-        <div className="builder-branch-row">
-          <span className="field-hint">Otherwise</span>
-          <Select
-            value={fallback?.to ?? ""} aria-label={`where ${from} goes when no row fits`}
-            onChange={(ev) => emit(conditional, ev.target.value || null)}
-          >
-            <option value="">pause and ask me</option>
-            {targets.map((n) => <option key={n.id} value={n.id}>go to {n.title?.trim() || n.id}</option>)}
-          </Select>
-          {!fallback && (
-            <span className="field-hint">
-              With nothing else matching, the run stops here and waits for you. That is a real
-              choice — leave it if there is no sensible default.
-            </span>
-          )}
+    <div className="flex flex-col gap-2">
+      <div className="field-hint">The first row that fits decides. Order is priority — the top one wins.</div>
+      {conditional.length === 0 && !fallback && <div className="field-hint">No routes yet.</div>}
+      {conditional.map((e, i) => (
+        <div key={i} className="builder-branch-row">
+          <ConditionControls spec={spec} when={e.when} nth={i + 1} onChange={(when) => setRow(i, { when })} />
+          <span className="field-hint">go to</span>
+          <TargetPicker spec={spec} value={e.to} label={`where row ${i + 1} goes`} onChange={(to) => setRow(i, { to })} />
+          <Button variant="ghost" size="icon" aria-label={`move row ${i + 1} up`} disabled={i === 0} onClick={() => move(i, -1)}><ArrowUp size={13} /></Button>
+          <Button variant="ghost" size="icon" aria-label={`move row ${i + 1} down`} disabled={i === conditional.length - 1} onClick={() => move(i, 1)}><ArrowDown size={13} /></Button>
+          <Button
+            variant="ghost" size="icon" aria-label={`remove row ${i + 1}`}
+            onClick={() => emit(conditional.filter((_, j) => j !== i), fallback?.to ?? null)}
+          ><Trash2 size={13} /></Button>
         </div>
-        <div className="actions">
-          <Button variant="outline" size="sm" disabled={spec.fields.length === 0} onClick={addRow}><Plus />Add a condition</Button>
-          {spec.fields.length === 0 && <span className="field-hint">Add a field first — a condition tests one.</span>}
-        </div>
-        {problems.map((p, i) => <div key={i} className="field-error builder-problem">{p.message}</div>)}
-      </CardContent>
-    </Card>
-  );
-}
-
-export function BranchingPane({ draft, dispatch, problems }: {
-  draft: Draft;
-  dispatch: (a: DraftAction) => void;
-  problems: SpecProblem[];
-}) {
-  const { spec } = draft;
-  const routable = spec.nodes.filter((n) => n.kind !== "terminal");
-  return (
-    <div className="flex flex-col gap-3">
-      {routable.length === 0 ? (
-        <EmptyState>add a step first — branching is what happens after one</EmptyState>
-      ) : (
-        routable.map((n) => (
-          <StepBranching
-            key={n.id} spec={spec} from={n.id}
-            problems={problems.filter((p) => p.node === n.id)}
-            onChange={(edges) => dispatch({ type: "set-branching", from: n.id, edges })}
-          />
-        ))
-      )}
-      {problems.filter((p) => !p.node || !routable.some((n) => n.id === p.node)).map((p, i) => (
-        <div key={i} className="field-error">{p.message}</div>
       ))}
+      <div className="builder-branch-row">
+        <span className="field-hint">Otherwise</span>
+        <Select
+          value={fallback?.to ?? ""} aria-label={`where ${from} goes when no row fits`}
+          onChange={(ev) => emit(conditional, ev.target.value || null)}
+        >
+          <option value="">pause and ask me</option>
+          {spec.nodes.map((n) => <option key={n.id} value={n.id}>go to {n.title?.trim() || n.id}</option>)}
+        </Select>
+        {!fallback && (
+          <span className="field-hint">
+            With nothing else matching, the run stops here and waits for you. That is a real
+            choice — leave it if there is no sensible default.
+          </span>
+        )}
+      </div>
+      <div className="actions">
+        <Button variant="outline" size="sm" disabled={spec.fields.length === 0} onClick={addRow}><Plus />Add a condition</Button>
+        {spec.fields.length === 0 && <span className="field-hint">Add a field first — a condition tests one.</span>}
+      </div>
+      {problems.map((p, i) => <div key={i} className="field-error builder-problem">{p.message}</div>)}
     </div>
   );
 }

@@ -51,7 +51,7 @@ const SOURCES = walk(APP).sort();
  */
 const COMPOSED_PREFIXES: Array<{ prefix: string; fedBy: string }> = [
   { prefix: "depth-", fedBy: "run/logs.tsx: `log-row ${r.kind} depth-${r.depth}`" },
-  { prefix: "kind-", fedBy: "graph-dag.tsx: `dag-node … kind-${n.kind}`" },
+  { prefix: "kind-", fedBy: "graph-dag.tsx `dag-node … kind-${n.kind}`, builder/node-card.tsx `gb-node kind-${kind}`" },
 ];
 
 /**
@@ -70,6 +70,19 @@ const STRUCTURAL: string[] = [
   "dv-group", "dv-reason",                             // drift grouping + its prose line
   "gr-prose",                                          // inherits .gr-sub entirely
   "sd-rowless-ask",                                    // the panel-carried ask; has a testid
+];
+
+/**
+ * Names a LIBRARY reads, not a stylesheet (HOW-24). React Flow's `nodrag` / `nopan` are its
+ * documented interaction opt-outs: it queries for them in JavaScript to decide whether a
+ * pointer press starts a node drag or a canvas pan. They are behaviour, and the vendor sheet
+ * deliberately gives them no rules — so direction 1 would call them dangling and an empty rule
+ * would be a lie about what they do. Listing them is the honest version, and it is the only
+ * reason a class may be exempt without a rule anywhere.
+ */
+const BEHAVIOURAL: Array<{ name: string; readBy: string }> = [
+  { name: "nodrag", readBy: "@xyflow/react — a press here must not drag the step's card" },
+  { name: "nopan", readBy: "@xyflow/react — a press here must not pan the canvas" },
 ];
 
 const COMPOSED_NAMES: Array<{ name: string; fedBy: string }> = [
@@ -186,7 +199,7 @@ for (const f of SHEETS) for (const c of classesDefinedIn(readFileSync(f, "utf8")
 const composed = (c: string) =>
   COMPOSED_PREFIXES.some(({ prefix }) => c === prefix || c.startsWith(prefix)) ||
   COMPOSED_NAMES.some(({ name }) => name === c);
-const exempt = (c: string) => composed(c) || STRUCTURAL.includes(c);
+const exempt = (c: string) => composed(c) || STRUCTURAL.includes(c) || BEHAVIOURAL.some((b) => b.name === c);
 
 /**
  * Direction 1 needs Tailwind's OUTPUT, not its input: most classes the components emit are

@@ -606,6 +606,47 @@ describe("parseGraphSpec refuses what it cannot vouch for", () => {
 });
 
 /**
+ * HOW-24. A canvas whose steps spring back to an auto-layout on reload is not a canvas, so the
+ * arrangement is part of the artifact. It has to be two things at once: carried faithfully by
+ * the spec, and invisible to everything below it.
+ */
+describe("a step's place on the canvas is the spec's, and the engine's business never", () => {
+  const placed = (): GraphSpec => ({
+    ...minimal(),
+    nodes: minimal().nodes.map((n, i) => ({ ...n, position: { x: 40 + i * 10, y: 100 * i } })),
+  });
+
+  test("a position survives parseGraphSpec, on every node kind including a Finish step", () => {
+    const parsed = parseGraphSpec(JSON.parse(JSON.stringify(placed())));
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) expect(parsed.spec.nodes.map((n) => n.position)).toEqual([{ x: 40, y: 0 }, { x: 50, y: 100 }]);
+  });
+
+  test("a position that could not round-trip through JSON is dropped, never carried", () => {
+    // NaN and Infinity serialise to `null`, and the spec is embedded in a module with
+    // JSON.stringify — the same rule coerceOperand applies to a number operand
+    for (const bad of [{ x: NaN, y: 0 }, { x: 0, y: Infinity }, { x: "40", y: 0 }, { x: 0 }, null, "40,0"]) {
+      const parsed = parseGraphSpec({ ...minimal(), nodes: [{ ...minimal().nodes[1]!, position: bad }] });
+      expect(parsed.ok, JSON.stringify(bad)).toBe(true);
+      if (parsed.ok) expect(parsed.spec.nodes[0]!.position, JSON.stringify(bad)).toBeUndefined();
+    }
+  });
+
+  test("a position is NOT compiled into the graph — the engine sees the identical Graph", () => {
+    // `def.spec` is the round trip and legitimately differs; everything the ENGINE reads must
+    // not, which is the whole claim
+    const { spec: _placed, ...withPositions } = buildGraph(placed()).def;
+    const { spec: _plain, ...without } = buildGraph(minimal()).def;
+    expect(withPositions).toEqual(without);
+    for (const n of Object.values(buildGraph(placed()).def.nodes)) expect("position" in n).toBe(false);
+  });
+
+  test("...and it is not a problem to report either: layout is not a verdict", () => {
+    expect(specProblems(placed())).toEqual([]);
+  });
+});
+
+/**
  * HOW-22 review, findings 1, 3 and 4 — the three things the ONE verdict could not yet see. All
  * three are proven on the SPEC rather than in the form, because a spec also arrives by PUT and
  * by re-opening a hand-edited module, and a form fix only fixes the form.

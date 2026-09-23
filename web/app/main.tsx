@@ -9,6 +9,11 @@
  * lines and held ten screens, nineteen inline styles and both styling systems at once.
  */
 import "./globals.css";
+// HOW-24: React Flow's own sheet, imported HERE and never pasted into howdah.css/tokens.css —
+// those three are scanned by app/css-contract.test.ts in both directions, and a few hundred
+// unconsumed vendor rules would fail "every rule has a consumer" instantly. The canvas is
+// themed by setting React Flow's custom properties from tokens.css, under .gb-canvas.
+import "@xyflow/react/dist/style.css";
 import { createRoot } from "react-dom/client";
 import { useCallback, useEffect, useState } from "react";
 import { Rows3, Plus, Workflow, Settings as SettingsIcon, Library, FileDiff, BellRing, Sun, Moon, Monitor } from "lucide-react";

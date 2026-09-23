@@ -31,6 +31,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ZoomIn, ZoomOut, Maximize2, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip } from "@/components/ui/tooltip";
+// HOW-24: the layered-BFS placement moved to lib/layout.ts, because the builder's canvas
+// places the same boxes and two copies of it would draw one graph two ways.
+import { layout } from "@/lib/layout";
 
 export interface AgentConfigDto {
   harness?: string;
@@ -75,34 +78,6 @@ function subtitle(n: GraphShapeDto["nodes"][number]): string {
   if (n.kind === "wait") return n.duration ?? "";
   if (n.kind === "terminal") return n.outcome ?? "";
   return n.kind;
-}
-
-function layout(shape: GraphShapeDto): Map<string, { x: number; y: number }> {
-  // BFS layers from entry; unreached nodes go in a trailing layer
-  const depth = new Map<string, number>([[shape.entry, 0]]);
-  const queue = [shape.entry];
-  while (queue.length) {
-    const n = queue.shift()!;
-    for (const e of shape.edges) {
-      if (e.from === n && !depth.has(e.to)) {
-        depth.set(e.to, (depth.get(n) ?? 0) + 1);
-        queue.push(e.to);
-      }
-    }
-  }
-  for (const n of shape.nodes) if (!depth.has(n.id)) depth.set(n.id, (Math.max(0, ...depth.values()) + 1));
-
-  const layers = new Map<number, string[]>();
-  for (const n of shape.nodes) {
-    const d = depth.get(n.id)!;
-    if (!layers.has(d)) layers.set(d, []);
-    layers.get(d)!.push(n.id);
-  }
-  const pos = new Map<string, { x: number; y: number }>();
-  for (const [d, ids] of layers) {
-    ids.forEach((id, i) => pos.set(id, { x: 40 + i * 210 + (d % 2) * 60, y: 40 + d * 92 }));
-  }
-  return pos;
 }
 
 export function GraphDag({

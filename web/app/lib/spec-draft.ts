@@ -27,13 +27,14 @@
  * round trip, and still cannot be the thing that decides a graph is legal.
  */
 import {
-  emittableWrites, nameTakenProblem, predicateLabel, promptIdFor, recoercePredicate, specProblems, stepTitle,
-  type FieldKind, type FieldSpec, type GraphSpec, type NodeSpec, type Predicate, type ProblemPane, type SpecProblem,
+  coerceOperand, emittableWrites, nameTakenProblem, promptIdFor, recoercePredicate, specProblems,
+  type EdgeSpec, type FieldKind, type FieldSpec, type GraphSpec, type NodeSpec, type Point, type Predicate,
+  type ProblemPane, type SpecProblem,
 } from "../../../core/graph-spec";
 import { renameTemplateRef, templateReads } from "../../../core/template-refs";
+import { autoLayout, nextFreePosition } from "./layout";
 import type { AgentConfig } from "../../../core/graph";
 import type { Scope } from "../../../core/context";
-import type { GraphShapeDto } from "../graph-dag";
 
 export interface Draft {
   spec: GraphSpec;
@@ -106,12 +107,40 @@ export type DraftAction =
   | { type: "update-field"; key: string; patch: Partial<FieldSpec> }
   | { type: "remove-field"; key: string }
   | { type: "toggle-input"; key: string }
-  | { type: "add-step"; node: NodeSpec; body?: string; fields?: FieldSpec[] }
+  | { type: "add-step"; node: NodeSpec; body?: string; fields?: FieldSpec[]; position?: Point }
   | { type: "update-step"; id: string; node: NodeSpec }
   | { type: "remove-step"; id: string }
   | { type: "move-step"; id: string; by: 1 | -1 }
+  /** HOW-24: a step dragged on the canvas. Dispatched on drag END, never per frame — one
+   *  drag is one draft change, so draftProblems() is not re-run sixty times a second. */
+  | { type: "move-node"; id: string; position: Point }
   | { type: "set-branching"; from: string; edges: Array<{ to: string; when?: Predicate }> }
+  /** HOW-24: the canvas's three edge edits. An edge has no identity of its own, so it is
+   *  addressed by its index in `spec.edges` — which is also what makes row order, and
+   *  therefore priority, directly editable. */
+  | { type: "add-edge"; from: string; to: string }
+  | { type: "update-edge"; index: number; patch: { to?: string; when?: Predicate | null } }
+  | { type: "remove-edge"; index: number }
   | { type: "set-prompt"; id: string; body: string };
+
+/** The one shape an edge is ever built in, so the panel path and the canvas path cannot
+ *  produce two different things for the same route. */
+const edgeOf = (from: string, to: string, when?: Predicate): EdgeSpec => ({ from, to, ...(when ? { when } : {}) });
+
+/**
+ * A CONDITION ROW IS BORN ABLE TO FIRE. The operand is seeded through `coerceOperand`, so a new
+ * row on a yes/no field is `flag == false` and on a number field `count == 0` — never `== ''`,
+ * which is a predicate no runtime value can satisfy and which saved clean (HOW-22 review,
+ * finding 3). On a text or choice field it is still "", and `specProblems` says so.
+ *
+ * Exported because there are now TWO creation paths — "Add a condition" in a step's routes and
+ * a wire drawn between two handles — and it was the CREATION path forgetting this rule that
+ * produced the defect in the first place.
+ */
+export function seedPredicate(spec: GraphSpec): Predicate {
+  const first = spec.fields[0];
+  return { op: "equals", key: first?.key ?? "", value: coerceOperand("", first?.kind) };
+}
 
 const withoutKey = (keys: string[], key: string) => keys.filter((k) => k !== key);
 
@@ -244,7 +273,10 @@ export function draftReducer(draft: Draft, action: DraftAction): Draft {
     }
 
     case "add-step": {
-      const nodes = [...spec.nodes, withEmittableWrites(withDerivedReads(action.node, action.body))];
+      // every step on the canvas has a place, so one arriving without a dropped position is
+      // given one here rather than piling up at the origin (HOW-24)
+      const placed = { ...action.node, position: action.position ?? action.node.position ?? nextFreePosition(spec.nodes) };
+      const nodes = [...spec.nodes, withEmittableWrites(withDerivedReads(placed, action.body))];
       const entry = pickEntry(nodes, spec.entry);
       const prompts = action.body !== undefined && action.node.kind === "agent"
         ? { ...draft.prompts, [action.node.prompt]: action.body }
@@ -288,12 +320,41 @@ export function draftReducer(draft: Draft, action: DraftAction): Draft {
       return { ...draft, spec: { ...spec, nodes } };
     }
 
+    case "move-node":
+      return {
+        ...draft,
+        spec: { ...spec, nodes: spec.nodes.map((n) => (n.id === action.id ? { ...n, position: action.position } : n)) },
+      };
+
     case "set-branching": {
       // the rows REPLACE this step's outgoing edges, in order: first conditional row wins
       const others = spec.edges.filter((e) => e.from !== action.from);
-      const mine = action.edges.map((e) => ({ from: action.from, to: e.to, ...(e.when ? { when: e.when } : {}) }));
+      const mine = action.edges.map((e) => edgeOf(action.from, e.to, e.when));
       return { ...draft, spec: { ...spec, edges: [...others, ...mine] } };
     }
+
+    case "add-edge": {
+      // A WIRE DRAWN ON THE CANVAS IS THE SAME ROUTE THE PANEL MAKES. The first route leaving a
+      // step is its "Otherwise"; every later one is a condition, seeded through the rule above
+      // so it can fire. Appending puts it AFTER that step's existing conditions, which is what
+      // keeps row order — and therefore priority — meaning what the operator saw.
+      const hasFallback = spec.edges.some((e) => e.from === action.from && !e.when);
+      // with no fields there is no condition to seed, so the gesture still makes a route and
+      // specProblems() names what is missing rather than the canvas refusing the drag
+      const when = hasFallback && spec.fields.length ? seedPredicate(spec) : undefined;
+      return { ...draft, spec: { ...spec, edges: [...spec.edges, edgeOf(action.from, action.to, when)] } };
+    }
+    case "update-edge": {
+      const at = spec.edges[action.index];
+      if (!at) return draft;
+      // `null` CLEARS the condition (this route becomes the "Otherwise"); `undefined` means the
+      // patch says nothing about it, which is not the same thing
+      const when = action.patch.when === undefined ? at.when : (action.patch.when ?? undefined);
+      const next = edgeOf(at.from, action.patch.to ?? at.to, when);
+      return { ...draft, spec: { ...spec, edges: spec.edges.map((e, i) => (i === action.index ? next : e)) } };
+    }
+    case "remove-edge":
+      return { ...draft, spec: { ...spec, edges: spec.edges.filter((_, i) => i !== action.index) } };
     case "set-prompt":
       return {
         ...draft,
@@ -421,32 +482,6 @@ export function draftProblems(draft: Draft, opts: { taken?: readonly string[] } 
   ];
 }
 
-/** The DAG's DTO, straight off the draft — no fetch, so the picture moves with the typing. */
-export function specToShape(spec: GraphSpec): GraphShapeDto {
-  return {
-    name: spec.name || "untitled",
-    description: spec.description,
-    entry: spec.entry,
-    inputs: [...spec.inputs],
-    defaults: spec.defaults,
-    nodes: spec.nodes.map((n) => ({
-      id: n.id,
-      // the builder's picture speaks in TITLES; the id stays what the run DAG and the log say
-      title: stepTitle(spec, n.id),
-      kind: n.kind,
-      ...(n.kind === "agent" ? { prompt: n.prompt, harness: n.config?.harness, model: n.config?.model, effort: n.config?.effort } : {}),
-      ...(n.kind === "command" ? { run: n.run } : {}),
-      ...(n.kind === "wait" ? { duration: n.duration } : {}),
-      ...(n.kind === "terminal" ? { outcome: n.outcome } : {}),
-      ...("maxVisits" in n && n.maxVisits !== undefined ? { maxVisits: n.maxVisits } : {}),
-      ...(n.kind !== "terminal" && n.class ? { class: n.class } : {}),
-    })),
-    // the caption is the SAME label the compiled graph carries (core/graph-spec.ts), so the
-    // preview and the run's own DAG cannot read differently
-    edges: spec.edges.map((e) => ({ from: e.from, to: e.to, ...(e.when ? { label: predicateLabel(e.when) } : {}) })),
-  };
-}
-
 // ---- starting points ---------------------------------------------------------------------
 
 /** A preset's agent step. `reads` is deliberately absent: deriveDraftReads() fills it from
@@ -570,7 +605,15 @@ const PRESET_DEFS: Preset[] = [
  * are GIVEN is read out of the instructions it ships with — the same rule the wizard applies
  * to every keystroke and graphs/builder.ts applies when it writes the file.
  */
-export const PRESETS: Preset[] = PRESET_DEFS.map((p) => ({ ...p, build: (name: string) => deriveDraftReads(p.build(name)) }));
+export const PRESETS: Preset[] = PRESET_DEFS.map((p) => ({
+  ...p,
+  // ...and laid out, so a preset opens as an arrangement rather than a pile at the origin
+  // (HOW-24). The positions are the spec's from that moment on, and the first save writes them.
+  build: (name: string) => {
+    const draft = deriveDraftReads(p.build(name));
+    return { ...draft, spec: autoLayout(draft.spec) };
+  },
+}));
 
 /** A new step of one kind, with the defaults its form would otherwise make you fill in. */
 export function newStep(spec: GraphSpec, kind: StepKind, title: string): { node: NodeSpec; body?: string; fields?: FieldSpec[] } {
