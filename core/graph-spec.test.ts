@@ -14,7 +14,7 @@ import { describe, expect, test } from "bun:test";
 import {
   COMMAND_BUILTINS, WORKTREE_FACTS,
   buildGraph, coerceOperand, compilePredicate, emittableWrites, parseGraphSpec, predicateLabel,
-  recoercePredicate, specProblems, unmatchableOperand,
+  keepPath, recoercePredicate, specProblems, unmatchableOperand,
   type GraphSpec, type NodeSpec, type Predicate,
 } from "./graph-spec";
 
@@ -344,7 +344,10 @@ describe("a condition row that can never fire is refused, not saved", () => {
   test("what is deliberately NOT refused, because it can legitimately match at run time", () => {
     // a path reaches INTO a value, so the field's kind describes the container, not the operand
     expect(specProblems(branching({ op: "equals", key: "blob", path: "outcome", value: "reject" }))).toEqual([]);
-    expect(specProblems(branching({ op: "equals", key: "flag", path: "inner", value: "" }))).toEqual([]);
+    // ...but only on a field that CAN hold one. This asserted clean until HOW-22 review finding
+    // 3: a path on a yes/no field is invisible (the inner-name box renders for json only) and
+    // fatal (the row can never fire), so the empty operand beside it went unreported too.
+    expect(only({ op: "equals", key: "flag", path: "inner", value: "" })).toContain("is not a structured (JSON) field");
     // a choice outside its declared choices: `probe:pr` can report OPEN for a pr.state the
     // operator listed as MERGED/CLOSED, and that branch is a true statement about run time
     expect(specProblems(branching({ op: "equals", key: "verdict", value: "unlisted" }))).toEqual([]);
@@ -495,9 +498,20 @@ describe("a field's kind owns the operands that compare against it", () => {
     expect(recoercePredicate(nullary, "number")).toEqual(nullary);
   });
 
-  test("the path a predicate reaches through is kept", () => {
+  test("a path survives only a kind that can carry one, and the operand is re-typed either way", () => {
+    // json keeps it: the kind describes the CONTAINER and the value at the path is untyped
+    expect(recoercePredicate({ op: "equals", key: "v", path: "outcome", value: "true" }, "json"))
+      .toEqual({ op: "equals", key: "v", path: "outcome", value: "true" });
+    // anything else drops it. This used to be KEPT, which is how a re-pointed row saved clean
+    // and never fired (HOW-22 review, finding 3) — the operand is still re-typed.
     expect(recoercePredicate({ op: "equals", key: "v", path: "outcome", value: "true" }, "boolean"))
-      .toEqual({ op: "equals", key: "v", path: "outcome", value: true });
+      .toEqual({ op: "equals", key: "v", value: true });
+    // a nullary op carries no operand and can still carry a stale path
+    expect(recoercePredicate({ op: "is-true", key: "v", path: "outcome" }, "text")).toEqual({ op: "is-true", key: "v" });
+    expect(keepPath("outcome", "json")).toBe("outcome");
+    for (const k of ["text", "number", "boolean", "choice", undefined] as const)
+      expect(keepPath("outcome", k)).toBeUndefined();
+    expect(keepPath(undefined, "json")).toBeUndefined();
   });
 });
 
@@ -528,5 +542,102 @@ describe("parseGraphSpec refuses what it cannot vouch for", () => {
     const parsed = parseGraphSpec({ ...minimal(), defaults: { harness: "sudo", model: "claude-opus-5" } });
     expect(parsed.ok).toBe(true);
     if (parsed.ok) expect(parsed.spec.defaults).toEqual({ model: "claude-opus-5" });
+  });
+});
+
+/**
+ * HOW-22 review, findings 1, 3 and 4 — the three things the ONE verdict could not yet see. All
+ * three are proven on the SPEC rather than in the form, because a spec also arrives by PUT and
+ * by re-opening a hand-edited module, and a form fix only fixes the form.
+ */
+describe("the verdict sees a half-built draft, a stale path and a borrowed prompt", () => {
+  const only = (spec: GraphSpec, where: string) => {
+    const problems = specProblems(spec);
+    expect(problems.map((p) => p.message)).toHaveLength(1);
+    expect(problems[0]!.where).toBe(where as never);
+    return problems[0]!;
+  };
+
+  test('a "go to" with no step picked says THAT, not that the step was removed', () => {
+    const p = only(minimal({ edges: [{ from: "draft", to: "" }] }), "branching");
+    expect(p.node).toBe("draft");
+    expect(p.message).toBe('**Draft the doc** has a "go to" with no step picked. Choose where it goes, or remove the row.');
+  });
+
+  test("a target that was REMOVED still gets its own, different sentence", () => {
+    // the split must not swallow the case it was split out of
+    expect(only(minimal({ edges: [{ from: "draft", to: "gone" }] }), "branching").message)
+      .toContain('points at a step that no longer exists ("gone")');
+  });
+
+  test("a path on a field that cannot hold one is refused, naming the field and the path", () => {
+    for (const kind of ["text", "number", "boolean", "choice"] as const) {
+      const spec = minimal({
+        fields: [{ key: "goal", kind: "text", scope: "sticky" }, { key: "verdict", kind, scope: "sticky", ...(kind === "choice" ? { choices: ["a"] } : {}) }],
+        nodes: [
+          { id: "draft", kind: "agent", title: "Draft the doc", prompt: "my-review.draft", reads: ["goal"], writes: ["verdict"] },
+          { id: "done", kind: "terminal", outcome: "success" },
+        ],
+        edges: [{ from: "draft", to: "done", when: { op: "equals", key: "verdict", path: "outcome", value: "reject" } }],
+      });
+      const p = only(spec, "branching");
+      expect(p.message, kind).toContain("reaches inside `verdict` for `outcome`");
+      expect(p.message, kind).toContain("is not a structured (JSON) field");
+    }
+  });
+
+  test("...and a path on a json field is still clean, which is what stops the rule overreaching", () => {
+    const spec = minimal({
+      fields: [{ key: "goal", kind: "text", scope: "sticky" }, { key: "verdict", kind: "json", scope: "sticky" }],
+      nodes: [
+        { id: "draft", kind: "agent", title: "Draft the doc", prompt: "my-review.draft", reads: ["goal"], writes: ["verdict"] },
+        { id: "done", kind: "terminal", outcome: "success" },
+      ],
+      edges: [{ from: "draft", to: "done", when: { op: "equals", key: "verdict", path: "outcome", value: "reject" } }],
+    });
+    expect(specProblems(spec)).toEqual([]);
+  });
+
+  test("unmatchableOperand invents nothing about a field it cannot see", () => {
+    // the caller already reports an unknown key; a public export must not add a second verdict
+    expect(unmatchableOperand({ op: "equals", key: "v", path: "outcome", value: "x" }, undefined)).toBeNull();
+  });
+
+  test("a step filed under ANOTHER graph's prompt is refused, naming the step and the id", () => {
+    const spec = minimal({
+      nodes: [
+        { id: "draft", kind: "agent", title: "Draft the doc", prompt: "victim.work", reads: ["goal"], writes: ["summary"] },
+        { id: "done", kind: "terminal", outcome: "success" },
+      ],
+    });
+    const p = only(spec, "steps");
+    expect(p.node).toBe("draft");
+    expect(p.message).toContain('filed under "victim.work", which belongs to another graph');
+    expect(p.message).toContain("`my-review.<step>`");
+  });
+
+  test("...but two steps of ONE graph may share a body, which is already how remove-step works", () => {
+    const spec = minimal({
+      nodes: [
+        { id: "draft", kind: "agent", title: "Draft the doc", prompt: "my-review.draft", reads: ["goal"], writes: ["summary"] },
+        { id: "redraft", kind: "agent", title: "Draft it again", prompt: "my-review.draft", reads: ["goal"], writes: ["summary"] },
+        { id: "done", kind: "terminal", outcome: "success" },
+      ],
+      edges: [{ from: "draft", to: "redraft" }, { from: "redraft", to: "done" }],
+    });
+    expect(specProblems(spec)).toEqual([]);
+  });
+
+  test("an UNNAMED draft reports its name and nothing else — the restraint the id check keeps", () => {
+    const spec = minimal({
+      name: "",
+      nodes: [
+        { id: "draft", kind: "agent", title: "Draft the doc", prompt: "victim.work", reads: ["goal"], writes: ["summary"] },
+        { id: "done", kind: "terminal", outcome: "success" },
+      ],
+    });
+    const problems = specProblems(spec);
+    expect(problems.filter((p) => p.message.includes("belongs to another graph"))).toEqual([]);
+    expect(problems.some((p) => p.where === "basics")).toBe(true);
   });
 });

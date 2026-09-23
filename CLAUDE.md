@@ -151,7 +151,23 @@ Break one of these and the design stops working, so check them before changing t
   cannot carry is whether its NAME is free, so a save DECLARES `intent: "create" | "update"`:
   a create landing on an existing graph is a 409 before any write, and `nameTakenProblem` is
   the single place that sentence is written, fed the catalog in the browser and this one
-  file's existence on the server.
+  file's existence on the server. A GRAPH WRITES ONLY ITS OWN PROMPTS: every local prompt
+  lives in one directory, so the `<graph>.<step>` prefix is the only thing keeping two graphs'
+  instructions apart — `specProblems` refuses a step filed under another graph's id and
+  `graphs/builder.ts` refuses the same id again at the write, since a create naming one
+  rewrote that graph's prompt and returned ok. Two steps of ONE graph may still share a body,
+  which is what a prefix rule permits and exact equality would not.
+  Two consequences of the builder drawing and editing a draft rather than a finished graph.
+  THE PICTURE NEVER ASSERTS: `GraphDag` draws a half-built shape, so an edge whose endpoint
+  has no position is SKIPPED rather than dereferenced — a run's shape is server-derived and
+  consistent, a draft's is being typed ("go to [pick a step]"), and `web/app` has no error
+  boundary, so one `!` took the wizard and the unsaved draft down with it. What is missing is
+  reported in words by the verdict, in the pane that fixes it. AND A BOX IS CONTROLLED BY
+  MEANING, NOT BY SPELLING: the spec stores typed data on purpose (`3`, not `"3"`;
+  `["pass","warn"]`, not `"pass, warn"`), so a control fed straight back from it destroys every
+  intermediate keystroke the coercion trims. `useTypedText` (`web/app/lib/hooks.ts`) keeps what
+  was typed while it still MEANS what the draft holds and follows the draft the moment it does
+  not — which is why `3.5`, `-1` and a second comma-separated value are typeable at all.
 - **Prompt ids are generated, not typed by hand.** `prompts/<id>.md` (front-matter `id` must
   equal the filename) → `bun prompts/codegen.ts` → the `PromptId` union in
   `core/prompt-ids.ts`. Inline prompt text in a graph is a compile error by design.

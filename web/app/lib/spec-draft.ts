@@ -171,10 +171,28 @@ export function draftReducer(draft: Draft, action: DraftAction): Draft {
       const was = spec.fields.find((f) => f.key === action.key);
       const renamed = patch.key !== undefined && patch.key !== action.key ? patch.key : null;
       const kind = patch.kind !== undefined && patch.kind !== was?.kind ? patch.kind : null;
+
+      // A CLEARED NAME IS NOT A RENAME. The box is emptied on the way to typing a new one, and
+      // "" is FALSY — so the guard below read it as "no rename" while the field's key was still
+      // set to "", after which every later keystroke renamed FROM "" and matched nothing:
+      // bodies, reads, edges and inputs were left naming the old key for good, and only a hand
+      // edit could fix it (HOW-22 review, finding 5). The rename is DEFERRED instead: the field
+      // keeps the name it had, the pane keeps showing what was typed (useTypedText), and the
+      // first real character renames from the ORIGINAL key in one cascade. Cascading "" is not
+      // the alternative — renameTemplateRef(body, "goal", "") writes `{{ context. }}`, which is
+      // no longer a reference, so the next keystroke could not find it.
+      //
+      // Anything ELSE in the patch still applies, so a blank name cannot silently swallow a
+      // kind or scope change that arrived with it.
+      if (renamed !== null && !renamed.trim()) {
+        const { key: _blank, ...rest } = patch;
+        return Object.keys(rest).length ? draftReducer(draft, { ...action, patch: rest }) : draft;
+      }
+
       // a rename has to follow the key everywhere it is used, or the draft silently breaks
       const rename = (k: string) => (renamed && k === action.key ? renamed : k);
       const fields = spec.fields.map((f) => (f.key === action.key ? { ...f, ...patch } : f));
-      if (!renamed && !kind) return { ...draft, spec: { ...spec, fields } };
+      if (renamed === null && kind === null) return { ...draft, spec: { ...spec, fields } };
 
       // THE BODIES FOLLOW THE RENAME. An agent's `reads` is read out of its instructions, so
       // swapping the declaration without the text would leave the two contradicting each

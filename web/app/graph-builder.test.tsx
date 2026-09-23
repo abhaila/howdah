@@ -21,7 +21,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { buildGraph, specProblems, type GraphSpec, type NodeSpec } from "../../core/graph-spec";
+import { buildGraph, specProblems, type FieldKind, type FieldSpec, type GraphSpec, type NodeSpec } from "../../core/graph-spec";
 import { templateReads } from "../../core/template-refs";
 import {
   PRESETS, draftProblems, draftReducer, newStep, pickPrompts, problemsByPane, specToShape,
@@ -30,7 +30,10 @@ import {
 import { GraphBuilder } from "./screens/graph-builder";
 import { StepForm } from "./builder/step-form";
 import { BranchingPane } from "./builder/branching";
+import { FieldsPane } from "./builder/fields";
 import { ToastProvider } from "./components/ui/toast";
+import { Input } from "./components/ui/input";
+import { useTypedText } from "./lib/hooks";
 
 // ---- the draft ---------------------------------------------------------------------------
 
@@ -738,5 +741,270 @@ describe("a declared fact is never invisible-and-unremovable", () => {
     const el = await openStep(withWorktree("create", []));
     expect(el.querySelector("dialog")!.textContent).toContain("Making a worktree reports nothing");
     expect(tickboxes(el).filter((t) => t.label.includes("worktree."))).toHaveLength(0);
+  });
+});
+
+/**
+ * HOW-22 review, round 4. Three of the five findings this round lived in a COMPONENT — a
+ * picture that asserted a draft was finished, and two boxes that mirrored stored MEANING back
+ * at the keystrokes that produced it. The existing suite could not see any of them: it drives
+ * the reducer directly and never renders a pane or simulates a keystroke. So these tests are
+ * weighted to the real panes, driven by real events.
+ */
+
+/** the fields pane on its own, over a draft the caller supplies */
+async function openFields(start: Draft): Promise<{ el: HTMLElement; latest: () => Draft }> {
+  let draft = start;
+  host = document.createElement("div");
+  document.body.appendChild(host);
+  root = createRoot(host);
+  const render = () =>
+    root!.render(
+      <ToastProvider>
+        <FieldsPane draft={draft} dispatch={(a) => { draft = draftReducer(draft, a); render(); }} />
+      </ToastProvider>,
+    );
+  await act(async () => { render(); });
+  return { el: host, latest: () => draft };
+}
+
+/** the branching pane over a draft whose one testable field has the kind under test */
+async function openRows(field: FieldSpec): Promise<{ el: HTMLElement; latest: () => Draft; setKind: (k: FieldKind) => void }> {
+  let draft: Draft = {
+    saved: false,
+    prompts: { "seed.work": "Do it." },
+    spec: {
+      version: 1, name: "seed", description: "",
+      fields: [field, { key: "other", kind: "text", scope: "sticky" }],
+      inputs: [], entry: "work",
+      nodes: [
+        { id: "work", kind: "command", title: "Do it", run: "true", reads: [], writes: [field.key, "other"] },
+        { id: "done", kind: "terminal", outcome: "success" },
+      ],
+      edges: [{ from: "work", to: "done" }],
+    },
+  };
+  host = document.createElement("div");
+  document.body.appendChild(host);
+  root = createRoot(host);
+  const render = () =>
+    root!.render(
+      <ToastProvider>
+        <BranchingPane
+          draft={draft}
+          problems={problemsByPane(draftProblems(draft)).branching}
+          dispatch={(a) => { draft = draftReducer(draft, a); render(); }}
+        />
+      </ToastProvider>,
+    );
+  await act(async () => { render(); });
+  return {
+    el: host,
+    latest: () => draft,
+    setKind: (k) => { draft = draftReducer(draft, { type: "update-field", key: field.key, patch: { kind: k } }); act(() => { render(); }); },
+  };
+}
+
+const box = (el: HTMLElement, label: string) =>
+  [...el.querySelectorAll("input")].find((x) => x.getAttribute("aria-label") === label) as HTMLInputElement;
+/**
+ * One keystroke at a time, the way a person produces "3.5".
+ *
+ * Each key APPENDS to what the box is currently SHOWING, which is the whole point: a browser
+ * types onto the rendered value, not onto some absolute string the test had in mind. Setting
+ * the full prefix each time would quietly repair the very defect under test — the box would
+ * never be asked to carry `3.` forward, so `35` could not happen.
+ */
+const typeEach = (get: () => HTMLInputElement, text: string) => {
+  type(get(), "");                                  // select-all, as an operator would
+  for (const ch of text) type(get(), get().value + ch);
+};
+const rowPredicate = (d: Draft) => d.spec.edges.find((e) => e.when)?.when;
+
+describe("a box keeps what was typed into it (finding 2)", () => {
+  test("a number operand survives the decimal point on its way through", async () => {
+    const { el, latest } = await openRows({ key: "count", kind: "number", scope: "sticky" });
+    click(byText(el, "Add a condition"));
+    typeEach(() => box(el, "what count is compared with"), "3.5");
+    // before: "3." read back as "3", so the next key made 35 and specProblems said nothing
+    expect(rowPredicate(latest())).toMatchObject({ value: 3.5 });
+    expect(box(el, "what count is compared with").value).toBe("3.5");
+  });
+
+  test("...and the minus sign, which used to make a negative operand untypeable", async () => {
+    const { el, latest } = await openRows({ key: "count", kind: "number", scope: "sticky" });
+    click(byText(el, "Add a condition"));
+    typeEach(() => box(el, "what count is compared with"), "-1");
+    expect(rowPredicate(latest())).toMatchObject({ value: -1 });
+  });
+
+  test("`is one of` can be given a SECOND value, which the swallowed comma made impossible", async () => {
+    const { el, latest } = await openRows({ key: "verdict", kind: "text", scope: "sticky" });
+    click(byText(el, "Add a condition"));
+    const op = [...el.querySelectorAll("select")].find((s) => s.getAttribute("aria-label") === "how row 1 compares")!;
+    type(op, "one-of");
+    typeEach(() => box(el, "what verdict is compared with"), "pass, warn");
+    expect(rowPredicate(latest())).toMatchObject({ op: "one-of", values: ["pass", "warn"] });
+    expect(box(el, "what verdict is compared with").value).toBe("pass, warn");
+  });
+
+  test("the box follows the DRAFT when the draft says something else — it is not uncontrolled", async () => {
+    const { el, latest, setKind } = await openRows({ key: "count", kind: "number", scope: "sticky" });
+    click(byText(el, "Add a condition"));
+    typeEach(() => box(el, "what count is compared with"), "3.");
+    expect(box(el, "what count is compared with").value).toBe("3.");
+    // the kind flips from another pane: `3.` no longer MEANS what the draft holds, so the box
+    // stops showing it. This is the equivalence branch, and what stops the hook drifting.
+    setKind("text");
+    expect(box(el, "what count is compared with").value).toBe(String(
+      (rowPredicate(latest()) as { value: unknown }).value,
+    ));
+    expect(box(el, "what count is compared with").value).not.toBe("3.");
+  });
+
+  test("leaving the box settles it on what the spec actually holds", async () => {
+    const { el, latest } = await openRows({ key: "count", kind: "number", scope: "sticky" });
+    click(byText(el, "Add a condition"));
+    type(box(el, "what count is compared with"), "-");
+    expect(rowPredicate(latest())).toMatchObject({ value: 0 });
+    // React maps onBlur onto the bubbling focusout event, which is what a real blur fires
+    act(() => { box(el, "what count is compared with").dispatchEvent(new window.FocusEvent("focusout", { bubbles: true })); });
+    expect(box(el, "what count is compared with").value).toBe("0");
+  });
+
+  test("a multi-value choice FIELD is typeable too — the same defect, the other box", async () => {
+    const { el, latest } = await openFields({
+      saved: false, prompts: {},
+      spec: {
+        version: 1, name: "c", description: "",
+        fields: [{ key: "verdict", kind: "choice", scope: "sticky", choices: [] }],
+        inputs: ["verdict"], entry: "done",
+        nodes: [{ id: "done", kind: "terminal", outcome: "success" }],
+        edges: [],
+      },
+    });
+    typeEach(() => box(el, "the choices for verdict"), "pass, reject");
+    expect(latest().spec.fields[0]!.choices).toEqual(["pass", "reject"]);
+    expect(box(el, "the choices for verdict").value).toBe("pass, reject");
+  });
+});
+
+describe("clearing a field's name is not a rename (finding 5)", () => {
+  test("the box empties, the draft does not move, and retyping renames EVERYTHING in one go", async () => {
+    const start = PRESETS.find((p) => p.id === "code")!.build("p5");
+    // `goal` is the preset's FIRST field, which is the row the name box below belongs to —
+    // asserted rather than assumed, so a preset reshuffle fails here and not mysteriously later
+    expect(start.spec.fields[0]!.key).toBe("goal");
+    const { el, latest } = await openFields(start);
+    // the label names the CURRENT key, so it moves with every keystroke of the rename
+    const name = () => el.querySelector("input.font-mono") as HTMLInputElement;
+
+    type(name(), "");
+    // the box shows what was typed; the draft keeps the name it had, and says nothing is wrong
+    expect(name().value).toBe("");
+    expect(latest().spec.fields.map((f) => f.key)).toEqual(start.spec.fields.map((f) => f.key));
+    expect(draftProblems(latest())).toEqual([]);
+
+    typeEach(name, "objective");
+
+    const d = latest();
+    expect(d.spec.fields.some((f) => f.key === "objective")).toBe(true);
+    expect(d.spec.fields.some((f) => f.key === "goal")).toBe(false);
+    expect(d.spec.inputs).toContain("objective");
+    expect(d.spec.inputs).not.toContain("goal");
+    for (const [id, body] of Object.entries(d.prompts)) {
+      expect(body, id).not.toContain("{{ context.goal }}");
+      expect(templateReads(body).includes("goal"), id).toBe(false);
+    }
+    for (const n of d.spec.nodes) if (n.kind === "agent") expect(n.reads, n.id).not.toContain("goal");
+    for (const e of d.spec.edges) expect(e.when?.key, e.from).not.toBe("goal");
+    // the invariant the whole cascade exists for
+    expect(draftProblems(d)).toEqual([]);
+  });
+
+  test("the reducer treats a blank key as nothing happening, and still applies the rest", async () => {
+    const start = PRESETS.find((p) => p.id === "code")!.build("p5b");
+    expect(apply(start, { type: "update-field", key: "goal", patch: { key: "" } })).toEqual(start);
+    expect(apply(start, { type: "update-field", key: "goal", patch: { key: "   " } })).toEqual(start);
+    // a kind arriving with the blank name still lands; the name does not
+    const both = apply(start, { type: "update-field", key: "goal", patch: { key: "", kind: "json" } });
+    expect(both.spec.fields.find((f) => f.key === "goal")!.kind).toBe("json");
+    expect(both.spec.fields.some((f) => f.key === "")).toBe(false);
+  });
+});
+
+describe("a stale path cannot hide on a field that cannot hold one (finding 3)", () => {
+  test("re-pointing a json row at a text field REPAIRS it rather than reporting it", async () => {
+    const { el, latest } = await openRows({ key: "blob", kind: "json", scope: "sticky" });
+    click(byText(el, "Add a condition"));
+    type(box(el, "which part of blob row 1 tests"), "outcome");
+    type(box(el, "what blob is compared with"), "reject");
+    expect(rowPredicate(latest())).toMatchObject({ path: "outcome" });
+
+    const key = [...el.querySelectorAll("select")].find((s) => s.getAttribute("aria-label") === "the field row 1 tests")!;
+    type(key, "other");
+    // the inner-name box is gone with the json kind, so a surviving path would be unremovable
+    expect(box(el, "which part of other row 1 tests")).toBeUndefined();
+    expect(rowPredicate(latest())).not.toHaveProperty("path");
+  });
+
+  test("flipping the FIELD's kind drops the path from every row that named it", async () => {
+    const { el, latest, setKind } = await openRows({ key: "blob", kind: "json", scope: "sticky" });
+    click(byText(el, "Add a condition"));
+    type(box(el, "which part of blob row 1 tests"), "outcome");
+    type(box(el, "what blob is compared with"), "reject");
+    setKind("text");
+    expect(rowPredicate(latest())).not.toHaveProperty("path");
+    expect(problemsByPane(draftProblems(latest())).branching).toEqual([]);
+  });
+});
+
+describe("useTypedText: controlled by meaning, not by spelling", () => {
+  /** a box over a value stored as a NUMBER, the smallest form of what the operand box does */
+  async function openBox(): Promise<{ input: () => HTMLInputElement; set: (n: number) => void }> {
+    let stored = 0;
+    host = document.createElement("div");
+    document.body.appendChild(host);
+    root = createRoot(host);
+    function Box() {
+      const [shown, setTyped] = useTypedText(String(stored), (t) => String(Number(t.trim() === "" ? 0 : t) || 0));
+      return (
+        <Input
+          aria-label="box" value={shown}
+          onChange={(e) => { setTyped(e.target.value); stored = Number(e.target.value) || 0; render(); }}
+        />
+      );
+    }
+    const render = () => root!.render(<Box />);
+    await act(async () => { render(); });
+    return {
+      input: () => box(host!, "box"),
+      set: (n) => { stored = n; act(() => { render(); }); },
+    };
+  }
+
+  test("what was typed stays while it still MEANS what is stored, and follows the store when it does not", async () => {
+    const { input, set } = await openBox();
+    typeEach(input, "3.");
+    expect(input().value).toBe("3.");   // 3. means 3, which is what is stored
+    set(9);                              // ...and now it does not
+    expect(input().value).toBe("9");
+  });
+});
+
+describe("the picture never takes the wizard down with it (finding 1)", () => {
+  test('picking "pick a step" leaves the wizard standing and reports the row in words', async () => {
+    const el = await mount();
+    goTo(el, "Branching");
+    click(byText(el, "Add a condition"));
+    const to = [...el.querySelectorAll("select")].find((s) => s.getAttribute("aria-label") === "where row 1 goes")!;
+    type(to, "");
+
+    // the wizard is still mounted, and so is the live picture beside it
+    expect(el.querySelector(".builder-rail-label")).not.toBeNull();
+    expect(el.querySelector("svg.dag")).not.toBeNull();
+    const rail = buttons(el).find((b) => b.getAttribute("aria-label")?.startsWith("Branching"))!;
+    expect(rail.getAttribute("aria-label")).toContain("1 to sort out");
+    expect(el.textContent).toContain('has a "go to" with no step picked');
   });
 });

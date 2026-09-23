@@ -13,6 +13,14 @@
  * and the arrow keys walk the nodes in layout order so reaching the tenth node does not
  * cost ten Tabs. The geometry is untouched — layout() is the same function.
  *
+ * HOW-22: this component now draws a DRAFT as well as a run. A run's shape is derived by the
+ * server and is internally consistent; a draft is being TYPED, so an edge may name a step that
+ * is not there yet ("go to [pick a step]") and a re-opened hand-edited module may name one
+ * that never was. The edge and node loops below therefore SKIP what they cannot place instead
+ * of asserting it with `!` — a picture is not a gate, and the assertion took the whole app
+ * down with it, unsaved draft included, because web/app has no error boundary. The missing
+ * step is reported in words by specProblems(), in the pane that fixes it.
+ *
  * The box truncates a node id at 20 characters, and what carries the full one is the node's
  * OWN aria-label rather than a tooltip. A Tooltip here would have to live in a
  * `foreignObject`, whose overflow Safari clips — so the floating panel would be cut off
@@ -231,8 +239,11 @@ export function GraphDag({
           </marker>
         </defs>
         {shape.edges.map((e, i) => {
-          const a = pos.get(e.from)!;
-          const b = pos.get(e.to)!;
+          const a = pos.get(e.from);
+          const b = pos.get(e.to);
+          // layout() places the steps that EXIST, so an edge naming one that does not has no
+          // position to draw between. Skip it rather than dereference nothing (see header).
+          if (!a || !b) return null;
           const back = depthOf(e.to) <= depthOf(e.from) && e.from !== e.to;
           const x1 = a.x + 90, y1 = a.y + 52, x2 = b.x + 90, y2 = b.y - 2;
           const d = back
@@ -256,7 +267,11 @@ export function GraphDag({
           );
         })}
         {shape.nodes.map((n, i) => {
-          const p = pos.get(n.id)!;
+          const p = pos.get(n.id);
+          // layout() gives every node in `shape.nodes` a position, an unreached one included
+          // (its trailing layer), so this holds today — it is read rather than asserted so the
+          // node loop cannot become the next edge loop if that ever changes
+          if (!p) return null;
           const isCurrent = n.id === current;
           const v = visits?.[n.id];
           const selectable = !!onSelect && canSelect(n);

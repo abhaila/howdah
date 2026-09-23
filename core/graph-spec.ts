@@ -108,6 +108,16 @@ export function coerceOperand(raw: string, kind: FieldKind | undefined): string 
 }
 
 /**
+ * A `path` reaches INSIDE a structured value, so it means something only on a json field. Left
+ * on any other kind it is both invisible (the inner-name box renders for json only) and fatal
+ * (nothing that kind can hold has that path in it, so the row can never fire) — HOW-22 review,
+ * finding 3.
+ */
+export function keepPath(path: string | undefined, kind: FieldKind | undefined): string | undefined {
+  return kind === "json" && path ? path : undefined;
+}
+
+/**
  * Why this condition row can never fire, or null — the same rule as `coerceOperand`, read
  * backwards. A row that compiles to a predicate no runtime value can satisfy saves clean and
  * then silently never routes: `flag == ''` on a yes/no field, `count == '3'` as text on a
@@ -127,6 +137,13 @@ export function coerceOperand(raw: string, kind: FieldKind | undefined): string 
  * a path are unchecked for the same reason — a command may write a number into a text field.
  */
 export function unmatchableOperand(p: Predicate, field: FieldSpec | undefined): string | null {
+  // a path the field's kind cannot carry is the one path case that IS decidable, and it was the
+  // silent one: re-pointing a json row at a text field carried the path across, the inner-name
+  // box stopped rendering so it could not be removed, and the row saved clean and never fired.
+  // `field &&` is deliberate — an unknown key is already reported by the caller's own branch,
+  // and this is a public export that must not invent a verdict about a field it cannot see.
+  if (p.path && field && field.kind !== "json")
+    return `reaches inside \`${p.key}\` for \`${p.path}\`, but \`${p.key}\` is not a structured (JSON) field — nothing it can hold has a \`${p.path}\` in it.`;
   if (p.path) return null;
   const operands: Array<string | number | boolean> =
     p.op === "one-of" ? p.values : p.op === "equals" || p.op === "not-equals" ? [p.value] : [];
@@ -142,12 +159,16 @@ export function unmatchableOperand(p: Predicate, field: FieldSpec | undefined): 
   return null;
 }
 
-/** Every operand a predicate carries, re-typed for its field's kind. Nullary ops are returned
- *  untouched — they compare against nothing, so there is nothing to coerce. */
+/** Every operand a predicate carries, re-typed for its field's kind, and its `path` dropped when
+ *  the kind can no longer carry one (keepPath). Nullary ops keep no operand — they compare
+ *  against nothing, so there is nothing to coerce — but they can still carry a stale path. */
 export function recoercePredicate(p: Predicate, kind: FieldKind | undefined): Predicate {
-  if (p.op === "equals" || p.op === "not-equals") return { ...p, value: coerceOperand(String(p.value), kind) };
-  if (p.op === "one-of") return { ...p, values: p.values.map((v) => coerceOperand(String(v), kind)) };
-  return p;
+  const path = keepPath(p.path, kind);
+  const base = { ...p, ...(path ? { path } : {}) };
+  if (!path) delete (base as { path?: string }).path;
+  if (base.op === "equals" || base.op === "not-equals") return { ...base, value: coerceOperand(String(base.value), kind) };
+  if (base.op === "one-of") return { ...base, values: base.values.map((v) => coerceOperand(String(v), kind)) };
+  return base;
 }
 
 interface NodeBase {
@@ -563,6 +584,19 @@ export function specProblems(spec: GraphSpec, opts: { knownPrompts?: readonly st
       // consequence is held back until the cause is fixed.
       if (!SPEC_PROMPT_ID.test(n.prompt)) {
         if (namedYet) problems.push({ node: n.id, where: "steps", message: `${who} has no prompt file name.` });
+      } else if (namedYet && !n.prompt.startsWith(`${spec.name}.`)) {
+        // A GRAPH WRITES ONLY ITS OWN PROMPTS. Local prompts share one directory, so the
+        // `<graph>.<step>` prefix is the ONLY thing keeping two graphs' instructions apart —
+        // and nothing proved it, so a create naming another graph's id rewrote that graph's
+        // prompt file and returned ok (HOW-22 review, finding 4). A graph name cannot contain a
+        // dot (LOCAL_NAME / SPEC_GRAPH_NAME), so `a.` and `a-b.` cannot overlap. The prefix
+        // rather than exact equality with promptIdFor(name, n.id), because two steps of ONE
+        // graph sharing a body is legitimate and already supported (remove-step keeps a body
+        // another step still names). Gated on `namedYet` for the same reason the id check is.
+        problems.push({
+          node: n.id, where: "steps",
+          message: `${who}'s instructions are filed under "${n.prompt}", which belongs to another graph. A graph owns the prompts called \`${spec.name}.<step>\` and no others — rename the step, or give it its own instructions.`,
+        });
       } else if (knownPrompts && !knownPrompts.has(n.prompt))
         problems.push({ node: n.id, where: "steps", message: `${who} names the prompt "${n.prompt}", which has no file yet. Write its instructions.` });
       if (n.requires && !spec.nodes.some((x) => x.id === n.requires && x.kind === "approval"))
@@ -590,6 +624,12 @@ export function specProblems(spec: GraphSpec, opts: { knownPrompts?: readonly st
     });
   for (const e of spec.edges) {
     if (!ids.has(e.from)) problems.push({ where: "branching", message: `A "go to" starts from a step that no longer exists ("${e.from}"). Remove it.` });
+    // an UNPICKED target and a target that was REMOVED are different things that happened, and
+    // the second sentence read as the first ('points at a step that no longer exists ("")').
+    // The row is kept either way: a row IS its edge, so dropping it would take the condition the
+    // operator just typed with it (HOW-22 review, finding 1).
+    else if (!e.to)
+      problems.push({ node: e.from, where: "branching", message: `**${titleOf(spec, e.from)}** has a "go to" with no step picked. Choose where it goes, or remove the row.` });
     else if (!ids.has(e.to)) problems.push({ node: e.from, where: "branching", message: `**${titleOf(spec, e.from)}** points at a step that no longer exists ("${e.to}"). Pick a step that does.` });
     else if (e.when && !fieldKeys.has(e.when.key))
       problems.push({ node: e.from, where: "branching", message: `**${titleOf(spec, e.from)}** branches on \`${e.when.key}\`, which is not a field.` });
@@ -830,7 +870,9 @@ export function parseGraphSpec(value: unknown): ParseResult {
   };
 }
 
-/** `my-review` + `draft` → `my-review.draft`: a prompt id no other graph can collide with. */
+/** `my-review` + `draft` → `my-review.draft`: a prompt id no other graph can collide with —
+ *  enforced by `specProblems` and again by `graphs/builder.ts`, because local prompts share one
+ *  directory and the `<graph>.` prefix is the only thing keeping them apart (HOW-22 review). */
 export function promptIdFor(graphName: string, nodeId: string): string {
   return `${graphName}.${nodeId}`;
 }

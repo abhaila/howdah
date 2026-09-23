@@ -19,6 +19,13 @@
  *   the declaration and the text cannot disagree. (The builder computes the same thing live
  *   with the same function, for the "This step will be given…" line.)
  *
+ *   A GRAPH WRITES ONLY ITS OWN PROMPTS. Every local prompt lives in one directory, so the
+ *   `<graph>.<step>` prefix is all that keeps two graphs' instructions apart. The loop below
+ *   asks four questions of every prompt id it is handed — is it a usable id, does a step of
+ *   THIS spec name it, does the repo already ship one, and is it this graph's to write — and it
+ *   must be able to answer the last one alone, without reasoning through the spec, because a
+ *   create naming another graph's id rewrote that graph's prompt and returned ok.
+ *
  *   A CREATE NEVER DESTROYS. The save declares whether it is a create or an update, and a
  *   create that lands on a name a graph already owns is refused before any write. Sibling
  *   `POST /api/graphs` has kept that guarantee since day one (`cli/new-graph.ts` throws on an
@@ -141,6 +148,8 @@ export async function saveBuilderGraph(opts: {
   for (const id of Object.keys(prompts)) {
     if (!SPEC_PROMPT_ID.test(id)) return { ok: false, error: `"${id}" is not a usable prompt name` };
     if (!declaredIds.has(id)) return { ok: false, error: `no step names the prompt "${id}"` };
+    if (!id.startsWith(`${opts.spec.name}.`))
+      return { ok: false, error: `"${id}" is another graph's prompt — a graph may only write the ones called "${opts.spec.name}.<step>".` };
     if (existsSync(join(repoRoot, "prompts", `${id}.md`)))
       return { ok: false, error: `"${id}" is one of Howdah's own prompts — a local one would shadow it everywhere. Rename the step.` };
   }

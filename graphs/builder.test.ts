@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promptIdFor, promptIdsOf, readLocalPrompt, renderSpecModule, saveBuilderGraph } from "./builder";
 import { loadLocalGraph, localGraphPath, localPromptsDir, ensureLocalDirs } from "./local";
-import { COMMAND_BUILTINS, WORKTREE_FACTS, coerceOperand, type GraphSpec, type NodeSpec } from "../core/graph-spec";
+import { COMMAND_BUILTINS, WORKTREE_FACTS, coerceOperand, keepPath, type GraphSpec, type NodeSpec } from "../core/graph-spec";
 // the reducer is plain data over core/ — no React, no DOM — so the browser's verdict can be
 // driven from here and compared against this file's gate, which is the whole point below
 import { PRESETS, draftProblems, draftReducer, newStep, pickPrompts, type Draft, type DraftAction } from "../web/app/lib/spec-draft";
@@ -187,6 +187,55 @@ describe("what a prompt id is allowed to be", () => {
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error).toContain("shadow");
     expect(existsSync(join(localPromptsDir(h), "delivery.publish.md"))).toBe(false);
+  });
+
+  /**
+   * HOW-22 review, finding 4. Local prompts share ONE directory, so `<graph>.<step>` is the only
+   * thing keeping two graphs' instructions apart — and nothing proved it, so a create naming
+   * another graph's id rewrote that graph's prompt file and returned ok. This is C7's guarantee
+   * ("a create that lands on an existing graph is refused, never merged") one level down: the
+   * module was protected and the prompts it renders from were not.
+   */
+  test("a save may not write ANOTHER local graph's prompt — the victim's bytes survive it", async () => {
+    const h = home();
+    const victim = tiny("victim", "victim.work");
+    expect((await saveBuilderGraph({ intent: "create", home: h, repoRoot: ROOT, spec: victim, prompts: { "victim.work": "Do the work. {{ context.goal }}" } })).ok).toBe(true);
+    const path = join(localPromptsDir(h), "victim.work.md");
+    const before = readFileSync(path, "utf8");
+    const listing = readdirSync(localPromptsDir(h)).sort();
+
+    const attacker = tiny("attacker", "victim.work");
+    const r = await saveBuilderGraph({ intent: "create", home: h, repoRoot: ROOT, spec: attacker, prompts: { "victim.work": "PWNED. {{ context.goal }}" } });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toContain("another graph's prompt");
+    expect(readFileSync(path, "utf8")).toBe(before);
+    expect(existsSync(localGraphPath(h, "attacker"))).toBe(false);
+    expect(readdirSync(localPromptsDir(h)).sort()).toEqual(listing);
+  });
+
+  test("the same id in the PAYLOAD alone is refused too — the two guards leave no hole", async () => {
+    const h = home();
+    // declared by no step of this spec, so the "no step names" guard fires first; asserted so a
+    // later reshuffle of the loop cannot let a foreign id through on the strength of the other
+    const r = await saveBuilderGraph({ intent: "create", home: h, repoRoot: ROOT, spec: tiny("mine", "mine.work"), prompts: { "mine.work": "x", "victim.work": "y" } });
+    expect(r.ok).toBe(false);
+    expect(existsSync(join(localPromptsDir(h), "victim.work.md"))).toBe(false);
+  });
+
+  test("...and two steps of ONE graph sharing a body still saves, which is how remove-step leaves things", async () => {
+    const h = home();
+    const spec: GraphSpec = {
+      version: 1, name: "shared", description: "", fields: [{ key: "goal", kind: "text", scope: "sticky" }], inputs: ["goal"],
+      entry: "work",
+      nodes: [
+        { id: "work", kind: "agent", prompt: "shared.work", reads: ["goal"], writes: [] },
+        { id: "again", kind: "agent", prompt: "shared.work", reads: ["goal"], writes: [] },
+        { id: "done", kind: "terminal", outcome: "success" },
+      ],
+      edges: [{ from: "work", to: "again" }, { from: "again", to: "done" }],
+    };
+    const r = await saveBuilderGraph({ intent: "create", home: h, repoRoot: ROOT, spec, prompts: { "shared.work": "Do it. {{ context.goal }}" } });
+    expect(r.ok, r.ok ? "" : r.error).toBe(true);
   });
 
   test("an existing prompt file keeps its version rather than being renumbered", async () => {
@@ -395,6 +444,57 @@ describe("the browser's verdict and the server's gate cannot disagree", () => {
       applies: (d) => d.spec.fields.some((f) => f.kind === "text" && d.spec.inputs.includes(f.key)),
       apply: (d) => addSeededRow(d, d.spec.fields.find((f) => f.kind === "text")!.key),
       saves: false,
+    },
+    // HOW-22 review, finding 1. "go to [pick a step]" is a real state of the picker; it must be
+    // reported in words, and the picture beside it must survive being drawn (graph-dag.test.tsx).
+    {
+      name: "point a branch at no step",
+      apply: (d) => {
+        const from = d.spec.entry;
+        return draftReducer(d, {
+          type: "set-branching", from,
+          edges: d.spec.edges.filter((e) => e.from === from).map((e, i) => (i === 0 ? { to: "", ...(e.when ? { when: e.when } : {}) } : { to: e.to, ...(e.when ? { when: e.when } : {}) })),
+        });
+      },
+      saves: false,
+    },
+    // HOW-22 review, finding 3. A path on a field that cannot hold one saved clean and never
+    // fired; it is the verdict, not the form, that has to say so.
+    {
+      name: "reach inside a field that is not structured",
+      applies: (d) => d.spec.edges.some((e) => e.when && d.spec.fields.some((f) => f.key === e.when!.key && f.kind !== "json")),
+      apply: (d) => ({
+        ...d,
+        spec: {
+          ...d.spec,
+          edges: d.spec.edges.map((e) =>
+            e.when && d.spec.fields.some((f) => f.key === e.when!.key && f.kind !== "json")
+              ? { ...e, when: { ...e.when, path: "outcome" } }
+              : e),
+        },
+      }),
+      saves: false,
+    },
+    // ...and the REPAIR must leave a LEGAL row, or the fix would merely have moved the dead end.
+    // keepPath is the rule BOTH mutation paths resolve through (repredicate in the pane,
+    // recoercePredicate in the reducer), applied here the way they apply it.
+    {
+      name: "re-point a json row with a path at a text field",
+      applies: (d) => d.spec.edges.some((e) => e.when) && d.spec.fields.some((f) => f.kind === "text" && d.spec.inputs.includes(f.key)),
+      apply: (d) => {
+        const key = d.spec.fields.find((f) => f.kind === "text" && d.spec.inputs.includes(f.key))!.key;
+        const e0 = d.spec.edges.find((e) => e.when)!;
+        const path = keepPath("outcome", "text");
+        return {
+          ...d,
+          spec: {
+            ...d.spec,
+            edges: d.spec.edges.map((e) =>
+              e === e0 ? { ...e, when: { op: "equals" as const, key, ...(path ? { path } : {}), value: "reject" } } : e),
+          },
+        };
+      },
+      saves: true,
     },
     {
       name: "a branch comparing a yes/no field with text",

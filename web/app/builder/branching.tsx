@@ -24,7 +24,7 @@ import {
   // coerceOperand lives in core beside Predicate and FieldKind, because a field's kind can
   // change AFTER a row is written and the reducer has to re-type the operand with the very
   // same rule this control used (HOW-22 review, finding 4)
-  NULLARY_OPS, coerceOperand,
+  NULLARY_OPS, coerceOperand, keepPath,
   type EdgeSpec, type FieldSpec, type GraphSpec, type Predicate, type PredicateOp, type SpecProblem,
 } from "../../../core/graph-spec";
 import type { Draft, DraftAction } from "@/lib/spec-draft";
@@ -33,6 +33,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
+import { useTypedText } from "@/lib/hooks";
 
 /** the predicate vocabulary in the operator's words; the op itself is what gets stored */
 const OP_LABELS: Array<{ op: PredicateOp; label: string }> = [
@@ -54,14 +55,45 @@ const operandText = (p: Predicate): string =>
 function repredicate(p: Predicate, over: { op?: PredicateOp; key?: string; path?: string; text?: string }, fields: FieldSpec[]): Predicate {
   const op = over.op ?? p.op;
   const key = over.key ?? p.key;
-  const path = over.path !== undefined ? over.path : p.path;
   const field = fields.find((f) => f.key === key);
+  // the path is RESOLVED, not merely carried: re-pointing a json row at a text field used to
+  // keep an inner name the form then stopped rendering, leaving a row that saved clean and could
+  // never fire (HOW-22 review, finding 3). keepPath is the same rule recoercePredicate uses.
+  const path = keepPath(over.path !== undefined ? over.path : p.path, field?.kind);
   const text = over.text !== undefined ? over.text : operandText(p);
   const base = { key, ...(path ? { path } : {}) };
   if (op === "one-of")
     return { ...base, op, values: text.split(",").map((x) => x.trim()).filter(Boolean).map((x) => coerceOperand(x, field?.kind)) };
   if (op === "equals" || op === "not-equals") return { ...base, op, value: coerceOperand(text, field?.kind) };
   return { ...base, op };
+}
+
+/** What this row will STORE for `text`, read back as the box's own text — `repredicate`'s own
+ *  rule, CALLED rather than restated, so the two cannot drift. */
+const storedText = (text: string, p: Predicate, field: FieldSpec | undefined): string =>
+  operandText(repredicate(p, { text }, field ? [field] : []));
+
+/**
+ * The typed operand box. Its own component because a hook may not be called conditionally and
+ * `Operand` returns early for the nullary and picker cases.
+ *
+ * It is controlled by MEANING, not by spelling (useTypedText): the stored operand is typed
+ * data, so feeding it straight back destroyed `3.`, `-` and every comma on the way to a second
+ * value (HOW-22 review, finding 2). Blur settles the box on what the draft actually holds, so
+ * a `-` never sits on screen next to a stored 0.
+ */
+function OperandInput({ p, field, onText }: { p: Predicate; field: FieldSpec | undefined; onText: (text: string) => void }) {
+  const stored = operandText(p);
+  const [shown, setTyped] = useTypedText(stored, (t) => storedText(t, p, field));
+  return (
+    <Input
+      value={shown}
+      aria-label={`what ${p.key} is compared with`}
+      placeholder={p.op === "one-of" ? "pass, warn" : field?.kind === "number" ? "0" : "reject"}
+      onChange={(e) => { setTyped(e.target.value); onText(e.target.value); }}
+      onBlur={() => setTyped(stored)}
+    />
+  );
 }
 
 /** The operand control — a picker wherever the field's kind knows the answers. */
@@ -84,14 +116,9 @@ function Operand({ p, field, onText }: { p: Predicate; field: FieldSpec | undefi
       </Select>
     );
   }
-  return (
-    <Input
-      value={text}
-      aria-label={`what ${p.key} is compared with`}
-      placeholder={p.op === "one-of" ? "pass, warn" : field?.kind === "number" ? "0" : "reject"}
-      onChange={(e) => onText(e.target.value)}
-    />
-  );
+  // the pickers above are fully controlled on purpose: their options ARE the stored values, so
+  // there is no in-progress keystroke to keep
+  return <OperandInput p={p} field={field} onText={onText} />;
 }
 
 function StepBranching({ spec, from, problems, onChange }: {

@@ -194,6 +194,31 @@ describe("saving a graph built in the viewer", () => {
     expect(existsSync(localGraphPath(base, "write-doc"))).toBe(false);
   });
 
+  /**
+   * HOW-22 review, finding 4. Local prompts share one directory, so `<graph>.<step>` is the only
+   * thing keeping two graphs' instructions apart — and this route is public, so the wizard
+   * deriving its ids protected nothing. A well-formed request for a graph the gate refuses is a
+   * 422, which is what the route already answers for a specProblems refusal.
+   */
+  test("a create naming ANOTHER graph's prompt is refused, and that graph's body survives", async () => {
+    await put("/api/graphs/victim/builder", { intent: "create", spec: spec("victim"), prompts: prompts("victim", "ORIGINAL. {{ context.goal }}") });
+    const victimPrompt = join(base, "prompts", "victim.draft.md");
+    const before = readFileSync(victimPrompt, "utf8");
+
+    const hijack = {
+      ...spec("attacker"),
+      nodes: [
+        { id: "draft", kind: "agent", title: "Draft it", prompt: "victim.draft", reads: [], writes: ["summary"] },
+        { id: "done", kind: "terminal", outcome: "success" },
+      ],
+    };
+    const r = await put("/api/graphs/attacker/builder", { intent: "create", spec: hijack, prompts: { "victim.draft": "PWNED. {{ context.goal }}" } });
+    expect(r.status).toBe(422);
+    expect((await r.json() as { error: string }).error).toContain("another graph");
+    expect(readFileSync(victimPrompt, "utf8")).toBe(before);
+    expect(existsSync(localGraphPath(base, "attacker"))).toBe(false);
+  });
+
   test("a spec the server cannot vouch for is refused, not written", async () => {
     for (const bad of [
       { spec: { ...spec("nope"), version: 9 } },
