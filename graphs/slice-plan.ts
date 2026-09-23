@@ -54,6 +54,31 @@ export interface SlicePlan {
   risks: string[];
 }
 
+/**
+ * A ticket the `tickets.create` step raised, joined to its slice by `slice_id`. The tracker is
+ * reached through the agent's own tooling (as `complete_ticket` already closes tickets), so
+ * this is what comes BACK from it — never a client of any tracker's API.
+ */
+export interface SliceTicket {
+  slice_id: string;
+  identifier: string;
+  url: string;
+  title?: string;
+}
+
+/**
+ * What `runs:launch` publishes: what started, and what was already running and was NOT
+ * restarted. `skipped` is a fact, not an error — a re-attempt of the launch step is the normal
+ * way an interrupted fan-out finishes, and it has to be able to say so.
+ *
+ * It lives here rather than with the executor because the graph declares the key and no graph
+ * imports an executor.
+ */
+export interface LaunchResult {
+  launched: Array<{ slice_id: string; ticket: string; run_id: string; workspace: string }>;
+  skipped: Array<{ slice_id: string; run_id: string; reason: string }>;
+}
+
 export type SlicePlanValidation = { ok: true; plan: SlicePlan } | { ok: false; errors: string[] };
 
 export interface SlicePlanOptions {

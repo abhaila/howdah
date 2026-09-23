@@ -38,7 +38,11 @@ import type { AttemptResult, ExecArgs, Executor } from "../run";
 import { declaredWrites } from "./map";
 import { launchArgs, type LaunchRequest } from "../../core/launch-args";
 import { normalizeRunName } from "../../core/run-name";
-import { validateSlicePlan, type Slice, type SlicePlan } from "../../graphs/slice-plan";
+// the slice-plan contract (the plan, its tickets, and what a launch publishes) is pure data
+// and lives with the graph that declares those keys — no graph imports an executor
+import { validateSlicePlan, type LaunchResult, type Slice, type SlicePlan, type SliceTicket } from "../../graphs/slice-plan";
+
+export type { LaunchResult, SliceTicket };
 
 export const LAUNCH_BUILTIN = "runs:launch";
 
@@ -56,20 +60,6 @@ export const TICKETS_KEY = "tickets";
 
 export function isLaunchBuiltin(run: string): boolean {
   return run.trim().split(/\s+/)[0] === LAUNCH_BUILTIN;
-}
-
-/** A ticket the `tickets.create` step raised, joined to its slice by `slice_id`. */
-export interface SliceTicket {
-  slice_id: string;
-  identifier: string;
-  url: string;
-  title?: string;
-}
-
-/** What `runs:launch` publishes: what started, and what was already running and was not restarted. */
-export interface LaunchResult {
-  launched: Array<{ slice_id: string; ticket: string; run_id: string; workspace: string }>;
-  skipped: Array<{ slice_id: string; run_id: string; reason: string }>;
 }
 
 /**
