@@ -238,11 +238,11 @@ describe("comment anchoring", () => {
       { id: "c2", entity_id: "GET /ping", text: "should be POST" },
       { id: "c3", entity_id: `GET /ping→${fn("ping(Request)")}:route-handler`, text: "edge" },
     ];
-    expect(orphanedComments(comments, v1)).toEqual([]);
+    expect(orphanedComments(comments, ghostEntityIds(v1))).toEqual([]);
     // v2 renames the route: the route comment and its edge comment are orphaned
     const v2 = structuredClone(v1);
     v2.entities[1]!.id = "POST /ping";
     v2.edges[0]!.from = "POST /ping";
-    expect(orphanedComments(comments, v2).map((c) => c.id)).toEqual(["c2", "c3"]);
+    expect(orphanedComments(comments, ghostEntityIds(v2)).map((c) => c.id)).toEqual(["c2", "c3"]);
   });
 });

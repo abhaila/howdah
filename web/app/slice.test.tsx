@@ -411,6 +411,26 @@ describe("ApprovalCard over a slice plan", () => {
     expect($(el, '.plan-slice[data-id="api-route"] .ap-comment-text')!.textContent).toBe("split the migration out");
   });
 
+  test("a comment on a slice the redraw dropped is ORPHANED, not silently filed on nothing", () => {
+    const log = new FakeLog();
+    started(log, "plan-feature");
+    const first = proposeRound(log, planV1());
+    pin(log, first, "web-client", "fold this into the first slice");
+    pin(log, first, "api-route", "keep this one");
+    log.add({ type: "slice-feedback-sent", proposal_id: first, proposal_hash: `h${first}`, manifest_hash: "m1", comment_ids: [] });
+    // the redraw does what was asked and the `web-client` slice is gone with it
+    const redraft = { ...planV1(), slices: planV1().slices.slice(0, 1) };
+    proposeAndPark(log, redraft, 2);
+
+    const el = render(<ApprovalCard runId="r1" slice={deriveSlice(log.events)!} onChanged={noop} />);
+    const orphans = $(el, '[data-testid="orphaned"]')!;
+    expect(orphans.textContent).toContain("fold this into the first slice");
+    expect(orphans.textContent).toContain("web-client");
+    // the one whose slice survived stays on its row rather than being swept up with it
+    expect(orphans.textContent).not.toContain("keep this one");
+    expect($(el, '.plan-slice[data-id="api-route"] .ap-comment-text')!.textContent).toBe("keep this one");
+  });
+
   test("a proposal that is neither a ghost set nor a plan still shows as proposed", () => {
     const log = new FakeLog();
     started(log, "quick-task");

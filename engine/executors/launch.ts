@@ -27,6 +27,10 @@
  *      observed reality beats recorded state.
  *   3. `effects.claim()` / `done()` around each spawn. A death between the two leaves an
  *      AMBIGUOUS intent, which parks the run for `howdah resolve-effect` rather than guessing.
+ * The spawn is detached and unawaited — the parent never learns a child's exit code, by design
+ * — so "proven done" here means "we started it", not "it is running". Where the record and the
+ * run directory disagree, guard 2 is asked FIRST and the disagreement is reported as a fact
+ * (observed reality beats recorded state), never silently read as a launch that happened.
  *
  * The spawn itself goes through a `spawn` seam, defaulted to a detached, unref'd `Bun.spawn`,
  * for the same reason `ServerOpts.spawnRun` and `CommandExecutorOpts.prProbe` have one: the
@@ -104,17 +108,29 @@ export function launchBuiltinExecutor(opts: LaunchBuiltinOpts = {}): Executor {
     const overrides = started?.type === "run-started" ? started.overrides : undefined;
 
     const result: LaunchResult = { launched: [], skipped: [] };
+    const unaccounted: string[] = [];
     for (const { slice, ticket, workspace } of checked.targets) {
       const child = childRunId(runId, slice.id);
-      // an existing child run dir: a re-attempt, a resume, or an operator jump back onto this
-      // node — never a reason to start a second run against the same ticket
+      // OBSERVED REALITY FIRST. An existing child run dir is a re-attempt, a resume, or an
+      // operator jump back onto this node — never a reason to start a second run against the
+      // same ticket. It is checked BEFORE the record, so that a record and a reality that
+      // disagree are caught below instead of being read as "already launched".
       if (existsSync(join(runsDir, child, "run.jsonl"))) {
         result.skipped.push({ slice_id: slice.id, run_id: child, reason: `run ${child} already exists` });
         continue;
       }
       const effect = `launch-run:${child}`;
       if (effects.claim(effect)) {
-        result.skipped.push({ slice_id: slice.id, run_id: child, reason: `run ${child} was already launched by an earlier attempt of ${nodeId}` });
+        // proven done, and yet no run. The spawn is detached and unawaited — the parent never
+        // sees a child's exit code — so the honest thing is to say what is and is not known
+        // rather than to report the slice as launched or to silently launch it twice. Doing it
+        // again could duplicate a real run that is merely slow to write its first line, and
+        // the operator can start it by hand: the id is deterministic and printed here.
+        unaccounted.push(child);
+        result.skipped.push({
+          slice_id: slice.id, run_id: child,
+          reason: `${nodeId} recorded launching ${child}, but no run exists at ${join(runsDir, child)} — it never started, or it has not written its first line yet`,
+        });
         continue;
       }
       spawn(launchArgs(childRequest(slice, ticket, workspace, checked.plan, runId, overrides), child));
@@ -126,7 +142,13 @@ export function launchBuiltinExecutor(opts: LaunchBuiltinOpts = {}): Executor {
       result.launched.push({ slice_id: slice.id, ticket: ticket.identifier, run_id: child, workspace });
     }
 
-    return { status: "succeeded", writes: declaredWrites(LAUNCH_BUILTIN, def, { launched: result }) };
+    return {
+      status: "succeeded",
+      writes: declaredWrites(LAUNCH_BUILTIN, def, { launched: result }),
+      // a thread note, not a park: the fan-out that DID happen still stands, and this is a
+      // disagreement for a human to look at, never something to auto-resolve
+      ...(unaccounted.length ? { reason: `recorded as launched but not found: ${unaccounted.join(", ")} — start each by hand if it is really missing` } : {}),
+    };
   };
 }
 

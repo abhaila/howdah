@@ -55,8 +55,15 @@ interface Harness {
   run: (reads: Record<string, unknown>, over?: { def?: NodeDef<any>; runId?: string; cwd?: string }) => Promise<AttemptResult>;
 }
 
-/** one parent run dir, a recording spawn seam, and the real command executor over both */
-function harness(opts: { workspaces?: WorkspaceLookup; overrides?: Record<string, unknown> } = {}): Harness {
+/**
+ * One parent run dir, a recording spawn seam, and the real command executor over both.
+ *
+ * The seam writes the child's run.jsonl as a real launch would, because half of what this
+ * executor does is compare the record with the run directory — a seam that recorded argv and
+ * left no run behind would make every re-attempt look like the "recorded but missing" case.
+ * `deadSpawn` is that case on purpose: a child that never starts.
+ */
+function harness(opts: { workspaces?: WorkspaceLookup; overrides?: Record<string, unknown>; deadSpawn?: boolean } = {}): Harness {
   const dir = mkdtempSync(join(tmpdir(), "howdah-launch-"));
   const runsDir = join(dir, "runs");
   const runId = "plan-feature-abc";
@@ -67,7 +74,14 @@ function harness(opts: { workspaces?: WorkspaceLookup; overrides?: Record<string
   });
   const spawned: string[][] = [];
   const exec = commandExecutor({
-    launch: { runsDir, workspaces: opts.workspaces ?? WORKSPACES, spawn: (argv) => void spawned.push(argv) },
+    launch: {
+      runsDir,
+      workspaces: opts.workspaces ?? WORKSPACES,
+      spawn: (argv) => {
+        spawned.push(argv);
+        if (!opts.deadSpawn) seedChild(runsDir, flag(argv, "--id")!);
+      },
+    },
   });
   const done = new Set<string>();
   return {
@@ -247,8 +261,33 @@ describe("exactly-once", () => {
     const again = await h.run(reads);
     expect(h.spawned).toHaveLength(1);
     expect(launched(again).launched).toEqual([]);
-    expect(launched(again).skipped[0]!.reason).toContain("already launched by an earlier attempt of runs.launch");
+    expect(launched(again).skipped[0]!.reason).toContain("already exists");
     expect(h.events().filter((e) => e.type === "run-spawned")).toHaveLength(1);
+  });
+
+  test("a launch recorded with no run to show for it is REPORTED, not read as launched", async () => {
+    // the spawn is detached and unawaited, so "proven done" means "we started it", never
+    // "it is running" — a child that died on the way up must not vanish into a benign skip
+    const h = harness({ deadSpawn: true });
+    const reads = { "plan.slices": { feature: "f", slices: [slice()] }, tickets: { tickets: [ticket()] } };
+    await h.run(reads);
+    const again = await h.run(reads);
+
+    expect(h.spawned).toHaveLength(1); // not launched again: that could duplicate a slow starter
+    expect(launched(again).launched).toEqual([]);
+    expect(launched(again).skipped[0]!.reason).toContain("recorded launching plan-feature-abc--add-endpoint, but no run exists");
+    // it reaches the thread as well as the write, so the operator sees it without opening Context
+    expect(again.reason).toContain("recorded as launched but not found: plan-feature-abc--add-endpoint");
+    expect(again.reason).toContain("start each by hand");
+    expect(again.status).toBe("succeeded"); // the fan-out that DID happen still stands
+    expect(h.events().filter((e) => e.type === "run-spawned")).toHaveLength(1);
+  });
+
+  test("a run that really started reports no disagreement at all", async () => {
+    const h = harness();
+    const reads = { "plan.slices": { feature: "f", slices: [slice()] }, tickets: { tickets: [ticket()] } };
+    await h.run(reads);
+    expect((await h.run(reads)).reason).toBeUndefined();
   });
 
   test("one run-spawned per child, naming the slice, the ticket and the workspace", async () => {

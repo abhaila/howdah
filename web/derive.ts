@@ -23,7 +23,7 @@ import { currentProposal, decisionAnswers, decisionKind, findDecision } from "..
 import { replayState } from "../engine/replay";
 import type { Scope } from "../core/context";
 import { coalesce, outcomesByHash, type CoalescedTurn, type JoinedOutcome } from "../log/coalesce";
-import { ghostEdgeId, orphanedComments, OPS, type GhostSet, type GhostTrace, type Op } from "../map/ghosts";
+import { ghostEdgeId, ghostEntityIds, orphanedComments, OPS, type GhostSet, type GhostTrace, type Op } from "../map/ghosts";
 import { DRIFT_OUTCOMES, type DriftItem, type DriftOutcome } from "../map/drift";
 import { PROBLEM_OUTCOMES, snapshotStamp } from "../engine/slice-map";
 import type { AssembledMap, EntityKind, Tier } from "../map/types";
@@ -938,6 +938,7 @@ export function deriveSlice(events: LoggedEvent[], snapshot: SnapshotIndex | nul
 
   if (current) {
     const ghosts = asGhostSet(current.proposal);
+    const plan = asSlicePlan(current.proposal);
     const groups = ghosts ? groupGhosts(ghosts, snapshot) : [];
     const rows = groups.flatMap((g) => [...(g.row ? [g.row] : []), ...g.entities, ...g.edges]);
     const tier_counts: Partial<Record<Tier, number>> = {};
@@ -950,7 +951,7 @@ export function deriveSlice(events: LoggedEvent[], snapshot: SnapshotIndex | nul
       at: current.ts,
       node: current.node,
       ghosts,
-      plan: asSlicePlan(current.proposal),
+      plan,
       raw: current.proposal,
       groups,
       traces: ghosts?.trace ?? [],
@@ -966,7 +967,11 @@ export function deriveSlice(events: LoggedEvent[], snapshot: SnapshotIndex | nul
         ? [{ id: e.id, entity_id: e.entity_id, text: e.text, proposal_id: e.proposal_id, round: roundOf.get(e.proposal_id)!, at: e.ts, sent: sentIds.has(e.id) }]
         : [],
     );
-    orphaned = ghosts ? orphanedComments(all, ghosts) : [];
+    // every id a comment on THIS round can still point at: a ghost set's keys, or a slice
+    // plan's slice ids (HOW-23 — the same redraw-dropped-my-key rule, a different vocabulary).
+    // An opaque proposal has no id set, so nothing can honestly be called orphaned.
+    const pinnable = ghosts ? ghostEntityIds(ghosts) : plan ? plan.slices.map((s) => s.id) : null;
+    orphaned = pinnable ? orphanedComments(all, pinnable) : [];
     const orphanIds = new Set(orphaned.map((c) => c.id));
     for (const c of all) if (!orphanIds.has(c.id)) (comments[c.entity_id] ??= []).push(c);
 
