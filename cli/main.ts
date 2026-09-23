@@ -3,8 +3,9 @@
  * howdah — thin scripting verbs (design A9.2: the CLI is not a designed surface, the web
  * view is; these exist for scripts, launchd, and the start-run API).
  *
- *   howdah run <graph> [-i key=value]... [--workspace <name>] [--dir <path>] [--id <run-id>] [--name <text>]
+ *   howdah run <graph> [-i key=value]... [--workspace <name>] [--dir <path>] [--id <run-id>] [--name <text>] [--parent <run-id>]
  *     --name is a display label only (HOW-18); the run id stays identity
+ *     --parent records which run launched this one (HOW-23) — lineage only, nothing routes on it
  *   howdah runs --json
  *   howdah reply <run-id> <text>
  *   howdah resolve-effect <run-id> <effect> happened|not-happened [--node <node>]
@@ -99,7 +100,7 @@ function spawnResume(runId: string): void {
 export function parseRunArgs(argv: string[]) {
   const inputs: Record<string, string> = {};
   const overrides: import("../core/graph").AgentConfig = {};
-  let workspace: string | undefined, dir: string | undefined, id: string | undefined, name: string | undefined;
+  let workspace: string | undefined, dir: string | undefined, id: string | undefined, name: string | undefined, parent: string | undefined;
   const [graphName, ...rest] = argv;
   for (let i = 0; i < rest.length; i++) {
     const a = rest[i]!;
@@ -111,6 +112,8 @@ export function parseRunArgs(argv: string[]) {
     } else if (a === "--workspace") workspace = rest[++i];
     else if (a === "--dir") dir = rest[++i];
     else if (a === "--id") id = rest[++i];
+    // HOW-23: set by `runs:launch` on every child of a plan-feature fan-out — lineage only
+    else if (a === "--parent") parent = rest[++i];
     else if (a === "--name") {
       if (i + 1 >= rest.length) throw new Error("--name needs a value");
       const r = normalizeRunName(rest[++i]);
@@ -130,11 +133,11 @@ export function parseRunArgs(argv: string[]) {
     else if (a === "--skills") overrides.skills = (rest[++i] ?? "").split(",").map((x) => x.trim()).filter(Boolean);
     else throw new Error(`unknown flag: ${a}`);
   }
-  return { graphName, inputs, workspace, dir, id, name, overrides };
+  return { graphName, inputs, workspace, dir, id, name, parent, overrides };
 }
 
 export async function runCommand(argv: string[]): Promise<string> {
-  const { graphName, inputs, workspace, dir, id, name, overrides } = parseRunArgs(argv);
+  const { graphName, inputs, workspace, dir, id, name, parent, overrides } = parseRunArgs(argv);
   // HOWDAH_MODEL is a run-level default so the RECORD shows what actually ran
   if (!overrides.model && process.env.HOWDAH_MODEL) overrides.model = process.env.HOWDAH_MODEL;
   // built-ins plus the operator's own from $HOWDAH_HOME; a local graph that does not load is
@@ -159,7 +162,7 @@ export async function runCommand(argv: string[]): Promise<string> {
   const runId = id ?? `${graphName}-${Date.now().toString(36)}`;
   const runDir = join(runsDir, runId);
   const engine: Engine = new Engine(graph, {
-    dir: runDir, executors: executors(), cwd, folderKind, name, overrides,
+    dir: runDir, executors: executors(), cwd, folderKind, name, parent, overrides,
     promptsDir: promptSearchPath(base, ROOT),
     tuning: loadTuning(base)[graphName!],
     harnesses: harnessSettings(),

@@ -43,6 +43,11 @@ export interface RunSummary {
   graph: string;
   /** HOW-18: the operator's label from run-started; null for an unnamed (or older) run */
   name: string | null;
+  /**
+   * HOW-23: the run that launched this one (a `plan-feature` fan-out), or null for a run an
+   * operator started. Lineage only — a child is an ordinary independent run.
+   */
+  parent: string | null;
   goal: string;
   status: RunStatus;
   started_at: string | null;
@@ -109,6 +114,13 @@ export interface RunDetail {
    * is a row the operator can attest to in the viewer.
    */
   ambiguous_effects: Array<{ node: string; visit: number; effect: string; attempt_id: string }>;
+  /**
+   * HOW-23: the runs this one launched, in launch order, folded from `run-spawned`. Empty for
+   * every run that is not a `plan-feature` parent. What each child DID is its own log's to
+   * say — this is only the link, so the viewer never invents a status for a run it is not
+   * reading.
+   */
+  children: Array<{ run_id: string; slice_id: string; ticket: string | null; graph: string; workspace: string | null; at: string }>;
   events_seq: number;
 }
 
@@ -158,6 +170,7 @@ export function deriveSummary(id: string, events: LoggedEvent[]): RunSummary {
     id,
     graph: started?.type === "run-started" ? started.graph : "?",
     name: started?.type === "run-started" ? started.name ?? null : null,
+    parent: started?.type === "run-started" ? started.parent ?? null : null,
     goal: started?.type === "run-started" ? String((started.inputs as any)?.goal ?? "") : "",
     status,
     started_at: events[0]?.ts ?? null,
@@ -308,6 +321,11 @@ export function deriveDetail(
     context: deriveContextTable(events, declarations),
     identity,
     slice: deriveSlice(events, opts.snapshot ?? null),
+    children: events.flatMap((e) =>
+      e.type === "run-spawned"
+        ? [{ run_id: e.child, slice_id: e.slice_id, ticket: e.ticket ?? null, graph: e.graph, workspace: e.workspace ?? null, at: e.ts }]
+        : [],
+    ),
     ambiguous_effects:
       ask?.code === "ambiguous-effect"
         ? replayState(events).pendingIntents.map((i) => ({ node: i.node, visit: i.visit, effect: i.effect, attempt_id: i.attempt_id }))
@@ -450,6 +468,9 @@ export function deriveLogRows(events: LoggedEvent[]): LogRow[] {
       case "map-extracted":
         return { ...base, ...at(e.node, e.visit), kind: "engine", depth: 0,
           summary: `map ${e.manifest_hash.slice(0, 12)} @ ${e.commit?.slice(0, 12) ?? "(no commit)"}${e.dirty ? " + uncommitted changes" : ""} · ${e.files} files · ${e.skipped} skipped · ${e.not_checked} not-checked · ${e.unparsed} unparsed` };
+      case "run-spawned":
+        return { ...base, ...at(e.node, e.visit), kind: "engine", depth: 0,
+          summary: `launched ${e.graph} run ${e.child} for slice ${e.slice_id}${e.ticket ? ` (${e.ticket})` : ""}${e.workspace ? ` in ${e.workspace}` : ""}` };
       case "map-progress":
         return { ...base, ...at(e.node, e.visit), kind: "engine", depth: 1, summary: `extracting ${e.done}/${e.total} (skipped ${e.skipped})` };
       case "drift-detected": {

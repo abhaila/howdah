@@ -157,6 +157,17 @@ describe("parseRunArgs --name (HOW-18)", () => {
   });
 });
 
+describe("parseRunArgs --parent (HOW-23)", () => {
+  test("carries the launching run's id alongside every other flag", () => {
+    const parsed = parseRunArgs(["implement-ticket", "--id", "p--a", "--parent", "p", "-i", "goal=x", "--workspace", "api"]);
+    expect(parsed).toMatchObject({ graphName: "implement-ticket", id: "p--a", parent: "p", workspace: "api" });
+  });
+
+  test("a run nobody launched has no parent", () => {
+    expect(parseRunArgs(["g"]).parent).toBeUndefined();
+  });
+});
+
 describe("launchArgs (HOW-18)", () => {
   test("forwards a name as --name, and nothing when there is none", () => {
     const args = launchArgs({ graph: "research", name: "My run", inputs: { goal: "g" } }, "research-abc");

@@ -7,7 +7,8 @@ import { dependencyCycles, MAX_SLICES, validateSlicePlan, type Slice } from "./s
 
 const OPTS = { knownWorkspaces: ["api", "web"] };
 
-const slice = (over: Partial<Slice> = {}): Record<string, unknown> => ({
+/** `over` is deliberately untyped: most of these tests feed the validator what a MODEL sent. */
+const slice = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
   id: "add-endpoint",
   title: "Add the endpoint",
   goal: "a caller can POST /things",
