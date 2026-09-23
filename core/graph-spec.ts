@@ -225,14 +225,24 @@ export interface GraphSpec {
 /**
  * What each built-in command produces — the executor emits exactly these and nothing else.
  * `probe:pr` DROPS an undeclared key silently (engine/executors/worktree.ts) and the `map:*`
- * built-ins throw (engine/executors/map.ts declaredWrites); either way a step declaring
- * something else is wrong before it ever runs, which is what emittableWrites() is for.
+ * and `runs:launch` built-ins refuse (engine/executors/map.ts declaredWrites, and
+ * engine/executors/launch.ts before it spawns anything); either way a step declaring something
+ * else is wrong before it ever runs, which is what emittableWrites() is for.
+ *
+ * `reads` is the OTHER half of a built-in's contract, and only `runs:launch` has one: it is the
+ * only built-in that reads context BY NAME (`plan.slices` and `tickets`) and refuses a node
+ * that does not declare them, so offering it in the picker without seeding those reads would
+ * put a step in the catalog that cannot run and cannot be fixed from the builder. The `map:*`
+ * built-ins work from the node's cwd and the hand-written graphs legitimately give them
+ * `goal` / `work`, so constraining THEIR reads would refuse a graph that already runs.
+ * graphs/builder.test.ts checks both halves against the executors themselves.
  */
-export const COMMAND_BUILTINS: Array<{ run: string; label: string; produces: string[] }> = [
+export const COMMAND_BUILTINS: Array<{ run: string; label: string; produces: string[]; reads?: string[] }> = [
   { run: "probe:pr", label: "Check the pull request", produces: ["pr.state"] },
   { run: "map:extract", label: "Extract the system map", produces: ["map.base", "map.neighbourhood", "slice.drift", "review_findings"] },
   { run: "map:reextract", label: "Re-extract the system map", produces: ["map.after"] },
   { run: "map:drift", label: "Compare the map against the approved design", produces: ["slice.drift"] },
+  { run: "runs:launch", label: "Launch one run per approved slice", produces: ["launched"], reads: ["plan.slices", "tickets"] },
 ];
 
 /** A worktree CLEAN-UP step emits these two facts and no others (engine/executors/worktree.ts). */
@@ -271,6 +281,24 @@ export function emittableWrites(n: NodeSpec): readonly string[] | undefined {
     default:
       return undefined;
   }
+}
+
+/**
+ * The context keys a built-in's executor reads by NAME, or `undefined` when the step's reads
+ * are the operator's own business. The mirror of emittableWrites(), and the one place the rule
+ * is written: the step form seeds from it and specProblems() reports a step that is missing
+ * them, which is what keeps the browser and engine/executors/launch.ts precheck() agreeing.
+ */
+export function builtinReads(n: NodeSpec): readonly string[] | undefined {
+  return n.kind === "command" ? commandBuiltin(n.run)?.reads : undefined;
+}
+
+/** The keys a built-in works from that the step does not declare — MISSING, not different:
+ *  the executor only checks inclusion, so an extra read stays legal on both sides. */
+export function missingBuiltinReads(n: NodeSpec): string[] {
+  const needed = builtinReads(n);
+  if (!needed || !("reads" in n)) return [];
+  return needed.filter((k) => !n.reads.includes(k));
 }
 
 /** The keys a step declares that its executor could never publish. */
@@ -576,6 +604,16 @@ export function specProblems(spec: GraphSpec, opts: { knownPrompts?: readonly st
     // CLAUDE.md says means an engine bug, because the validator proved it cannot happen
     for (const key of undeliverableWrites(n))
       problems.push({ node: n.id, where: "steps", message: `${who} says it produces \`${key}\`, but ${cannotEmit(n)}` });
+
+    // the same fact from the other side: a built-in that reads context BY NAME refuses a node
+    // that does not name it (engine/executors/launch.ts precheck), so a step wired up without
+    // it is a run-time park the browser could have said so about while it was being typed
+    const missingReads = missingBuiltinReads(n);
+    if (missingReads.length)
+      problems.push({
+        node: n.id, where: "steps",
+        message: `${who} works from \`${(builtinReads(n) ?? []).join("\` and \`")}\`, but this step does not use ${missingReads.length > 1 ? "them" : `\`${missingReads[0]}\``}. Pick the built-in again to set ${missingReads.length > 1 ? "them" : "it"}, or use a script of your own.`,
+      });
 
     if (n.kind === "agent") {
       // an agent's prompt id is DERIVED from the graph name (`<graph>.<step>`), so an unnamed

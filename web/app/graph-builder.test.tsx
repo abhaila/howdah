@@ -1008,3 +1008,75 @@ describe("the picture never takes the wizard down with it (finding 1)", () => {
     expect(el.textContent).toContain('has a "go to" with no step picked');
   });
 });
+
+/**
+ * HOW-23 review, finding 2. `runs:launch` reads `plan.slices` and `tickets` BY NAME and the
+ * executor refuses a node that does not declare them — but a command step has no reads control
+ * at all, so an entry in the picker without seeded reads would be a step guaranteed to park and
+ * impossible to fix from the builder. The seeding is a convenience, not the gate: what makes it
+ * safe is that specProblems() reports the gap either way (core/graph-spec.test.ts).
+ */
+describe("a built-in that works from named fields arrives wired up", () => {
+  const fanOutDraft = (): Draft => ({
+    saved: false,
+    prompts: {},
+    spec: {
+      version: 1, name: "fan", description: "",
+      fields: [
+        { key: "plan.slices", kind: "json", scope: "sticky" },
+        { key: "tickets", kind: "json", scope: "sticky" },
+        { key: "launched", kind: "json", scope: "sticky" },
+      ],
+      inputs: ["plan.slices", "tickets"], entry: "fan-out",
+      nodes: [
+        { id: "fan-out", kind: "command", title: "Fan it out", run: "probe:pr", reads: [], writes: [] },
+        { id: "done", kind: "terminal", outcome: "success" },
+      ],
+      edges: [{ from: "fan-out", to: "done" }],
+    },
+  });
+
+  async function openFanOut(): Promise<{ el: HTMLElement; latest: () => Draft }> {
+    let draft = fanOutDraft();
+    host = document.createElement("div");
+    document.body.appendChild(host);
+    root = createRoot(host);
+    const render = () =>
+      root!.render(
+        <ToastProvider>
+          <StepForm draft={draft} id="fan-out" dispatch={(a) => { draft = draftReducer(draft, a); render(); }} onClose={() => {}} />
+        </ToastProvider>,
+      );
+    await act(async () => { render(); });
+    return { el: host, latest: () => draft };
+  }
+
+  const step = (d: Draft) => d.spec.nodes.find((n) => n.id === "fan-out") as Extract<NodeSpec, { kind: "command" }>;
+  const whatToRun = (el: HTMLElement) => [...el.querySelectorAll("select")].find((s) => s.value === "probe:pr" || s.value === "runs:launch" || s.value === "shell")!;
+
+  test("picking it seeds what it works from, shows it, and leaves the draft clean", async () => {
+    const { el, latest } = await openFanOut();
+    type(whatToRun(el), "runs:launch");
+
+    expect(step(latest()).reads).toEqual(["plan.slices", "tickets"]);
+    expect(el.querySelector("dialog")!.textContent).toContain("It works from");
+    // …and the wired-up step is not reported, by either half of the contract
+    expect(draftProblems({ ...latest(), spec: { ...latest().spec, nodes: latest().spec.nodes.map((n) => (n.id === "fan-out" ? { ...step(latest()), writes: ["launched"] } : n)) } }))
+      .toEqual([]);
+  });
+
+  test("switching to a script of my own takes the built-in's reads back off", async () => {
+    const { el, latest } = await openFanOut();
+    type(whatToRun(el), "runs:launch");
+    expect(step(latest()).reads).toEqual(["plan.slices", "tickets"]);
+    type(whatToRun(el), "shell");
+    expect(step(latest()).run).toBe("");
+    expect(step(latest()).reads).toEqual([]);
+    expect(el.querySelector("dialog")!.textContent).not.toContain("It works from");
+  });
+
+  test("only this built-in claims to work from anything — the others are told nothing about reads", async () => {
+    const { el } = await openFanOut();
+    expect(el.querySelector("dialog")!.textContent).not.toContain("It works from");
+  });
+});

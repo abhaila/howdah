@@ -191,15 +191,27 @@ export function StepForm({ draft, id, dispatch, onClose }: {
                   onChange={(e) => {
                     // switching kinds drops produced keys the new one cannot emit — but that
                     // is the REDUCER's rule now (lib/spec-draft.ts withEmittableWrites), for
-                    // both forms at once, rather than a filter only this one remembered
+                    // both forms at once, rather than a filter only this one remembered.
+                    // The READS are seeded here instead of in the reducer, because a rule
+                    // broad enough to be total would strip `goal` / `work` off an imported
+                    // `map:extract` step the moment anyone opened it. This is a convenience,
+                    // not the gate: specProblems() reports a step missing what its built-in
+                    // works from, in the browser on every keystroke and again at the save.
                     const next = COMMAND_BUILTINS.find((b) => b.run === e.target.value);
-                    set({ ...node, run: next ? next.run : "" });
+                    set({ ...node, run: next ? next.run : "", reads: next?.reads ?? [] });
                   }}
                 >
                   {COMMAND_BUILTINS.map((b) => <option key={b.run} value={b.run}>{b.label} ({b.run})</option>)}
                   <option value="shell">a shell script of my own</option>
                 </Select>
               </Label>
+              {builtin?.reads && (
+                <div className="field-hint">
+                  It works from{" "}
+                  {builtin.reads.map((k) => <Badge key={k} variant="outline" className="mr-1 font-mono">{k}</Badge>)}
+                  {" "}— the built-in reads those by name, so the graph has to produce them before this step runs.
+                </div>
+              )}
               {!builtin && (
                 <Label>
                   The script

@@ -10,6 +10,10 @@ import { join } from "node:path";
 import { promptIdFor, promptIdsOf, readLocalPrompt, renderSpecModule, saveBuilderGraph } from "./builder";
 import { loadLocalGraph, localGraphPath, localPromptsDir, ensureLocalDirs } from "./local";
 import { COMMAND_BUILTINS, WORKTREE_FACTS, coerceOperand, keepPath, type GraphSpec, type NodeSpec } from "../core/graph-spec";
+// core/ is node-free and cannot import an executor, so the table REPEATS what the executors
+// know. This file is node-side, so it imports the executors' own constants and pins the repetition.
+import { LAUNCH_BUILTIN, LAUNCH_PRODUCES, LAUNCH_READS } from "../engine/executors/launch";
+import { MAP_BUILTINS } from "../engine/executors/map";
 // the reducer is plain data over core/ — no React, no DOM — so the browser's verdict can be
 // driven from here and compared against this file's gate, which is the whole point below
 import { PRESETS, draftProblems, draftReducer, newStep, pickPrompts, type Draft, type DraftAction } from "../web/app/lib/spec-draft";
@@ -343,6 +347,33 @@ describe("what an executor can emit — the table checked against the executors 
     expect(Object.keys(found).sort()).toEqual(Object.keys(table).sort());
     expect(found).toEqual(table);
   });
+
+  // HOW-23 review, finding 2. The fan-out built-in was dispatched by the command executor and
+  // was not in the table at all, so the browser had no answer for it: nothing to offer, nothing
+  // to refuse with, and a step declaring an impossible fact saved clean.
+  test("runs:launch publishes — and works from — exactly what the table claims", () => {
+    const row = COMMAND_BUILTINS.find((b) => b.run === LAUNCH_BUILTIN)!;
+    expect(row.produces).toEqual([...LAUNCH_PRODUCES]);
+    expect(row.reads).toEqual([...LAUNCH_READS]);
+  });
+
+  test("…and those constants are the object engine/executors/launch.ts actually hands declaredWrites", () => {
+    const m = executor("launch.ts").match(/declaredWrites\(\s*LAUNCH_BUILTIN\s*,\s*def\s*,\s*\{([^}]*)\}/);
+    // a rewrite that stopped matching this pattern would make the test vacuous
+    expect(m, "no declaredWrites(LAUNCH_BUILTIN, def, { … }) call found").not.toBeNull();
+    const keys = [...m![1]!.matchAll(/(?:"([^"]+)"|([A-Za-z_]\w*))\s*:/g)].map((k) => k[1] ?? k[2]!).sort();
+    expect(keys.length).toBeGreaterThan(0);
+    expect(keys).toEqual([...LAUNCH_PRODUCES].sort());
+  });
+
+  /**
+   * The test that would have caught the omission. A built-in the command executor dispatches
+   * but the table has never heard of is invisible to the whole builder — `emittableWrites`
+   * returns undefined, which MEANS "anything the operator declares is legal".
+   */
+  test("every built-in the command executor dispatches is in the table", () => {
+    expect([...MAP_BUILTINS, LAUNCH_BUILTIN, "probe:pr"].sort()).toEqual(COMMAND_BUILTINS.map((b) => b.run).sort());
+  });
 });
 
 /**
@@ -387,8 +418,40 @@ describe("the browser's verdict and the server's gate cannot disagree", () => {
     });
   };
 
+  /**
+   * HOW-23: a fan-out step, built the way the wizard builds one. It goes in FRONT of the
+   * existing entry so every other step stays reachable, and the plan and its tickets are asked
+   * for at launch so something writes them on every path — the smallest draft that puts
+   * `runs:launch` in a graph at all.
+   */
+  const fanOut = (patch: (n: Extract<NodeSpec, { kind: "command" }>) => NodeSpec) => (d: Draft): Draft => {
+    const made = newStep(d.spec, "command", "Fan it out");
+    const wasEntry = d.spec.entry;
+    const node = { ...(made.node as Extract<NodeSpec, { kind: "command" }>), run: "runs:launch", reads: ["plan.slices", "tickets"], writes: ["launched"] };
+    const built = ([
+      { type: "add-field", patch: { key: "plan.slices", kind: "json", scope: "sticky" } },
+      { type: "add-field", patch: { key: "tickets", kind: "json", scope: "sticky" } },
+      { type: "add-field", patch: { key: "launched", kind: "json", scope: "sticky" } },
+      { type: "toggle-input", key: "plan.slices" },
+      { type: "toggle-input", key: "tickets" },
+      { type: "add-step", ...made, node },
+      { type: "set-branching", from: node.id, edges: [{ to: wasEntry }] },
+      { type: "set-entry", id: node.id },
+    ] as DraftAction[]).reduce(draftReducer, d);
+    // the reducer NORMALISES a step's writes to what its executor can emit, so an impossible
+    // declaration cannot be typed — it arrives by PUT or from a hand-edited file, which is
+    // what these rows put straight onto the spec
+    return { ...built, spec: { ...built.spec, nodes: built.spec.nodes.map((n) => (n.id === node.id ? patch(n as Extract<NodeSpec, { kind: "command" }>) : n)) } };
+  };
+
   const MUTATIONS: Array<{ name: string; apply: (d: Draft) => Draft; saves: boolean; applies?: (d: Draft) => boolean }> = [
     { name: "untouched", apply: (d) => d, saves: true },
+    { name: "fan one run out per approved slice", apply: fanOut((n) => n), saves: true },
+    // HOW-23 review, finding 2: `runs:launch` reports `launched` and nothing else
+    { name: "a fan-out step claiming it produces the tickets", apply: fanOut((n) => ({ ...n, writes: ["tickets"] })), saves: false },
+    // …and the other half of the contract: the executor refuses a node that does not name what
+    // it reads, so the browser has to refuse it too or the two disagree again
+    { name: "a fan-out step wired to nothing", apply: fanOut((n) => ({ ...n, reads: [] })), saves: false },
     {
       name: "add an agent step, then remove it",
       apply: (d) => {
