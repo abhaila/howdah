@@ -31,11 +31,11 @@ import {
   type Draft, type DraftAction,
 } from "./lib/spec-draft";
 import { GraphBuilder } from "./screens/graph-builder";
-import { specToFlow } from "./builder/canvas";
+import { STEP_KIND_MIME, applyNodeChangesToDraft, specToFlow } from "./builder/canvas";
 import { StepFields } from "./builder/step-form";
 import { StepRoutes } from "./builder/branching";
 import { FieldsPane } from "./builder/fields";
-import { STEP_KIND_MIME } from "./builder/palette";
+import { freeSpotNear } from "./lib/layout";
 import { ToastProvider } from "./components/ui/toast";
 import { Input } from "./components/ui/input";
 import { useTypedText } from "./lib/hooks";
@@ -583,7 +583,15 @@ const realFetch = globalThis.fetch;
  */
 const CARD = { w: 180, h: 52 };
 const HANDLE = 6;
+/** ...and the pane a size of its own. Without one there is no viewport for a clicked step to
+ *  land INSIDE, so the placement assertions below would pass on anything (review finding 3),
+ *  and `fitView` would be fitting a graph into 180x52. */
+const PANE = { w: 900, h: 600 };
 const isHandle = (el: Element) => el.classList?.contains("react-flow__handle");
+/** what React Flow measures itself by: `domNode` is the `.react-flow` wrapper and the resize
+ *  handler watches `.react-flow__renderer` */
+const isPane = (el: Element) =>
+  el.classList?.contains("react-flow") || el.classList?.contains("react-flow__renderer") || el.classList?.contains("gb-canvas");
 
 function stubLayout(): () => void {
   const proto = window.HTMLElement.prototype;
@@ -591,13 +599,13 @@ function stubLayout(): () => void {
   const savedH = Object.getOwnPropertyDescriptor(proto, "offsetHeight");
   const savedRect = window.Element.prototype.getBoundingClientRect;
   const savedRO = globalThis.ResizeObserver;
-  Object.defineProperty(proto, "offsetWidth", { configurable: true, get(this: Element) { return isHandle(this) ? HANDLE : CARD.w; } });
-  Object.defineProperty(proto, "offsetHeight", { configurable: true, get(this: Element) { return isHandle(this) ? HANDLE : CARD.h; } });
+  Object.defineProperty(proto, "offsetWidth", { configurable: true, get(this: Element) { return isHandle(this) ? HANDLE : isPane(this) ? PANE.w : CARD.w; } });
+  Object.defineProperty(proto, "offsetHeight", { configurable: true, get(this: Element) { return isHandle(this) ? HANDLE : isPane(this) ? PANE.h : CARD.h; } });
   window.Element.prototype.getBoundingClientRect = function (this: Element): DOMRect {
     const handle = isHandle(this);
     const top = handle && this.getAttribute("data-handlepos") === "bottom" ? CARD.h : 0;
-    const w = handle ? HANDLE : CARD.w;
-    const h = handle ? HANDLE : CARD.h;
+    const w = handle ? HANDLE : isPane(this) ? PANE.w : CARD.w;
+    const h = handle ? HANDLE : isPane(this) ? PANE.h : CARD.h;
     return { x: 0, y: top, top, left: 0, right: w, bottom: top + h, width: w, height: h, toJSON: () => ({}) } as DOMRect;
   };
   globalThis.ResizeObserver = class {
@@ -673,6 +681,38 @@ const cards = (el: HTMLElement) => [...el.querySelectorAll("[data-testid=gb-node
 const card = (el: HTMLElement, kind: string) => cards(el).find((n) => n.dataset.kind === kind);
 const nameBox = (el: HTMLElement) => el.querySelector('input[placeholder="my-review"]') as HTMLInputElement;
 
+/** the `.react-flow__node` a card sits in, and where the picture actually draws it */
+const placed = (n: HTMLElement) => n.closest(".react-flow__node") as HTMLElement;
+const TRANSLATE = /translate\(\s*(-?[\d.]+)px\s*,\s*(-?[\d.]+)px\s*\)/;
+function translation(el: HTMLElement): { x: number; y: number } {
+  const m = TRANSLATE.exec(el.style.transform);
+  if (!m?.[1] || !m[2]) throw new Error(`no translate in "${el.style.transform}"`);
+  return { x: Number(m[1]), y: Number(m[2]) };
+}
+/** the viewport's own transform, so a flow-space position can be checked where it is DRAWN */
+function viewport(el: HTMLElement): { x: number; y: number; zoom: number } {
+  const vp = el.querySelector(".react-flow__viewport") as HTMLElement;
+  const at = translation(vp);
+  const m = /scale\(\s*(-?[\d.]+)\s*\)/.exec(vp.style.transform);
+  if (!m?.[1]) throw new Error(`no scale in "${vp.style.transform}"`);
+  return { ...at, zoom: Number(m[1]) };
+}
+/** a flow-space position, in the screen coordinates the operator is looking at */
+const onScreen = (at: { x: number; y: number }, vp: { x: number; y: number; zoom: number }) =>
+  ({ x: at.x * vp.zoom + vp.x, y: at.y * vp.zoom + vp.y });
+
+/** React Flow's own arrow-key nudge: a keydown that bubbles out of the card to its wrapper */
+const nudge = (el: HTMLElement, title: string, key: string) =>
+  act(() => { openStep(el, title)!.dispatchEvent(new window.KeyboardEvent("keydown", { key, bubbles: true })); });
+
+/** the PUT body of the last save, which is the only place a position provably survives */
+function saved(calls: Array<{ url: string; method: string; body: unknown }>): GraphSpec {
+  const puts = calls.filter((c) => c.method === "PUT");
+  return (puts[puts.length - 1]!.body as { spec: GraphSpec }).spec;
+}
+const at = (spec: GraphSpec, id: string) => spec.nodes.find((n) => n.id === id)!.position!;
+const openDialog = () => document.querySelector("dialog[open]") as HTMLDialogElement | null;
+
 /** a real drag-and-drop, as far as React is concerned: the drop event carries a dataTransfer */
 function drop(el: HTMLElement, kind: string, at: { x: number; y: number }) {
   const canvas = el.querySelector(".gb-canvas")!;
@@ -701,10 +741,13 @@ describe("a step is added where it was put, and without a mouse (AC1)", () => {
     drop(el, "wait", { x: 300, y: 420 });
     const waits = cards(el).filter((n) => n.dataset.kind === "wait");
     expect(waits).toHaveLength(2);
-    // where it lands is where it was dropped, which is the whole reason positions exist: two
-    // drops at different points are two different places, not a pile
-    const places = waits.map((n) => n.closest(".react-flow__node")!.getAttribute("data-id"));
-    expect(new Set(places).size).toBe(2);
+    // where it lands is where it was DROPPED, which is the whole reason positions exist. Two
+    // distinct node ids would be true of any two steps and prove nothing, so this asserts on
+    // the two PLACES: 220px apart on screen, because that is how far apart the drops were.
+    const vp = viewport(el);
+    const [first, second] = waits.map((n) => translation(placed(n)));
+    expect(second!.y - first!.y).toBeCloseTo(220 / vp.zoom, 5);
+    expect(second!.x - first!.x).toBeCloseTo(0, 5);
   });
 
   test("...and the same step is added from the keyboard, which is all a Button needs", async () => {
@@ -713,6 +756,50 @@ describe("a step is added where it was put, and without a mouse (AC1)", () => {
     expect(card(el, "wait")).toBeDefined();
     // the step that was just added is what the panel is showing — no second click to find it
     expect(el.textContent).toContain("Step id");
+  });
+
+  test("a clicked step lands where you are LOOKING, not below everything (finding 3)", async () => {
+    const calls = serve();
+    const el = await mount();
+    type(nameBox(el), "my-review");
+    // the graph is first made TALLER THAN THE PANE, because that is the case the finding is
+    // about: "below everything" is only off-screen when there is a lot of everything, and a
+    // two-step graph would have hidden the defect either way
+    drop(el, "wait", { x: 400, y: PANE.h - 20 });
+    click(palette(el, "Get my approval"));
+    await act(async () => { byText(el, "Save and add to the catalog")!.click(); });
+
+    // asserted through the SAVE, because that is the position that would survive a reload
+    const spec = saved(calls);
+    const added = spec.nodes.find((n) => n.kind === "approval")!;
+    const on = onScreen(added.position!, viewport(el));
+    // the palette says "in the middle" on both its item labels and its hint. This is that
+    // sentence, asserted: somewhere inside the pane the operator is looking at.
+    expect(on.x, `x of ${JSON.stringify(on)}`).toBeGreaterThanOrEqual(0);
+    expect(on.x, `x of ${JSON.stringify(on)}`).toBeLessThanOrEqual(PANE.w);
+    expect(on.y, `y of ${JSON.stringify(on)}`).toBeGreaterThanOrEqual(0);
+    expect(on.y, `y of ${JSON.stringify(on)}`).toBeLessThanOrEqual(PANE.h);
+  });
+
+  test("two clicks are two places, not a pile on the same pixel", async () => {
+    const calls = serve();
+    const el = await mount();
+    type(nameBox(el), "my-review");
+    click(palette(el, "Wait"));
+    click(palette(el, "Wait"));
+    await act(async () => { byText(el, "Save and add to the catalog")!.click(); });
+
+    const waits = saved(calls).nodes.filter((n) => n.kind === "wait");
+    expect(waits).toHaveLength(2);
+    const [a, b] = waits.map((n) => n.position!);
+    // "always the centre" would cover the first card with the second; a free spot is the fix
+    expect(Math.abs(a!.x - b!.x) >= 90 || Math.abs(a!.y - b!.y) >= 32, `${JSON.stringify([a, b])}`).toBe(true);
+  });
+
+  test("with nothing measured there is no middle to aim at, and nothing is invented", () => {
+    // `undefined` in, `undefined` out — `add-step` then places it below everything, which is
+    // the honest answer to "we do not know what is on screen"
+    expect(freeSpotNear(doc().spec.nodes, undefined)).toBeUndefined();
   });
 
   test("every one of the six kinds is a named, enabled control (AC6)", async () => {
@@ -841,6 +928,8 @@ describe("saving is the same PUT it always was (AC5), and it carries the arrange
     click(palette(el, "Ask an agent"));
     type(el.querySelector('textarea[aria-label="the agent\'s instructions"]') as HTMLTextAreaElement, "Summarise {{ context.goal }}");
     click(byText(el, "Remove this step"));
+    // it has instructions, so it asks first — see "a removal that destroys text asks first"
+    click(byText(el, "Remove the step and its instructions"));
     await act(async () => { byText(el, "Save and add to the catalog")!.click(); });
 
     const body = calls.find((c) => c.method === "PUT")!.body as { spec: GraphSpec; prompts: Record<string, string> };
@@ -1365,5 +1454,147 @@ describe("the canvas never takes the builder down with it (finding 1)", () => {
     expect(cards(el).length).toBeGreaterThan(0);
     expect(labelled(el, "1 to sort out")).toBeDefined();
     expect(el.textContent).toContain('has a "go to" with no step picked');
+  });
+});
+
+describe("the canvas holds the frames; the draft holds the result (finding 1)", () => {
+  test("a selected step is moved by the arrow keys, and the move is in the saved graph (AC6)", async () => {
+    const calls = serve();
+    const el = await mount();
+    type(nameBox(el), "my-review");
+    // the whole keyboard path, and every link in it already existed but the last: Tab to the
+    // card's own control, Enter to select it, then arrows. React Flow's `isInputDOMNode`
+    // exempts form controls, NOT a Button, so the keydown reaches the node wrapper's handler.
+    click(openStep(el, "Do the work"));
+    const before = translation(placed(card(el, "agent")!));
+    nudge(el, "Do the work", "ArrowRight");
+    nudge(el, "Do the work", "ArrowDown");
+    await act(async () => { byText(el, "Save and add to the catalog")!.click(); });
+
+    // the PICTURE moved...
+    const after = translation(placed(card(el, "agent")!));
+    expect(after.x).toBeGreaterThan(before.x);
+    expect(after.y).toBeGreaterThan(before.y);
+    // ...and so did the SPEC, which is the half a controlled `nodes` with no `onNodesChange`
+    // was throwing away: the position would not have survived a reload
+    const spec = saved(calls);
+    expect(at(spec, "work").x).toBeCloseTo(after.x, 5);
+    expect(at(spec, "work").y).toBeCloseTo(after.y, 5);
+  });
+
+  test("one drag is ONE edit, however many frames it took", () => {
+    const moves: DraftAction[] = [];
+    const dispatch = (a: DraftAction) => moves.push(a);
+    // three frames under the pointer, then the release. Driving React Flow's real pointer
+    // pipeline needs a layout engine happy-dom does not have, so the property is asserted at
+    // the handler the pipeline calls — which is where "one gesture, one `draftProblems()` run"
+    // is actually decided.
+    const flying = [
+      applyNodeChangesToDraft([{ id: "work", type: "position", position: { x: 10, y: 10 }, dragging: true }], dispatch),
+      applyNodeChangesToDraft([{ id: "work", type: "position", position: { x: 20, y: 30 }, dragging: true }], dispatch),
+      applyNodeChangesToDraft([{ id: "work", type: "position", position: { x: 33, y: 44 }, dragging: true }], dispatch),
+    ];
+    expect(moves).toEqual([]);
+    // the frames are drawn from the overlay, not from the draft
+    expect(flying.map((f) => f?.get("work"))).toEqual([{ x: 10, y: 10 }, { x: 20, y: 30 }, { x: 33, y: 44 }]);
+
+    const settled = applyNodeChangesToDraft(
+      [{ id: "work", type: "position", position: { x: 33, y: 44 }, dragging: false }],
+      dispatch,
+    );
+    expect(settled).toBeNull();
+    expect(moves).toEqual([{ type: "move-node", id: "work", position: { x: 33, y: 44 } }]);
+  });
+
+  test("a change that is not a position leaves the overlay and the draft alone", () => {
+    const moves: DraftAction[] = [];
+    const dispatch = (a: DraftAction) => moves.push(a);
+    // `dimensions` and `select` were already being discarded when EVERY change was; ignoring
+    // them here is byte-for-byte that behaviour, so nothing that works can regress through it
+    const flying = applyNodeChangesToDraft(
+      [
+        { id: "work", type: "dimensions", dimensions: { width: 180, height: 64 } },
+        { id: "work", type: "select", selected: true },
+        // ...and a position that cannot round-trip through JSON is not a position
+        { id: "work", type: "position", position: { x: NaN, y: 4 } },
+      ],
+      dispatch,
+    );
+    expect(flying).toBeNull();
+    expect(moves).toEqual([]);
+  });
+});
+
+describe("nothing is destroyed by a stray keystroke (finding 2)", () => {
+  test("Backspace with a step selected destroys neither the step nor its instructions", async () => {
+    const calls = serve();
+    const el = await mount();
+    type(nameBox(el), "my-review");
+    click(openStep(el, "Do the work"));
+    type(el.querySelector('textarea[aria-label="the agent\'s instructions"]') as HTMLTextAreaElement, "Summarise {{ context.goal }}");
+    // React Flow binds its delete key on `document`, and `isInputDOMNode` exempts only
+    // INPUT/SELECT/TEXTAREA — not the Button that is the documented way into a step. So this
+    // is the keystroke that used to take the step AND its prompt body, with no undo.
+    // awaited: `deleteElements` is async (it may consult `onBeforeDelete`), so a synchronous
+    // assertion after the keydown would pass whether the key is live or not
+    await act(async () => { document.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Backspace", bubbles: true })); });
+    expect(card(el, "agent")).toBeDefined();
+
+    await act(async () => { byText(el, "Save and add to the catalog")!.click(); });
+    const body = calls.find((c) => c.method === "PUT")!.body as { spec: GraphSpec; prompts: Record<string, string> };
+    // the payload is the assertion that matters: the finding was about losing TEXT
+    expect(body.spec.nodes.map((n) => n.id)).toContain("work");
+    expect(body.prompts["my-review.work"]).toBe("Summarise {{ context.goal }}");
+  });
+
+  test("Delete does nothing either — the key is off, not moved one modifier away", async () => {
+    const el = await mount();
+    click(openStep(el, "Do the work"));
+    await act(async () => { document.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Delete", bubbles: true })); });
+    expect(card(el, "agent")).toBeDefined();
+  });
+
+  test("a removal that destroys text asks first, and the default answer is no", async () => {
+    const el = await mount();
+    click(openStep(el, "Do the work"));
+    type(el.querySelector('textarea[aria-label="the agent\'s instructions"]') as HTMLTextAreaElement, "Summarise {{ context.goal }}");
+    click(byText(el, "Remove this step"));
+
+    const dialog = openDialog();
+    expect(dialog).not.toBeNull();
+    // it says what goes, in the operator's words, rather than "are you sure?"
+    expect(dialog!.textContent).toContain("instructions you wrote");
+    expect(dialog!.getAttribute("role")).toBe("alertdialog");
+    expect(card(el, "agent")).toBeDefined();
+
+    click(byText(el, "Cancel"));
+    expect(openDialog()).toBeNull();
+    expect(card(el, "agent")).toBeDefined();
+  });
+
+  test("...and confirming takes the step and the instructions it owned", async () => {
+    const calls = serve();
+    const el = await mount();
+    type(nameBox(el), "my-review");
+    click(openStep(el, "Do the work"));
+    type(el.querySelector('textarea[aria-label="the agent\'s instructions"]') as HTMLTextAreaElement, "Summarise {{ context.goal }}");
+    click(byText(el, "Remove this step"));
+    click(byText(el, "Remove the step and its instructions"));
+
+    expect(card(el, "agent")).toBeUndefined();
+    await act(async () => { byText(el, "Save and add to the catalog")!.click(); });
+    const body = calls.find((c) => c.method === "PUT")!.body as { spec: GraphSpec; prompts: Record<string, string> };
+    expect(body.spec.nodes.map((n) => n.id)).not.toContain("work");
+    expect(Object.keys(body.prompts)).not.toContain("my-review.work");
+  });
+
+  test("removing a step with nothing at stake does not ask", async () => {
+    const el = await mount();
+    click(palette(el, "Wait"));
+    click(byText(el, "Remove this step"));
+    // a wait step dropped by mistake should not need a dialog; one that fires when nothing is
+    // at stake is the kind that gets dismissed reflexively
+    expect(openDialog()).toBeNull();
+    expect(card(el, "wait")).toBeUndefined();
   });
 });

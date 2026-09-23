@@ -821,6 +821,24 @@ run view gets built once inside a system that has been agreed, and T23 is UI-ind
     it), and `css-contract.test.ts` gained a BEHAVIOURAL exemption list for React Flow's
     `nodrag` / `nopan` — names a library reads in JavaScript, which the vendor sheet
     deliberately gives no rules.
+  - **Found in review — three library facts that cost real time to find once, so they are
+    written down.** (1) A controlled `nodes` prop DISCARDS every node change unless
+    `onNodesChange` is supplied: `triggerNodeChanges` applies changes only when
+    `hasDefaultNodes`, so the first cut's card did not follow the pointer (it jumped at
+    mouse-up, because `onNodeDragStop` is handed the DRAG ITEM's position rather than the
+    store's) and React Flow's arrow-key nudge moved nothing at all. Fixed by supplying the
+    handler and keeping the in-flight positions in a local overlay — the DRAFT still changes
+    exactly once per gesture, which was the property the omission looked like it was
+    protecting. (2) `deleteKeyCode` defaults to `'Backspace'`, bound on `document`, and
+    `isInputDOMNode` exempts INPUT/SELECT/TEXTAREA and `contenteditable` — NOT a `BUTTON`,
+    which is the documented keyboard way into a step. Tab, Enter, Backspace destroyed a step
+    and its prompt body with no confirmation and no undo. The key is off (`deleteKeyCode={null}`)
+    and removal is a named control that says what goes and asks first when the text cannot be
+    got back. (3) A placement promised in UI copy has to be a placement the code makes: the
+    palette said "drop it in the middle" and the click path passed no position at all, so the
+    reducer put the step below everything — off-screen on any graph taller than the pane.
+    `useCanvasCentre()` now goes through the same `screenToFlowPosition` a drop uses, and
+    `freeSpotNear()` steps aside from what is already there.
 
 ## GSTACK REVIEW REPORT
 

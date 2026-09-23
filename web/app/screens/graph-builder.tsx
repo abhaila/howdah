@@ -203,7 +203,7 @@ export function GraphBuilder({ name }: { name?: string }) {
 
       <ReactFlowProvider>
         <div className="gb">
-          <Palette onAdd={addStep} />
+          <Palette draft={draft} onAdd={addStep} />
           <GraphCanvas
             draft={draft} dispatch={dispatch} problems={problems} generation={generation}
             selection={live} onSelect={onSelect} onAdd={addStep}

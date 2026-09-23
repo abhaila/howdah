@@ -16,6 +16,11 @@
  * all, and a pile of boxes at the origin is not an arrangement — so the first open lays it
  * out, and the next save writes those positions into the spec. A step that ALREADY has a
  * position is never moved: the arrangement is the operator's, and this only fills the gaps.
+ *
+ * `nextFreePosition()` and `freeSpotNear()` are the two answers to "where does a step with no
+ * dropped point go". The first is for "we have no idea what is on screen" — below everything,
+ * covering nothing. The second is for "the middle of the view, unless a card is already
+ * there", which is what a palette CLICK means (review finding 3).
  */
 import type { GraphSpec, NodeSpec, Point } from "../../../core/graph-spec";
 
@@ -76,6 +81,35 @@ export function autoLayout(spec: GraphSpec): GraphSpec {
   if (spec.nodes.every((n) => n.position)) return spec;
   const pos = layout(spec, CANVAS_PITCH);
   return { ...spec, nodes: spec.nodes.map((n) => (n.position ? n : { ...n, position: pos.get(n.id) ?? ORIGIN })) };
+}
+
+/** How big a card is on the canvas, for the two things that have to reason about overlap.
+ *  The width is the shared box width; the height is a rough one, because a card grows with an
+ *  entry marker and a problem count and React Flow measures what it renders. */
+const CARD: Point = { x: 180, y: 64 };
+/** How far a crowded-out step steps aside. The y is a whole card, so one already-placed step
+ *  can rule out at most ONE candidate — which is what makes the search below terminate with a
+ *  free spot rather than merely terminate. */
+const CASCADE: Point = { x: 48, y: 72 };
+
+/**
+ * `at`, unless a step is already sitting there — then the next clear spot down-and-right.
+ *
+ * Two palette clicks in a row must not stack two cards on the same pixel, which is the failure
+ * mode "always the centre" has. Deliberately NOT used by the DROP path: a drop is where the
+ * operator put it, and moving it is a lie about a direct-manipulation gesture.
+ *
+ * `undefined` in, `undefined` out — there is no spot near nowhere.
+ */
+export function freeSpotNear(nodes: NodeSpec[], at: Point | undefined): Point | undefined {
+  if (!at) return undefined;
+  const placed = nodes.map((n) => n.position).filter((p): p is Point => !!p);
+  const clear = (p: Point) =>
+    !placed.some((q) => Math.abs(q.x - p.x) < CARD.x / 2 && Math.abs(q.y - p.y) < CARD.y / 2);
+  let spot = at;
+  for (let i = 1; i <= placed.length && !clear(spot); i++)
+    spot = { x: at.x + i * CASCADE.x, y: at.y + i * CASCADE.y };
+  return spot;
 }
 
 /** Where a step with no position of its own goes — below everything, so nothing is covered. */

@@ -24,6 +24,13 @@
  *   - an approval step's decision and comments keys are its own and are shown read-only;
  *     the redesign target never offers the step that owns the feedback key, because there it
  *     is engine-owned (core/graph.ts approvalProblems).
+ *
+ * "Remove this step" is the one control here that destroys something, and since HOW-24's
+ * review it is also the ONLY way to (the canvas has no delete key — see canvas.tsx). It asks
+ * first in exactly the case where the answer cannot be got back: an agent step whose
+ * instructions have been written and whose prompt file no other step shares. A wait step
+ * dropped by mistake gets no dialog, deliberately — a confirmation that fires when nothing is
+ * at stake is the kind that gets dismissed reflexively.
  */
 import { useMemo, useState } from "react";
 import { Plus, Trash2 } from "lucide-react";
@@ -41,6 +48,7 @@ import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
+import { AlertDialog } from "@/components/ui/dialog";
 
 const DURATION_UNITS = [
   { unit: "ms", label: "milliseconds" },
@@ -117,9 +125,17 @@ export function StepFields({ draft, id, dispatch, onRemoved }: {
   const body = node?.kind === "agent" ? draft.prompts[node.prompt] ?? "" : "";
   const given = useMemo(() => templateReads(body), [body]);
   const approvals = spec.nodes.filter((n) => n.kind === "approval");
+  const [confirming, setConfirming] = useState(false);
 
   if (!node) return null;
   const title = node.title ?? "";
+  const remove = () => { dispatch({ type: "remove-step", id }); onRemoved?.(); };
+  // exactly when the removal destroys text nothing can give back: an agent step with
+  // instructions written, filed under a prompt id no other step is also using
+  const destroysText =
+    node.kind === "agent" &&
+    body.trim() !== "" &&
+    spec.nodes.filter((n) => n.kind === "agent" && n.prompt === node.prompt).length === 1;
 
   return (
     <div className="flex flex-col gap-3">
@@ -346,11 +362,24 @@ export function StepFields({ draft, id, dispatch, onRemoved }: {
       <div className="actions">
         <Button
           variant="destructive" size="sm"
-          onClick={() => { dispatch({ type: "remove-step", id }); onRemoved?.(); }}
+          onClick={() => (destroysText ? setConfirming(true) : remove())}
         >
           <Trash2 />Remove this step
         </Button>
       </div>
+      <AlertDialog
+        open={confirming}
+        onClose={() => setConfirming(false)}
+        onConfirm={() => { setConfirming(false); remove(); }}
+        title={`Remove ${title.trim() || id}?`}
+        description={
+          <>
+            This takes the step, every route into and out of it, and the instructions you wrote
+            for it. There is no undo.
+          </>
+        }
+        confirmLabel="Remove the step and its instructions"
+      />
     </div>
   );
 }

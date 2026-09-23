@@ -24,7 +24,7 @@ three hand-written sheets (see the CSS contract below).
 
 ```bash
 bun install                      # required on a fresh clone (node_modules/ is gitignored)
-bun test                         # whole suite (1610 tests, ~3 min) — bun:test, happy-dom preloaded via bunfig.toml
+bun test                         # whole suite (1621 tests, ~3 min) — bun:test, happy-dom preloaded via bunfig.toml
 bun test engine/engine.test.ts   # one file
 bun test -t "resume"             # one test by name
 bun run check                    # tsc --noEmit + prompt-id codegen staleness gate
@@ -192,7 +192,15 @@ Break one of these and the design stops working, so check them before changing t
   condition seeded through `seedPredicate()`, the same function "Add a condition" calls, and it
   APPENDS — which is what keeps row order, and therefore weight, meaning what the operator saw.
   A drag commits `move-node` on drag END, never per frame, so one drag is one draft change
-  rather than sixty `draftProblems()` runs a second. An edge has no identity of its own, so the
+  rather than sixty `draftProblems()` runs a second — but that only works because
+  `onNodesChange` IS supplied: React Flow's `triggerNodeChanges` applies a change only when it
+  owns the nodes, so a controlled `nodes` with no handler discards every one of them and the
+  card never follows the pointer at all. `canvas.tsx` keeps the frames of a drag in a local
+  overlay and lets only the settled change reach the draft. AND THERE IS NO DELETE KEY:
+  `deleteKeyCode` defaults to Backspace bound on `document`, and its input exemption covers
+  form controls but not the `Button` that is the way into a step, so destroying a step — which
+  takes its prompt body with it, with no undo — is a named control in the panel that says what
+  goes, and asks first when the text cannot be got back. An edge has no identity of its own, so the
   canvas addresses one by its INDEX in `spec.edges`; that is safe only because the two edit
   paths are never on screen together (a step's whole routes list is `set-branching`, which may
   renumber; a single selected edge is `update-edge`/`remove-edge`, which cannot), and because
@@ -207,8 +215,9 @@ Break one of these and the design stops working, so check them before changing t
   the canvas prints a condition IN the gap between two cards rather than beside the wire.
   NOTHING BECAME MOUSE-ONLY (HOW-16 P2 is not given back): every palette item is a `Button` that
   is also `draggable`, every step's routes can be set from its panel without drawing a wire, the
-  way into a step is a real control on its card rather than the card itself, and a wire's
-  caption is a `Button` — a hairline is not a click target. React Flow's stylesheet is imported
+  way into a step is a real control on its card rather than the card itself, a wire's
+  caption is a `Button` — a hairline is not a click target — and a step is MOVED without a
+  mouse: Tab to its control, Enter to select it, then the arrow keys (Shift for 4x). React Flow's stylesheet is imported
   from `main.tsx` and NEVER pasted into `tokens.css`/`howdah.css`/`globals.css`: those three are
   scanned in both directions by `app/css-contract.test.ts`, and a few hundred unconsumed vendor
   rules would fail "every rule has a consumer" instantly. The canvas is themed by setting React
