@@ -26,6 +26,7 @@ import { RunView } from "./run/view";
 import { RunsList } from "./screens/runs";
 import { StartRun } from "./screens/start-run";
 import { GraphsList } from "./screens/graphs";
+import { GraphBuilder } from "./screens/graph-builder";
 import { PromptsScreen } from "./screens/prompts";
 import { ProposalsScreen } from "./screens/proposals";
 import { Settings } from "./screens/settings";
@@ -92,8 +93,15 @@ function App() {
   const isNew = path === "/new";
   const isSettings = path === "/settings";
   const isGraphs = path === "/graphs";
+  // HOW-22: the graph builder. /graphs/new is a draft with no file yet; /graphs/:name/build
+  // re-opens one that has one. Both sit UNDER /graphs so the nav's Graphs tab stays lit —
+  // building a graph is not a different place, it is what that place is for.
+  const buildMatch = path === "/graphs/new" ? { name: undefined } : (() => {
+    const m = path.match(/^\/graphs\/([^/]+)\/build$/);
+    return m ? { name: m[1]! } : null;
+  })();
   const isAttention = path === "/attention";
-  const isRuns = !runMatch && !isNew && !isGraphs && !isSettings && !promptMatch && !proposalMatch && !isAttention;
+  const isRuns = !runMatch && !isNew && !isGraphs && !buildMatch && !isSettings && !promptMatch && !proposalMatch && !isAttention;
 
   // how many drafts are waiting for you to look — R2's whole point is that you look, so a
   // count that goes stale after an accept is worse than no count: it is a live-looking lie
@@ -136,7 +144,7 @@ function App() {
             {waiting > 0 && <span className="nav-badge">{waiting}</span>}
           </a>
           <a className={`nav ${isNew ? "active" : ""}`} href="/new"><Plus size={15} /><span className="label">New run</span></a>
-          <a className={`nav ${isGraphs ? "active" : ""}`} href="/graphs"><Workflow size={15} /><span className="label">Graphs</span></a>
+          <a className={`nav ${isGraphs || buildMatch ? "active" : ""}`} href="/graphs"><Workflow size={15} /><span className="label">Graphs</span></a>
           <a className={`nav ${promptMatch ? "active" : ""}`} href="/prompts"><Library size={15} /><span className="label">Prompts</span></a>
           <a className={`nav ${proposalMatch ? "active" : ""}`} href="/proposals">
             <FileDiff size={15} /><span className="label">Proposals</span>
@@ -155,6 +163,7 @@ function App() {
             : isNew ? <StartRun />
             : isSettings ? <Settings />
             : isGraphs ? <GraphsList />
+            : buildMatch ? <GraphBuilder name={buildMatch.name} />
             : promptMatch ? <PromptsScreen selected={promptMatch[1] ? decodeURIComponent(promptMatch[1]) : null} />
             : proposalMatch ? <ProposalsScreen selected={proposalMatch[1] ? decodeURIComponent(proposalMatch[1]) : null} />
             : <div className="runs"><RunsList /></div>}

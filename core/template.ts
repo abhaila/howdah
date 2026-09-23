@@ -37,30 +37,16 @@
  */
 import { createHash } from "node:crypto";
 import { harnessSpec, isHarness } from "./harnesses";
+import { isEngineNamespace, templateRefPattern } from "./template-refs";
 import type { Harness } from "./graph";
 
-/** `{{ context.key }}` / `{{ inputs.key }}`, optional `| filter` tail, captured as (ns, key). */
-const TEMPLATE_REF = String.raw`\{\{\s*(context|inputs)\.([\w.]+)(?:\s*\|[^}]*)?\s*\}\}`;
-
-/** A fresh global matcher per call — no shared lastIndex to get bitten by. */
-export function templateRefPattern(): RegExp {
-  return new RegExp(TEMPLATE_REF, "g");
-}
-
-/** `context.internal.*` is the engine's own namespace, not a context key: left verbatim. */
-export function isEngineNamespace(ns: string, key: string): boolean {
-  return ns === "context" && key.startsWith("internal.");
-}
-
-/** Every context/inputs key a template reads, sorted, engine namespace excluded. */
-export function templateReads(body: string): string[] {
-  const reads = new Set<string>();
-  for (const m of body.matchAll(templateRefPattern())) {
-    const [, ns, key] = m as unknown as [string, string, string];
-    if (!isEngineNamespace(ns, key)) reads.add(key);
-  }
-  return [...reads].sort();
-}
+/**
+ * HOW-22: the reference grammar itself lives in core/template-refs.ts, which is node-free so
+ * the viewer can bundle it (the graph builder needs templateReads live, in the browser).
+ * Re-exported here because this file is still the one place a caller asks about templates —
+ * the split moved the regex, it did not add a second one.
+ */
+export { TEMPLATE_REF, templateRefPattern, isEngineNamespace, templateReads } from "./template-refs";
 
 /**
  * Substitute every ref via `resolve`. Strings interpolate raw, everything else as JSON —

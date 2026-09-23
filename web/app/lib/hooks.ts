@@ -56,3 +56,25 @@ export function useAttentionSurfaces(needsInput: boolean) {
     return () => { if (timer) clearInterval(timer); if (fav) fav.href = "/favicon.svg"; };
   }, [needsInput]);
 }
+
+/**
+ * A text box over a value the draft stores as MEANING rather than as keystrokes (HOW-22
+ * review, finding 2).
+ *
+ * The graph builder's spec stores typed data on purpose: a number field's operand is `3`, not
+ * `"3"`; an `is one of` row holds `["pass","warn"]`, not `"pass, warn"`. A box fed straight
+ * back from that loses every intermediate keystroke the coercion trims — `3.` reads back as
+ * `3`, so the next key gives `35`; `-` reads back as `0`, so a negative operand cannot be
+ * typed at all; and a comma is swallowed the instant it is typed, which makes a second value
+ * unreachable.
+ *
+ * `means(typed)` is what the draft WOULD hold for that text, rendered back as text. What was
+ * typed stays on screen while it still means what the draft holds; the moment the draft says
+ * something else — the field's kind flipped, the row moved, the value changed from another
+ * control — the box follows the draft again. So this is not an uncontrolled input: it is
+ * controlled by MEANING instead of by spelling.
+ */
+export function useTypedText(stored: string, means: (typed: string) => string): [string, (typed: string) => void] {
+  const [typed, setTyped] = useState(stored);
+  return [means(typed) === stored ? typed : stored, setTyped];
+}

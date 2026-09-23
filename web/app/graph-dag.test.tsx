@@ -217,3 +217,43 @@ describe("the graph canvas can be zoomed and panned", () => {
   });
 });
 
+
+/**
+ * HOW-22, finding 1. This component now draws a DRAFT as well as a run, and a draft is being
+ * typed: the builder's Branching pane offers "go to [pick a step]", which stores an edge with
+ * an empty target, and re-opening a hand-edited module can name a step that never existed.
+ * `pos.get(e.to)!` took the whole app down with it — web/app has no error boundary, so the
+ * wizard and the operator's unsaved draft went too. A picture is not a gate.
+ */
+describe("a half-built shape is drawn, not crashed on", () => {
+  /** the fixture with one extra edge, so the count of SURVIVING edges is checkable */
+  const withEdge = (e: { from: string; to: string }) => ({ ...SHAPE, edges: [...SHAPE.edges, e] });
+
+  function draw(shape: GraphShapeDto): HTMLElement {
+    host = document.createElement("div");
+    document.body.appendChild(host);
+    root = createRoot(host);
+    act(() => root!.render(<GraphDag shape={shape} />));
+    return host;
+  }
+
+  const edges = (el: HTMLElement) => el.querySelectorAll(".dag-edge").length;
+
+  test("an edge pointing at no step draws the OTHER edges instead of throwing", () => {
+    const el = draw(withEdge({ from: "review", to: "" }));
+    // "fixed" must not mean "drew nothing": the four real edges are still there
+    expect(edges(el)).toBe(SHAPE.edges.length);
+    expect(el.querySelectorAll(".dag-node")).toHaveLength(SHAPE.nodes.length);
+  });
+
+  test("an edge STARTING from no step is the same guard, reached by re-opening a hand edit", () => {
+    const el = draw(withEdge({ from: "ghost", to: "review" }));
+    expect(edges(el)).toBe(SHAPE.edges.length);
+  });
+
+  test("a shape with no steps at all still renders", () => {
+    const el = draw({ ...SHAPE, nodes: [], edges: [] });
+    expect(el.querySelector("svg.dag")).not.toBeNull();
+    expect(edges(el)).toBe(0);
+  });
+});

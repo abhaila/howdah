@@ -246,7 +246,6 @@ main { flex: 1; min-width: 0; min-height: 0; overflow: hidden; display: flex; fl
 .dag-visits-text { fill: var(--on-alarm); font-size: var(--type-2xs); font-weight: 700; font-family: var(--font-mono); }
 .graphs-layout { display: grid; grid-template-columns: 300px 1fr; gap: 28px; align-items: start; }
 .graph-description { margin-bottom: 8px; }
-.new-graph-card { margin-top: 12px; }
 /* the moved static inline styles (HOW-16 P3.13) */
 .topbar-back { text-decoration: none; color: var(--fg-muted); }
 .section-gap { margin-top: 28px; }
@@ -283,6 +282,37 @@ main { flex: 1; min-width: 0; min-height: 0; overflow: hidden; display: flex; fl
 .tuner { display: flex; flex-direction: column; gap: 14px; }
 .tuner-panels { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; align-items: start; }
 .tuner-save { display: flex; align-items: center; gap: 10px; }
+
+/* graph builder (HOW-22) — the wizard is three columns: the rail says where you are and what
+   is outstanding, the middle is the pane you are answering, and the picture is the graph as
+   it stands. The picture is sticky because it is the thing you are checking your edits
+   against; scrolling a long Steps pane must not take it away. */
+.builder { max-width: none; }
+.builder-layout { display: grid; grid-template-columns: 220px minmax(0, 1fr) minmax(0, 440px); gap: 20px; align-items: start; }
+.builder-rail { display: flex; flex-direction: column; gap: 2px; position: sticky; top: 12px; }
+.builder-rail-item { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; padding: 7px 8px; }
+.builder-rail-label { font-size: var(--type-base); font-weight: 600; }
+.builder-main { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.builder-preview { display: flex; flex-direction: column; gap: 6px; position: sticky; top: 12px; overflow-x: auto; }
+
+.builder-step { display: flex; flex-direction: column; gap: 3px; }
+.builder-step-head { display: flex; align-items: center; gap: 10px; width: 100%; padding: 7px 8px; }
+.builder-step-title { font-size: var(--type-base); font-weight: 600; }
+.builder-glyph { color: var(--fg-muted); font-family: var(--font-mono); font-size: var(--type-md); }
+.builder-step-actions { display: flex; align-items: center; gap: 4px; margin-left: auto; flex-shrink: 0; }
+.builder-add { display: flex; flex-wrap: wrap; gap: 6px; padding-top: 10px; }
+.builder-problem { padding-left: 26px; }
+.builder-verdict { display: flex; align-items: center; gap: 8px; color: var(--status-done); font-size: var(--type-sm); }
+
+/* one branch row reads as a sentence: When <field> <op> <value> go to <step>. It wraps
+   rather than scrolls, because the controls are the sentence and hiding half of it would
+   hide the condition. */
+.builder-branch-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 5px 0; border-bottom: 1px solid var(--border); }
+.builder-branch-row:last-of-type { border-bottom: none; }
+
+/* the source editor, demoted (HOW-22): still the escape hatch, no longer the front door */
+.graph-advanced { margin-bottom: 12px; }
+.graph-advanced summary { cursor: pointer; color: var(--fg-muted); font-size: var(--type-sm); }
 
 /* run controls (T22) — the controls themselves are Buttons */
 .run-controls { display: flex; gap: 6px; flex-shrink: 0; }

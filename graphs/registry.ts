@@ -11,6 +11,7 @@
  * Async because local graphs are dynamically imported. Callers that only need built-ins
  * (prompt library, proposals) keep using GRAPHS directly and stay synchronous.
  */
+import { specOf } from "../core/graph-spec";
 import type { Graph } from "../core/graph";
 import { GRAPHS } from "./index";
 import { loadLocalGraphs, type LocalGraphProblem } from "./local";
@@ -24,6 +25,13 @@ export interface CatalogEntry {
   /** a graph with a worktree node needs a repo; everything else runs on a plain folder */
   kind: "repo" | "plain";
   source: GraphSource;
+  /**
+   * HOW-22: can the graph builder re-open this one? True only for a LOCAL graph that still
+   * carries the spec it was built from. A hand-written graph — or a builder graph someone
+   * has since hand-edited past recognition — is `false`, and the UI offers the source
+   * editor and says why. The builder never guesses a spec back out of TypeScript.
+   */
+  builder: boolean;
 }
 
 export interface Registry {
@@ -57,6 +65,7 @@ export function catalogOf(reg: Registry): CatalogEntry[] {
       inputs: [...g.def.inputs],
       kind: Object.values(g.def.nodes).some((n) => n.kind === "worktree") ? ("repo" as const) : ("plain" as const),
       source: reg.source[g.def.name] ?? ("builtin" as const),
+      builder: reg.source[g.def.name] === "local" && specOf(g) !== null,
     }))
     .sort((a, b) => (a.source === b.source ? a.name.localeCompare(b.name) : a.source === "builtin" ? -1 : 1));
 }

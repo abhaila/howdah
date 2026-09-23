@@ -13,6 +13,14 @@
  * and the arrow keys walk the nodes in layout order so reaching the tenth node does not
  * cost ten Tabs. The geometry is untouched — layout() is the same function.
  *
+ * HOW-22: this component now draws a DRAFT as well as a run. A run's shape is derived by the
+ * server and is internally consistent; a draft is being TYPED, so an edge may name a step that
+ * is not there yet ("go to [pick a step]") and a re-opened hand-edited module may name one
+ * that never was. The edge and node loops below therefore SKIP what they cannot place instead
+ * of asserting it with `!` — a picture is not a gate, and the assertion took the whole app
+ * down with it, unsaved draft included, because web/app has no error boundary. The missing
+ * step is reported in words by specProblems(), in the pane that fixes it.
+ *
  * The box truncates a node id at 20 characters, and what carries the full one is the node's
  * OWN aria-label rather than a tooltip. A Tooltip here would have to live in a
  * `foreignObject`, whose overflow Safari clips — so the floating panel would be cut off
@@ -43,7 +51,15 @@ export interface GraphShapeDto {
   default_harness?: string;
   tuning?: { defaults?: AgentConfigDto; nodes?: Record<string, AgentConfigDto> };
   nodes: Array<{
-    id: string; kind: string; class?: string; prompt?: string; run?: string;
+    id: string;
+    /**
+     * HOW-22: what to CALL this node in the picture. The graph builder sets it, because a
+     * step there carries an editable title while its id — which is run identity,
+     * `${node}#${visit}` — is frozen at creation. Everywhere else it is absent and the id is
+     * the name, unchanged.
+     */
+    title?: string;
+    kind: string; class?: string; prompt?: string; run?: string;
     model?: string; harness?: string; effort?: string; maxVisits?: number; outcome?: string; duration?: string;
     baseline?: AgentConfigDto; node_tuning?: AgentConfigDto; effective?: AgentConfigDto;
   }>;
@@ -223,8 +239,11 @@ export function GraphDag({
           </marker>
         </defs>
         {shape.edges.map((e, i) => {
-          const a = pos.get(e.from)!;
-          const b = pos.get(e.to)!;
+          const a = pos.get(e.from);
+          const b = pos.get(e.to);
+          // layout() places the steps that EXIST, so an edge naming one that does not has no
+          // position to draw between. Skip it rather than dereference nothing (see header).
+          if (!a || !b) return null;
           const back = depthOf(e.to) <= depthOf(e.from) && e.from !== e.to;
           const x1 = a.x + 90, y1 = a.y + 52, x2 = b.x + 90, y2 = b.y - 2;
           const d = back
@@ -248,13 +267,20 @@ export function GraphDag({
           );
         })}
         {shape.nodes.map((n, i) => {
-          const p = pos.get(n.id)!;
+          const p = pos.get(n.id);
+          // layout() gives every node in `shape.nodes` a position, an unreached one included
+          // (its trailing layer), so this holds today — it is read rather than asserted so the
+          // node loop cannot become the next edge loop if that ever changes
+          if (!p) return null;
           const isCurrent = n.id === current;
           const v = visits?.[n.id];
           const selectable = !!onSelect && canSelect(n);
           const sub = subtitle(n);
+          const shown = n.title?.trim() || n.id;
           const label = [
-            `${n.kind} node ${n.id}`,
+            // the id is spoken too when a title stands in for it: the id is what every other
+            // surface (the run DAG, the log, node@visit) calls this step
+            shown === n.id ? `${n.kind} node ${n.id}` : `${n.kind} step ${shown}, id ${n.id}`,
             sub,
             v !== undefined && v > 0 ? `${v} visit${v === 1 ? "" : "s"}` : "",
             n.node_tuning ? "has a node override" : "",
@@ -288,7 +314,7 @@ export function GraphDag({
             >
               <rect width="180" height="52" rx="9" />
               <text x="12" y="21" className="dag-title" aria-hidden>
-                {KIND_GLYPH[n.kind] ?? "?"} {n.id.length > 20 ? n.id.slice(0, 19) + "…" : n.id}
+                {KIND_GLYPH[n.kind] ?? "?"} {shown.length > 20 ? shown.slice(0, 19) + "…" : shown}
               </text>
               <text x="12" y="40" className="dag-sub" aria-hidden>{sub}</text>
               {v !== undefined && v > 0 && <g aria-hidden><rect x="150" y="-9" width="30" height="18" rx="9" className="dag-visits" /><text x="165" y="4" textAnchor="middle" className="dag-visits-text">×{v}</text></g>}

@@ -25,6 +25,7 @@
 import { validateGraph, formatViolations, type GraphShape, type Violation } from "./validate";
 import { defaultHarness, harnessNames, harnessSpec, isHarness, type HarnessName } from "./harnesses";
 import type { Scope } from "./context";
+import type { GraphSpec } from "./graph-spec";
 import type { PromptId } from "./prompt-ids";
 
 /** The generated union from prompts/codegen.ts — an unknown id is a compile error. */
@@ -251,6 +252,17 @@ export interface GraphDef<C extends object> {
    * is where the run works (its worktree once one exists).
    */
   validateProposal?: (proposal: unknown, approvalNode: string, run: ProposalRun) => string | null;
+  /**
+   * HOW-22: the declarative spec this graph was COMPILED from, when it was built in the
+   * viewer's graph builder rather than written by hand (core/graph-spec.ts buildGraph).
+   *
+   * It is carried here so the builder can re-open exactly what it wrote instead of
+   * reverse-engineering a spec out of TypeScript. Nothing in the engine reads it — a graph
+   * with a spec and the same graph written by hand behave identically — and a hand-written
+   * graph simply has none, which is how the viewer knows to offer the source editor instead.
+   * The import is type-only, so core/graph-spec.ts may import this module at runtime.
+   */
+  spec?: GraphSpec;
 }
 
 /** Which run a proposal is validated for (GraphDef.validateProposal). */
@@ -318,7 +330,7 @@ export class Graph<C extends object> {
   /**
    * All structural checks. Returns [] for a legal graph; validateOrThrow() for load-time use.
    *   1. duplicate/unknown ids and entry (validateGraph throws on those)
-   *   2. terminal nodes have no outgoing edges
+   *   2. terminal nodes have no outgoing edges, and the ENTRY is not one
    *   3. non-terminal nodes have at least one outgoing edge (no silent dead-ends)
    *   4. at most one unconditional fallback edge per node (ambiguity)
    *   5. conflicting scope declarations (declarations() throws)
@@ -330,6 +342,12 @@ export class Graph<C extends object> {
   validate(): { structural: string[]; paths: Violation[] } {
     const structural: string[] = [];
     const d = this.def;
+
+    // a run that STARTS at a terminal ends before it does anything: vacuously consistent (every
+    // read has a writer on the zero paths that reach anything) and completely useless. The
+    // approval half of this rule was already here — `redesignTo` a terminal is refused below —
+    // and the entry was the asymmetry (HOW-22 review, finding 1).
+    if (d.nodes[d.entry]?.kind === "terminal") structural.push(`entry node "${d.entry}" is a terminal`);
 
     const outgoing = new Map<string, EdgeDef<C>[]>(Object.keys(d.nodes).map((id) => [id, []]));
     for (const e of d.edges) outgoing.get(e.from)?.push(e);

@@ -114,6 +114,60 @@ Break one of these and the design stops working, so check them before changing t
   `Graph.validate()` + `core/validate.ts`: a forward MUST-analysis proving every read has a
   writer on *every* path from entry. `graphs/index.ts` validates every registered graph at
   import time, so a broken graph fails the registry rather than a run.
+- **A built graph is still a file; the spec is what is inside it (HOW-22).** The graph
+  builder (`/graphs/new`, `/graphs/:name/build`) is now the primary authoring path, and it
+  changes nothing downstream: it writes an ordinary local `.ts` whose body is a `GraphSpec`
+  literal plus one `buildGraph()` call (`core/graph-spec.ts`), which `graphs/local.ts`
+  imports, validates and gates exactly as before. `buildGraph` hangs the spec back on
+  `GraphDef.spec` for an EXACT round trip — the builder never guesses a spec out of
+  TypeScript, so a file it cannot re-parse reads as `builder: false` and is offered the
+  source editor instead. There is ONE verdict, not two: `graphs/builder.ts` runs the same
+  `specProblems()` the browser runs, over the spec it is about to write and BEFORE it writes
+  anything, so "Ready to save" and a 422 cannot disagree and a refusal is phrased in the
+  operator's words rather than `validate()`'s. The server stays stronger only where it must
+  (a prompt id shadowing one of the repo's own; the real `loadLocalGraph` import).
+  Two properties make the compiler unnecessary rather than bypassed:
+  nothing is typed free-hand (keys come from the field registry, predicates are data, prompt
+  ids are generated from step ids), and `core/graph-spec.ts` is NODE-FREE, so
+  `buildGraph(draft).validate()` runs in the browser on every keystroke and `specProblems()`
+  rewrites each `Violation` into the operator's words, attributed to the step AND the pane
+  that fixes it. An agent step's `reads` is never declared: it is derived from the prompt
+  body with `templateReads()` — in the browser (`web/app/lib/spec-draft.ts`) and again on the
+  server (`graphs/builder.ts`), which is the authority. So renaming a field rewrites the
+  reference in the body (`renameTemplateRef`, still the one regex in `core/template-refs.ts`,
+  so prose and a longer key that merely starts the same are untouched), and REMOVING a field
+  a body still names is reported rather than papered over by editing the step's reads behind
+  the text. What a step may declare it PRODUCES is data too (`emittableWrites`): the worktree
+  and command executors publish a fixed set, the draft reducer normalises to it on every step
+  edit, and `specProblems` refuses a declaration that could never be published — a
+  `worktree.clean` on a "make" step is a `ContextError` at run time, not a style question.
+  The verdict also covers whether the graph can DO anything, which is what "Ready to save"
+  means: the starting step may not be a Finish step (refused in `core/graph.ts` `validate()`
+  too, so a hand-edited module cannot load as a no-op graph, and the reducer's `pickEntry`
+  never produces one), no step may be unreachable (builder-only, reported LAST so it never
+  buries the dead end that caused it), and an operand must be able to MATCH its field —
+  `unmatchableOperand` is `coerceOperand` read backwards, so `flag == ''` on a yes/no field is
+  refused wherever it arrives from and the form seeds through the same rule. One fact a spec
+  cannot carry is whether its NAME is free, so a save DECLARES `intent: "create" | "update"`:
+  a create landing on an existing graph is a 409 before any write, and `nameTakenProblem` is
+  the single place that sentence is written, fed the catalog in the browser and this one
+  file's existence on the server. A GRAPH WRITES ONLY ITS OWN PROMPTS: every local prompt
+  lives in one directory, so the `<graph>.<step>` prefix is the only thing keeping two graphs'
+  instructions apart — `specProblems` refuses a step filed under another graph's id and
+  `graphs/builder.ts` refuses the same id again at the write, since a create naming one
+  rewrote that graph's prompt and returned ok. Two steps of ONE graph may still share a body,
+  which is what a prefix rule permits and exact equality would not.
+  Two consequences of the builder drawing and editing a draft rather than a finished graph.
+  THE PICTURE NEVER ASSERTS: `GraphDag` draws a half-built shape, so an edge whose endpoint
+  has no position is SKIPPED rather than dereferenced — a run's shape is server-derived and
+  consistent, a draft's is being typed ("go to [pick a step]"), and `web/app` has no error
+  boundary, so one `!` took the wizard and the unsaved draft down with it. What is missing is
+  reported in words by the verdict, in the pane that fixes it. AND A BOX IS CONTROLLED BY
+  MEANING, NOT BY SPELLING: the spec stores typed data on purpose (`3`, not `"3"`;
+  `["pass","warn"]`, not `"pass, warn"`), so a control fed straight back from it destroys every
+  intermediate keystroke the coercion trims. `useTypedText` (`web/app/lib/hooks.ts`) keeps what
+  was typed while it still MEANS what the draft holds and follows the draft the moment it does
+  not — which is why `3.5`, `-1` and a second comma-separated value are typeable at all.
 - **Prompt ids are generated, not typed by hand.** `prompts/<id>.md` (front-matter `id` must
   equal the filename) → `bun prompts/codegen.ts` → the `PromptId` union in
   `core/prompt-ids.ts`. Inline prompt text in a graph is a compile error by design.
@@ -213,8 +267,8 @@ Break one of these and the design stops working, so check them before changing t
 
 | Path | Role |
 |---|---|
-| `core/` | graph schema (`graph.ts`), path validator (`validate.ts`), context store, template/render contract (`template.ts`), the harness table (`harnesses.ts`), generated `prompt-ids.ts` |
-| `graphs/` | the runnable graphs + `index.ts` registry, `local.ts` (the operator's own, from `$HOWDAH_HOME`), `registry.ts` (merged catalog), `typecheck.ts` (tsc gate); `implement-ticket`, `implement-slice` (design on the map → approve → build → drift), `improve-codebase`, `review-teammate-pr`, `write-doc`, `research`, `quick-task`; `delivery.ts` shared publish/repair half |
+| `core/` | graph schema (`graph.ts`), path validator (`validate.ts`), context store, template/render contract (`template.ts`) + its node-free reference grammar (`template-refs.ts`), the graph-as-data model the builder writes (`graph-spec.ts`), the harness table (`harnesses.ts`), generated `prompt-ids.ts` |
+| `graphs/` | the runnable graphs + `index.ts` registry, `local.ts` (the operator's own, from `$HOWDAH_HOME`), `registry.ts` (merged catalog), `typecheck.ts` (tsc gate), `builder.ts` (HOW-22: renders a GraphSpec into a module and saves it transactionally over the graph AND its prompts); `implement-ticket`, `implement-slice` (design on the map → approve → build → drift), `improve-codebase`, `review-teammate-pr`, `write-doc`, `research`, `quick-task`; `delivery.ts` shared publish/repair half |
 | `map/` | the code-derived system map (syntactic tier): tree-sitter extraction (`extract.ts`, `facts.ts`, `adapters.ts` + `queries/`), content-addressed store, `assemble.ts` (identity keys, MountResolver), `ghosts.ts` (GhostSet validator), `drift.ts`, `neighbourhood.ts` |
 | `prompts/` | one `.md` per prompt (front-matter `id`/`version`), codegen, `store.ts` (load/list/accept with stale-base + undeclared-read guards), `proposals.ts` (lifecycle + review view), `library.ts` (read model: consumers, feedback, outcome join, render reconstruction) |
 | `log/` | event union (`events.ts`), durable JSONL writer, view-time `coalesce.ts` |
@@ -222,7 +276,7 @@ Break one of these and the design stops working, so check them before changing t
 | `engine/` | `run.ts` (loop, routing, pinning, effects, attribution), `replay.ts`, `reconcile.ts` (git probes + worktree fingerprint), `attention.ts`, `control.ts` (replies, decisions, runner lock), `slice-decision.ts`, `slice-map.ts`, `executors/` |
 | `cli/` | `main.ts` verbs, `new-graph.ts` scaffolder (writes into `$HOWDAH_HOME`) |
 | `config/` | `config.json` workspaces + settings, `tuning.json` overlay, GitHub repo registration |
-| `web/` | Bun server (read model + reply/launch/control writes, SSE), `derive.ts` read model, React app in `app/`: `main.tsx` is the shell/nav/router only, screens in `app/screens/`, run-detail panes in `app/run/`, primitives in `app/components/ui/`, helpers in `app/lib/` |
+| `web/` | Bun server (read model + reply/launch/control writes, SSE), `derive.ts` read model, React app in `app/`: `main.tsx` is the shell/nav/router only, screens in `app/screens/`, run-detail panes in `app/run/`, builder panes in `app/builder/` (HOW-22, one per wizard step), primitives in `app/components/ui/`, helpers in `app/lib/` |
 | `reviser/` | GEPA-method revision script, eval case, generated proposals |
 | `watchdog/` | out-of-process heartbeat/attention checker + launchd plist |
 | `research/` | Orbital spec, feedback doc, DOT exports, UI captures — the inputs this design was built from |
