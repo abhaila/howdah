@@ -38,7 +38,7 @@ import { harnessNames, harnessSpec, isHarness } from "../core/harnesses";
 import { GRAPHS, graphCatalog } from "../graphs/index";
 import { loadRegistry, catalogOf } from "../graphs/registry";
 import { promptSearchPath } from "../graphs/local";
-import { howdahHome, loadConfig, saveConfig, resolveWorkspace, repoNameFor, ensureHowdahHome } from "../config/config";
+import { howdahHome, loadConfig, saveConfig, resolveWorkspace, repoNameFor, workspaceNameFor, ensureHowdahHome } from "../config/config";
 import { loadTuning } from "../config/tuning";
 import { normalizeRunName } from "../core/run-name";
 import {
@@ -60,6 +60,14 @@ function executors() {
         attentionDir: join(base, "attention"),
         reposDir: join(base, "repos"),
         repoName: (repoPath) => repoNameFor(loadConfig(base), repoPath),
+        // HOW-23: the config is read HERE, as it is for repoName — the engine and its
+        // executors stay free of config loading, and `runs:launch` gets the registry it needs
+        // to refuse a slice nobody could build before it spawns anything
+        runsDir,
+        workspaces: {
+          repoNames: () => Object.keys(loadConfig(base).repos),
+          nameFor: (path) => workspaceNameFor(loadConfig(base), path),
+        },
       });
 }
 

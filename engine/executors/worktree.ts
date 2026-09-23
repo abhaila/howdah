@@ -14,7 +14,8 @@
  * streamed as chunks, and declared facts read from THE FINAL JSON LINE of stdout. The
  * built-in `probe:pr` routes through the reconciler: gh is the source, forge-unreachable
  * THROWS (parks the run) rather than reading as "no PR". The map built-ins (map:extract,
- * map:reextract, map:drift — system-map 1c, engine/executors/map.ts) dispatch from here too.
+ * map:reextract, map:drift — system-map 1c, engine/executors/map.ts) dispatch from here too,
+ * as does `runs:launch` (HOW-23, engine/executors/launch.ts).
  */
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { effectiveCwd, readWorktreeRecord, worktreeRecordPath, type WorktreeRecord } from "./worktree-record";
@@ -22,6 +23,7 @@ import { basename, dirname, join } from "node:path";
 import type { Executor } from "../run";
 import { probeGit, ghForgeProbe, type ForgeProbe } from "../reconcile";
 import { isMapBuiltin, mapBuiltinExecutor, type MapBuiltinOpts } from "./map";
+import { isLaunchBuiltin, launchBuiltinExecutor, type LaunchBuiltinOpts } from "./launch";
 
 export { type WorktreeRecord, worktreeRecordPath, readWorktreeRecord, effectiveCwd } from "./worktree-record";
 
@@ -153,15 +155,21 @@ export interface CommandExecutorOpts {
   defaultTimeoutMs?: number;
   /** the map built-ins' store / workers / throttle (system-map 1c) */
   map?: MapBuiltinOpts;
+  /** HOW-23: where `runs:launch` launches children from, and what it launches them through */
+  launch?: LaunchBuiltinOpts;
 }
 
 export function commandExecutor(opts: CommandExecutorOpts = {}): Executor {
   const mapBuiltins = mapBuiltinExecutor(opts.map);
+  const launchBuiltin = launchBuiltinExecutor(opts.launch);
   return async (args) => {
     const { nodeId, def, visit, cwd, log, reads } = args;
     if (def.kind !== "command") throw new Error("commandExecutor on non-command node");
     // built-ins: map:extract / map:reextract / map:drift run in-process with the node's reads
     if (isMapBuiltin(def.run)) return mapBuiltins(args);
+    // HOW-23: `runs:launch` spawns a child run per approved slice — exactly-once, so it needs
+    // the engine's effects handle rather than a shell
+    if (isLaunchBuiltin(def.run)) return launchBuiltin(args);
     const workDir = effectiveCwd(log.path, cwd);
     const declared = Object.keys(def.writes ?? {});
     let index = 0;

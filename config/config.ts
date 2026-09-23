@@ -87,6 +87,22 @@ export function repoNameFor(config: HowdahConfig, repoPath: string): string {
   return registered ? registered[0] : basename(repoPath);
 }
 
+/**
+ * HOW-23: the REGISTERED name for a path, or null when nothing is registered at it.
+ *
+ * The strict half of `repoNameFor`, and strict for a reason: `runs:launch` uses it to inherit
+ * the parent run's workspace for a slice that named none, and a child must be launched with
+ * `--workspace` (a `--dir` run is Plain, so `implement-ticket`'s create_worktree would throw).
+ * A basename guess would be a name `resolveWorkspace` then cannot find — so an unregistered
+ * path answers null and the launcher refuses in words, before anything is spawned.
+ */
+export function workspaceNameFor(config: HowdahConfig, path: string): string | null {
+  const repo = Object.entries(config.repos).find(([, r]) => r.path === path);
+  if (repo) return repo[0];
+  const folder = Object.entries(config.folders).find(([, f]) => f.path === path);
+  return folder ? folder[0] : null;
+}
+
 /** resolve a workspace by name — repos take precedence on a name clash */
 export function resolveWorkspace(config: HowdahConfig, name: string): WorkspaceRef | null {
   const repo = config.repos[name];

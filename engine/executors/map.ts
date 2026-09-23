@@ -139,8 +139,12 @@ export function redesignSeedText(events: readonly LoggedEvent[], node: string): 
   });
 }
 
-/** Only the declared keys, and every declared key: a node asking for something unknown is a graph bug. */
-function declaredWrites(builtin: string, def: ExecArgs["def"], produced: Record<string, unknown>): Record<string, unknown> {
+/**
+ * Only the declared keys, and every declared key: a node asking for something unknown is a
+ * graph bug. Shared with the other in-process built-ins (HOW-23's `runs:launch`), which owe
+ * the engine the same bounded writes.
+ */
+export function declaredWrites(builtin: string, def: ExecArgs["def"], produced: Record<string, unknown>): Record<string, unknown> {
   const declared = Object.keys(("writes" in def && def.writes) || {});
   const unknown = declared.filter((k) => !(k in produced));
   if (unknown.length) throw new Error(`${builtin} cannot produce ${unknown.join(", ")} (it produces ${Object.keys(produced).join(", ")})`);
