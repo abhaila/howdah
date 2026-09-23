@@ -764,6 +764,15 @@ run view gets built once inside a system that has been agreed, and T23 is UI-ind
   - The fan-out is exactly-once three guards deep (precheck before any spawn, deterministic
     child ids, `effects.claim`/`done`) because a half-launched fan-out costs duplicate PRs and
     a second harness allowance. See CLAUDE.md's multi-graph fan-out invariant.
+  - Review correction (2026-09-23). The precheck now covers the NODE'S OWN DECLARATION as well
+    as the plan: `declaredWrites` throws on a key the built-in cannot publish and it ran after
+    the spawn loop, so a node declaring anything but `launched` started every child and only
+    then parked — and every retry threw again, so it could never succeed. And `runs:launch`
+    joined `core/graph-spec.ts`'s `COMMAND_BUILTINS`, which it had never been added to, so the
+    HOW-22 builder can offer it and refuses the same declaration in the browser. That table now
+    carries a built-in's READS as well as its writes, because this is the one built-in that
+    reads context by name and a command step has no reads control to fix it with; a test pins
+    that every built-in the command executor dispatches has a row.
 
 ## GSTACK REVIEW REPORT
 

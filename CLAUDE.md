@@ -262,8 +262,15 @@ Break one of these and the design stops working, so check them before changing t
   lineage, not control: nothing routes on them and no cached status of a child is ever stored,
   because the child's own log is the authority on what it did. Launching is the most expensive
   side effect in the system, so it is guarded three deep: NOTHING is spawned until the plan
-  re-validates and every slice, ticket and workspace lines up (a half-launched fan-out is
-  duplicate PRs and a second allowance); child ids are deterministic (`<parent>--<slice id>`,
+  re-validates, every slice, ticket and workspace lines up, AND THE NODE'S OWN DECLARATION
+  CHECKS OUT — the step reads `plan.slices` + `tickets` (the built-in names them; extra reads
+  are legal) and publishes `launched` and nothing else, both refused in `precheck()` before the
+  first spawn, because `declaredWrites` throws after the loop and a half-launched fan-out is
+  duplicate PRs and a second allowance. Both halves are in `core/graph-spec.ts`'s
+  `COMMAND_BUILTINS` too, so the HOW-22 builder gates a step on them while it is being typed;
+  `core/` cannot import an executor, so `graphs/builder.test.ts` pins the repetition and fails
+  if any built-in the command executor dispatches is missing from the table. Child ids are
+  deterministic (`<parent>--<slice id>`,
   which is why `graphs/slice-plan.ts` makes the slice id a path-safe slug) so a re-attempt sees
   the run dir and skips; and `effects.claim`/`done` wraps each spawn, so a death between them
   parks for `resolve-effect` rather than guessing. One argv builder (`core/launch-args.ts`)
