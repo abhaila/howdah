@@ -7,7 +7,7 @@
  * accepts. A refused save must change nothing.
  */
 import { afterAll, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHowdahServer } from "./server";
@@ -153,7 +153,7 @@ describe("saving a graph built in the viewer", () => {
   const prompts = (name: string, body = "Write it. Goal: {{ context.goal }}") => ({ [`${name}.draft`]: body });
 
   test("a built graph is created, listed as local, and says the builder can re-open it", async () => {
-    const r = await put("/api/graphs/built-here/builder", { spec: spec("built-here"), prompts: prompts("built-here") });
+    const r = await put("/api/graphs/built-here/builder", { intent: "create", spec: spec("built-here"), prompts: prompts("built-here") });
     expect(r.status).toBe(201);
     expect(existsSync(localGraphPath(base, "built-here"))).toBe(true);
 
@@ -165,7 +165,7 @@ describe("saving a graph built in the viewer", () => {
   });
 
   test("the spec comes back out of the shape route exactly as it went in, bar derived reads", async () => {
-    await put("/api/graphs/round-trip/builder", { spec: spec("round-trip"), prompts: prompts("round-trip") });
+    await put("/api/graphs/round-trip/builder", { intent: "create", spec: spec("round-trip"), prompts: prompts("round-trip") });
     const shape = (await (await fetch(url("/api/graphs/round-trip"))).json()) as { builder: boolean; spec: { nodes: Array<Record<string, unknown>> } };
     expect(shape.builder).toBe(true);
     // `reads` is DERIVED server-side from the prompt body, which asks for goal
@@ -174,8 +174,9 @@ describe("saving a graph built in the viewer", () => {
   });
 
   test("saving it again updates rather than creating, and the change is live at once", async () => {
-    await put("/api/graphs/updatable/builder", { spec: spec("updatable"), prompts: prompts("updatable") });
+    await put("/api/graphs/updatable/builder", { intent: "create", spec: spec("updatable"), prompts: prompts("updatable") });
     const again = await put("/api/graphs/updatable/builder", {
+      intent: "update",
       spec: spec("updatable", { description: "second thoughts" }),
       prompts: prompts("updatable"),
     });
@@ -185,8 +186,10 @@ describe("saving a graph built in the viewer", () => {
   });
 
   test("a name a built-in already owns is refused BEFORE anything is written", async () => {
-    const r = await put("/api/graphs/write-doc/builder", { spec: spec("write-doc"), prompts: prompts("write-doc") });
+    const r = await put("/api/graphs/write-doc/builder", { intent: "create", spec: spec("write-doc"), prompts: prompts("write-doc") });
     expect(r.status).toBe(409);
+    // the stricter of the two 409s: the built-in check runs first, so the operator is told it
+    // is a SHIPPED graph rather than merely a taken name
     expect((await r.json() as { error: string }).error).toContain("Howdah's own graphs");
     expect(existsSync(localGraphPath(base, "write-doc"))).toBe(false);
   });
@@ -197,22 +200,23 @@ describe("saving a graph built in the viewer", () => {
       { spec: { ...spec("nope"), nodes: [{ id: "x", kind: "agent", prompt: "../../etc/passwd" }] } },
       { spec: "not even an object" },
     ]) {
-      const r = await put("/api/graphs/nope/builder", { ...bad, prompts: {} });
+      const r = await put("/api/graphs/nope/builder", { intent: "create", ...bad, prompts: {} });
       expect(r.status).toBe(400);
     }
     // and the path and the spec have to agree about the name
-    const mismatch = await put("/api/graphs/one-name/builder", { spec: spec("another-name"), prompts: {} });
+    const mismatch = await put("/api/graphs/one-name/builder", { intent: "create", spec: spec("another-name"), prompts: {} });
     expect(mismatch.status).toBe(400);
     expect(existsSync(localGraphPath(base, "one-name"))).toBe(false);
   });
 
   test("a save that fails the gate leaves the graph AND its prompts at the last good version", async () => {
-    await put("/api/graphs/kept/builder", { spec: spec("kept"), prompts: prompts("kept") });
+    await put("/api/graphs/kept/builder", { intent: "create", spec: spec("kept"), prompts: prompts("kept") });
     const graphBytes = readFileSync(localGraphPath(base, "kept"), "utf8");
     const promptPath = join(base, "prompts", "kept.draft.md");
     const promptBytes = readFileSync(promptPath, "utf8");
 
     const r = await put("/api/graphs/kept/builder", {
+      intent: "update",
       spec: spec("kept", { edges: [] }),                       // a dead end: validate() refuses
       prompts: prompts("kept", "REWRITTEN — must not survive"),
     });
@@ -222,17 +226,61 @@ describe("saving a graph built in the viewer", () => {
     expect(readFileSync(promptPath, "utf8")).toBe(promptBytes);
   });
 
+  /**
+   * The guarantee `POST /api/graphs` has always kept (cli/new-graph.ts throws on an existing
+   * path) and this route did not: a create that lands on an existing graph must be REFUSED,
+   * not written over it. Before `intent`, a brand-new draft that happened to reuse a name
+   * replaced the graph module AND every prompt file (HOW-22 review, finding 2).
+   */
+  test("a create that lands on an existing graph is refused, and changes not one byte", async () => {
+    const first = await put("/api/graphs/mine/builder", { intent: "create", spec: spec("mine"), prompts: prompts("mine", "ORIGINAL instructions. {{ context.goal }}") });
+    expect(first.status).toBe(201);
+    const graphPath = localGraphPath(base, "mine");
+    const promptDir = join(base, "prompts");
+    const graphBytes = readFileSync(graphPath, "utf8");
+    const promptBytes = readFileSync(join(promptDir, "mine.draft.md"), "utf8");
+    const listing = readdirSync(promptDir).sort();
+
+    const again = await put("/api/graphs/mine/builder", { intent: "create", spec: spec("mine", { description: "an unrelated new draft" }), prompts: prompts("mine", "REPLACED instructions. {{ context.goal }}") });
+    expect(again.status).toBe(409);
+    expect((await again.json() as { error: string }).error).toContain("There is already a graph called");
+    expect(readFileSync(graphPath, "utf8")).toBe(graphBytes);
+    expect(readFileSync(join(promptDir, "mine.draft.md"), "utf8")).toBe(promptBytes);
+    expect(readdirSync(promptDir).sort()).toEqual(listing);
+
+    // and the LEGITIMATE path still works, or the fix would be a regression
+    const edit = await put("/api/graphs/mine/builder", { intent: "update", spec: spec("mine"), prompts: prompts("mine", "EDITED instructions. {{ context.goal }}") });
+    expect(edit.status).toBe(200);
+    expect(readFileSync(join(promptDir, "mine.draft.md"), "utf8")).toContain("EDITED instructions");
+  });
+
+  test("the save has to say which it is; an update of nothing is a 404", async () => {
+    for (const body of [
+      { spec: spec("intentless"), prompts: prompts("intentless") },
+      { intent: "rename", spec: spec("intentless"), prompts: prompts("intentless") },
+    ]) {
+      const r = await put("/api/graphs/intentless/builder", body);
+      expect(r.status).toBe(400);
+      expect((await r.json() as { error: string }).error).toContain('"create"');
+    }
+    expect(existsSync(localGraphPath(base, "intentless"))).toBe(false);
+
+    const missing = await put("/api/graphs/absent/builder", { intent: "update", spec: spec("absent"), prompts: prompts("absent") });
+    expect(missing.status).toBe(404);
+    expect(existsSync(localGraphPath(base, "absent"))).toBe(false);
+  });
+
   test("the builder save never runs tsc — the compiler is not in this loop", async () => {
     // the typecheck route is the only tsc path, and it is a POST nobody makes here; what
     // this asserts is that a save is fast enough to be one, and that it gated anyway
     const started = Date.now();
-    const r = await put("/api/graphs/no-tsc/builder", { spec: spec("no-tsc"), prompts: prompts("no-tsc") });
+    const r = await put("/api/graphs/no-tsc/builder", { intent: "create", spec: spec("no-tsc"), prompts: prompts("no-tsc") });
     expect(r.status).toBe(201);
     expect(Date.now() - started).toBeLessThan(5000); // a tsc pass on this repo is far slower
   });
 
   test("a step's instructions can be read back for editing, and nothing outside HOWDAH_HOME can", async () => {
-    await put("/api/graphs/readable/builder", { spec: spec("readable"), prompts: prompts("readable", "Body one") });
+    await put("/api/graphs/readable/builder", { intent: "create", spec: spec("readable"), prompts: prompts("readable", "Body one") });
     const got = (await (await fetch(url("/api/local-prompts/readable.draft"))).json()) as { body: string };
     expect(got.body).toBe("Body one");
     expect((await fetch(url("/api/local-prompts/delivery.publish"))).status).toBe(404); // a repo prompt is not local
@@ -240,7 +288,7 @@ describe("saving a graph built in the viewer", () => {
   });
 
   test("tuning accepts a built graph's step ids like any other graph's", async () => {
-    await put("/api/graphs/tunable/builder", { spec: spec("tunable"), prompts: prompts("tunable") });
+    await put("/api/graphs/tunable/builder", { intent: "create", spec: spec("tunable"), prompts: prompts("tunable") });
     expect((await put("/api/graphs/tunable/tuning", { nodes: { draft: { harness: "codex" } } })).status).toBe(200);
     expect((await put("/api/graphs/tunable/tuning", { nodes: { nosuch: { harness: "codex" } } })).status).toBe(400);
   });

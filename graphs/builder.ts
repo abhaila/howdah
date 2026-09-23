@@ -7,7 +7,7 @@
  * TypeScript — which is what makes re-opening it in the builder an exact round trip rather
  * than a parse.
  *
- * Three rules this file exists to keep:
+ * Four rules this file exists to keep:
  *
  *   WHAT IS ON DISK IS ALWAYS RUNNABLE. `saveLocalSource` already restores the graph file
  *   when the gate refuses. A builder save also writes PROMPT files, and a refused save that
@@ -19,6 +19,12 @@
  *   the declaration and the text cannot disagree. (The builder computes the same thing live
  *   with the same function, for the "This step will be given…" line.)
  *
+ *   A CREATE NEVER DESTROYS. The save declares whether it is a create or an update, and a
+ *   create that lands on a name a graph already owns is refused before any write. Sibling
+ *   `POST /api/graphs` has kept that guarantee since day one (`cli/new-graph.ts` throws on an
+ *   existing path); this route became the PRIMARY authoring path without it, so a new draft
+ *   that happened to reuse a name silently replaced that graph and its prompts.
+ *
  *   ONE VERDICT, NOT TWO. The refusal below runs the same `specProblems()` the browser runs
  *   on every keystroke, over the spec that is about to be WRITTEN. Before that, the browser
  *   could call a draft clean while this file refused it — and the message the operator got
@@ -27,7 +33,7 @@
  */
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { promptIdFor, specProblems, SPEC_PROMPT_ID, type GraphSpec, type NodeSpec } from "../core/graph-spec";
+import { nameTakenProblem, promptIdFor, specProblems, SPEC_PROMPT_ID, type GraphSpec, type NodeSpec } from "../core/graph-spec";
 import { frontMatterField, splitFrontMatter, templateReads } from "../core/template";
 import { ensureLocalDirs, LOCAL_NAME, loadLocalGraph, localGraphPath, localPromptsDir } from "./local";
 import type { Graph } from "../core/graph";
@@ -88,7 +94,11 @@ export function promptIdsOf(spec: GraphSpec): string[] {
   return spec.nodes.filter((n): n is Extract<NodeSpec, { kind: "agent" }> => n.kind === "agent").map((n) => n.prompt);
 }
 
-export type SaveResult = { ok: true; created: boolean; graph: Graph<any> } | { ok: false; error: string };
+export type SaveResult =
+  | { ok: true; created: boolean; graph: Graph<any> }
+  /** `code` lets the route pick a status without re-deciding the refusal: "exists" is a create
+   *  that landed on a graph, "missing" an update of one that is not there. */
+  | { ok: false; error: string; code?: "exists" | "missing" };
 
 interface Snapshot {
   path: string;
@@ -116,6 +126,13 @@ export async function saveBuilderGraph(opts: {
   repoRoot: string;
   spec: GraphSpec;
   prompts: Record<string, string>;
+  /**
+   * REQUIRED: a create that lands on an existing graph is REFUSED, never merged over it
+   * (HOW-22 review, finding 2 — a brand-new draft reusing a name replaced that graph's module
+   * and every one of its prompt files). Optional-defaulting-to-update would be a flag a caller
+   * forgets, and forgetting reproduces exactly that bug, so `tsc` is made to name every site.
+   */
+  intent: "create" | "update";
 }): Promise<SaveResult> {
   const { home, repoRoot, prompts } = opts;
   if (!LOCAL_NAME.test(opts.spec.name)) return { ok: false, error: `graph name must be kebab-case: "${opts.spec.name}"` };
@@ -126,6 +143,16 @@ export async function saveBuilderGraph(opts: {
     if (!declaredIds.has(id)) return { ok: false, error: `no step names the prompt "${id}"` };
     if (existsSync(join(repoRoot, "prompts", `${id}.md`)))
       return { ok: false, error: `"${id}" is one of Howdah's own prompts — a local one would shadow it everywhere. Rename the step.` };
+  }
+
+  // BEFORE ensureLocalDirs, so a refusal touches nothing at all. The list holds one name
+  // because the only name whose existence matters to this save is its own.
+  const existing = existsSync(localGraphPath(home, opts.spec.name));
+  if (opts.intent === "create") {
+    const taken = nameTakenProblem(opts.spec.name, existing ? [opts.spec.name] : []);
+    if (taken) return { ok: false, error: taken.message, code: "exists" };
+  } else if (!existing) {
+    return { ok: false, error: `there is no graph called "${opts.spec.name}" to update`, code: "missing" };
   }
 
   ensureLocalDirs(home);
@@ -144,8 +171,6 @@ export async function saveBuilderGraph(opts: {
       return body === null ? n : { ...n, reads: templateReads(body) };
     }),
   };
-
-  const created = !existsSync(graphPath);
 
   try {
     // THE SAME VERDICT THE BROWSER SHOWED. specProblems() is node-free precisely so both
@@ -176,7 +201,7 @@ export async function saveBuilderGraph(opts: {
     // the gate ran on what was imported; prove the spec survived the round trip too, so a
     // graph can never be listed as builder-editable while the builder cannot read it back
     if (graph.def.spec === undefined) throw new Error("the saved module does not carry its spec");
-    return { ok: true, created, graph };
+    return { ok: true, created: opts.intent === "create", graph };
   } catch (err) {
     restore(files);
     return { ok: false, error: err instanceof Error ? err.message : String(err) };

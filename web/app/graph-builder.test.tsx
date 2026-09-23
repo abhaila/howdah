@@ -29,6 +29,7 @@ import {
 } from "./lib/spec-draft";
 import { GraphBuilder } from "./screens/graph-builder";
 import { StepForm } from "./builder/step-form";
+import { BranchingPane } from "./builder/branching";
 import { ToastProvider } from "./components/ui/toast";
 
 // ---- the draft ---------------------------------------------------------------------------
@@ -60,6 +61,55 @@ describe("the draft keeps itself consistent, because the edits are coupled", () 
   test("removing the starting step moves the start rather than leaving it dangling", () => {
     const after = apply(doc(), { type: "remove-step", id: "draft" });
     expect(after.spec.entry).toBe(after.spec.nodes[0]!.id);
+  });
+
+  /**
+   * HOW-22 review, finding 1. `remove-step`'s fallback was `nodes[0]`, which is the FINISH step
+   * as soon as an operator drags one to the top: the draft then saved clean and every run ended
+   * before doing anything. The entry falls through to the first step that can actually run.
+   */
+  test("removing the starting step never leaves a Finish step as the start", () => {
+    // the review's exact reproduction, through actions the panes dispatch and nothing else
+    const blank = PRESETS[0]!.build("demo");
+    const made = newStep(blank.spec, "command", "Extra");
+    const after = apply(
+      blank,
+      { type: "add-step", ...made },
+      { type: "set-branching", from: made.node.id, edges: [{ to: "done" }] },
+      { type: "move-step", id: "done", by: -1 },
+      { type: "move-step", id: "done", by: -1 },
+      { type: "remove-step", id: "work" },
+    );
+    expect(after.spec.nodes[0]!.kind).toBe("terminal");           // the Finish really is first
+    expect(after.spec.nodes.find((n) => n.id === after.spec.entry)!.kind).not.toBe("terminal");
+    expect(draftProblems(after)).toEqual([]);
+  });
+
+  test("removing the last step that can run leaves no start, and says so rather than throwing", () => {
+    const after = apply(
+      { spec: { ...doc().spec, nodes: [{ id: "done", kind: "terminal", outcome: "success" }], edges: [], entry: "done" }, prompts: {}, saved: false },
+      { type: "remove-step", id: "nothing-here" },
+    );
+    expect(after.spec.entry).toBe("");
+    expect(draftProblems(after).some((p) => p.where === "basics" && p.message.includes("not in the graph"))).toBe(true);
+  });
+
+  test("a Finish step added first does not become the start", () => {
+    const empty: Draft = { spec: { ...doc().spec, nodes: [], edges: [], entry: "" }, prompts: {}, saved: false };
+    const fin = newStep(empty.spec, "terminal", "All done");
+    const after = apply(empty, { type: "add-step", ...fin });
+    expect(after.spec.entry).toBe("");
+    const work = newStep(after.spec, "command", "Do it");
+    expect(apply(after, { type: "add-step", ...work }).spec.entry).toBe(work.node.id);
+  });
+
+  /** HOW-22 review, C9 — the review pane promises every step is reachable; now it is checked. */
+  test("a step nothing goes to is counted in the Branching pane", () => {
+    const made = newStep(doc().spec, "command", "Stranded");
+    const after = apply(doc(), { type: "add-step", ...made }, { type: "set-branching", from: made.node.id, edges: [{ to: "done" }] });
+    const problems = problemsByPane(draftProblems(after));
+    expect(problems.branching).toHaveLength(1);
+    expect(problems.branching[0]!.message).toContain("**Stranded** is never reached");
   });
 
   test("removing a field takes it off every step AND removes the branch rows that tested it", () => {
@@ -365,8 +415,13 @@ let root: Root | null = null;
 let host: HTMLElement | null = null;
 const realFetch = globalThis.fetch;
 
-/** the catalog answers every GET; a PUT is recorded and answered 201 unless told otherwise */
-function serve(put: { status: number; body: unknown } = { status: 201, body: { ok: true } }) {
+/** the catalog answers every GET; a PUT is recorded and answered 201 unless told otherwise.
+ *  `catalog` is the list of names already taken — the one fact a spec cannot carry, so the
+ *  builder fetches it once and feeds it to draftProblems(). */
+function serve(
+  put: { status: number; body: unknown } = { status: 201, body: { ok: true } },
+  catalog: string[] = [],
+) {
   const calls: Array<{ url: string; method: string; body: unknown }> = [];
   globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
@@ -374,7 +429,7 @@ function serve(put: { status: number; body: unknown } = { status: 201, body: { o
     calls.push({ url, method, body: init?.body ? JSON.parse(String(init.body)) : undefined });
     if (method !== "GET")
       return new Response(JSON.stringify(put.body), { status: put.status, headers: { "content-type": "application/json" } });
-    return new Response(JSON.stringify({ graphs: [], problems: [] }), { status: 200, headers: { "content-type": "application/json" } });
+    return new Response(JSON.stringify({ graphs: catalog.map((name) => ({ name })), problems: [] }), { status: 200, headers: { "content-type": "application/json" } });
   }) as typeof fetch;
   return calls;
 }
@@ -492,6 +547,37 @@ describe("the wizard, end to end (AC3)", () => {
     );
   });
 
+  /**
+   * HOW-22 review, finding 2. The collision used to be a field-error the Basics pane rendered
+   * on its own, outside the verdict: the rail counted Basics clean, Review printed "Ready to
+   * save", and the save replaced the other graph. It is now ONE counted problem, and there is
+   * only one copy of it.
+   */
+  test("a name the catalog already owns is a counted problem, printed once", async () => {
+    serve({ status: 201, body: { ok: true } }, ["taken-name"]);
+    const el = await mount();
+    type(el.querySelector('input[placeholder="my-review"]') as HTMLInputElement, "taken-name");
+    expect(
+      buttons(el).find((b) => b.getAttribute("aria-label")?.startsWith("Basics"))!.getAttribute("aria-label"),
+    ).toContain("1 to sort out");
+    const errors = [...el.querySelectorAll(".field-error")].map((n) => n.textContent);
+    expect(errors.filter((t) => t?.includes("already a graph called"))).toHaveLength(1);
+    goTo(el, "Review");
+    expect(el.textContent).toContain("1 thing to sort out");
+    expect(el.textContent).not.toContain("Ready to save");
+  });
+
+  test("the first save declares a create; the next one declares an update", async () => {
+    const calls = serve();
+    const el = await mount();
+    type(el.querySelector('input[placeholder="my-review"]') as HTMLInputElement, "my-review");
+    goTo(el, "Review");
+    await act(async () => { byText(el, "Save and add to the catalog")!.click(); });
+    await act(async () => { byText(el, "Save changes")!.click(); });
+    const puts = calls.filter((c) => c.method === "PUT").map((c) => (c.body as { intent: string }).intent);
+    expect(puts).toEqual(["create", "update"]);
+  });
+
   test("a refused save says why, in the server's words, and keeps the draft open", async () => {
     serve({ status: 422, body: { error: 'node "work" has nowhere to go next' } });
     const el = await mount();
@@ -527,6 +613,79 @@ describe("nothing in the builder asks anyone to write TypeScript or JSON (AC2)",
   });
 });
 
+
+/**
+ * HOW-22 review, finding 3. "Add a condition" seeded `value: ""` without passing it through
+ * coerceOperand, so on a yes/no field the row compiled to `flag == ''` — a predicate no runtime
+ * value can satisfy, showing a BLANK operand next to a picker that only offers yes/no, and
+ * saving clean. The seed now uses the same rule a kind change already did.
+ */
+describe("a condition row is born able to fire", () => {
+  /** the branching pane on its own, over a draft whose first field has the kind under test */
+  async function openBranching(kind: "boolean" | "number" | "text"): Promise<{ el: HTMLElement; latest: () => Draft }> {
+    let draft: Draft = {
+      saved: false,
+      prompts: { "seed.work": "Do it." },
+      spec: {
+        version: 1, name: "seed", description: "",
+        fields: [{ key: "flag", kind, scope: "sticky" }],
+        inputs: [], entry: "work",
+        nodes: [
+          { id: "work", kind: "command", title: "Do it", run: "true", reads: [], writes: ["flag"] },
+          { id: "done", kind: "terminal", outcome: "success" },
+        ],
+        edges: [{ from: "work", to: "done" }],
+      },
+    };
+    host = document.createElement("div");
+    document.body.appendChild(host);
+    root = createRoot(host);
+    const render = () =>
+      root!.render(
+        <ToastProvider>
+          <BranchingPane
+            draft={draft}
+            problems={problemsByPane(draftProblems(draft)).branching}
+            dispatch={(a) => { draft = draftReducer(draft, a); render(); }}
+          />
+        </ToastProvider>,
+      );
+    await act(async () => { render(); });
+    return { el: host, latest: () => draft };
+  }
+
+  const rowOperand = (draft: Draft) => {
+    const when = draft.spec.edges.find((e) => e.when)?.when;
+    return when && (when.op === "equals" || when.op === "not-equals") ? when.value : undefined;
+  };
+
+  test("on a yes/no field the row is born `flag == false`, and the picker agrees", async () => {
+    const { el, latest } = await openBranching("boolean");
+    click(byText(el, "Add a condition"));
+    expect(rowOperand(latest())).toBe(false);
+    const operand = [...el.querySelectorAll("select")].find((x) => x.getAttribute("aria-label") === "what flag is compared with")!;
+    expect(operand.value).toBe("false");
+    expect([...operand.options].find((o) => o.selected)?.textContent).toBe("no");
+    // a row that can fire is not a problem, so the rail stays quiet
+    expect(problemsByPane(draftProblems(latest())).branching).toEqual([]);
+  });
+
+  test("on a number field it is born 0, not the string that would never match", async () => {
+    const { el, latest } = await openBranching("number");
+    click(byText(el, "Add a condition"));
+    expect(rowOperand(latest())).toBe(0);
+    expect(problemsByPane(draftProblems(latest())).branching).toEqual([]);
+  });
+
+  test("on a text field the row starts empty — and is REPORTED rather than silently dead", async () => {
+    const { el, latest } = await openBranching("text");
+    click(byText(el, "Add a condition"));
+    expect(rowOperand(latest())).toBe("");
+    const problems = problemsByPane(draftProblems(latest())).branching;
+    expect(problems).toHaveLength(1);
+    expect(problems[0]!.message).toContain("compares `flag` with nothing");
+  });
+});
 
 describe("a declared fact is never invisible-and-unremovable", () => {
   /** the step form on its own, over a draft that already carries the awkward declaration */

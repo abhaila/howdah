@@ -1,8 +1,9 @@
 /**
  * Step 1 of the builder (HOW-22): what the graph is called, what it is for, and where it
- * starts. The name is the FILE name, so it is checked here — kebab-case, and not a name a
- * built-in already owns — before anything is written; and once the file exists it stops
- * being editable, because renaming it would be making a different graph.
+ * starts. The name is the FILE name, so it is checked — kebab-case, and not a name already
+ * in the catalog — before anything is written; but the checking happens in the ONE verdict
+ * (core/graph-spec.ts), not here. Once the file exists the name stops being editable, because
+ * renaming it would be making a different graph.
  */
 import { PRESETS, type Draft, type DraftAction } from "@/lib/spec-draft";
 import { Button } from "@/components/ui/button";
@@ -12,17 +13,16 @@ import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 
-export function BasicsPane({ draft, dispatch, taken, onPreset }: {
+export function BasicsPane({ draft, dispatch, onPreset }: {
   draft: Draft;
   dispatch: (a: DraftAction) => void;
-  /** every name already in the catalog — a collision is answered here, not at save */
-  taken: string[];
   onPreset: (presetId: string) => void;
 }) {
   const { spec, saved } = draft;
-  // an illegal name is reported by specProblems with the rest of this pane's problems; what
-  // it cannot know is what ELSE is in the catalog, so that is the one check made here
-  const collides = !saved && taken.includes(spec.name);
+  // This pane renders NO verdict of its own. An illegal name and a name the catalog already
+  // owns are both draftProblems() now (nameTakenProblem), printed below by the shell and
+  // counted by the rail — a second copy here would be a rule that can disagree with the one
+  // the save enforces, which is how a create came to overwrite a graph (HOW-22 review).
   return (
     <div className="flex flex-col gap-3">
       <Card>
@@ -37,7 +37,6 @@ export function BasicsPane({ draft, dispatch, taken, onPreset }: {
             Name
             <Input value={spec.name} disabled={saved} placeholder="my-review" onChange={(e) => dispatch({ type: "set-name", name: e.target.value })} />
           </Label>
-          {collides && <div className="field-error">There is already a graph called {spec.name}. Pick another name.</div>}
           {saved && <div className="field-hint">Saved graphs keep their name — the runs that already happened are filed under it.</div>}
           <Label>
             What it does, in one line

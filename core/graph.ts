@@ -330,7 +330,7 @@ export class Graph<C extends object> {
   /**
    * All structural checks. Returns [] for a legal graph; validateOrThrow() for load-time use.
    *   1. duplicate/unknown ids and entry (validateGraph throws on those)
-   *   2. terminal nodes have no outgoing edges
+   *   2. terminal nodes have no outgoing edges, and the ENTRY is not one
    *   3. non-terminal nodes have at least one outgoing edge (no silent dead-ends)
    *   4. at most one unconditional fallback edge per node (ambiguity)
    *   5. conflicting scope declarations (declarations() throws)
@@ -342,6 +342,12 @@ export class Graph<C extends object> {
   validate(): { structural: string[]; paths: Violation[] } {
     const structural: string[] = [];
     const d = this.def;
+
+    // a run that STARTS at a terminal ends before it does anything: vacuously consistent (every
+    // read has a writer on the zero paths that reach anything) and completely useless. The
+    // approval half of this rule was already here — `redesignTo` a terminal is refused below —
+    // and the entry was the asymmetry (HOW-22 review, finding 1).
+    if (d.nodes[d.entry]?.kind === "terminal") structural.push(`entry node "${d.entry}" is a terminal`);
 
     const outgoing = new Map<string, EdgeDef<C>[]>(Object.keys(d.nodes).map((id) => [id, []]));
     for (const e of d.edges) outgoing.get(e.from)?.push(e);

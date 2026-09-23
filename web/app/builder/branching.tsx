@@ -118,10 +118,15 @@ function StepBranching({ spec, from, problems, onChange }: {
     emit(next, fallback?.to ?? null);
   };
 
-  const first = spec.fields[0]?.key ?? "";
+  // the operand is seeded through coerceOperand, the same rule a KIND change already went
+  // through: a bare "" is a row that can never fire on a yes/no or number field, and it saved
+  // clean while showing a blank operand (HOW-22 review, finding 3). On a text or choice field
+  // it is still "" — and specProblems now says so, which is the nagging that makes an
+  // unfinished row visible instead of silently dead.
+  const firstField = spec.fields[0];
   const addRow = () =>
     emit(
-      [...conditional, { from, to: targets[0]?.id ?? "", when: { op: "equals", key: first, value: "" } }],
+      [...conditional, { from, to: targets[0]?.id ?? "", when: { op: "equals", key: firstField?.key ?? "", value: coerceOperand("", firstField?.kind) } }],
       fallback?.to ?? null,
     );
 

@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promptIdFor, promptIdsOf, readLocalPrompt, renderSpecModule, saveBuilderGraph } from "./builder";
 import { loadLocalGraph, localGraphPath, localPromptsDir, ensureLocalDirs } from "./local";
-import { COMMAND_BUILTINS, WORKTREE_FACTS, type GraphSpec, type NodeSpec } from "../core/graph-spec";
+import { COMMAND_BUILTINS, WORKTREE_FACTS, coerceOperand, type GraphSpec, type NodeSpec } from "../core/graph-spec";
 // the reducer is plain data over core/ — no React, no DOM — so the browser's verdict can be
 // driven from here and compared against this file's gate, which is the whole point below
 import { PRESETS, draftProblems, draftReducer, newStep, pickPrompts, type Draft, type DraftAction } from "../web/app/lib/spec-draft";
@@ -75,7 +75,7 @@ describe("a builder graph is an ordinary local graph", () => {
   test("it saves, loads, validates, and the spec round-trips byte-for-byte", async () => {
     const h = home();
     const spec = everything();
-    const saved = await saveBuilderGraph({ home: h, repoRoot: ROOT, spec, prompts: bodies(spec) });
+    const saved = await saveBuilderGraph({ intent: "create", home: h, repoRoot: ROOT, spec, prompts: bodies(spec) });
     expect(saved.ok).toBe(true);
     if (!saved.ok) return;
     expect(saved.created).toBe(true);
@@ -96,7 +96,7 @@ describe("a builder graph is an ordinary local graph", () => {
   test("every node kind survives the compile", async () => {
     const h = home();
     const spec = everything();
-    await saveBuilderGraph({ home: h, repoRoot: ROOT, spec, prompts: bodies(spec) });
+    await saveBuilderGraph({ intent: "create", home: h, repoRoot: ROOT, spec, prompts: bodies(spec) });
     const g = await loadLocalGraph(h, spec.name, ROOT);
     expect(Object.values(g.def.nodes).map((n) => n.kind).sort()).toEqual(
       ["agent", "agent", "approval", "command", "terminal", "terminal", "wait", "worktree", "worktree"],
@@ -113,7 +113,7 @@ describe("a builder graph is an ordinary local graph", () => {
     const spec = everything();
     // the client claims it reads nothing; the body says otherwise, and the body wins
     const lying: GraphSpec = { ...spec, nodes: spec.nodes.map((n) => (n.id === "build" ? { ...n, reads: [] } : n)) };
-    await saveBuilderGraph({ home: h, repoRoot: ROOT, spec: lying, prompts: bodies(spec) });
+    await saveBuilderGraph({ intent: "create", home: h, repoRoot: ROOT, spec: lying, prompts: bodies(spec) });
     const g = await loadLocalGraph(h, spec.name, ROOT);
     const build = g.def.nodes["build"]!;
     expect(build.kind === "agent" && build.reads).toEqual(["goal", "plan"]);
@@ -125,7 +125,7 @@ describe("a refused save changes nothing — the graph OR its prompts", () => {
     const h = home();
     const spec = everything("guarded");
     const first = bodies(spec);
-    expect((await saveBuilderGraph({ home: h, repoRoot: ROOT, spec, prompts: first })).ok).toBe(true);
+    expect((await saveBuilderGraph({ intent: "create", home: h, repoRoot: ROOT, spec, prompts: first })).ok).toBe(true);
 
     const graphBytes = readFileSync(localGraphPath(h, "guarded"), "utf8");
     const promptBytes = Object.fromEntries(
@@ -137,7 +137,7 @@ describe("a refused save changes nothing — the graph OR its prompts", () => {
       ...spec,
       nodes: spec.nodes.map((n) => (n.kind === "approval" ? { ...n, redesignTo: "no-such-step" } : n)),
     };
-    const refused = await saveBuilderGraph({
+    const refused = await saveBuilderGraph({ intent: "update",
       home: h, repoRoot: ROOT, spec: broken,
       prompts: Object.fromEntries(Object.keys(first).map((id) => [id, "REWRITTEN — must not survive"])),
     });
@@ -158,7 +158,7 @@ describe("a refused save changes nothing — the graph OR its prompts", () => {
     const h = home();
     const spec = everything("never-was");
     const broken: GraphSpec = { ...spec, edges: [] };
-    expect((await saveBuilderGraph({ home: h, repoRoot: ROOT, spec: broken, prompts: bodies(spec) })).ok).toBe(false);
+    expect((await saveBuilderGraph({ intent: "create", home: h, repoRoot: ROOT, spec: broken, prompts: bodies(spec) })).ok).toBe(false);
     expect(existsSync(localGraphPath(h, "never-was"))).toBe(false);
     for (const id of Object.keys(bodies(spec))) expect(existsSync(join(localPromptsDir(h), `${id}.md`))).toBe(false);
   });
@@ -175,7 +175,7 @@ describe("what a prompt id is allowed to be", () => {
   test("a body for a prompt no step names is refused — the id is a file path", async () => {
     const h = home();
     const spec = tiny("tiny", "tiny.work");
-    const r = await saveBuilderGraph({ home: h, repoRoot: ROOT, spec, prompts: { "tiny.work": "x", "somebody.else": "y" } });
+    const r = await saveBuilderGraph({ intent: "create", home: h, repoRoot: ROOT, spec, prompts: { "tiny.work": "x", "somebody.else": "y" } });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error).toContain("no step names the prompt");
   });
@@ -183,7 +183,7 @@ describe("what a prompt id is allowed to be", () => {
   test("a prompt that would shadow one of Howdah's own is refused by name", async () => {
     const h = home();
     const spec = tiny("shadowy", "delivery.publish");
-    const r = await saveBuilderGraph({ home: h, repoRoot: ROOT, spec, prompts: { "delivery.publish": "hijacked" } });
+    const r = await saveBuilderGraph({ intent: "create", home: h, repoRoot: ROOT, spec, prompts: { "delivery.publish": "hijacked" } });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error).toContain("shadow");
     expect(existsSync(join(localPromptsDir(h), "delivery.publish.md"))).toBe(false);
@@ -194,7 +194,7 @@ describe("what a prompt id is allowed to be", () => {
     ensureLocalDirs(h);
     writeFileSync(join(localPromptsDir(h), "versioned.work.md"), "---\nid: versioned.work\nversion: 7\n---\nold body\n");
     const spec = tiny("versioned", "versioned.work");
-    expect((await saveBuilderGraph({ home: h, repoRoot: ROOT, spec, prompts: { "versioned.work": "new body {{ context.goal }}" } })).ok).toBe(true);
+    expect((await saveBuilderGraph({ intent: "create", home: h, repoRoot: ROOT, spec, prompts: { "versioned.work": "new body {{ context.goal }}" } })).ok).toBe(true);
     const raw = readFileSync(join(localPromptsDir(h), "versioned.work.md"), "utf8");
     expect(raw).toContain("version: 7");
     expect(readLocalPrompt(h, "versioned.work")).toBe("new body {{ context.goal }}");
@@ -210,7 +210,7 @@ describe("the rendered module", () => {
     // the quote that would have closed the literal is escaped, so the payload stays a string
     expect(src).toContain(String.raw`not a string\"; process.exit(1); const x = \"`);
     // and the proof is that the module still loads, with the prose intact as prose
-    await saveBuilderGraph({ home: h, repoRoot: ROOT, spec, prompts: bodies(spec) });
+    await saveBuilderGraph({ intent: "create", home: h, repoRoot: ROOT, spec, prompts: bodies(spec) });
     expect((await loadLocalGraph(h, "sneaky", ROOT)).def.description).toBe(spec.description);
   });
 
@@ -224,7 +224,7 @@ describe("an IO failure is still all-or-nothing (the writes live inside the try)
   test("a prompt that cannot be created leaves every earlier file byte-identical", async () => {
     const h = home();
     const spec = everything("io-fail");
-    expect((await saveBuilderGraph({ home: h, repoRoot: ROOT, spec, prompts: bodies(spec) })).ok).toBe(true);
+    expect((await saveBuilderGraph({ intent: "create", home: h, repoRoot: ROOT, spec, prompts: bodies(spec) })).ok).toBe(true);
 
     const graphBytes = readFileSync(localGraphPath(h, "io-fail"), "utf8");
     const promptBytes = Object.fromEntries(
@@ -246,7 +246,7 @@ describe("an IO failure is still all-or-nothing (the writes live inside the try)
     };
     chmodSync(localPromptsDir(h), 0o500);
     try {
-      const refused = await saveBuilderGraph({ home: h, repoRoot: ROOT, spec: grown, prompts: rewritten });
+      const refused = await saveBuilderGraph({ intent: "update", home: h, repoRoot: ROOT, spec: grown, prompts: rewritten });
       expect(refused.ok).toBe(false);
       if (!refused.ok) expect(refused.error).toMatch(/EACCES|permission denied/i);
     } finally {
@@ -318,6 +318,26 @@ describe("the browser's verdict and the server's gate cannot disagree", () => {
    * bodies no longer follow, say — would keep the property while breaking the feature. Each
    * row therefore also says what the right answer IS.
    */
+  /** what the Branching pane's "Add a condition" does: one more row leaving the entry step,
+   *  its operand seeded by the field's KIND through the same coerceOperand the form calls */
+  const addSeededRow = (d: Draft, key: string): Draft => {
+    const f = d.spec.fields.find((x) => x.key === key)!;
+    // the step the operator would be standing on: whichever one already branches on this field
+    // if there is one (so the field is written by the time the row is evaluated), else the entry
+    const from = d.spec.edges.find((e) => e.when?.key === key)?.from ?? d.spec.entry;
+    const mine = d.spec.edges.filter((e) => e.from === from);
+    const fallback = mine.find((e) => !e.when);
+    return draftReducer(d, {
+      type: "set-branching", from,
+      edges: [
+        ...mine.filter((e) => e.when).map((e) => ({ to: e.to, when: e.when! })),
+        { to: fallback?.to ?? d.spec.nodes.find((n) => n.kind === "terminal")!.id,
+          when: { op: "equals" as const, key, value: coerceOperand("", f.kind) } },
+        ...(fallback ? [{ to: fallback.to }] : []),
+      ],
+    });
+  };
+
   const MUTATIONS: Array<{ name: string; apply: (d: Draft) => Draft; saves: boolean; applies?: (d: Draft) => boolean }> = [
     { name: "untouched", apply: (d) => d, saves: true },
     {
@@ -341,6 +361,55 @@ describe("the browser's verdict and the server's gate cannot disagree", () => {
       saves: false,
     },
     { name: "rename the graph before its first save", apply: seq({ type: "set-name", name: "renamed-here" }), saves: true },
+    // HOW-22 review, finding 1: an entry that cannot run. The picker cannot offer a terminal,
+    // so this is the shape that arrives from a PUT or a hand-edited file — refused by BOTH sides.
+    {
+      name: "point the start at a Finish step",
+      applies: (d) => d.spec.nodes.some((n) => n.kind === "terminal"),
+      apply: (d) => draftReducer(d, { type: "set-entry", id: d.spec.nodes.find((n) => n.kind === "terminal")!.id }),
+      saves: false,
+    },
+    // HOW-22 review, C9: the review pane promises every step is reachable
+    {
+      name: "add a step nothing goes to",
+      apply: (d) => {
+        const made = newStep(d.spec, "command", "Stranded");
+        const done = d.spec.nodes.find((n) => n.kind === "terminal")!.id;
+        return seq({ type: "add-step", ...made }, { type: "set-branching", from: made.node.id, edges: [{ to: done }] })(d);
+      },
+      saves: false,
+    },
+    // HOW-22 review, finding 3. A row seeded through coerceOperand on a yes/no field is BORN
+    // able to fire, and must save: agreement alone would be satisfied by both sides refusing a
+    // condition an operator had only just added.
+    {
+      name: "add a condition row on a yes/no field",
+      applies: (d) => d.spec.fields.some((f) => f.kind === "boolean" && d.spec.edges.some((e) => e.when?.key === f.key)),
+      apply: (d) => addSeededRow(d, d.spec.fields.find((f) => f.kind === "boolean")!.key),
+      saves: true,
+    },
+    // on a TEXT field the seed is genuinely "" — there is no value to guess — so the unfinished
+    // row is REPORTED rather than saved as a branch that can never fire (plan R7, accepted)
+    {
+      name: "add a condition row on a text field",
+      applies: (d) => d.spec.fields.some((f) => f.kind === "text" && d.spec.inputs.includes(f.key)),
+      apply: (d) => addSeededRow(d, d.spec.fields.find((f) => f.kind === "text")!.key),
+      saves: false,
+    },
+    {
+      name: "a branch comparing a yes/no field with text",
+      applies: (d) => d.spec.fields.some((f) => f.kind === "boolean"),
+      apply: (d) => {
+        const key = d.spec.fields.find((f) => f.kind === "boolean")!.key;
+        const from = d.spec.edges.find((e) => e.when?.key === key)!.from;
+        return draftReducer(d, {
+          type: "set-branching", from,
+          edges: d.spec.edges.filter((e) => e.from === from).map((e) =>
+            e.when?.key === key ? { to: e.to, when: { op: "equals" as const, key, value: "yes please" } } : { to: e.to, ...(e.when ? { when: e.when } : {}) }),
+        });
+      },
+      saves: false,
+    },
   ];
 
   for (const preset of PRESETS) {
@@ -350,7 +419,7 @@ describe("the browser's verdict and the server's gate cannot disagree", () => {
       test(`${preset.id}: ${mutation.name}`, async () => {
         const draft = mutation.apply(base);
         const problems = draftProblems(draft);
-        const saved = await saveBuilderGraph({
+        const saved = await saveBuilderGraph({ intent: "create",
           home: home(), repoRoot: ROOT, spec: draft.spec, prompts: pickPrompts(draft),
         });
         expect(saved.ok, `browser said ${problems.length} problem(s); server said ${saved.ok ? "ok" : saved.error}`)
@@ -365,6 +434,69 @@ describe("the browser's verdict and the server's gate cannot disagree", () => {
     }
   }
 
+  /**
+   * The review's reproduction, INVERTED. It used to leave `entry` on the Finish step — clean on
+   * both sides, and a graph that ended every run before doing anything. It must now SAVE,
+   * because the entry falls through to a step that can actually run. It is outside the matrix
+   * because the right answer is preset-dependent: removing the doc preset's first agent takes
+   * the writer of a field its later steps read, which is a legitimate refusal for other reasons.
+   */
+  test("moving Finish to the top and removing the start lands on a step that runs", async () => {
+    const blank = PRESETS[0]!.build("runnable");
+    const made = newStep(blank.spec, "command", "Extra");
+    const after = ([
+      { type: "add-step", ...made },
+      { type: "set-branching", from: made.node.id, edges: [{ to: "done" }] },
+      { type: "move-step", id: "done", by: -1 },
+      { type: "move-step", id: "done", by: -1 },
+      { type: "remove-step", id: "work" },
+    ] as DraftAction[]).reduce(draftReducer, blank);
+
+    expect(after.spec.nodes[0]!.kind).toBe("terminal");
+    expect(after.spec.nodes.find((n) => n.id === after.spec.entry)!.kind).toBe("command");
+    expect(draftProblems(after)).toEqual([]);
+    const saved = await saveBuilderGraph({ intent: "create", home: home(), repoRoot: ROOT, spec: after.spec, prompts: pickPrompts(after) });
+    expect(saved.ok, saved.ok ? "" : saved.error).toBe(true);
+  });
+
+  /**
+   * The one fact the matrix above cannot reach: every row gets a fresh `home`, so no name is
+   * ever taken. The ⟺ is asserted here over a shared home instead — the browser's list has to
+   * carry the same sentence the save refuses with (HOW-22 review, finding 2).
+   */
+  test("a name already in the catalog: the browser says so, and the save refuses with that sentence", async () => {
+    const h = home();
+    const first = PRESETS[0]!.build("collides");
+    expect((await saveBuilderGraph({ intent: "create", home: h, repoRoot: ROOT, spec: first.spec, prompts: pickPrompts(first) })).ok).toBe(true);
+    const graphBytes = readFileSync(localGraphPath(h, "collides"), "utf8");
+
+    const fresh = PRESETS[0]!.build("collides");
+    const problems = draftProblems(fresh, { taken: ["collides"] });
+    expect(problems.length).toBeGreaterThan(0);
+    expect(problems[0]!.where).toBe("basics");
+
+    const refused = await saveBuilderGraph({ intent: "create", home: h, repoRoot: ROOT, spec: fresh.spec, prompts: pickPrompts(fresh) });
+    expect(refused.ok).toBe(false);
+    if (!refused.ok) {
+      expect(refused.code).toBe("exists");
+      expect(problems.map((x) => x.message)).toContain(refused.error);
+    }
+    expect(readFileSync(localGraphPath(h, "collides"), "utf8")).toBe(graphBytes);
+
+    // an already-saved draft legitimately owns its own name, so the same draft as an UPDATE is clean
+    expect(draftProblems({ ...fresh, saved: true }, { taken: ["collides"] })).toEqual([]);
+    expect((await saveBuilderGraph({ intent: "update", home: h, repoRoot: ROOT, spec: fresh.spec, prompts: pickPrompts(fresh) })).ok).toBe(true);
+  });
+
+  test("an update of a graph that is not there is refused rather than creating one", async () => {
+    const h = home();
+    const d = PRESETS[0]!.build("never-made");
+    const r = await saveBuilderGraph({ intent: "update", home: h, repoRoot: ROOT, spec: d.spec, prompts: pickPrompts(d) });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.code).toBe("missing");
+    expect(existsSync(localGraphPath(h, "never-made"))).toBe(false);
+  });
+
   test("a removed step leaves nothing behind for a later save to trip over", async () => {
     // posted RAW — not through pickPrompts — so this fails if the reducer keeps the orphan,
     // which is the shape the review found: one removal blocked every save for the session
@@ -373,7 +505,7 @@ describe("the browser's verdict and the server's gate cannot disagree", () => {
     const after = ([{ type: "add-step", ...made }, { type: "remove-step", id: made.node.id }] as DraftAction[])
       .reduce(draftReducer, draft);
     expect(Object.keys(after.prompts)).toEqual(promptIdsOf(after.spec));
-    const saved = await saveBuilderGraph({ home: home(), repoRoot: ROOT, spec: after.spec, prompts: after.prompts });
+    const saved = await saveBuilderGraph({ intent: "create", home: home(), repoRoot: ROOT, spec: after.spec, prompts: after.prompts });
     expect(saved.ok, saved.ok ? "" : saved.error).toBe(true);
   });
 

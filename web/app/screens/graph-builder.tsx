@@ -115,7 +115,9 @@ export function GraphBuilder({ name }: { name?: string }) {
     return () => { live = false; };
   }, [name]);
 
-  const problems = useMemo(() => draftProblems(draft), [draft]);
+  // `taken` is the catalog, and the one fact a spec cannot carry: it turns a create that
+  // would land on an existing graph into a counted Basics problem rather than a silent save
+  const problems = useMemo(() => draftProblems(draft, { taken }), [draft, taken]);
   const byPane = useMemo(() => problemsByPane(problems), [problems]);
   const shape = useMemo(() => specToShape(draft.spec), [draft.spec]);
 
@@ -128,8 +130,11 @@ export function GraphBuilder({ name }: { name?: string }) {
         headers: { "content-type": "application/json" },
         // pickPrompts, not draft.prompts: the payload is DERIVED from the spec, so a body
         // for a step that no longer exists cannot reach the server — which refuses one, and
-        // used to refuse every save for the rest of the session over it (HOW-22 review)
-        body: JSON.stringify({ spec: draft.spec, prompts: pickPrompts(draft) }),
+        // used to refuse every save for the rest of the session over it (HOW-22 review).
+        // `intent` is DECLARED rather than inferred server-side from a stat: an unsaved draft
+        // is a create, and a create landing on an existing name must be refused, not written
+        // over that graph (HOW-22 review).
+        body: JSON.stringify({ spec: draft.spec, prompts: pickPrompts(draft), intent: draft.saved ? "update" : "create" }),
       });
       const body = (await r.json().catch(() => ({}))) as { error?: string };
       if (!r.ok) {
@@ -195,7 +200,7 @@ export function GraphBuilder({ name }: { name?: string }) {
         <div className="builder-main">
           {pane === "basics" && (
             <BasicsPane
-              draft={draft} dispatch={dispatch} taken={taken}
+              draft={draft} dispatch={dispatch}
               onPreset={(id) => {
                 const preset = PRESETS.find((x) => x.id === id);
                 if (preset) dispatch({ type: "load", draft: preset.build(draft.spec.name) });

@@ -141,6 +141,17 @@ Break one of these and the design stops working, so check them before changing t
   and command executors publish a fixed set, the draft reducer normalises to it on every step
   edit, and `specProblems` refuses a declaration that could never be published — a
   `worktree.clean` on a "make" step is a `ContextError` at run time, not a style question.
+  The verdict also covers whether the graph can DO anything, which is what "Ready to save"
+  means: the starting step may not be a Finish step (refused in `core/graph.ts` `validate()`
+  too, so a hand-edited module cannot load as a no-op graph, and the reducer's `pickEntry`
+  never produces one), no step may be unreachable (builder-only, reported LAST so it never
+  buries the dead end that caused it), and an operand must be able to MATCH its field —
+  `unmatchableOperand` is `coerceOperand` read backwards, so `flag == ''` on a yes/no field is
+  refused wherever it arrives from and the form seeds through the same rule. One fact a spec
+  cannot carry is whether its NAME is free, so a save DECLARES `intent: "create" | "update"`:
+  a create landing on an existing graph is a 409 before any write, and `nameTakenProblem` is
+  the single place that sentence is written, fed the catalog in the browser and this one
+  file's existence on the server.
 - **Prompt ids are generated, not typed by hand.** `prompts/<id>.md` (front-matter `id` must
   equal the filename) → `bun prompts/codegen.ts` → the `PromptId` union in
   `core/prompt-ids.ts`. Inline prompt text in a graph is a compile error by design.

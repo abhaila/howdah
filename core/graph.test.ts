@@ -28,6 +28,25 @@ describe("structural checks", () => {
     expect(g.validate().structural.join("\n")).toContain('terminal node "done" has outgoing edges');
   });
 
+  test("a run cannot START at a Finish step — it would end before doing anything", () => {
+    const def = {
+      name: "starts-at-the-end",
+      entry: "done",
+      inputs: ["goal"] as Array<keyof MiniCtx & string>,
+      nodes: {
+        a: { kind: "agent" as const, prompt: "discover" as const, reads: ["goal"] as Array<keyof MiniCtx & string> },
+        done: { kind: "terminal" as const, outcome: "success" as const },
+      },
+      edges: [{ from: "a", to: "done" }],
+    };
+    const g = defineGraph<MiniCtx>(def);
+    expect(g.validate().structural).toEqual(['entry node "done" is a terminal']);
+    expect(() => g.validateOrThrow()).toThrow(/entry node "done" is a terminal/);
+    // and the rule does not fire on a normal entry, which is what keeps it from judging graphs
+    // that are fine (every built-in's entry is a worktree or an agent)
+    expect(defineGraph<MiniCtx>({ ...def, entry: "a" }).validate().structural).toEqual([]);
+  });
+
   test("dead-end non-terminal is rejected", () => {
     const g = defineGraph<MiniCtx>({
       name: "dead-end",

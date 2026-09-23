@@ -27,7 +27,7 @@
  * round trip, and still cannot be the thing that decides a graph is legal.
  */
 import {
-  emittableWrites, predicateLabel, promptIdFor, recoercePredicate, specProblems, stepTitle,
+  emittableWrites, nameTakenProblem, predicateLabel, promptIdFor, recoercePredicate, specProblems, stepTitle,
   type FieldKind, type FieldSpec, type GraphSpec, type NodeSpec, type Predicate, type ProblemPane, type SpecProblem,
 } from "../../../core/graph-spec";
 import { renameTemplateRef, templateReads } from "../../../core/template-refs";
@@ -114,6 +114,22 @@ export type DraftAction =
   | { type: "set-prompt"; id: string; body: string };
 
 const withoutKey = (keys: string[], key: string) => keys.filter((k) => k !== key);
+
+/**
+ * The starting step, kept RUNNABLE. A Finish step cannot be one — `core/graph.ts` validate()
+ * refuses it and `specProblems` says so in Basics' words — so removing the entry falls through
+ * to the first step that can actually run, rather than to `nodes[0]`, which may be the Finish
+ * step an operator dragged to the top (HOW-22 review, finding 1). It also repairs an entry
+ * left stale for any other reason, which is why `add-step` goes through it too.
+ *
+ * `set-entry` deliberately does NOT: an explicit operator choice is honoured, the picker
+ * cannot offer a terminal, and anything arriving from elsewhere is REPORTED rather than moved
+ * behind their back.
+ */
+function pickEntry(nodes: NodeSpec[], current: string): string {
+  if (nodes.some((n) => n.id === current && n.kind !== "terminal")) return current;
+  return nodes.find((n) => n.kind !== "terminal")?.id ?? "";
+}
 
 function renameGraph(draft: Draft, name: string): Draft {
   const old = draft.spec.name;
@@ -211,7 +227,7 @@ export function draftReducer(draft: Draft, action: DraftAction): Draft {
 
     case "add-step": {
       const nodes = [...spec.nodes, withEmittableWrites(withDerivedReads(action.node, action.body))];
-      const entry = spec.nodes.length === 0 ? action.node.id : spec.entry;
+      const entry = pickEntry(nodes, spec.entry);
       const prompts = action.body !== undefined && action.node.kind === "agent"
         ? { ...draft.prompts, [action.node.prompt]: action.body }
         : draft.prompts;
@@ -240,7 +256,7 @@ export function draftReducer(draft: Draft, action: DraftAction): Draft {
           ...spec,
           nodes,
           edges: spec.edges.filter((e) => e.from !== action.id && e.to !== action.id),
-          entry: spec.entry === action.id ? (nodes[0]?.id ?? "") : spec.entry,
+          entry: pickEntry(nodes, spec.entry),
           // an approval step pointing at the removed one is left to say so in the rail
         },
       };
@@ -369,11 +385,22 @@ export function pickPrompts(draft: Draft): Record<string, string> {
   return out;
 }
 
-export function draftProblems(draft: Draft): SpecProblem[] {
+/**
+ * `taken` is every name already in the catalog. It is passed in rather than looked up because
+ * core/graph-spec.ts is node-free and a spec cannot carry the catalog — and it only counts
+ * while the draft is UNSAVED, since a saved graph legitimately owns its own name. This used to
+ * be a field-error the Basics pane rendered on its own, outside the verdict, so the rail
+ * counted Basics clean and Save went through and replaced the other graph (HOW-22 review).
+ */
+export function draftProblems(draft: Draft, opts: { taken?: readonly string[] } = {}): SpecProblem[] {
   // a prompt is "known" if the operator has written one here or it already exists on disk;
   // the builder seeds every agent step with a body, so an empty map means "do not check"
   const known = Object.keys(draft.prompts);
-  return specProblems(draft.spec, known.length ? { knownPrompts: known } : {});
+  const collision = nameTakenProblem(draft.spec.name, draft.saved ? [] : (opts.taken ?? []));
+  return [
+    ...(collision ? [collision] : []),
+    ...specProblems(draft.spec, known.length ? { knownPrompts: known } : {}),
+  ];
 }
 
 /** The DAG's DTO, straight off the draft — no fetch, so the picture moves with the typing. */

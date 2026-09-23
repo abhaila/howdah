@@ -107,6 +107,41 @@ export function coerceOperand(raw: string, kind: FieldKind | undefined): string 
   return raw;
 }
 
+/**
+ * Why this condition row can never fire, or null — the same rule as `coerceOperand`, read
+ * backwards. A row that compiles to a predicate no runtime value can satisfy saves clean and
+ * then silently never routes: `flag == ''` on a yes/no field, `count == '3'` as text on a
+ * number field, `x in []`. The form seeds through `coerceOperand` so it cannot create one, but
+ * a spec also arrives by PUT and by re-opening a hand-edited module, and it was the CREATION
+ * path forgetting this rule that produced the defect in the first place (HOW-22 review,
+ * finding 3) — so the spec, not the form, is where it is proven.
+ *
+ * Checked only when `path` is ABSENT: with a path the field's kind describes the CONTAINER and
+ * the value at the path has no declared type, so `slice.approval` + `outcome` == "reject" on a
+ * json field is legitimate.
+ *
+ * Deliberately NOT checked: whether a `choice` operand is one of the declared `choices`.
+ * `probe:pr` can legitimately report `OPEN` for a `pr.state` an operator declared as
+ * ["MERGED","CLOSED"], and refusing that branch would be refusing a true statement about run
+ * time on the strength of a launch-form hint. `text` beyond the empty case and `json` without
+ * a path are unchecked for the same reason — a command may write a number into a text field.
+ */
+export function unmatchableOperand(p: Predicate, field: FieldSpec | undefined): string | null {
+  if (p.path) return null;
+  const operands: Array<string | number | boolean> =
+    p.op === "one-of" ? p.values : p.op === "equals" || p.op === "not-equals" ? [p.value] : [];
+  if (p.op === "one-of" && p.values.length === 0)
+    return `has no values to match. Add at least one, or use a different test.`;
+  for (const v of operands) {
+    if (v === "") return `compares \`${p.key}\` with nothing. Type a value, or use "has a value" / "is empty".`;
+    if (field?.kind === "boolean" && typeof v !== "boolean")
+      return `compares \`${p.key}\` with \`${JSON.stringify(v)}\`, but \`${p.key}\` is a yes/no field — nothing it can hold will ever equal that.`;
+    if (field?.kind === "number" && typeof v !== "number")
+      return `compares \`${p.key}\` with \`${JSON.stringify(v)}\` as text, but \`${p.key}\` is a number field. Type a number.`;
+  }
+  return null;
+}
+
 /** Every operand a predicate carries, re-typed for its field's kind. Nullary ops are returned
  *  untouched — they compare against nothing, so there is nothing to coerce. */
 export function recoercePredicate(p: Predicate, kind: FieldKind | undefined): Predicate {
@@ -389,6 +424,21 @@ export interface SpecProblem {
   message: string;
 }
 
+/**
+ * The one refusal a spec cannot carry the evidence for: whether its NAME is already taken.
+ * `specProblems()` cannot answer it — a spec does not know the catalog, and this module is
+ * node-free so it cannot look at the filesystem. Each caller passes what it knows (the
+ * browser the whole catalog, `graphs/builder.ts` this one file's existence) and the sentence
+ * is written HERE so there is only ever one of it. A copy in the pane was the second rule
+ * that could disagree, and it is how a create came to overwrite an existing graph silently
+ * (HOW-22 review, finding 2).
+ */
+export function nameTakenProblem(name: string, taken: readonly string[]): SpecProblem | null {
+  return taken.includes(name)
+    ? { where: "basics", message: `There is already a graph called \`${name}\`. Pick another name.` }
+    : null;
+}
+
 /** What a step is CALLED. The id is identity (`${node}#${visit}`) and never moves; the title
  *  is the label an operator edits, and it is what every message about the step uses. */
 export const stepTitle = (spec: GraphSpec, id: string): string => {
@@ -525,13 +575,28 @@ export function specProblems(spec: GraphSpec, opts: { knownPrompts?: readonly st
       problems.push({ node: n.id, where: "steps", message: `${who} uses one field for both the decision and the comments. Give them separate fields.` });
   }
 
-  if (!ids.has(spec.entry))
+  // The starting step, both halves of the same question. A Finish step as the entry saves
+  // clean and ends every run immediately (HOW-22 review, finding 1); `core/graph.ts` validate()
+  // refuses it too, which is what covers a hand-edited module, but the sentence the operator
+  // reads is this one. It fires in the CHEAP block, which returns before anything else runs, so
+  // a Finish-step entry is never buried under the consequences it would have for reachability.
+  const entryNode = spec.nodes.find((n) => n.id === spec.entry);
+  if (!entryNode)
     problems.push({ where: "basics", message: `The starting step is not in the graph. Pick which step runs first.` });
+  else if (entryNode.kind === "terminal")
+    problems.push({
+      where: "basics",
+      message: `**${titleOf(spec, entryNode.id)}** is a Finish step, so a run that starts there ends before it does anything. Pick the step that should do the work.`,
+    });
   for (const e of spec.edges) {
     if (!ids.has(e.from)) problems.push({ where: "branching", message: `A "go to" starts from a step that no longer exists ("${e.from}"). Remove it.` });
     else if (!ids.has(e.to)) problems.push({ node: e.from, where: "branching", message: `**${titleOf(spec, e.from)}** points at a step that no longer exists ("${e.to}"). Pick a step that does.` });
     else if (e.when && !fieldKeys.has(e.when.key))
       problems.push({ node: e.from, where: "branching", message: `**${titleOf(spec, e.from)}** branches on \`${e.when.key}\`, which is not a field.` });
+    else if (e.when) {
+      const why = unmatchableOperand(e.when, spec.fields.find((f) => f.key === e.when!.key));
+      if (why) problems.push({ node: e.from, where: "branching", message: `**${titleOf(spec, e.from)}** ${why}` });
+    }
   }
   if (problems.length) return problems;
 
@@ -557,6 +622,30 @@ export function specProblems(spec: GraphSpec, opts: { knownPrompts?: readonly st
         `Add a step before it that produces \`${v.key}\`, or ask for it at launch.`,
     });
   }
+  if (problems.length) return problems;
+
+  // LAST, and only over an otherwise-clean draft. A step nothing reaches is dead work the
+  // operator cannot see, and the review pane already tells them a clean verdict means "every
+  // step is reachable" — `validate()` proves the other two clauses of that sentence and never
+  // this one (HOW-22 review). It is reported last because unreachability is usually the
+  // CONSEQUENCE of something else: with no edges at all, every step dead-ends and every step
+  // but the entry is unreachable, and the dead end is the thing to fix. Same restraint the
+  // prompt-id check practises for an unnamed graph.
+  //
+  // Builder-only on purpose: a repo-wide rule would judge every hand-written graph, which is a
+  // bigger blast radius than this change earns (all seven built-ins are in fact clean).
+  const seen = new Set([spec.entry]);
+  const queue = [spec.entry];
+  while (queue.length) {
+    const cur = queue.shift()!;
+    for (const e of spec.edges) if (e.from === cur && !seen.has(e.to)) { seen.add(e.to); queue.push(e.to); }
+  }
+  for (const n of spec.nodes)
+    if (!seen.has(n.id))
+      problems.push({
+        node: n.id, where: "branching",
+        message: `**${titleOf(spec, n.id)}** is never reached — no step goes to it. Give some step a "go to" that lands on it, or remove it.`,
+      });
   return problems;
 }
 

@@ -284,7 +284,8 @@ export function createHowdahServer(opts: ServerOpts) {
        * trusted: parseGraphSpec() rebuilds it field by field and drops everything it did not
        * put there, and the built-in collision is refused BEFORE any write — the registry
        * only reports that shadowing after the fact, which is too late to be useful while you
-       * are still naming the thing.
+       * are still naming the thing. The body also declares `intent`, because a create and an
+       * update are different writes and only the caller knows which one it meant.
        */
       const bm = url.pathname.match(/^\/api\/graphs\/([^/]+)\/builder$/);
       if (bm) {
@@ -307,9 +308,15 @@ export function createHowdahServer(opts: ServerOpts) {
             prompts[id] = value;
           }
         }
-        const existed = existsSync(localGraphPath(home, name));
-        const saved = await saveBuilderGraph({ home, repoRoot: root, spec: parsed.spec, prompts });
-        return saved.ok ? json({ ok: true, name }, existed ? 200 : 201) : json({ error: saved.error }, 422);
+        // the intent is REQUIRED, not inferred from a stat: a brand-new draft that happened to
+        // reuse a name used to REPLACE that graph's module and its prompts (HOW-22 review), and
+        // the only thing that can tell the two apart is the caller saying which it meant
+        const intent = body.intent;
+        if (intent !== "create" && intent !== "update")
+          return json({ error: `say whether this is a new graph ("create") or an edit ("update")` }, 400);
+        const saved = await saveBuilderGraph({ home, repoRoot: root, spec: parsed.spec, prompts, intent });
+        if (saved.ok) return json({ ok: true, name }, intent === "create" ? 201 : 200);
+        return json({ error: saved.error }, saved.code === "exists" ? 409 : saved.code === "missing" ? 404 : 422);
       }
 
       /**
