@@ -39,8 +39,9 @@ bun node_modules/typescript/lib/tsc.js --noEmit                   # typecheck on
 CLI (there is no installed `howdah` binary — invoke the entrypoint):
 
 ```bash
-bun cli/main.ts run <graph> -i goal=... -i work=... --workspace <name> [--name <text>] [--model/--harness/--effort/...]
+bun cli/main.ts run <graph> -i goal=... -i work=... --workspace <name> [--name <text>] [--parent <run-id>] [--model/--harness/--effort/...]
                                              # --name: display label only (HOW-18); the run id stays identity
+                                             # --parent: which run launched this one (HOW-23); lineage only
 bun cli/main.ts setup                        # create $HOWDAH_HOME's layout (config.json, runs/, repos/, attention/)
 bun cli/main.ts runs | graphs | doctor
 bun cli/main.ts reply <run-id> <text>        # answers the current ask, resumes if the runner died
@@ -254,6 +255,20 @@ Break one of these and the design stops working, so check them before changing t
   declares one — Claude always runs in `auto`, Codex in a full-access sandbox, cursor with
   `--force`. `readOnly: true` is applied last and beats everything, the fallback included:
   `plan` for Claude, a read-only sandbox for Codex, no auto-approve flag for cursor.
+- **A parent launches children exactly-once; it never supervises them (HOW-23).** The
+  `runs:launch` built-in fans a `plan-feature` decomposition out into one `implement-ticket`
+  run per approved slice, and then the parent FINISHES. A child is an ordinary independent run
+  — own worktree, own branch, own PR, own park — and `run-spawned` + `run-started.parent` are
+  lineage, not control: nothing routes on them and no cached status of a child is ever stored,
+  because the child's own log is the authority on what it did. Launching is the most expensive
+  side effect in the system, so it is guarded three deep: NOTHING is spawned until the plan
+  re-validates and every slice, ticket and workspace lines up (a half-launched fan-out is
+  duplicate PRs and a second allowance); child ids are deterministic (`<parent>--<slice id>`,
+  which is why `graphs/slice-plan.ts` makes the slice id a path-safe slug) so a re-attempt sees
+  the run dir and skips; and `effects.claim`/`done` wraps each spawn, so a death between them
+  parks for `resolve-effect` rather than guessing. One argv builder (`core/launch-args.ts`)
+  serves both this and the viewer's launch route — they are the only two things that start
+  runs, and a flag added to one must not be missing from the other.
 - **A harness fallback is a new visit, rendered for the harness that runs it.** When a
   harness's allowance is exhausted (or the attempt reads as rate-limited) the engine retries
   the node on the next harness in the fallback chain (claude → codex → cursor by default,
@@ -268,7 +283,7 @@ Break one of these and the design stops working, so check them before changing t
 | Path | Role |
 |---|---|
 | `core/` | graph schema (`graph.ts`), path validator (`validate.ts`), context store, template/render contract (`template.ts`) + its node-free reference grammar (`template-refs.ts`), the graph-as-data model the builder writes (`graph-spec.ts`), the harness table (`harnesses.ts`), generated `prompt-ids.ts` |
-| `graphs/` | the runnable graphs + `index.ts` registry, `local.ts` (the operator's own, from `$HOWDAH_HOME`), `registry.ts` (merged catalog), `typecheck.ts` (tsc gate), `builder.ts` (HOW-22: renders a GraphSpec into a module and saves it transactionally over the graph AND its prompts); `implement-ticket`, `implement-slice` (design on the map → approve → build → drift), `improve-codebase`, `review-teammate-pr`, `write-doc`, `research`, `quick-task`; `delivery.ts` shared publish/repair half |
+| `graphs/` | the runnable graphs + `index.ts` registry, `local.ts` (the operator's own, from `$HOWDAH_HOME`), `registry.ts` (merged catalog), `typecheck.ts` (tsc gate), `builder.ts` (HOW-22: renders a GraphSpec into a module and saves it transactionally over the graph AND its prompts); `implement-ticket`, `implement-slice` (design on the map → approve → build → drift), `plan-feature` (HOW-23: decompose → approve → ticket each → launch a run each) with its pure `slice-plan.ts` contract, `improve-codebase`, `review-teammate-pr`, `write-doc`, `research`, `quick-task`; `delivery.ts` shared publish/repair half |
 | `map/` | the code-derived system map (syntactic tier): tree-sitter extraction (`extract.ts`, `facts.ts`, `adapters.ts` + `queries/`), content-addressed store, `assemble.ts` (identity keys, MountResolver), `ghosts.ts` (GhostSet validator), `drift.ts`, `neighbourhood.ts` |
 | `prompts/` | one `.md` per prompt (front-matter `id`/`version`), codegen, `store.ts` (load/list/accept with stale-base + undeclared-read guards), `proposals.ts` (lifecycle + review view), `library.ts` (read model: consumers, feedback, outcome join, render reconstruction) |
 | `log/` | event union (`events.ts`), durable JSONL writer, view-time `coalesce.ts` |
@@ -305,7 +320,7 @@ the contract, the claude and codex executors ask ONCE more on the same session/t
 from decision events; agent nodes may declare `requires: { approvalOf }` (a pre-start gate
 that also re-checks the live worktree fingerprint) and `readOnly: true` (plan mode that no
 override can raise). Command built-ins beside `probe:pr`: `map:extract`, `map:reextract`,
-`map:drift` (`engine/executors/map.ts`).
+`map:drift` (`engine/executors/map.ts`) and `runs:launch` (`engine/executors/launch.ts`).
 
 Routing: highest-weight passing condition wins; an unconditional edge is the weight-0
 fallback; no matching edge parks the run (Orbital semantics), so exhaustive conditional sets
