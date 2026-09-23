@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, type ReactElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { deriveSlice, deriveStatus, snapshotIndex, type SliceView } from "../derive";
-import { FakeLog, FIND, HANDLER_EDGE, ROUTE, SNAPSHOT, drift, failApproval, ghostsV1, ghostsV2, pin, proposeAndPark, proposeRound, started } from "../slice.fixtures";
+import { FakeLog, FIND, HANDLER_EDGE, ROUTE, SNAPSHOT, drift, failApproval, ghostsV1, ghostsV2, pin, planV1, proposeAndPark, proposeRound, started } from "../slice.fixtures";
 import { ApprovalCard, DriftView, MapProgressLine, TierGlyph, slicePanes } from "./slice";
 import { clockTime as clock } from "../../core/clock-time";
 import { StatusBadge } from "./status";
@@ -352,6 +352,75 @@ describe("ApprovalCard", () => {
 });
 
 // ---- drift view -----------------------------------------------------------------------------
+
+// ---- the slice plan (HOW-23) ------------------------------------------------------------
+
+describe("ApprovalCard over a slice plan", () => {
+  function awaitingPlan(): { slice: SliceView; log: FakeLog; id: number } {
+    const log = new FakeLog();
+    started(log, "plan-feature");
+    const id = proposeAndPark(log, planV1());
+    return { slice: deriveSlice(log.events)!, log, id };
+  }
+
+  test("renders one row per slice — the feature, the title, the workspace and the ordering", () => {
+    const { slice } = awaitingPlan();
+    const el = render(<ApprovalCard runId="r1" slice={slice} onChanged={noop} />);
+
+    expect($$(el, ".plan-slice").map((s) => s.dataset.id)).toEqual(["api-route", "web-client"]);
+    expect($(el, ".plan-feature")!.textContent).toBe("let users delete their account");
+    expect($(el, '.plan-slice[data-id="api-route"] .gr-id')!.textContent).toBe("DELETE /api/users/{id}");
+    expect($(el, '.plan-slice[data-id="api-route"] .gr-prose')!.textContent).toBe("the route exists");
+    // a slice that names its own workspace says so; one that inherits shows nothing
+    expect($(el, '.plan-slice[data-id="web-client"] .gr-kind')!.textContent).toBe("web");
+    expect($(el, '.plan-slice[data-id="api-route"] .gr-kind')).toBeNull();
+    expect($(el, '.plan-slice[data-id="web-client"] .plan-deps')!.textContent).toContain("after api-route");
+    expect($(el, '.plan-slice[data-id="web-client"] .plan-deps')!.textContent).toContain("ordering only");
+
+    // the plan's edges are as much a decision as its slices
+    expect(el.textContent).toContain("Out of scope");
+    expect(el.textContent).toContain("the admin UI");
+    expect(el.textContent).toContain("Risks");
+
+    // a plan is NOT a ghost set: no ghost rows, no tier summary, and never the raw fallback
+    expect($$(el, ".ghost-group")).toHaveLength(0);
+    expect($(el, ".ap-tiers")).toBeNull();
+    expect($(el, ".sd-raw")).toBeNull();
+  });
+
+  test("a comment pins to a SLICE id through the same route and the same form as a ghost", async () => {
+    const { slice, id } = awaitingPlan();
+    const calls = mockFetch(() => json({ ok: true }));
+    const el = render(<ApprovalCard runId="r1" slice={slice} onChanged={noop} />);
+
+    await click($(el, '.plan-slice[data-id="web-client"] .gr-pin')!);
+    type($(el, '.plan-slice[data-id="web-client"] input')!, "fold this into the first slice");
+    await click(button($(el, '.plan-slice[data-id="web-client"]')!, "Pin"));
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.url).toBe("/api/runs/r1/comments");
+    expect(calls[0]!.body).toEqual({ entity_id: "web-client", text: "fold this into the first slice", proposal_id: id });
+  });
+
+  test("a comment already pinned to a slice is shown on that slice's row", () => {
+    const log = new FakeLog();
+    started(log, "plan-feature");
+    const id = proposeAndPark(log, planV1());
+    pin(log, id, "api-route", "split the migration out");
+    const el = render(<ApprovalCard runId="r1" slice={deriveSlice(log.events)!} onChanged={noop} />);
+    expect($(el, '.plan-slice[data-id="api-route"] .ap-comment-text')!.textContent).toBe("split the migration out");
+  });
+
+  test("a proposal that is neither a ghost set nor a plan still shows as proposed", () => {
+    const log = new FakeLog();
+    started(log, "quick-task");
+    proposeAndPark(log, { something: "else" });
+    const el = render(<ApprovalCard runId="r1" slice={deriveSlice(log.events)!} onChanged={noop} />);
+    expect($(el, ".pd-note")!.textContent).toContain("not a ghost set");
+    expect($(el, ".sd-raw")!.textContent).toContain("something");
+    expect($$(el, ".plan-slice")).toHaveLength(0);
+  });
+});
 
 describe("DriftView", () => {
   const report = () => {

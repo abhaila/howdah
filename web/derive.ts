@@ -729,6 +729,12 @@ export interface SliceProposal {
   node: string;
   /** null when the proposal is not a ghost set (another graph's opaque proposal) */
   ghosts: GhostSet | null;
+  /**
+   * HOW-23: null unless the proposal is a plan-feature SLICE PLAN. A proposal is one or the
+   * other or neither — the card shows the ghost rows, the slice rows, or the raw JSON, and
+   * never guesses.
+   */
+  plan: SlicePlanView | null;
   raw: unknown;
   groups: GhostGroup[];
   traces: GhostTrace[];
@@ -819,6 +825,46 @@ export function asGhostSet(v: unknown): GhostSet | null {
   };
 }
 
+/**
+ * HOW-23: a slice plan as the approval card shows it. Tolerant in the same spirit as
+ * `asGhostSet` — the graph's validator already accepted what a plan-feature run proposes, and
+ * anything else is null so the card falls back to the raw JSON rather than rendering half a
+ * plan as if it were whole. `id` is the row key, so a pinned comment attaches to a SLICE the
+ * same way it attaches to a ghost.
+ */
+export interface SlicePlanView {
+  feature: string;
+  slices: Array<{ id: string; title: string; goal: string; workspace: string | null; verify: string; work: string; depends_on: string[] }>;
+  out_of_scope: string[];
+  risks: string[];
+}
+
+export function asSlicePlan(v: unknown): SlicePlanView | null {
+  if (!isRecord(v) || !Array.isArray(v.slices) || v.slices.length === 0) return null;
+  const str = (x: unknown): x is string => typeof x === "string";
+  const text = (x: unknown): string => (str(x) ? x : "");
+  const slices = v.slices.flatMap((s) =>
+    isRecord(s) && str(s.id)
+      ? [{
+          id: s.id,
+          title: text(s.title),
+          goal: text(s.goal),
+          workspace: str(s.workspace) ? s.workspace : null,
+          verify: text(s.verify),
+          work: text(s.work),
+          depends_on: Array.isArray(s.depends_on) ? s.depends_on.filter(str) : [],
+        }]
+      : [],
+  );
+  if (slices.length !== v.slices.length) return null; // half a plan is not a plan
+  return {
+    feature: text(v.feature),
+    slices,
+    out_of_scope: Array.isArray(v.out_of_scope) ? v.out_of_scope.filter(str) : [],
+    risks: Array.isArray(v.risks) ? v.risks.filter(str) : [],
+  };
+}
+
 /** Group a ghost set block → entities → edges, in declaration order. */
 export function groupGhosts(g: GhostSet, snapshot: SnapshotIndex | null): GhostGroup[] {
   const groups = new Map<string, GhostGroup>();
@@ -904,6 +950,7 @@ export function deriveSlice(events: LoggedEvent[], snapshot: SnapshotIndex | nul
       at: current.ts,
       node: current.node,
       ghosts,
+      plan: asSlicePlan(current.proposal),
       raw: current.proposal,
       groups,
       traces: ghosts?.trace ?? [],

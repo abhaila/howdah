@@ -16,7 +16,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Rows3, Workflow, Play, Pause, OctagonX, RotateCcw, ExternalLink, GitBranch, GitPullRequest,
   Clock, Coins, Pin, Fingerprint, MessagesSquare, CornerDownRight, X, ScrollText, Loader2,
-  FolderOpen, Copy,
+  FolderOpen, Copy, GitFork,
 } from "lucide-react";
 import type { RunDetail } from "../../derive";
 import type { CoalescedTurn } from "../../../log/coalesce";
@@ -464,6 +464,9 @@ export function RunView({ id, graceMs = OPEN_GRACE_MS }: { id: string; graceMs?:
           {detail.persistence && <div className="kv"><span className="k">home</span><PathValue full={detail.persistence.home} /></div>}
           {detail.identity.cwd && <div className="kv"><span className="k">{detail.identity.folder_kind === "repo" ? "repo" : "folder"}</span><PathValue full={detail.identity.cwd} shown={detail.identity.cwd.split("/").slice(-2).join("/")} /></div>}
           {detail.git?.intended?.branch && <div className="kv"><span className="k">branch</span><span>{detail.git.intended.branch}</span></div>}
+          {/* HOW-23: a child of a fan-out says which run planned it. A link, not a status —
+              the parent's own log is the only thing that knows how the parent is doing. */}
+          {summary.parent && <div className="kv"><span className="k">planned by</span><a href={`/run/${summary.parent}`} className="pr-link">{summary.parent}</a></div>}
         </section>
         {detail.persistence && (
           <section>
@@ -492,6 +495,20 @@ export function RunView({ id, graceMs = OPEN_GRACE_MS }: { id: string; graceMs?:
             ) : (
               <div className="kv"><span className="k">git</span><span>not probed yet</span></div>
             )}
+          </section>
+        )}
+        {/* HOW-23: the fan-out. One row per child run, with the slice and ticket it came from.
+            No status per child: this run's log records that it launched them and nothing more,
+            and a status invented here would be a live-looking lie. Follow the link instead. */}
+        {detail.children.length > 0 && (
+          <section>
+            <h2><GitFork size={12} /> Launched runs</h2>
+            {detail.children.map((c) => (
+              <div key={c.run_id} className="kv">
+                <span className="k">{c.ticket ?? c.slice_id}</span>
+                <a href={`/run/${c.run_id}`} className="pr-link">{c.run_id}</a>
+              </div>
+            ))}
           </section>
         )}
         {detail.pull_requests.length > 0 && (

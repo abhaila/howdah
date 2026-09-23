@@ -145,6 +145,51 @@ describe("opening a run that has not been written yet", () => {
  * region — render outside it. So the dialog closes before the verb is sent, the way every
  * other confirmation in this app does.
  */
+describe("the fan-out is visible from both ends (HOW-23)", () => {
+  /** a plan-feature parent that launched two children, and one of those children */
+  function fanOut() {
+    const log = new FakeLog();
+    log.add({ type: "run-started", graph: "plan-feature", inputs: { goal: "ship things" }, pinned_prompts: {} });
+    log.add({ type: "node-started", node: "runs.launch", visit: 1, attempt_id: "runs.launch#1" });
+    log.add({ type: "run-spawned", node: "runs.launch", visit: 1, child: "p--api", graph: "implement-ticket", slice_id: "api", ticket: "HOW-31", workspace: "api" });
+    log.add({ type: "run-spawned", node: "runs.launch", visit: 1, child: "p--web", graph: "implement-ticket", slice_id: "web" });
+    const child = new FakeLog();
+    child.add({ type: "run-started", graph: "implement-ticket", inputs: { goal: "g" }, pinned_prompts: {}, parent: "p" });
+    return { parent: deriveDetail("p", log.events), child: deriveDetail("p--api", child.events) };
+  }
+
+  test("the parent lists every run it launched, linked, with the ticket it came from", async () => {
+    serve([{ status: 200, body: fanOut().parent }]);
+    const el = render(OPEN_GRACE_MS);
+    await settle(50);
+    expect(el.textContent).toContain("Launched runs");
+    expect([...el.querySelectorAll("a[href^='/run/p--']")].map((a) => a.textContent)).toEqual(["p--api", "p--web"]);
+    // the identifier where there is one; the slice id is the fallback, never a blank label
+    expect(el.textContent).toContain("HOW-31");
+    expect(el.textContent).toContain("web");
+    // no status per child: this run's log only knows that it launched them
+    expect(el.querySelector("a[href='/run/p--api']")!.closest("section")!.textContent).not.toContain("running");
+  });
+
+  test("the child names the run that planned it; an ordinary run has no such row", async () => {
+    const { child, parent } = fanOut();
+    serve([{ status: 200, body: child }]);
+    const el = render(OPEN_GRACE_MS);
+    await settle(50);
+    expect(el.textContent).toContain("planned by");
+    expect(el.querySelector("a[href='/run/p']")!.textContent).toBe("p");
+    expect(el.textContent).not.toContain("Launched runs"); // a child launched nothing
+    act(() => root!.unmount());
+
+    serve([{ status: 200, body: runDetail() }]);
+    const plain = render(OPEN_GRACE_MS);
+    await settle(50);
+    expect(plain.textContent).not.toContain("planned by");
+    expect(plain.textContent).not.toContain("Launched runs");
+    expect(parent.children).toHaveLength(2); // the fixture really is a fan-out
+  });
+});
+
 describe("aborting a run", () => {
   const controls = (el: HTMLElement) => [...el.querySelectorAll(".run-controls button")] as HTMLButtonElement[];
   const abortButton = (el: HTMLElement) => controls(el).find((b) => b.textContent!.startsWith("Abort"))!;

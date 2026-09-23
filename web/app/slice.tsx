@@ -34,7 +34,7 @@
  */
 import { useRef, useState } from "react";
 import { submitOnEnter } from "@/lib/keys";
-import type { GhostGroup, GhostRow, RunDetail, SliceComment, SliceDecision, SliceDrift, SliceMapProgress, SliceMapSnapshot, SliceView } from "../derive";
+import type { GhostGroup, GhostRow, RunDetail, SliceComment, SliceDecision, SliceDrift, SliceMapProgress, SliceMapSnapshot, SliceProposal, SliceView } from "../derive";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -367,6 +367,8 @@ export function ApprovalCard({ runId, slice, onChanged }: { runId: string; slice
             </div>
           )}
         </>
+      ) : p.plan ? (
+        <SlicePlanView plan={p.plan} slice={slice} runId={runId} canPin={block === null} proposalId={p.proposal_id} onChanged={onChanged} />
       ) : (
         <>
           <div className="pd-note">this proposal is not a ghost set — shown as proposed</div>
@@ -500,18 +502,22 @@ function GhostGroupView({ group, slice, runId, canPin, proposalId, onChanged }: 
   );
 }
 
-function GhostRowView({ row, slice, runId, canPin, proposalId, onChanged }: {
-  row: GhostRow; slice: SliceView; runId: string; canPin: boolean; proposalId: number; onChanged: () => void;
-}) {
+/**
+ * THE comment affordance: the pin button that belongs in a row's header, and the form that
+ * belongs under it. One hook rather than two copies, because a comment pins to an ID and
+ * neither this form nor the route it posts to cares what kind of thing that id names — a
+ * ghost's identity key (1c) or HOW-23's slice id. The two callers differ only in the row
+ * they draw around it.
+ */
+function usePinAffordance(entityId: string, runId: string, proposalId: number, canPin: boolean, onChanged: () => void) {
   const [open, setOpen] = useState(false);
   const [text, setText] = useState("");
   const [state, setState] = useState<{ sending: boolean; error: string | null }>({ sending: false, error: null });
-  const comments = slice.comments[row.id] ?? [];
 
   const pin = async () => {
     if (state.sending || text.trim() === "") return;
     setState({ sending: true, error: null });
-    const r = await post(`/api/runs/${runId}/comments`, { entity_id: row.id, text, proposal_id: proposalId });
+    const r = await post(`/api/runs/${runId}/comments`, { entity_id: entityId, text, proposal_id: proposalId });
     if (r.ok) {
       setState({ sending: false, error: null });
       setText("");
@@ -522,6 +528,34 @@ function GhostRowView({ row, slice, runId, canPin, proposalId, onChanged }: {
       if (r.refused) onChanged(); // like a refused decision: the log moved on, show where
     }
   };
+
+  return {
+    button: canPin ? (
+      <Button variant="ghost" size="sm" className="gr-pin" aria-expanded={open} aria-label={`pin a comment on ${entityId}`} onClick={() => setOpen(!open)}>pin</Button>
+    ) : null,
+    form: open ? (
+      <div className="gr-pin-form">
+        <Input
+          autoFocus
+          aria-label={`comment on ${entityId}`}
+          placeholder="Comment for the proposer…"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={submitOnEnter(() => void pin())}
+        />
+        <Button size="sm" disabled={state.sending || text.trim() === ""} onClick={() => void pin()}>{state.sending ? "Pinning…" : "Pin"}</Button>
+        <Button size="sm" variant="ghost" onClick={() => setOpen(false)}>Cancel</Button>
+        {state.error && <div className="send-state ap-refusal" role="alert">{state.error}</div>}
+      </div>
+    ) : null,
+  };
+}
+
+function GhostRowView({ row, slice, runId, canPin, proposalId, onChanged }: {
+  row: GhostRow; slice: SliceView; runId: string; canPin: boolean; proposalId: number; onChanged: () => void;
+}) {
+  const comments = slice.comments[row.id] ?? [];
+  const { button, form } = usePinAffordance(row.id, runId, proposalId, canPin, onChanged);
 
   return (
     <div className="ghost-item" data-id={row.id}>
@@ -534,9 +568,7 @@ function GhostRowView({ row, slice, runId, canPin, proposalId, onChanged }: {
           </span>
         </Tooltip>
         <span className="gr-kind">{row.edge ? `${row.edge.kind} edge` : row.subject}</span>
-        {canPin && (
-          <Button variant="ghost" size="sm" className="gr-pin" aria-expanded={open} aria-label={`pin a comment on ${row.id}`} onClick={() => setOpen(!open)}>pin</Button>
-        )}
+        {button}
       </div>
       {(row.expected_file || row.prose) && (
         <div className="gr-sub">
@@ -545,21 +577,68 @@ function GhostRowView({ row, slice, runId, canPin, proposalId, onChanged }: {
         </div>
       )}
       {comments.map((c) => <CommentLine key={c.id} c={c} current={c.proposal_id === proposalId} />)}
-      {open && (
-        <div className="gr-pin-form">
-          <Input
-            autoFocus
-            aria-label={`comment on ${row.id}`}
-            placeholder="Comment for the proposer…"
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            onKeyDown={submitOnEnter(() => void pin())}
-          />
-          <Button size="sm" disabled={state.sending || text.trim() === ""} onClick={() => void pin()}>{state.sending ? "Pinning…" : "Pin"}</Button>
-          <Button size="sm" variant="ghost" onClick={() => setOpen(false)}>Cancel</Button>
-          {state.error && <div className="send-state ap-refusal" role="alert">{state.error}</div>}
+      {form}
+    </div>
+  );
+}
+
+/**
+ * HOW-23: the slice plan an approval round proposes — one row per slice, keyed by its id, so
+ * the same pin affordance works on a slice as on a ghost. Every field shown is prose the
+ * OPERATOR judges (nothing here is verified against code the way a ghost is), and what makes
+ * the row worth reading before approving is what it will cost: each one becomes a ticket, a
+ * run, a worktree and a pull request. `depends_on` is shown as ordering, never as a gate.
+ */
+function SlicePlanView({ plan, slice, runId, canPin, proposalId, onChanged }: {
+  plan: NonNullable<SliceProposal["plan"]>; slice: SliceView; runId: string; canPin: boolean; proposalId: number; onChanged: () => void;
+}) {
+  return (
+    <div className="plan-list">
+      {plan.feature && <div className="pd-note plan-feature">{plan.feature}</div>}
+      {plan.slices.map((s, i) => (
+        <SliceRowView key={s.id} n={i + 1} s={s} slice={slice} runId={runId} canPin={canPin} proposalId={proposalId} onChanged={onChanged} />
+      ))}
+      {plan.out_of_scope.length > 0 && <PlanAside title="Out of scope" items={plan.out_of_scope} />}
+      {plan.risks.length > 0 && <PlanAside title="Risks" items={plan.risks} />}
+    </div>
+  );
+}
+
+function SliceRowView({ n, s, slice, runId, canPin, proposalId, onChanged }: {
+  n: number; s: NonNullable<SliceProposal["plan"]>["slices"][number];
+  slice: SliceView; runId: string; canPin: boolean; proposalId: number; onChanged: () => void;
+}) {
+  const comments = slice.comments[s.id] ?? [];
+  const { button, form } = usePinAffordance(s.id, runId, proposalId, canPin, onChanged);
+
+  return (
+    <section className="ghost-item plan-slice" data-id={s.id}>
+      <div className="ghost-row">
+        <span className="m plan-n">{n}</span>
+        <Tooltip content={s.id} className="gr-id-wrap"><span className="gr-id">{s.title || s.id}</span></Tooltip>
+        {s.workspace && <span className="m gr-kind">{s.workspace}</span>}
+        {button}
+      </div>
+      <div className="gr-sub plan-sub">
+        <span className="m gr-file">{s.id}</span>
+        <span className="gr-prose">{s.goal}</span>
+      </div>
+      {s.depends_on.length > 0 && (
+        <div className="gr-sub plan-sub">
+          <span className="plan-deps">after {s.depends_on.join(", ")} <span className="gr-unverified">ordering only — every slice is launched</span></span>
         </div>
       )}
+      {comments.map((c) => <CommentLine key={c.id} c={c} current={c.proposal_id === proposalId} />)}
+      {form}
+    </section>
+  );
+}
+
+function PlanAside({ title, items }: { title: string; items: string[] }) {
+  return (
+    <div className="ap-traces">
+      <h2 className="rh">{title}</h2>
+      {items.map((t, i) => <div key={i} className="ap-trace"><span className="ap-trace-name">{t}</span></div>)}
     </div>
   );
 }
