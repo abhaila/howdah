@@ -14,7 +14,7 @@ import { describe, expect, test } from "bun:test";
 import {
   COMMAND_BUILTINS, WORKTREE_FACTS,
   buildGraph, builtinReads, coerceOperand, compilePredicate, emittableWrites, missingBuiltinReads, parseGraphSpec, predicateLabel,
-  keepPath, recoercePredicate, specProblems, unmatchableOperand,
+  isBlocking, keepPath, recoercePredicate, specAdvice, specProblems, unmatchableOperand,
   type GraphSpec, type NodeSpec, type Predicate,
 } from "./graph-spec";
 
@@ -318,6 +318,10 @@ describe("a condition row that can never fire is refused, not saved", () => {
     expect(problems[0]).toMatchObject({ node: "draft", where: "branching" });
     return problems[0]!.message;
   };
+  /** what is REFUSED, which is the subject of this describe. A row that saves clean may still
+   *  be ADVISED against (HOW-26 — `note == 'anything'` on a text field is the example below),
+   *  and advice is not a refusal: graphs/builder.ts writes the file over it. */
+  const refused = (when: Predicate) => specProblems(branching(when)).filter(isBlocking);
 
   test("an operand left empty compares against nothing, whatever the field's kind", () => {
     for (const f of kinds) {
@@ -343,20 +347,22 @@ describe("a condition row that can never fire is refused, not saved", () => {
 
   test("what is deliberately NOT refused, because it can legitimately match at run time", () => {
     // a path reaches INTO a value, so the field's kind describes the container, not the operand
-    expect(specProblems(branching({ op: "equals", key: "blob", path: "outcome", value: "reject" }))).toEqual([]);
+    expect(refused({ op: "equals", key: "blob", path: "outcome", value: "reject" })).toEqual([]);
     // ...but only on a field that CAN hold one. This asserted clean until HOW-22 review finding
     // 3: a path on a yes/no field is invisible (the inner-name box renders for json only) and
     // fatal (the row can never fire), so the empty operand beside it went unreported too.
     expect(only({ op: "equals", key: "flag", path: "inner", value: "" })).toContain("is not a structured (JSON) field");
     // a choice outside its declared choices: `probe:pr` can report OPEN for a pr.state the
     // operator listed as MERGED/CLOSED, and that branch is a true statement about run time
-    expect(specProblems(branching({ op: "equals", key: "verdict", value: "unlisted" }))).toEqual([]);
-    expect(specProblems(branching({ op: "equals", key: "note", value: "anything" }))).toEqual([]);
-    expect(specProblems(branching({ op: "one-of", key: "count", values: [1, 2] }))).toEqual([]);
+    expect(refused({ op: "equals", key: "verdict", value: "unlisted" })).toEqual([]);
+    // free text compared with a whole word IS advised against — it is the row that never fired
+    // in HOW-26 — but it is still not refused, because a command can legitimately write it
+    expect(refused({ op: "equals", key: "note", value: "anything" })).toEqual([]);
+    expect(refused({ op: "one-of", key: "count", values: [1, 2] })).toEqual([]);
     // every nullary op on every kind: they compare against nothing, so there is nothing to type
     for (const op of ["is-true", "is-false", "is-empty", "is-not-empty"] as const)
       for (const f of kinds)
-        expect(specProblems(branching({ op, key: f.key })), `${op}/${f.kind}`).toEqual([]);
+        expect(refused({ op, key: f.key }), `${op}/${f.kind}`).toEqual([]);
   });
 
   test("unmatchableOperand is the rule, and coerceOperand is the same rule forwards", () => {
@@ -740,5 +746,129 @@ describe("the verdict sees a half-built draft, a stale path and a borrowed promp
     const problems = specProblems(spec);
     expect(problems.filter((p) => p.message.includes("belongs to another graph"))).toEqual([]);
     expect(problems.some((p) => p.where === "basics")).toBe(true);
+  });
+});
+
+/**
+ * HOW-26: the five things the builder shipped that nothing could see.
+ *
+ * The fixture is the ticket's OWN graph, trimmed to the parts that carry each defect, because
+ * the point of the ticket is that this file validated clean and said "Ready to save". Every
+ * rule here is `advice`: it describes a graph that loads, validates and runs and is still not
+ * the graph that was meant, so it is counted and printed and never refused.
+ */
+describe("advice: a graph that will run, and still not do what was meant (HOW-26)", () => {
+  /** the ticket's graph, in the vocabulary it was actually built in */
+  const ticket = (): GraphSpec => ({
+    version: 1,
+    name: "one-shot-ticket-implementation",
+    description: "Implements tickets but doesn't go over board with planning and reviews",
+    fields: [
+      { key: "goal", kind: "text", scope: "sticky" },
+      { key: "summary", kind: "text", scope: "sticky" },
+      { key: "work", kind: "text", scope: "sticky" },
+    ],
+    inputs: ["goal", "work"],
+    entry: "work",
+    nodes: [
+      { id: "work", kind: "agent", title: "Create a worktree", prompt: "one-shot-ticket-implementation.work", reads: ["goal", "work"], writes: ["summary", "work"] },
+      { id: "ask-an-agent-8", kind: "agent", title: "Implement the changes required", prompt: "one-shot-ticket-implementation.ask-an-agent-8", reads: [], writes: ["summary"] },
+      { id: "ask-an-agent", kind: "agent", title: "review-pr", prompt: "one-shot-ticket-implementation.ask-an-agent", reads: [], writes: ["summary"] },
+      { id: "ask-an-agent-3", kind: "agent", title: "Probe the PR", prompt: "one-shot-ticket-implementation.ask-an-agent-3", reads: [], writes: ["summary"] },
+      { id: "done", kind: "terminal", outcome: "success", title: "Finish ticket" },
+    ],
+    edges: [
+      { from: "work", to: "ask-an-agent-8" },
+      { from: "ask-an-agent-8", to: "ask-an-agent" },
+      { from: "ask-an-agent", to: "ask-an-agent-8", when: { op: "equals", key: "goal", value: "reject" } },
+      { from: "ask-an-agent", to: "ask-an-agent-3" },
+      { from: "ask-an-agent-3", to: "done", when: { op: "equals", key: "summary", value: "All comments addressed and no CI failures" } },
+      { from: "ask-an-agent-3", to: "ask-an-agent-3" },
+    ],
+  });
+
+  const advice = (spec: GraphSpec) => specProblems(spec).filter((p) => !isBlocking(p));
+
+  test("the ticket's own graph validates clean and is advised against five ways", () => {
+    const spec = ticket();
+    // the premise: this is exactly what "Ready to save" was printed over
+    expect(buildGraph(spec).validate()).toEqual({ structural: [], paths: [] });
+    expect(specProblems(spec).filter(isBlocking)).toEqual([]);
+
+    const said = advice(spec).map((p) => p.message);
+    const one = (text: string) => {
+      const hits = said.filter((m) => m.includes(text));
+      expect(hits.length, text).toBeGreaterThan(0);
+      return hits;
+    };
+    // 1. three agent steps whose instructions name no field at all
+    expect(one("is given nothing").length).toBe(3);
+    // 2. the worktree step produces `work`, which the run is launched with
+    one("which the run is also launched with");
+    // 3. two rows compare free text against words no prompt asks for (`goal`, `summary`)
+    expect(one("is free text").length).toBe(2);
+    // 4. the probe's Otherwise goes back to itself — the row that actually hung the run
+    one('has an "Otherwise" that goes back to itself');
+    // 5. implement ⇄ review, with no limit on either
+    one("is in a loop with no limit on it");
+  });
+
+  test("every piece of advice is attributed to a step and a pane, like every other problem", () => {
+    for (const p of advice(ticket())) {
+      expect(p.severity).toBe("advice");
+      expect(["steps", "branching"]).toContain(p.where);
+      expect(ticket().nodes.some((n) => n.id === p.node)).toBe(true);
+    }
+  });
+
+  test("a loop is bounded by ONE maxVisits anywhere on it — the way the built-ins bound theirs", () => {
+    const bounded = ticket();
+    bounded.nodes = bounded.nodes.map((n) => (n.id === "ask-an-agent-8" ? { ...n, maxVisits: 4 } : n));
+    expect(advice(bounded).filter((p) => p.message.includes("loop with no limit"))).toEqual([]);
+  });
+
+  test("a poll is not a spin: a loop containing a Wait step is never advised against", () => {
+    const polling = minimal({
+      fields: [{ key: "goal", kind: "text", scope: "sticky" }, { key: "pr.state", kind: "choice", scope: "per-visit", choices: ["OPEN", "MERGED"] }],
+      nodes: [
+        { id: "probe", kind: "command", title: "Check the PR", run: "probe:pr", reads: [], writes: ["pr.state"] },
+        { id: "settle", kind: "wait", title: "Wait", duration: "5 m" },
+        { id: "done", kind: "terminal", outcome: "success" },
+      ],
+      entry: "probe",
+      edges: [
+        { from: "probe", to: "done", when: { op: "equals", key: "pr.state", value: "MERGED" } },
+        { from: "probe", to: "settle" },
+        { from: "settle", to: "probe" },
+      ],
+    });
+    expect(specProblems(polling)).toEqual([]);
+  });
+
+  test("a branch on a CHOICE field is the answer, so it is never advised against", () => {
+    const spec = minimal({
+      fields: [
+        { key: "goal", kind: "text", scope: "sticky" },
+        { key: "verdict", kind: "choice", scope: "cleared", choices: ["pass", "reject"] },
+      ],
+      nodes: [
+        { id: "draft", kind: "agent", title: "Draft it", prompt: "my-review.draft", reads: ["goal"], writes: ["verdict"] },
+        { id: "done", kind: "terminal", outcome: "success" },
+      ],
+      edges: [
+        { from: "draft", to: "done", when: { op: "equals", key: "verdict", value: "pass" } },
+        { from: "draft", to: "done" },
+      ],
+    });
+    expect(specProblems(spec)).toEqual([]);
+  });
+
+  test("advice is held back until nothing blocks — a graph that cannot run is not told about its loop", () => {
+    const broken = ticket();
+    broken.edges = [...broken.edges, { from: "ask-an-agent-8", to: "nowhere" }];
+    const problems = specProblems(broken);
+    expect(problems.every(isBlocking)).toBe(true);
+    // ...and specAdvice() is still a pure reading of the spec, callable on its own
+    expect(specAdvice(broken).length).toBeGreaterThan(0);
   });
 });

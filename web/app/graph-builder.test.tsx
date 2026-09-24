@@ -24,16 +24,21 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { buildGraph, predicateLabel, specProblems, type FieldKind, type FieldSpec, type GraphSpec, type NodeSpec } from "../../core/graph-spec";
+import {
+  SPEC_FIELD_KEY, SPEC_NODE_ID, buildGraph, predicateLabel, specProblems,
+  type FieldKind, type FieldSpec, type GraphSpec, type NodeSpec,
+} from "../../core/graph-spec";
 import { templateReads } from "../../core/template-refs";
 import {
-  PRESETS, draftProblems, draftReducer, newStep, pickPrompts, problemsByPane,
+  PRESETS, bySeverity, canRenameStep, draftProblems, draftReducer, newStep, nextNodeId, pickPrompts,
+  problemsByPane,
   type Draft, type DraftAction,
 } from "./lib/spec-draft";
 import { GraphBuilder } from "./screens/graph-builder";
 import { STEP_KIND_MIME, applyNodeChangesToDraft, specToFlow } from "./builder/canvas";
-import { StepFields } from "./builder/step-form";
+import { StepFields, choiceSentence, sayChoices } from "./builder/step-form";
 import { StepRoutes } from "./builder/branching";
+import { ProblemText } from "./builder/problem";
 import { FieldsPane } from "./builder/fields";
 import { freeSpotNear } from "./lib/layout";
 import { ToastProvider } from "./components/ui/toast";
@@ -44,6 +49,20 @@ import { useTypedText } from "./lib/hooks";
 
 const apply = (draft: Draft, ...actions: DraftAction[]): Draft => actions.reduce(draftReducer, draft);
 const doc = () => PRESETS.find((p) => p.id === "doc")!.build("my-review");
+
+/** Can this step be reached again FROM itself? — i.e. is a revisit part of the shape. */
+function onALoop(spec: GraphSpec, id: string): boolean {
+  const seen = new Set<string>();
+  const queue = spec.edges.filter((e) => e.from === id).map((e) => e.to);
+  while (queue.length) {
+    const at = queue.shift()!;
+    if (at === id) return true;
+    if (seen.has(at)) continue;
+    seen.add(at);
+    for (const e of spec.edges) if (e.from === at) queue.push(e.to);
+  }
+  return false;
+}
 
 describe("the draft keeps itself consistent, because the edits are coupled", () => {
   test("every preset is a graph that would actually run", () => {
@@ -58,6 +77,35 @@ describe("the draft keeps itself consistent, because the edits are coupled", () 
       for (const n of draft.spec.nodes)
         if (n.kind === "agent") expect(n.reads, `${preset.id}/${n.id}`).toEqual(templateReads(draft.prompts[n.prompt] ?? ""));
     }
+  });
+
+  /**
+   * HOW-26 review, finding 1. A preset is the builder's own answer to "compare this to the
+   * inbuilt ones", so its steps have to survive the loops they ship with. A step a repair edge
+   * comes BACK to is re-entered as a fresh agent session with no memory of the last one, so one
+   * that acts on a pull request has to be told WHICH one — either by reading the field that
+   * carries it, or, where the path validator cannot allow that read (a key with no writer on
+   * the entry path), by being told in prose to go and look. The built-in states it in prose for
+   * exactly that reason: prompts/delivery.publish.md says "any associated pull request",
+   * "Update the existing open PR" and "avoid creating duplicate PRs". Without it the pr
+   * preset's publish step opened a second PR on every repair visit, or parked on the `gh`
+   * refusal to open one.
+   */
+  test("a preset step a repair edge returns to is told which pull request it is acting on", () => {
+    let checked = 0;
+    for (const preset of PRESETS) {
+      const draft = preset.build("my-review");
+      for (const n of draft.spec.nodes) {
+        if (n.kind !== "agent" || !onALoop(draft.spec, n.id)) continue;
+        const body = draft.prompts[n.prompt] ?? "";
+        if (!/pull request/i.test(body)) continue;
+        checked++;
+        const told = n.reads.includes("publication_summary") || /\balready\b|\bexisting\b/i.test(body);
+        expect(told, `${preset.id}/${n.id} is re-entered and must say which pull request it means`).toBe(true);
+      }
+    }
+    // a rule no preset step reaches is not a rule, so the reach is asserted too
+    expect(checked).toBeGreaterThan(0);
   });
 
   test("removing a step takes the edges that named it, in both directions", () => {
@@ -725,6 +773,21 @@ function drop(el: HTMLElement, kind: string, at: { x: number; y: number }) {
   act(() => { canvas.dispatchEvent(ev); });
 }
 
+/**
+ * What the NEXT step will be called (HOW-26). The palette's own box, which is where a step's
+ * name — and therefore its id, and therefore its prompt file — now comes from, whichever
+ * gesture places it. The old flow seeded the id from the MENU LABEL, so a graph of six agent
+ * steps came out as `ask-an-agent` … `ask-an-agent-8` with its prompt files to match.
+ */
+const nextNameBox = (el: HTMLElement) =>
+  el.querySelector('input[aria-label="what the next step is called"]') as HTMLInputElement;
+const nameNext = (el: HTMLElement, name: string) => type(nextNameBox(el), name);
+/** the id the palette PROMISES the next step, read out of the DOM rather than recomputed */
+const previewedId = (el: HTMLElement) =>
+  [...el.querySelectorAll(".field-hint")]
+    .find((n) => n.textContent?.includes("The name becomes the step's id"))!
+    .querySelector("code")!.textContent!;
+
 beforeEach(() => { serve(); });
 afterEach(() => {
   if (root) act(() => root!.unmount());
@@ -902,6 +965,7 @@ describe("saving is the same PUT it always was (AC5), and it carries the arrange
     const calls = serve();
     const el = await mount();
     type(nameBox(el), "my-review");
+    nameNext(el, "Summarise the goal");
     click(palette(el, "Ask an agent"));
     type(el.querySelector('textarea[aria-label="the agent\'s instructions"]') as HTMLTextAreaElement, "Summarise {{ context.goal }}");
     // what the agent is GIVEN is read out of the instructions while they are being written —
@@ -913,10 +977,12 @@ describe("saving is the same PUT it always was (AC5), and it carries the arrange
     expect(put.url).toBe("/api/graphs/my-review/builder");
     const body = put.body as { spec: GraphSpec; prompts: Record<string, string> };
     expect(body.spec.name).toBe("my-review");
-    expect(body.spec.nodes.map((n) => n.id)).toContain("ask-an-agent");
-    expect(body.prompts["my-review.ask-an-agent"]).toBe("Summarise {{ context.goal }}");
+    // HOW-26: the id and the prompt file are named after the STEP, not after the button that
+    // made it. This asserted `ask-an-agent` / `my-review.ask-an-agent` before the name box.
+    expect(body.spec.nodes.map((n) => n.id)).toContain("summarise-the-goal");
+    expect(body.prompts["my-review.summarise-the-goal"]).toBe("Summarise {{ context.goal }}");
     // `reads` was derived from that body, never declared beside it
-    expect(body.spec.nodes.find((n) => n.id === "ask-an-agent")).toMatchObject({ reads: ["goal"] });
+    expect(body.spec.nodes.find((n) => n.id === "summarise-the-goal")).toMatchObject({ reads: ["goal"] });
     // ...and every step says where it sits, so re-opening re-draws what was arranged
     for (const n of body.spec.nodes) expect(n.position, n.id).toEqual({ x: expect.any(Number), y: expect.any(Number) } as never);
   });
@@ -925,6 +991,7 @@ describe("saving is the same PUT it always was (AC5), and it carries the arrange
     const calls = serve();
     const el = await mount();
     type(nameBox(el), "my-review");
+    nameNext(el, "Summarise the goal");
     click(palette(el, "Ask an agent"));
     type(el.querySelector('textarea[aria-label="the agent\'s instructions"]') as HTMLTextAreaElement, "Summarise {{ context.goal }}");
     click(byText(el, "Remove this step"));
@@ -933,7 +1000,7 @@ describe("saving is the same PUT it always was (AC5), and it carries the arrange
     await act(async () => { byText(el, "Save and add to the catalog")!.click(); });
 
     const body = calls.find((c) => c.method === "PUT")!.body as { spec: GraphSpec; prompts: Record<string, string> };
-    expect(Object.keys(body.prompts)).not.toContain("my-review.ask-an-agent");
+    expect(Object.keys(body.prompts)).not.toContain("my-review.summarise-the-goal");
     // and what IS posted is exactly what the spec's own steps name — the server refuses any
     // other id, and used to refuse every save for the rest of the session over one
     expect(Object.keys(body.prompts).sort()).toEqual(
@@ -1189,6 +1256,24 @@ const typeEach = (get: () => HTMLInputElement, text: string) => {
   type(get(), "");                                  // select-all, as an operator would
   for (const ch of text) type(get(), get().value + ch);
 };
+
+/**
+ * One key at a time, the way a BROWSER applies one: the character REPLACES the current
+ * selection, and only then does the box hold it.
+ *
+ * `typeEach` above appends to `value` and so types straight past a box that keeps
+ * re-selecting itself between keys — which is exactly the defect this helper exists to
+ * catch (HOW-26: the add-a-step name box re-selected its whole value on every keystroke, so
+ * "Implement the change" was added as a step called `e`).
+ */
+const typeKeys = (get: () => HTMLInputElement, text: string) => {
+  for (const ch of text) {
+    const box = get();
+    const from = box.selectionStart ?? box.value.length;
+    const to = box.selectionEnd ?? from;
+    type(box, box.value.slice(0, from) + ch + box.value.slice(to));
+  }
+};
 const rowPredicate = (d: Draft) => d.spec.edges.find((e) => e.when)?.when;
 
 describe("a box keeps what was typed into it (finding 2)", () => {
@@ -1325,7 +1410,9 @@ describe("a stale path cannot hide on a field that cannot hold one (finding 3)",
     type(box(el, "what blob is compared with"), "reject");
     setKind("text");
     expect(rowPredicate(latest())).not.toHaveProperty("path");
-    expect(problemsByPane(draftProblems(latest())).branching).toEqual([]);
+    // nothing BLOCKS: the row is legal again. It is now ADVISED against — `blob` is free text
+    // and the row compares it with a word (HOW-26) — which is a different sentence entirely.
+    expect(problemsByPane(bySeverity(draftProblems(latest())).blocking).branching).toEqual([]);
   });
 });
 
@@ -1715,5 +1802,613 @@ describe('a second "Otherwise" is drawn, not deleted (finding 2)', () => {
     type(picker(el, "where work goes when no row fits"), "");
     await act(async () => { byText(el, "Save and add to the catalog")!.click(); });
     expect(saved(calls).edges.filter((e) => e.from === "work")).toEqual([]);
+  });
+});
+// ---- HOW-26: easy AND correct --------------------------------------------------------------
+
+/**
+ * The step is NAMED before it exists, so its id and its prompt file are named after it.
+ *
+ * The ticket's graph came out as `ask-an-agent`, `ask-an-agent-2` … `ask-an-agent-8` with
+ * `one-shot-ticket-implementation.ask-an-agent-8.md` beside it, because `newStep` was seeded
+ * with the MENU LABEL and the id is frozen the moment the step exists. The title typed
+ * afterwards never reached either, which is the whole of "everything looks weird".
+ *
+ * On the canvas (HOW-24) the kind is a thing you pick up, so the name cannot be asked for by
+ * the button — a drop starts in the palette and lands on the canvas. It is one box ABOVE the
+ * six, read by both gestures and spent by whichever one places the step.
+ */
+describe("a step is named when it is added (HOW-26)", () => {
+  test("the name becomes the id, and the id becomes the prompt file", () => {
+    const draft = PRESETS[0]!.build("my-graph");
+    const made = newStep(draft.spec, "agent", "Implement the change");
+    expect(made.node.id).toBe("implement-the-change");
+    expect(made.node.kind === "agent" && made.node.prompt).toBe("my-graph.implement-the-change");
+  });
+
+  test("two steps with the same name still get distinct ids, and neither is named after the menu", () => {
+    let draft = PRESETS[0]!.build("my-graph");
+    for (let i = 0; i < 2; i++) draft = apply(draft, { type: "add-step", ...newStep(draft.spec, "agent", "Review it") });
+    expect(draft.spec.nodes.map((n) => n.id)).toEqual(["work", "done", "review-it", "review-it-2"]);
+  });
+
+  /**
+   * A step id is now derived from OPERATOR FREE TEXT, and SPEC_NODE_ID wants a leading
+   * letter. Before the name box the seed was always a menu label, so this could not fire;
+   * afterwards "1st draft" produced `1st-draft`, which every save refused — and the repair
+   * the form offers suggested the same illegal id again, so it said nothing anyone could act on.
+   */
+  test("a name that does not start with a letter still yields a usable id", () => {
+    const spec = PRESETS[0]!.build("my-graph").spec;
+    const id = nextNodeId(spec, "1st draft");
+    expect(id).toBe("step-1st-draft");
+    expect(SPEC_NODE_ID.test(id)).toBe(true);
+  });
+
+  test("...and a draft built from that name has nothing blocking it", () => {
+    let draft = PRESETS[0]!.build("my-graph");
+    draft = apply(
+      draft,
+      { type: "add-step", ...newStep(draft.spec, "agent", "1st draft") },
+      { type: "set-branching", from: "work", edges: [{ to: "step-1st-draft" }] },
+      { type: "set-branching", from: "step-1st-draft", edges: [{ to: "done" }] },
+    );
+    // before: '"1st-draft" is not a usable step id.', blocking, on every save
+    expect(bySeverity(draftProblems(draft)).blocking).toEqual([]);
+  });
+
+  test("an approval step derives its two fields from the id, so they must be legal too", () => {
+    const spec = PRESETS[0]!.build("my-graph").spec;
+    const made = newStep(spec, "approval", "1st draft");
+    expect(made.fields!.length).toBe(2);
+    for (const f of made.fields!) expect(SPEC_FIELD_KEY.test(f.key)).toBe(true);
+  });
+
+  test("a seed with no letters in it at all still names something", () => {
+    const spec = PRESETS[0]!.build("my-graph").spec;
+    for (const seed of ["!!!", "", "   ", "---"]) expect(nextNodeId(spec, seed)).toBe("step");
+  });
+
+  test("a long name is cut short without leaving a trailing hyphen", () => {
+    const spec = PRESETS[0]!.build("my-graph").spec;
+    const id = nextNodeId(spec, "implement the changes the reviewer asked for today");
+    expect(id.endsWith("-")).toBe(false);
+    expect(SPEC_NODE_ID.test(id)).toBe(true);
+    expect(id.length).toBeLessThanOrEqual(32);
+  });
+
+  /**
+   * ONE fallback for a step that was not named, and it lives in slug(). A second fallback in
+   * the preview and a different one at the add is how an empty box came to promise one id and
+   * create another — and the one it created was `ask-an-agent`, the id shape this whole ticket
+   * exists to eliminate, reached through the affordance added to eliminate it.
+   */
+  describe("an un-named step is named once, in one place", () => {
+    test("newStep on an empty name gives slug()'s answer, and no title at all", () => {
+      const spec = PRESETS[0]!.build("my-graph").spec;
+      const made = newStep(spec, "agent", "");
+      expect(made.node.id).toBe("step");
+      expect(made.node.kind === "agent" && made.node.prompt).toBe("my-graph.step");
+      // NOT "" — stepTitle() falls back to the id, and an empty string would be written into
+      // the saved module as `"title": ""`, which reads as a title someone chose
+      expect(made.node.title).toBeUndefined();
+      expect(nextNodeId(spec, "")).toBe(made.node.id);
+    });
+
+    test("...and a second one is step-2, preview and creation agreeing again", () => {
+      let draft = PRESETS[0]!.build("my-graph");
+      draft = apply(draft, { type: "add-step", ...newStep(draft.spec, "agent", "") });
+      expect(nextNodeId(draft.spec, "")).toBe("step-2");
+      expect(newStep(draft.spec, "agent", "").node.id).toBe("step-2");
+    });
+  });
+
+  /**
+   * A name typed the way a browser types one — key by key, each character REPLACING the
+   * current selection. The wizard's version of this box re-selected its whole value between
+   * keys (an effect that depended on an object `onChange` rebuilt per character), so
+   * "Implement the change" was added as a step called `e`: the headline fix, defeated by its
+   * own affordance. `type()` sets the whole value in ONE event and cannot see it.
+   */
+  test("a name typed one key at a time is the name the step gets", async () => {
+    const el = await mount();
+    typeKeys(() => nextNameBox(el), "Implement the change");
+    expect(nextNameBox(el).value).toBe("Implement the change");
+    expect(previewedId(el)).toBe("implement-the-change");
+    click(palette(el, "Ask an agent"));
+    expect(openStep(el, "Implement the change")).toBeDefined();
+  });
+
+  test("a named step is added by a palette click, id and prompt file to match", async () => {
+    const el = await mount();
+    nameNext(el, "Implement the change");
+    // the preview under the box promises an id; it must be the one the step actually gets
+    expect(previewedId(el)).toBe("implement-the-change");
+    click(palette(el, "Ask an agent"));
+    expect(openStep(el, "Implement the change")).toBeDefined();
+  });
+
+  test("...and by a DROP, which is the same creation path with a place attached", async () => {
+    const el = await mount();
+    nameNext(el, "Hold on");
+    drop(el, "wait", { x: 300, y: 200 });
+    expect(openStep(el, "Hold on")).toBeDefined();
+  });
+
+  test("the name is spent by the step it named, so the next one is not <id>-2", async () => {
+    const calls = serve();
+    const el = await mount();
+    type(nameBox(el), "my-review");
+    nameNext(el, "Implement the change");
+    click(palette(el, "Ask an agent"));
+    // the box is empty again, and what it now promises is slug()'s answer for nothing typed
+    expect(nextNameBox(el).value).toBe("");
+    expect(previewedId(el)).toBe("step");
+    click(palette(el, "Wait"));
+    await act(async () => { byText(el, "Save and add to the catalog")!.click(); });
+
+    const ids = saved(calls).nodes.map((n) => n.id);
+    expect(ids).toContain("implement-the-change");
+    expect(ids).toContain("step");
+    expect(ids.some((id) => id.startsWith("ask-an-agent"))).toBe(false);
+  });
+
+  test("clearing the name box creates the step the preview promised", async () => {
+    const calls = serve();
+    const el = await mount();
+    type(nameBox(el), "my-review");
+    nameNext(el, "Something");
+    nameNext(el, "");
+    // read the promise out of the DOM rather than recomputing it — the point is that what the
+    // operator is SHOWN is what happens. Agreement on `ask-an-agent` would satisfy an
+    // equality alone, so the value is named.
+    const previewed = previewedId(el);
+    expect(previewed).toBe("step");
+
+    click(palette(el, "Ask an agent"));
+    type(el.querySelector('textarea[aria-label="the agent\'s instructions"]') as HTMLTextAreaElement, "Do it.");
+    await act(async () => { byText(el, "Save and add to the catalog")!.click(); });
+
+    const body = calls.find((c) => c.method === "PUT")!.body as { spec: GraphSpec; prompts: Record<string, string> };
+    const made = body.spec.nodes.find((n) => n.id === previewed);
+    expect(made).toBeDefined();
+    expect(made!.kind === "agent" && made!.prompt).toBe(`my-review.${previewed}`);
+    expect(body.prompts[`my-review.${previewed}`]).toBe("Do it.");
+  });
+});
+
+/**
+ * Moving a step's id, which is the only way the ticket's graph could have been repaired: the
+ * ids were wrong, and the prompt file is named after the id, so remove-and-re-add would have
+ * lost every branch row and every word of the instructions.
+ */
+describe("renaming a step carries everything that names it (HOW-26)", () => {
+  const renamed = () => {
+    const base = PRESETS.find((p) => p.id === "code")!.build("my-code");
+    return { base, after: apply(base, { type: "rename-step", id: "implement", to: "make-the-change" }) };
+  };
+
+  test("the id, the prompt id, the body, the edges and the entry all move together", () => {
+    const { base, after } = renamed();
+    expect(after.spec.nodes.some((n) => n.id === "implement")).toBe(false);
+    const step = after.spec.nodes.find((n) => n.id === "make-the-change")!;
+    expect(step.kind === "agent" && step.prompt).toBe("my-code.make-the-change");
+    expect(after.prompts["my-code.make-the-change"]).toBe(base.prompts["my-code.implement"]);
+    expect(after.prompts["my-code.implement"]).toBeUndefined();
+    for (const e of after.spec.edges) {
+      expect(e.from).not.toBe("implement");
+      expect(e.to).not.toBe("implement");
+    }
+    expect(after.spec.edges.some((e) => e.to === "make-the-change")).toBe(true);
+    // and the graph is still exactly as valid as it was
+    expect(draftProblems(after)).toEqual([]);
+  });
+
+  test("the step keeps its PLACE, because the arrangement is part of the graph (HOW-24)", () => {
+    const { base, after } = renamed();
+    const was = base.spec.nodes.find((n) => n.id === "implement")!.position;
+    expect(after.spec.nodes.find((n) => n.id === "make-the-change")!.position).toEqual(was!);
+  });
+
+  test("renaming the ENTRY moves the entry with it", () => {
+    const base = PRESETS.find((p) => p.id === "code")!.build("my-code");
+    const after = apply(base, { type: "rename-step", id: "make-worktree", to: "checkout" });
+    expect(after.spec.entry).toBe("checkout");
+    expect(draftProblems(after)).toEqual([]);
+  });
+
+  test("a rename that could not land leaves the draft exactly as it was", () => {
+    const { base } = renamed();
+    for (const to of ["review", "implement", "Not An Id", ""])
+      expect(apply(base, { type: "rename-step", id: "implement", to })).toEqual(base);
+  });
+
+  /**
+   * The button that OFFERS the rename, and the reducer that performs one, are held to the
+   * same rule by `canRenameStep` — because they drifted: the form derived its suggestion over
+   * the whole spec, where the step's own id is always taken, so a correctly-named step was
+   * offered `<id>-2` and the "already matches" state was unreachable. Clicking it renamed a
+   * right step to a numbered duplicate and took its instructions file along.
+   */
+  describe("the offer and the refusal are one rule", () => {
+    /** one agent step with the id and title under test, plus somewhere for it to go */
+    const withStep = (id: string, title: string): Draft => ({
+      saved: true,
+      prompts: { [`g.${id}`]: "Do the work." },
+      spec: {
+        version: 1, name: "g", description: "",
+        fields: [], inputs: [], entry: id,
+        nodes: [
+          { id, kind: "agent", title, prompt: `g.${id}`, reads: [], writes: [] },
+          { id: "done", kind: "terminal", outcome: "success" },
+        ],
+        edges: [{ from: id, to: "done" }],
+      },
+    });
+
+    async function openRename(start: Draft, id: string) {
+      let draft = start;
+      let open = id;
+      host = document.createElement("div");
+      document.body.appendChild(host);
+      root = createRoot(host);
+      const render = () =>
+        root!.render(
+          <ToastProvider>
+            <StepFields
+              draft={draft} id={open}
+              dispatch={(a) => { draft = draftReducer(draft, a); render(); }}
+              onRenamed={(next) => { open = next; render(); }}
+            />
+          </ToastProvider>,
+        );
+      await act(async () => { render(); });
+      const button = () => buttons(host!).find((b) => b.textContent?.includes("Rename it to") || b.textContent?.includes("already matches"))!;
+      return { el: host, latest: () => draft, button, openStep: () => open };
+    }
+
+    test("a step whose id already matches its name is offered nothing to do", async () => {
+      const { button } = await openRename(
+        withStep("implement-the-changes-required", "Implement the changes required"),
+        "implement-the-changes-required",
+      );
+      // before: "Rename it to implement-the-changes-required-2", enabled
+      expect(button().textContent).toContain("The id already matches the name");
+      expect(button().disabled).toBe(true);
+    });
+
+    test("a step named after the menu is offered its title, with no numeric suffix", async () => {
+      const { latest, button } = await openRename(
+        withStep("ask-an-agent-8", "Implement the changes required"),
+        "ask-an-agent-8",
+      );
+      expect(button().textContent).toBe("Rename it to implement-the-changes-required");
+      click(button());
+      const moved = latest().spec.nodes.find((n) => n.id === "implement-the-changes-required")!;
+      expect(moved.kind === "agent" && moved.prompt).toBe("g.implement-the-changes-required");
+      expect(latest().prompts["g.implement-the-changes-required"]).toBe("Do the work.");
+      expect(latest().spec.entry).toBe("implement-the-changes-required");
+    });
+
+    test("a rename that cannot land leaves the draft alone AND the panel where it was", async () => {
+      const start = withStep("implement-the-changes-required", "Implement the changes required");
+      const { el, latest, button, openStep: open } = await openRename(start, "implement-the-changes-required");
+      click(button());
+      // the guard is in the handler as well as on the button, because onRenamed moves the
+      // selection: pointing it at an id the reducer refused emptied the panel silently
+      expect(latest()).toEqual(start);
+      expect(open()).toBe("implement-the-changes-required");
+      expect(el.textContent).toContain("What this step is called");
+    });
+
+    test("canRenameStep and the reducer refuse exactly the same renames", () => {
+      const { base } = renamed();
+      for (const to of ["review", "implement", "Not An Id", ""]) {
+        expect(canRenameStep(base.spec, "implement", to)).toBe(false);
+        expect(apply(base, { type: "rename-step", id: "implement", to })).toEqual(base);
+      }
+      expect(canRenameStep(base.spec, "implement", "make-the-change")).toBe(true);
+      expect(canRenameStep(base.spec, "no-such-step", "make-the-change")).toBe(false);
+    });
+  });
+
+  test("a body two steps SHARE does not move, because it is not this step's alone", () => {
+    let draft = PRESETS[0]!.build("shared");
+    draft = apply(draft, {
+      type: "add-step",
+      node: { id: "second", kind: "agent", title: "Second", prompt: "shared.work", reads: [], writes: [] },
+    });
+    const after = apply(draft, { type: "rename-step", id: "work", to: "first" });
+    const moved = after.spec.nodes.find((n) => n.id === "first")!;
+    expect(moved.kind === "agent" && moved.prompt).toBe("shared.work");
+    expect(after.prompts["shared.work"]).toBeDefined();
+  });
+
+  test("the canvas follows the rename: the card, its wires and the selection all move", async () => {
+    const el = await mount();
+    nameNext(el, "Draught it");
+    click(palette(el, "Ask an agent"));
+    // the title is corrected AFTER the step exists, which is the order the ticket's operator
+    // worked in — and the whole reason the id has to be moveable at all
+    type(el.querySelector('input[placeholder="Draft the document"]') as HTMLInputElement, "Draft it");
+    click(byText(el, "Rename it to draft-it"));
+    // the panel is still on the step (it is keyed by the id that just moved), and the picture
+    // is drawn from the same draft
+    expect(el.textContent).toContain("What this step is called");
+    expect(openStep(el, "Draft it")).toBeDefined();
+  });
+});
+
+/**
+ * The words a branch needs. Nothing tells an agent the values a condition compares against —
+ * the outputs contract names KEYS only — so the builder says it in the instructions, which is
+ * what every hand-written prompt in this repo does by hand.
+ */
+describe("a choice field's words reach the agent (HOW-26)", () => {
+  /** a draft whose one agent step produces a choice field its instructions never mention */
+  const silent = (): Draft => {
+    const base = PRESETS[0]!.build("verdicts");
+    return apply(
+      base,
+      { type: "add-field", patch: { key: "verdict", kind: "choice", scope: "cleared", choices: ["pass", "reject"] } },
+      { type: "update-step", id: "work", node: { ...(base.spec.nodes[0] as Extract<NodeSpec, { kind: "agent" }>), writes: ["summary", "verdict"] } },
+    );
+  };
+
+  async function openWork(start: Draft): Promise<{ el: HTMLElement; latest: () => Draft; send: (a: DraftAction) => void }> {
+    let draft = start;
+    host = document.createElement("div");
+    document.body.appendChild(host);
+    root = createRoot(host);
+    const apply1 = (a: DraftAction) => { draft = draftReducer(draft, a); render(); };
+    const render = () =>
+      root!.render(
+        <ToastProvider>
+          <StepFields draft={draft} id="work" dispatch={apply1} />
+        </ToastProvider>,
+      );
+    await act(async () => { render(); });
+    // an edit made from ANOTHER panel (the graph's fields), which is how a field's choices
+    // move while this form is open
+    return { el: host, latest: () => draft, send: (a) => { act(() => { apply1(a); }); } };
+  }
+
+  test("the form says the branch may never fire, and the button writes the sentence", async () => {
+    const { el, latest } = await openWork(silent());
+    expect(el.textContent).toContain("the instructions do not say so");
+    click(byText(el, "Say it in the instructions"));
+
+    const body = latest().prompts["verdicts.work"]!;
+    expect(body).toContain("Return `verdict` as exactly one of: `pass`, `reject`.");
+    // on its OWN line — a reference or a sentence run onto the end of the last one reads as
+    // part of it, both to the operator and to the agent
+    expect(body.split("\n\n").at(-1)).toBe("Return `verdict` as exactly one of: `pass`, `reject`.");
+    // and once it is said, the form stops saying anything
+    expect(el.textContent).toContain("the instructions say so");
+    expect(byText(el, "Say it in the instructions")).toBeUndefined();
+  });
+
+  test("inserting a field puts the reference on its own line too", async () => {
+    const { el, latest } = await openWork(silent());
+    click(buttons(el).find((b) => b.textContent === "goal"));
+    const body = latest().prompts["verdicts.work"]!;
+    expect(body.split("\n\n").at(-1)).toBe("{{ context.goal }}");
+    // the invariant the whole builder rests on still holds after it
+    expect(latest().spec.nodes.find((n) => n.id === "work")).toMatchObject({ reads: templateReads(body) });
+  });
+
+  /**
+   * Saying it REPLACES what it said before. `said` is a substring test over the choice
+   * values, so ADDING a value makes it false again and brings the button back — and an
+   * append-only handler then left the pinned prompt carrying two different allowed sets for
+   * one key. The agent is told two contradictory things and a branch matches whichever it
+   * happens to obey, which is the mis-branching the button exists to prevent.
+   */
+  describe("saying it again replaces the sentence rather than doubling it", () => {
+    const count = (body: string) => (body.match(/Return `verdict` as exactly one of:/g) ?? []).length;
+
+    test("nothing said yet — it is appended, on its own line, at the end", () => {
+      expect(sayChoices("Do the work.", "verdict", ["pass", "fail"]))
+        .toBe("Do the work.\n\nReturn `verdict` as exactly one of: `pass`, `fail`.");
+    });
+
+    test("a sentence mid-body is replaced IN PLACE, and what follows it is left alone", () => {
+      const before = `Intro.\n\n${choiceSentence("verdict", ["pass"])}\n\nTail paragraph.`;
+      const after = sayChoices(before, "verdict", ["pass", "warn"]);
+      expect(count(after)).toBe(1);
+      expect(after).toBe("Intro.\n\nReturn `verdict` as exactly one of: `pass`, `warn`.\n\nTail paragraph.");
+    });
+
+    test("a body already carrying two — the shape the defect produced — is repaired to one", () => {
+      const damaged = [
+        "Intro.", choiceSentence("verdict", ["pass"]), "Middle.", choiceSentence("verdict", ["pass", "fail"]), "End.",
+      ].join("\n\n");
+      const after = sayChoices(damaged, "verdict", ["pass", "warn", "fail"]);
+      expect(count(after)).toBe(1);
+      expect(after).toBe("Intro.\n\nReturn `verdict` as exactly one of: `pass`, `warn`, `fail`.\n\nMiddle.\n\nEnd.");
+      // removing the duplicate must not leave the blank line that was its paragraph break
+      expect(after).not.toContain("\n\n\n");
+    });
+
+    test("a sentence written for a DIFFERENT key is not touched", () => {
+      const other = choiceSentence("outcome", ["ok"]);
+      expect(sayChoices(other, "verdict", ["pass"])).toBe(`${other}\n\nReturn \`verdict\` as exactly one of: \`pass\`.`);
+    });
+
+    test("a dotted key is escaped, so it does not match another key's line", () => {
+      // `.` is legal in SPEC_FIELD_KEY; unescaped it is the any-character wildcard, and
+      // `review.verdict` would eat a line written for `reviewXverdict`
+      const decoy = choiceSentence("reviewXverdict", ["a"]);
+      expect(sayChoices(decoy, "review.verdict", ["p"]))
+        .toBe(`${decoy}\n\nReturn \`review.verdict\` as exactly one of: \`p\`.`);
+      expect(sayChoices(choiceSentence("review.verdict", ["a"]), "review.verdict", ["p"]))
+        .toBe("Return `review.verdict` as exactly one of: `p`.");
+    });
+
+    test("through the real form: edit the choices, say it again, one sentence survives", async () => {
+      const { el, latest, send } = await openWork(silent());
+      click(byText(el, "Say it in the instructions"));
+      expect(count(latest().prompts["verdicts.work"]!)).toBe(1);
+
+      // widening the choices makes `said` false again, which is what brings the button back
+      send({ type: "update-field", key: "verdict", patch: { choices: ["pass", "warn", "reject"] } });
+      expect(byText(el, "Say it in the instructions")).toBeDefined();
+
+      click(byText(el, "Say it in the instructions"));
+      const body = latest().prompts["verdicts.work"]!;
+      expect(count(body)).toBe(1);
+      expect(body).toContain("Return `verdict` as exactly one of: `pass`, `warn`, `reject`.");
+    });
+  });
+});
+
+/**
+ * The verdict, split. "Ready to save" still means what it always meant — `validate()` is
+ * happy — and advice is counted beside it rather than inside it, because the graph in the
+ * ticket was told it was ready and then spun forever.
+ */
+describe("the bar counts advice apart from what blocks (HOW-26)", () => {
+  test("a graph that only draws advice still reads as ready to save", async () => {
+    const el = await mount();
+    type(nameBox(el), "my-review");
+    click(openStep(el, "Do the work")!);
+    // empty the one step's instructions of every field it names: perfectly legal, and now it
+    // is told nothing — the state every hand-added step in the ticket's graph was in
+    type(el.querySelector('textarea[aria-label="the agent\'s instructions"]') as HTMLTextAreaElement, "Do the work.");
+
+    expect(labelled(el, "nothing outstanding")).toBeDefined();
+    expect(labelled(el, "1 worth a second look")).toBeDefined();
+
+    click(byText(el, "The graph itself"));
+    expect(el.textContent).toContain("Ready to save");
+    expect(el.textContent).toContain("worth a second look");
+    expect(el.textContent).toContain("is given nothing");
+  });
+
+  test("advice never turns the step's own card into an alarm", async () => {
+    const el = await mount();
+    // the name FIRST: an unnamed graph blocks, and advice is held back until nothing does —
+    // so without this the card is clean for the wrong reason and the assertion proves nothing
+    type(nameBox(el), "my-review");
+    click(openStep(el, "Do the work")!);
+    type(el.querySelector('textarea[aria-label="the agent\'s instructions"]') as HTMLTextAreaElement, "Do the work.");
+    expect(labelled(el, "1 worth a second look")).toBeDefined();
+    // `--attention` means "a human is needed" and nothing else in this palette; advice is not
+    // that, so the card it is about is left alone
+    expect(card(el, "agent")!.className).not.toContain("needs-input");
+  });
+
+  test("and the server's gate reads the blocking half only", () => {
+    // the browser-side half of the property graphs/builder.test.ts pins over a real save
+    const draft = apply(PRESETS[0]!.build("my-review"), { type: "set-prompt", id: "my-review.work", body: "Do the work." });
+    const problems = draftProblems(draft);
+    expect(bySeverity(problems).advice.length).toBeGreaterThan(0);
+    expect(bySeverity(problems).blocking).toEqual([]);
+  });
+});
+
+/**
+ * Every message the verdict produces is written with `**the step**` and `` `a field` `` in
+ * it. They were printed raw, so the builder's own sentences reached the screen with the
+ * markers in them — a share of "everything looks weird" that no rewording fixes.
+ */
+describe("a problem reads as a sentence, not as markdown source (HOW-26)", () => {
+  const rendered = (message: string) => {
+    host = document.createElement("div");
+    document.body.appendChild(host);
+    root = createRoot(host);
+    act(() => { root!.render(<ProblemText message={message} />); });
+    return host;
+  };
+
+  test("the step's title is bold and a field key is code, and no marker survives", () => {
+    const el = rendered("**Probe the PR** branches on `summary`, which is not a field.");
+    expect(el.textContent).toBe("Probe the PR branches on summary, which is not a field.");
+    expect(el.querySelector("strong")!.textContent).toBe("Probe the PR");
+    expect(el.querySelector("code")!.textContent).toBe("summary");
+  });
+
+  test("a message with no markers is the characters that were typed, unchanged", () => {
+    expect(rendered("A graph needs at least one step.").textContent).toBe("A graph needs at least one step.");
+  });
+
+  test("an unmatched marker is passed through rather than swallowing the rest", () => {
+    const el = rendered("compares `count` with `3` as text — not 2 ** 3");
+    expect(el.textContent).toBe("compares count with 3 as text — not 2 ** 3");
+    expect([...el.querySelectorAll("code")].map((c) => c.textContent)).toEqual(["count", "3"]);
+  });
+
+  test("every message the ticket's own graph produces renders with no marker left in it", () => {
+    const spec = PRESETS[0]!.build("markers").spec;
+    const broken: GraphSpec = { ...spec, nodes: spec.nodes.map((n) => (n.id === "work" ? { ...n, reads: ["goal", "nope"] } : n)) };
+    const messages = specProblems(broken).map((p) => p.message);
+    expect(messages.length).toBeGreaterThan(0);
+    for (const m of messages) {
+      const el = rendered(m);
+      expect(el.textContent, m).not.toContain("**");
+      expect(el.textContent, m).not.toContain("`");
+      act(() => root!.unmount());
+      host!.remove();
+    }
+  });
+});
+
+/**
+ * A step's routes print by SEVERITY, like everything else the verdict reaches.
+ *
+ * They did not. The other surfaces split the two classes and this one hard-coded
+ * `field-error`, so the ticket's own branch-on-free-text advice — the row that never fired —
+ * arrived in the refusal colour, saying the save was blocked when it was not. Nothing in the
+ * suite could see it, because every assertion was about the message and none about the class
+ * it lands in; this one is about the class.
+ */
+describe("advice about a route is advice, not a refusal (HOW-26)", () => {
+  async function openRoutesOn(draft: Draft): Promise<HTMLElement> {
+    host = document.createElement("div");
+    document.body.appendChild(host);
+    root = createRoot(host);
+    await act(async () => {
+      root!.render(
+        <ToastProvider>
+          <StepRoutes
+            draft={draft} from="review"
+            problems={problemsByPane(draftProblems(draft)).branching.filter((p) => p.node === "review")}
+            dispatch={() => {}}
+          />
+        </ToastProvider>,
+      );
+    });
+    return host;
+  }
+
+  /** the doc preset with its review rows moved off the `choice` field and onto free text —
+   *  which is exactly what the ticket's graph branched on */
+  const onFreeText = () =>
+    apply(doc(), {
+      type: "set-branching", from: "review",
+      edges: [{ to: "revise", when: { op: "equals", key: "summary", value: "reject" } }, { to: "done" }],
+    });
+
+  test("a free-text row is advised against in the quiet class, never the error class", async () => {
+    const draft = onFreeText();
+    const problems = problemsByPane(draftProblems(draft)).branching;
+    expect(bySeverity(problems).blocking).toEqual([]);
+    expect(bySeverity(problems).advice.length).toBeGreaterThan(0);
+
+    const el = await openRoutesOn(draft);
+    expect(el.querySelector(".field-advice")!.textContent).toContain("is free text");
+    // the refusal colour means the save is blocked, and it is not — the server writes this graph
+    expect(el.querySelector(".field-error")).toBeNull();
+  });
+
+  test("a row that really is refused still reads as one", async () => {
+    // an operand left empty compares against nothing, whatever the field's kind — blocking
+    const draft = apply(doc(), {
+      type: "set-branching", from: "review",
+      edges: [{ to: "revise", when: { op: "equals", key: "summary", value: "" } }, { to: "done" }],
+    });
+    const el = await openRoutesOn(draft);
+    expect(el.querySelector(".field-error")).not.toBeNull();
+    expect(el.querySelector(".field-advice")).toBeNull();
   });
 });

@@ -33,7 +33,7 @@
  */
 import { useCallback, useEffect, useMemo, useReducer, useState } from "react";
 import { ReactFlowProvider } from "@xyflow/react";
-import { CircleAlert, CircleCheck, Save } from "lucide-react";
+import { CircleAlert, CircleCheck, Lightbulb, Save } from "lucide-react";
 import type { GraphCatalog } from "@/lib/types";
 import { navigate } from "@/lib/nav";
 import { getJSON } from "@/lib/net";
@@ -41,7 +41,7 @@ import { autoLayout } from "@/lib/layout";
 import type { GraphSpec, Point } from "../../../core/graph-spec";
 import { parseGraphSpec } from "../../../core/graph-spec";
 import {
-  PRESETS, STEP_KINDS, draftProblems, draftReducer, newStep, pickPrompts, type Draft, type StepKind,
+  PRESETS, bySeverity, draftProblems, draftReducer, newStep, pickPrompts, type Draft, type StepKind,
 } from "@/lib/spec-draft";
 import { GraphCanvas, type Selection } from "../builder/canvas";
 import { Palette } from "../builder/palette";
@@ -85,6 +85,10 @@ async function loadDraft(name: string): Promise<Draft | { unopenable: string }> 
 export function GraphBuilder({ name }: { name?: string }) {
   const [draft, dispatch] = useReducer(draftReducer, undefined, () => freshDraft(name ?? ""));
   const [selection, setSelection] = useState<Selection>(null);
+  // what the NEXT step will be called. It lives here rather than in the palette because a drop
+  // starts in the palette and lands on the canvas, and HOW-26's rule is that the id comes from
+  // the operator's own words whichever gesture placed the step.
+  const [stepName, setStepName] = useState("");
   // every wholesale replacement of the draft — a preset, a graph read back — so the canvas can
   // refit to what just arrived without refitting on every ordinary edit
   const [generation, setGeneration] = useState(0);
@@ -119,6 +123,10 @@ export function GraphBuilder({ name }: { name?: string }) {
   // `taken` is the catalog, and the one fact a spec cannot carry: it turns a create that
   // would land on an existing graph into a counted problem rather than a silent save
   const problems = useMemo(() => draftProblems(draft, { taken }), [draft, taken]);
+  // HOW-26: the bar's alarm counts what BLOCKS; advice is counted beside it in a quieter
+  // badge, so "Ready to save" keeps meaning "validate() is happy" and the builder's own
+  // opinion never reads as a refusal
+  const { blocking, advice } = useMemo(() => bySeverity(problems), [problems]);
 
   // a selection that no longer exists is not an error to report but a panel to close: a step
   // can be deleted from the canvas and an edge renumbered by a reorder
@@ -131,11 +139,16 @@ export function GraphBuilder({ name }: { name?: string }) {
 
   /** One way to add a step, whichever gesture asked for it (D7) — palette click or drop. */
   const addStep = useCallback((kind: StepKind, at?: Point) => {
-    // the palette's own label seeds the title, and the title seeds the id — one vocabulary
-    const made = newStep(draft.spec, kind, STEP_KINDS.find((k) => k.kind === kind)!.label);
+    // the OPERATOR'S name seeds the id, not the palette's label (HOW-26). It is passed raw:
+    // `newStep` and the palette's preview both hand it to the same `nextNodeId`, so what the
+    // box promised is what the step gets — including for a box left empty.
+    const made = newStep(draft.spec, kind, stepName.trim());
     dispatch({ type: "add-step", ...made, ...(at ? { position: at } : {}) });
+    // the box has been spent; leaving it filled would name the next step the same thing and
+    // hand it `<id>-2`, which is the id shape this all exists to remove
+    setStepName("");
     setSelection({ kind: "step", id: made.node.id });
-  }, [draft.spec]);
+  }, [draft.spec, stepName]);
 
   const save = useCallback(async () => {
     setSaving(true);
@@ -190,11 +203,16 @@ export function GraphBuilder({ name }: { name?: string }) {
       <div className="gb-bar">
         <h1>{draft.saved ? `Editing ${draft.spec.name}` : "Build a graph"}</h1>
         <Badge
-          variant={problems.length ? "attention" : "outline"}
-          aria-label={problems.length ? `${problems.length} to sort out` : "nothing outstanding"}
+          variant={blocking.length ? "attention" : "outline"}
+          aria-label={blocking.length ? `${blocking.length} to sort out` : "nothing outstanding"}
         >
-          {problems.length ? <><CircleAlert size={11} />{problems.length} to sort out</> : <><CircleCheck size={11} />Ready to save</>}
+          {blocking.length ? <><CircleAlert size={11} />{blocking.length} to sort out</> : <><CircleCheck size={11} />Ready to save</>}
         </Badge>
+        {advice.length > 0 && (
+          <Badge variant="outline" aria-label={`${advice.length} worth a second look`}>
+            <Lightbulb size={11} />{advice.length} worth a second look
+          </Badge>
+        )}
         <Button className="ml-auto" onClick={save} disabled={saving}>
           <Save />{saving ? "Saving…" : draft.saved ? "Save changes" : "Save and add to the catalog"}
         </Button>
@@ -203,7 +221,7 @@ export function GraphBuilder({ name }: { name?: string }) {
 
       <ReactFlowProvider>
         <div className="gb">
-          <Palette draft={draft} onAdd={addStep} />
+          <Palette draft={draft} name={stepName} onName={setStepName} onAdd={addStep} />
           <GraphCanvas
             draft={draft} dispatch={dispatch} problems={problems} generation={generation}
             selection={live} onSelect={onSelect} onAdd={addStep}

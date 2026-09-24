@@ -9,14 +9,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promptIdFor, promptIdsOf, readLocalPrompt, renderSpecModule, saveBuilderGraph } from "./builder";
 import { loadLocalGraph, localGraphPath, localPromptsDir, ensureLocalDirs } from "./local";
-import { COMMAND_BUILTINS, WORKTREE_FACTS, coerceOperand, keepPath, type GraphSpec, type NodeSpec } from "../core/graph-spec";
+import { COMMAND_BUILTINS, WORKTREE_FACTS, coerceOperand, isBlocking, keepPath, specProblems, type GraphSpec, type NodeSpec } from "../core/graph-spec";
 // core/ is node-free and cannot import an executor, so the table REPEATS what the executors
 // know. This file is node-side, so it imports the executors' own constants and pins the repetition.
 import { LAUNCH_BUILTIN, LAUNCH_PRODUCES, LAUNCH_READS } from "../engine/executors/launch";
 import { MAP_BUILTINS } from "../engine/executors/map";
 // the reducer is plain data over core/ — no React, no DOM — so the browser's verdict can be
 // driven from here and compared against this file's gate, which is the whole point below
-import { PRESETS, draftProblems, draftReducer, newStep, pickPrompts, type Draft, type DraftAction } from "../web/app/lib/spec-draft";
+import { PRESETS, bySeverity, draftProblems, draftReducer, newStep, pickPrompts, type Draft, type DraftAction } from "../web/app/lib/spec-draft";
 
 const ROOT = join(import.meta.dir, "..");
 const home = () => mkdtempSync(join(tmpdir(), "howdah-builder-"));
@@ -583,7 +583,10 @@ describe("the browser's verdict and the server's gate cannot disagree", () => {
       if (mutation.applies && !mutation.applies(base)) continue;
       test(`${preset.id}: ${mutation.name}`, async () => {
         const draft = mutation.apply(base);
-        const problems = draftProblems(draft);
+        // BLOCKING only, both sides (HOW-26). The verdict also carries advice now, and advice
+        // is deliberately not a gate — so the property being pinned here is what it always
+        // meant: the browser and this file refuse the SAME drafts.
+        const problems = bySeverity(draftProblems(draft)).blocking;
         const saved = await saveBuilderGraph({ intent: "create",
           home: home(), repoRoot: ROOT, spec: draft.spec, prompts: pickPrompts(draft),
         });
@@ -678,5 +681,75 @@ describe("the browser's verdict and the server's gate cannot disagree", () => {
     const draft = PRESETS[0]!.build("orphan");
     const withJunk: Draft = { ...draft, prompts: { ...draft.prompts, "orphan.ghost": "nobody names me" } };
     expect(Object.keys(pickPrompts(withJunk))).toEqual(promptIdsOf(withJunk.spec));
+  });
+
+  /**
+   * HOW-26. The verdict now carries two severities, and only one of them is a gate. Advice
+   * describes a graph that loads, `validate()`s and RUNS and is merely not what was probably
+   * meant — refusing it here would be refusing a graph the launcher would happily accept, and
+   * would make the builder's own opinion into a rule nobody agreed to.
+   */
+  test("a graph the builder advises against is still SAVED, and still loads", async () => {
+    const h = home();
+    const draft = PRESETS[0]!.build("advised");
+    // the ticket's shape in miniature: the step's "Otherwise" goes back to itself, so whenever
+    // the one condition does not match it runs again with nothing changed
+    const spec: GraphSpec = {
+      ...draft.spec,
+      edges: [
+        { from: "work", to: "done", when: { op: "is-not-empty", key: "summary" } },
+        { from: "work", to: "work" },
+      ],
+    };
+    const problems = specProblems(spec, { knownPrompts: Object.keys(draft.prompts) });
+    expect(problems.length).toBeGreaterThan(0);
+    expect(problems.filter(isBlocking)).toEqual([]);
+
+    const saved = await saveBuilderGraph({ intent: "create", home: h, repoRoot: ROOT, spec, prompts: pickPrompts({ ...draft, spec }) });
+    expect(saved.ok, saved.ok ? "" : saved.error).toBe(true);
+    expect((await loadLocalGraph(h, "advised", ROOT)).def.name).toBe("advised");
+  });
+
+  test("a BLOCKING problem is still refused, and the browser named the same one first", async () => {
+    const h = home();
+    // the only step asks for `summary` in its own instructions and nothing writes it — a path
+    // violation. It is expressed in the BODY rather than in `reads`, because `reads` is derived
+    // from the body on both sides and a declaration the text contradicts would be repaired
+    // rather than refused.
+    const draft = draftReducer(PRESETS[0]!.build("refused"), {
+      type: "set-prompt", id: "refused.work",
+      body: "Do the work.\n\nGoal: {{ context.goal }}\n\nWhat happened so far: {{ context.summary }}",
+    });
+    const spec: GraphSpec = { ...draft.spec, nodes: draft.spec.nodes.map((n) => (n.id === "work" ? { ...n, writes: [] } : n)) };
+    const blocking = bySeverity(specProblems(spec, { knownPrompts: Object.keys(draft.prompts) })).blocking;
+    expect(blocking.length).toBeGreaterThan(0);
+
+    const r = await saveBuilderGraph({ intent: "create", home: h, repoRoot: ROOT, spec, prompts: pickPrompts({ ...draft, spec }) });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(blocking.map((x) => x.message)).toContain(r.error);
+    expect(existsSync(localGraphPath(h, "refused"))).toBe(false);
+  });
+
+  /** HOW-26: a preset is the worked example an operator edits, so it may not ship a single
+   *  thing this module would say a word about — at EITHER severity. */
+  test("every preset is exemplary: no problems and no advice", () => {
+    for (const preset of PRESETS) {
+      const d = preset.build("demo-graph");
+      expect(specProblems(d.spec, { knownPrompts: Object.keys(d.prompts) }), preset.id).toEqual([]);
+      expect(draftProblems(d), preset.id).toEqual([]);
+    }
+  });
+
+  test("a preset saves and loads for real, every one of them", async () => {
+    for (const preset of PRESETS) {
+      const h = home();
+      const d = preset.build(`p-${preset.id}`);
+      const saved = await saveBuilderGraph({ intent: "create", home: h, repoRoot: ROOT, spec: d.spec, prompts: pickPrompts(d) });
+      expect(saved.ok, saved.ok ? "" : `${preset.id}: ${saved.error}`).toBe(true);
+      // loadLocalGraph is the launcher's own gate: it imports, validates and checks that every
+      // agent step's prompt file exists. It throws rather than returning a verdict.
+      const loaded = await loadLocalGraph(h, `p-${preset.id}`, ROOT);
+      expect(loaded.def.name, preset.id).toBe(`p-${preset.id}`);
+    }
   });
 });

@@ -41,7 +41,7 @@ import {
   Background, Controls, ReactFlow, useReactFlow, useStore,
   MarkerType, type Edge, type Node, type NodeChange, type OnConnect, type OnNodesChange,
 } from "@xyflow/react";
-import { point, predicateLabel, type GraphSpec, type Point, type SpecProblem } from "../../../core/graph-spec";
+import { isBlocking, point, predicateLabel, type GraphSpec, type Point, type SpecProblem } from "../../../core/graph-spec";
 import { autoLayout } from "@/lib/layout";
 import type { Draft, DraftAction, StepKind } from "@/lib/spec-draft";
 import { STEP_KINDS } from "@/lib/spec-draft";
@@ -82,7 +82,12 @@ export function specToFlow(
   open: (sel: Selection) => void,
 ): { nodes: Node[]; edges: Edge[] } {
   const laid = autoLayout(spec);
-  const countOf = (id: string) => problems.filter((p) => p.node === id).length;
+  // the card's count and the wire's flag are about what BLOCKS (HOW-26). `--attention` is the
+  // only saturated colour in this palette and it means "a human is needed"; advice is not that
+  // — it is counted in the bar and printed in the panel, and tinting the picture with it would
+  // make the builder's own opinion read as a refusal on every box it has one about.
+  const blocking = problems.filter(isBlocking);
+  const countOf = (id: string) => blocking.filter((p) => p.node === id).length;
   const nodes: Node[] = laid.nodes.map((n) => ({
     id: n.id,
     type: "step",
@@ -113,7 +118,7 @@ export function specToFlow(
       label: e.when ? predicateLabel(e.when) : "",
       nth: (() => { const at = nth.get(e.from) ?? 0; nth.set(e.from, at + 1); return at; })(),
       siblings: leaving.get(e.from) ?? 1,
-      flagged: problems.some((p) => p.where === "branching" && p.node === e.from),
+      flagged: blocking.some((p) => p.where === "branching" && p.node === e.from),
       onOpen: () => open({ kind: "edge", index: i }),
     } satisfies ConditionEdgeData,
   }));

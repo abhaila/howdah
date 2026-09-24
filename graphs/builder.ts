@@ -36,11 +36,13 @@
  *   on every keystroke, over the spec that is about to be WRITTEN. Before that, the browser
  *   could call a draft clean while this file refused it — and the message the operator got
  *   back was `validate()`'s own, naming a node id and a "writer-free path". Every blocking
- *   defect in the HOW-22 review was one instance of that gap.
+ *   defect in the HOW-22 review was one instance of that gap. HOW-26 splits that verdict by
+ *   SEVERITY, and the refusal here reads the BLOCKING half only: advice describes a graph
+ *   that runs and is not what was meant, which is the operator's call and not a gate.
  */
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { nameTakenProblem, promptIdFor, specProblems, SPEC_PROMPT_ID, type GraphSpec, type NodeSpec } from "../core/graph-spec";
+import { isBlocking, nameTakenProblem, promptIdFor, specProblems, SPEC_PROMPT_ID, type GraphSpec, type NodeSpec } from "../core/graph-spec";
 import { frontMatterField, splitFrontMatter, templateReads } from "../core/template";
 import { ensureLocalDirs, LOCAL_NAME, loadLocalGraph, localGraphPath, localPromptsDir } from "./local";
 import type { Graph } from "../core/graph";
@@ -189,10 +191,15 @@ export async function saveBuilderGraph(opts: {
     // loadLocalGraph still runs the real gate — but it never refuses something the browser
     // called clean for a reason the browser could have known. It runs on the DERIVED spec,
     // because that is what is about to be written.
-    const problems = specProblems(spec, {
+    // BLOCKING only (HOW-26). specProblems() now also returns ADVICE — a graph that will load,
+    // validate and run and still not do what was meant (an agent told nothing, a branch on free
+    // text, an unbounded loop). Advice is the operator's call, not this file's: refusing on one
+    // would make the builder's own nagging into a gate nobody asked for, and would refuse a
+    // graph `validate()` accepts.
+    const blocking = specProblems(spec, {
       knownPrompts: promptIdsOf(spec).filter((id) => bodyOf(id) !== null),
-    });
-    if (problems.length) return { ok: false, error: problems[0]!.message };
+    }).filter(isBlocking);
+    if (blocking.length) return { ok: false, error: blocking[0]!.message };
 
     // the writes live INSIDE the try so restore() covers an IO failure (EACCES, ENOSPC) and
     // not only a refusal: each snapshot is taken BEFORE its write, so a throw half way

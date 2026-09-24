@@ -378,6 +378,13 @@ export function createHowdahServer(opts: ServerOpts) {
         const configuredDefaultHarness = loadConfig().defaultHarness;
         const effectiveOf = (id: string, n: (typeof g.def.nodes)[string]) =>
           n.kind === "agent" ? resolveAgentConfig(g, n, id, { tuning: tuning as EngineTuning, defaultHarness: configuredDefaultHarness }) : undefined;
+        // HOW-22/HOW-26: read the spec ONCE — specOf() re-parses every call — and index the
+        // step TITLES out of it. A built graph carries an editable title beside its frozen id,
+        // and without this the builder's own preview read "Implement the changes required"
+        // while the tuner and every run's DAG read `ask-an-agent-8`. The title is absent for a
+        // hand-written graph, where the id IS the name and GraphDag falls back to it.
+        const built = specOf(g);
+        const titles = new Map((built?.nodes ?? []).map((n) => [n.id, n.title?.trim() || undefined]));
         return json({
           name: g.def.name,
           description: g.def.description ?? "",
@@ -387,14 +394,15 @@ export function createHowdahServer(opts: ServerOpts) {
           // HOW-22: the spec the builder can re-open, and whether it can. `specOf` re-parses
           // rather than trusting `def.spec`, so a hand-edited file that no longer holds a
           // readable spec reads as `builder: false` instead of opening half-understood.
-          spec: specOf(g),
-          builder: (await registry()).source[name] === "local" && specOf(g) !== null,
+          spec: built,
+          builder: (await registry()).source[name] === "local" && built !== null,
           // what "inherit" means in the tuner, so it names the operator's default rather than
           // a hard-coded "claude"
           default_harness: defaultHarness(configuredDefaultHarness),
           tuning,
           nodes: Object.entries(g.def.nodes).map(([id, n]) => ({
             id,
+            title: titles.get(id),
             kind: n.kind,
             class: "class" in n ? n.class : undefined,
             prompt: n.kind === "agent" ? n.prompt : undefined,

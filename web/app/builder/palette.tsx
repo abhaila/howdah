@@ -15,23 +15,59 @@
  * graph taller than the pane, out of sight (review finding 3). It now asks the canvas where
  * the middle is — through the same `screenToFlowPosition` a drop uses — and `freeSpotNear`
  * steps aside from whatever is already there, so two clicks are two places rather than a pile.
+ *
+ * AND IT IS NAMED BEFORE IT EXISTS (HOW-26). A step's id is derived from what it is called at
+ * the moment it is added and then frozen, so seeding it with the KIND — which is what the six
+ * buttons used to do — named every step after the button that made it: `ask-an-agent`,
+ * `ask-an-agent-2` … `ask-an-agent-8`, and, since the prompt id comes off the id, the
+ * instructions were filed under those names too. The title typed afterwards reached neither.
+ * The box above the six buttons is the cause fixed rather than the symptom: it seeds the next
+ * step whichever gesture places it, the id it will get is previewed under it as it is typed,
+ * and it clears itself once the step exists. A step whose id is already wrong is repaired in
+ * its own form (step-form.tsx RenameStep) rather than removed and re-made.
  */
 import { Plus } from "lucide-react";
-import { STEP_KINDS, type StepKind } from "@/lib/spec-draft";
+import { STEP_KINDS, nextNodeId, type StepKind } from "@/lib/spec-draft";
 import { freeSpotNear } from "@/lib/layout";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import type { Draft } from "@/lib/spec-draft";
 import type { Point } from "../../../core/graph-spec";
 import { STEP_KIND_MIME, useCanvasCentre } from "./canvas";
 
-export function Palette({ draft, onAdd }: {
+export function Palette({ draft, name, onName, onAdd }: {
   draft: Draft;
+  /** what the NEXT step will be called — lifted to the shell, because a drop starts here and
+   *  lands on the canvas, and both gestures have to read the same box */
+  name: string;
+  onName: (name: string) => void;
   onAdd: (kind: StepKind, at?: Point) => void;
 }) {
   const centre = useCanvasCentre();
+  // the id the step WILL get, seeded with the RAW name and nothing else, because the add does
+  // too: a second fallback here and a different one there is how an emptied box came to
+  // preview one id and create another (HOW-26)
+  const preview = nextNodeId(draft.spec, name);
   return (
     <div className="gb-palette">
       <div className="gb-palette-title">Add a step</div>
+      <div className="builder-naming">
+        <Label className="flex-1">
+          What is the next step called?
+          <Input
+            value={name} placeholder="Implement the change"
+            aria-label="what the next step is called"
+            onChange={(e) => onName(e.target.value)}
+          />
+        </Label>
+      </div>
+      <div className="field-hint">
+        The name becomes the step's id — <code>{preview}</code> — and that is what its
+        instructions file is called too. A run's history is written against the id
+        (<code>step#visit</code>), so it is fixed once the step exists; the step's own form can
+        still move it, at the cost of any run parked there.
+      </div>
       {STEP_KINDS.map((k) => (
         <Button
           key={k.kind}
