@@ -20,6 +20,15 @@ export type AgentEvent =
       input: unknown;
       /** escalations the CLI proposes (claude permission_suggestions) — render as one-key options */
       suggestions?: unknown[];
+      /** the tool_use block this permission gates, when the harness names it */
+      tool_use_id?: string;
+      /**
+       * HOW-25: the harness's own declaration that this request needs a HUMAN CHOICE, not a
+       * yes/no — an AskUserQuestion whose input carries the questions. Answering it allow/deny
+       * loses the answer, so the executor routes it to the question card instead. Absent means
+       * an ordinary permission, which is why this is a flag and not a heuristic on tool_name.
+       */
+      requires_user_interaction?: boolean;
     }
   | {
       type: "turn_end";

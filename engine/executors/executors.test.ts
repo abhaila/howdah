@@ -172,6 +172,223 @@ describe("claude executor over the fake wire", () => {
   }, 15000);
 });
 
+/**
+ * HOW-25 — a skill that asks the operator a question. This is the ticket's whole subject: the
+ * question used to be swallowed (the adapter dropped it, no attention was raised, and the
+ * executor blocked on stdout for ever), so every test here is about the question REACHING a
+ * human and the answer REACHING the model, plus the three ways the wait is allowed to end.
+ */
+describe("claude executor — asking the operator a question (HOW-25)", () => {
+  const GRAPHS = { "mini-doc": miniGraph() } as Record<string, any>;
+
+  function questionEngine(dir: string, attentionDir: string, env: Record<string, string>, opts: { askTimeoutMs?: number; notifiers?: any[] } = {}) {
+    for (const [k, v] of Object.entries(env)) process.env[k] = v;
+    return new Engine(miniGraph(), {
+      dir,
+      promptsDir: promptDir(),
+      executors: {
+        agent: claudeExecutor({
+          attentionDir, binary: FAKE, askPollMs: 20, notifiers: opts.notifiers ?? [],
+          ...(opts.askTimeoutMs !== undefined ? { askTimeoutMs: opts.askTimeoutMs } : {}),
+        }),
+      },
+    });
+  }
+
+  const clearEnv = () => {
+    for (const k of ["FAKE_CLAUDE_QUESTION", "FAKE_CLAUDE_QUESTION_DIE", "FAKE_CAPTURE_ANSWER", "FAKE_CLAUDE_ASK"]) delete process.env[k];
+  };
+
+  /** answer every `user-question` park the run raises, the way the card or the CLI would */
+  function questionReplier(dir: string, attentionDir: string, answer: (qs: any[]) => { text: string; answers?: unknown }, stop: { done: boolean }) {
+    return (async () => {
+      const { readLog } = await import("../../log/write");
+      const { resolveReply } = await import("../control");
+      const path = join(dir, "run.jsonl");
+      const seen: any[] = [];
+      while (!stop.done) {
+        await Bun.sleep(25);
+        const events = readLog(path);
+        const asks = events.filter((e: any) => e.type === "attention-raised");
+        const resolutions = events.filter((e) => e.type === "attention-resolved").length;
+        if (asks.length > resolutions) {
+          const ask = asks[resolutions]! as any;
+          seen.push(ask);
+          const result = resolveReply(dir, answer(ask.ask?.questions ?? []), { graphs: GRAPHS });
+          if (result.ok) new AttentionCenter(attentionDir, []).resolve(`${ask.node}:${ask.visit}`);
+        }
+      }
+      return seen;
+    })();
+  }
+
+  test("the question parks as itself — the questions are in the log and the reason IS the question", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "howdah-auq-"));
+    const attentionDir = join(dir, "attn");
+    // the notification must fire AFTER the durable append (engine/attention.ts)
+    const rung: Array<{ body: string; seqAtRing: number }> = [];
+    const { readLog } = await import("../../log/write");
+    const notifier = async (n: any) => {
+      rung.push({ body: n.body, seqAtRing: readLog(join(dir, "run.jsonl")).filter((e: any) => e.type === "attention-raised").length });
+    };
+    const engine = questionEngine(dir, attentionDir, { FAKE_CLAUDE_QUESTION: "1", FAKE_CLAUDE_ASK: "0" }, { notifiers: [notifier] });
+    const stop = { done: false };
+    const replier = questionReplier(dir, attentionDir, () => ({ text: "Approach A" }), stop);
+    await engine.start({ goal: "ask me something" });
+    stop.done = true;
+    const asks = await replier;
+    clearEnv();
+
+    const first = asks[0];
+    expect(first.ask.kind).toBe("user-question");
+    expect(first.ask.tool_name).toBe("AskUserQuestion");
+    // the operator is told WHAT is being asked, not that a tool wants permission
+    expect(first.reason).toBe("Which approach should I take?");
+    expect(first.reason).not.toContain("needs permission");
+    expect(first.ask.questions[0].options.map((o: any) => o.label)).toEqual(["Approach A", "Approach B"]);
+    expect(first.ask.questions[0].options[0].description).toBe("Take Approach A.");
+    // durable BEFORE delivered: the raise was already in the log when the notifier ran
+    expect(rung.length).toBeGreaterThan(0);
+    expect(rung[0]!.seqAtRing).toBeGreaterThanOrEqual(1);
+    expect(rung[0]!.body).toContain("Which approach should I take?");
+  }, 20000);
+
+  test("a clicked option reaches the model as an answer, and the turn carries on", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "howdah-auq-"));
+    const attentionDir = join(dir, "attn");
+    const captured = join(dir, "answer.txt");
+    const engine = questionEngine(dir, attentionDir, { FAKE_CLAUDE_QUESTION: "1", FAKE_CLAUDE_ASK: "0", FAKE_CAPTURE_ANSWER: captured });
+    const stop = { done: false };
+    const replier = questionReplier(dir, attentionDir, (qs) => ({ text: "", answers: [{ id: qs[0].id, selected: ["Approach B"] }] }), stop);
+    const result = await engine.start({ goal: "ask me something" });
+    stop.done = true;
+    await replier;
+    clearEnv();
+
+    expect(result).toEqual({ state: "finished", outcome: "success" });
+    // what the harness actually received — the CLI's own answered-question phrasing
+    const message = readFileSync(captured, "utf8");
+    expect(message).toContain("The user answered:");
+    expect(message).toContain('"Which approach should I take?"="Approach B"');
+    expect(message).not.toContain("permission denied");
+
+    const events = engine.log.read();
+    // ONE node-started for draft: the answer landed mid-turn, the node did not restart
+    expect(events.filter((e: any) => e.type === "node-started" && e.node === "draft")).toHaveLength(1);
+    const draft: any = events.find((e: any) => e.type === "node-finished" && e.node === "draft");
+    expect(draft.status).toBe("succeeded");
+    expect(draft.writes).toEqual({ doc_summary: "fake doc_summary" });
+    // the answer is IN the transcript, pinned to the call it answered
+    const answerChunk: any = events.find((e: any) => e.type === "chunk" && e.kind === "tool_result" && e.tool_name === "AskUserQuestion");
+    expect(answerChunk.content).toBe("Approach: Approach B");
+    expect(answerChunk.tool_id).toBe("toolu_fake_auq_01");
+    // and the structured pick is on the resolution, beside the prose
+    const resolved: any = events.find((e: any) => e.type === "attention-resolved");
+    expect(resolved.answers).toEqual([{ id: "q0", selected: ["Approach B"] }]);
+    expect(resolved.reply).toBe("Approach: Approach B");
+  }, 20000);
+
+  test("a typed reply answers it too — `howdah reply <run> \"Approach B\"` is not second-class", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "howdah-auq-"));
+    const attentionDir = join(dir, "attn");
+    const captured = join(dir, "answer.txt");
+    const engine = questionEngine(dir, attentionDir, { FAKE_CLAUDE_QUESTION: "1", FAKE_CLAUDE_ASK: "0", FAKE_CAPTURE_ANSWER: captured });
+    const stop = { done: false };
+    // plain text, exactly what the CLI verb sends — no `answers` at all
+    const replier = questionReplier(dir, attentionDir, () => ({ text: "approach b" }), stop);
+    const result = await engine.start({ goal: "ask me something" });
+    stop.done = true;
+    await replier;
+    clearEnv();
+
+    expect(result).toEqual({ state: "finished", outcome: "success" });
+    expect(readFileSync(captured, "utf8")).toContain('"Which approach should I take?"="Approach B"');
+  }, 20000);
+
+  test("words that match no option are carried to the model whole, not dropped", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "howdah-auq-"));
+    const attentionDir = join(dir, "attn");
+    const captured = join(dir, "answer.txt");
+    const engine = questionEngine(dir, attentionDir, { FAKE_CLAUDE_QUESTION: "1", FAKE_CLAUDE_ASK: "0", FAKE_CAPTURE_ANSWER: captured });
+    const stop = { done: false };
+    const replier = questionReplier(dir, attentionDir, () => ({ text: "neither — ask me again after you read the spec" }), stop);
+    await engine.start({ goal: "ask me something" });
+    stop.done = true;
+    await replier;
+    clearEnv();
+    expect(readFileSync(captured, "utf8")).toContain("notes: neither — ask me again after you read the spec");
+  }, 20000);
+
+  test("several questions, including a multi-select, all travel", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "howdah-auq-"));
+    const attentionDir = join(dir, "attn");
+    const captured = join(dir, "answer.txt");
+    const engine = questionEngine(dir, attentionDir, { FAKE_CLAUDE_QUESTION: "multi", FAKE_CLAUDE_ASK: "0", FAKE_CAPTURE_ANSWER: captured });
+    const stop = { done: false };
+    const replier = questionReplier(dir, attentionDir, (qs) => ({
+      text: "",
+      answers: [{ id: qs[0].id, selected: ["Approach A"] }, { id: qs[1].id, selected: ["src", "tests"] }],
+    }), stop);
+    const result = await engine.start({ goal: "ask me twice" });
+    stop.done = true;
+    const asks = await replier;
+    clearEnv();
+
+    expect(result).toEqual({ state: "finished", outcome: "success" });
+    expect(asks[0].ask.questions).toHaveLength(2);
+    expect(asks[0].ask.questions[1].multiSelect).toBe(true);
+    // the reason names the first question and says how many more are waiting
+    expect(asks[0].reason).toBe("Which approach should I take? (+1 more)");
+    const message = readFileSync(captured, "utf8");
+    expect(message).toContain('"Which approach should I take?"="Approach A"');
+    expect(message).toContain('"Which files may I touch?"="src", "tests"');
+  }, 20000);
+
+  test("a harness that dies with a question pending PARKS with a reason — it does not spin", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "howdah-auq-"));
+    const engine = questionEngine(dir, join(dir, "attn"), { FAKE_CLAUDE_QUESTION: "1", FAKE_CLAUDE_QUESTION_DIE: "1", FAKE_CLAUDE_ASK: "0" });
+    // nobody answers: before HOW-25 this never returned
+    const result: any = await engine.start({ goal: "die on me" });
+    clearEnv();
+    // parking IS the answer here — normal control flow with a reason, not a frozen `running`
+    expect(result.state).toBe("parked");
+    expect(result.reason).toContain("the harness exited while it was waiting for you to answer");
+    expect(result.reason).toContain("Which approach should I take?");
+    // and it is NOT reported as the model breaking its contract
+    expect(result.reason).not.toContain("output contract violation");
+    const park: any = engine.log.read().findLast((e: any) => e.type === "attention-raised");
+    expect(park.code).toBe("attempt-failed");
+    expect(park.reason).toBe(result.reason);
+  }, 20000);
+
+  test("a configured wait that runs out parks naming the wait, rather than answering into a closed door", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "howdah-auq-"));
+    const engine = questionEngine(dir, join(dir, "attn"), { FAKE_CLAUDE_QUESTION: "1", FAKE_CLAUDE_ASK: "0" }, { askTimeoutMs: 150 });
+    const result: any = await engine.start({ goal: "nobody is home" });
+    clearEnv();
+    expect(result.state).toBe("parked");
+    expect(result.reason).toContain("nobody answered within the configured wait");
+    expect(result.reason).toContain("Which approach should I take?");
+    const park: any = engine.log.read().findLast((e: any) => e.type === "attention-raised");
+    expect(park.reason).toBe(result.reason);
+  }, 20000);
+
+  test("an ordinary permission is still a permission — the question path did not swallow it", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "howdah-auq-"));
+    const attentionDir = join(dir, "attn");
+    const engine = questionEngine(dir, attentionDir, { FAKE_CLAUDE_ASK: "1", FAKE_CLAUDE_QUESTION: "" });
+    const stop = { done: false };
+    const replier = questionReplier(dir, attentionDir, () => ({ text: "allow" }), stop);
+    const result = await engine.start({ goal: "just a permission" });
+    stop.done = true;
+    const asks = await replier;
+    clearEnv();
+    expect(result).toEqual({ state: "finished", outcome: "success" });
+    expect(asks[0].ask.kind).toBe("can_use_tool");
+    expect(asks[0].reason).toBe("Write needs permission");
+  }, 20000);
+});
+
 describe("codex executor over the fake app-server wire", () => {
   test("starts codex with a full-access sandbox by default", async () => {
     const dir = mkdtempSync(join(tmpdir(), "howdah-codex-"));

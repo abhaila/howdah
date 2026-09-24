@@ -855,6 +855,56 @@ run view gets built once inside a system that has been agreed, and T23 is UI-ind
     out of the rendering instead of being a second rule to remember, and makes core's refusal
     actionable where it is printed.
 
+- [x] **HOW-25 (P1) — engine + web — A harness question reaches a human: the Chat pane** ✅ 2026-09-23
+  - Trigger (from the ticket): "With skills that have user ask questions, nothing works. We
+    don't follow the normal chat flow." A graph whose prompt leans on an ask-the-user skill
+    FROZE: the run showed `running`, the viewer's stale-run banner counted the minutes, and
+    nothing ever rang.
+  - Root cause, three failures stacked. (1) `AskUserQuestion` arrives as a `can_use_tool`
+    request the executor treated as an ordinary permission, so the park read "AskUserQuestion
+    needs permission" and the questions stayed in the payload. (2) `web/app/run/ask.tsx`
+    rendered `ask.reason` and a text box and NEVER rendered `ask.ask`, so the question, its
+    options and their descriptions were on disk and not on screen. (3) `executors/reply.ts`
+    `isAllowReply` collapsed the reply to allow/deny, so "Option B" reached the model as
+    `permission denied: Option B`. Each alone is bad; together they are "nothing works".
+  - **The transport was probed, not assumed, and the plan's primary guess was wrong.** The CLI
+    does carry a dialog channel (`request_user_dialog`, kinds declared with
+    `supportedDialogKinds` on an `initialize` control_request, `getPendingUserDialogRequests`,
+    park deadlines, the lot) and the plan was written against it. Against claude 2.1.278 under
+    `-p`, declaring `ask_user_question` and having the declaration ACKNOWLEDGED still routed
+    the question through `can_use_tool` with `requires_user_interaction: true` — the dialog
+    channel belongs to the CLI's cloud host (`headlessCloudClient`), not to us. So the
+    plan's own named fallback became the design, no `initialize` frame is sent, and no
+    speculative dialog code was written against a path that cannot be tested here. The real
+    turn is pinned in `adapter/fixtures/claude-ask-user-question.jsonl`.
+  - The answer channel is narrow and that is load-bearing: the permission response schema is
+    `{behavior:"allow", updatedInput?}` or `{behavior:"deny", message}` with NO result field.
+    Answering `allow` runs the tool with nobody to ask and returns "The user did not answer the
+    questions." — the same freeze in a different disguise. So the operator's choice travels in
+    the deny `message`, worded with the CLI's OWN answered-question sentence so the model reads
+    a familiar tool result. Both halves were probed live before a line was written.
+  - Issue 2 in the plan (a park deadline vs a human who takes hours) largely dissolved with the
+    transport: the deadline machinery belongs to the dialog channel, and the permission channel
+    showed no deadline when probed. `askTimeoutMs` exists, unset by default, so the guard is
+    real and testable and a future CLI that DOES expire a question parks with a reason instead
+    of answering into a closed door.
+  - The AI SDK suggestion in the ticket was checked and DECLINED on evidence:
+    `@shadcn/helpers`' `createChat()` is a mock ChatTransport for demos, not a UI kit, and the
+    chat components live in AI Elements, which pulls Radix (banned here) plus a markdown stack,
+    and `useChat` wants a UI-message-stream endpoint an append-only log is not. What was worth
+    taking is the MESSAGE-PARTS shape, and `log/coalesce.ts` `TurnPart` already was it. Shape
+    adopted, dependency declined, zero new packages.
+  - Chat became the DEFAULT tab: the thing that needs interacting with is the question, and the
+    question lives in the conversation. Steps/Context/Logs/Graph are untouched.
+  - A latent hang was fixed on the way past: the permission poll loop watched only the log, so
+    a CLI that died mid-ask spun for ever. `awaitOperator` is now the one wait for both kinds
+    of ask and ends in exactly one of an answer, a dead harness, or a configured ceiling.
+  - Deliberately out: steering (an existing planned slice with its own event type); codex and
+    cursor question parity (DECLARED `user_questions: "no"` in `adapter/capabilities.ts` rather
+    than papered over — a graph that needs asking should pin `harness: "claude"`); the other
+    dialog kinds (`plan_approval`, `refusal_fallback_prompt`) — declaring a kind we cannot draw
+    is worse than declaring none.
+
 ## GSTACK REVIEW REPORT
 
 | Review | Trigger | Why | Runs | Status | Findings |

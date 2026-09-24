@@ -8,7 +8,8 @@
  *   GET  /api/runs/:id             full detail (thread, timeline, usage, allowance, ask)
  *   POST /api/runs                 {graph, inputs, workspace?, name?, overrides?} → launch detached; a bad name is 400 before the spawn (HOW-18)
  *   GET  /api/runs/:id/events?since=N   SSE of events with seq > N
- *   POST /api/runs/:id/reply       {text} → resolveReply (system-map 0.2): 200 + record cleared, or 409 naming the next step
+ *   POST /api/runs/:id/reply       {text?, answers?} → resolveReply (system-map 0.2): 200 + record cleared, or 409 naming
+ *                                  the next step. `answers` is the HOW-25 question card's structured pick.
  *   POST /api/runs/:id/comments    {entity_id, text, proposal_id?} → pin a comment to the current proposal round
  *   POST /api/runs/:id/approval    {approved, proposal_id} → approve, or send the round's comments as feedback
  *   POST /api/runs/:id/redesign    {message} → re-extract and redraw (refused while a runner is live)
@@ -686,15 +687,23 @@ export function createHowdahServer(opts: ServerOpts) {
       if (sub === "reply" && req.method === "POST") {
         const body: unknown = await req.json().catch(() => undefined);
         if (typeof body !== "object" || body === null || Array.isArray(body))
-          return json({ error: "body must be a JSON object {text}" }, 400);
+          return json({ error: "body must be a JSON object {text?, answers?}" }, 400);
         // absent text is the empty reply ("let it through" on a permission ask); anything
         // other than a string is a malformed request, not a 500 from deep in the rules
         const raw = (body as { text?: unknown }).text;
         const text = raw === undefined ? "" : raw;
         if (typeof text !== "string") return json({ error: "text must be a string" }, 400);
+        // HOW-25: a question card sends the options it picked. The shape is checked against
+        // the questions the park is actually asking, inside decideReply — this only refuses
+        // what is not even the right KIND of thing, so the 400s stay named.
+        const answers = (body as { answers?: unknown }).answers;
+        if (answers !== undefined && !Array.isArray(answers))
+          return json({ error: "answers must be an array" }, 400);
         // system-map 0.2: one shared rule set with `howdah reply`; refusals name the next step
-        const result = resolveReply(join(opts.runsDir, id), text, { graphs });
-        if (!result.ok) return json({ error: result.message, code: result.code }, 409);
+        const result = resolveReply(join(opts.runsDir, id), { text, answers }, { graphs });
+        // a body that does not fit the questions is the caller's error; everything else a
+        // reply can be refused for is a fact about the park, which is a 409 naming the next step
+        if (!result.ok) return json({ error: result.message, code: result.code }, result.malformed ? 400 : 409);
         new AttentionCenter(opts.attentionDir, []).resolve(`${id}:${result.node}:${result.visit}`);
         wake(id); // the reply must MOVE the run, not just record the answer
         return json({ ok: true, rendered: result.rendered });

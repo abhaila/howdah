@@ -58,7 +58,8 @@ export function toolSummary(input: string): string {
   return JSON.stringify(o).replace(/\s+/g, " ");
 }
 
-function ToolBeat({ call, result }: { call: TurnPart; result?: TurnPart }) {
+/** exported for the Chat transcript (HOW-25): one tool renderer, not two */
+export function ToolBeat({ call, result }: { call: TurnPart; result?: TurnPart }) {
   const failed = result !== undefined && FAILED.test(result.content);
   // a failure opens itself; everything else waits to be asked
   const [open, setOpen] = useState(failed);

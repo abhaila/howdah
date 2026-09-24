@@ -40,6 +40,7 @@
  * an O_EXCL lockfile (log/lockfile.ts, stale-PID recovery) for the whole engine run —
  * Engine.start/resume take it, and a loser returns `busy` without touching the log.
  */
+import { answersToReplyText, askQuestions, validateAnswers, type AskAnswer } from "../core/ask";
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { nodeReads, type Graph } from "../core/graph";
@@ -308,8 +309,13 @@ export function markPaused(runDir: string): boolean {
 export type ReplyResult =
   /** the resolution landed; `rendered` = the retried prompt will carry the reply */
   | { ok: true; node: string; visit: number; code?: ParkCode; rendered: boolean }
-  /** nothing was appended; `message` names what to do instead */
-  | { ok: false; message: string; code?: ParkCode };
+  /**
+   * nothing was appended; `message` names what to do instead. `malformed` marks the one
+   * refusal that is the CALLER's fault rather than the park's state (HOW-25: an answer set
+   * that does not fit the questions), so the web route can answer 400 instead of 409 without
+   * validating the body a second time somewhere else.
+   */
+  | { ok: false; message: string; code?: ParkCode; malformed?: true };
 
 interface AskContext {
   node: string;
@@ -412,13 +418,25 @@ export interface ReplyOpts {
   graphs: Record<string, Graph<any>>;
 }
 
+/**
+ * HOW-25: what an operator sent to answer a park. `text` alone is the old shape and still the
+ * whole story for every park that is not a question; `answers` is the question card's
+ * structured pick, validated HERE (core/ask.ts) against the questions the ask itself carries,
+ * so a malformed body is refused by name rather than reaching an executor as nonsense.
+ */
+export interface ReplyInput {
+  text: string;
+  answers?: unknown;
+}
+
 /** The pure decision: the resolution to append, or why not. Runs inside appendIf. */
 export function decideReply(
   events: LoggedEvent[],
   run: string,
-  text: string,
+  input: ReplyInput,
   graphs: Record<string, Graph<any>>,
 ): { event: RunEvent; result: ReplyResult } | { event: null; result: ReplyResult } {
+  const { text } = input;
   const replayed = replayState(events);
   // replay's `parked` already drops asks a jump superseded; a finished run awaits nothing
   const ask = replayed.finished ? null : replayed.parked;
@@ -436,9 +454,31 @@ export function decideReply(
     if (!verdict.accept)
       return { event: null, result: { ok: false, message: `reply refused (${ask.code}): ${verdict.message}`, code: ask.code } };
   }
+  // HOW-25: a question park takes a structured answer. It is validated against the very
+  // questions this ask raised, so "pick an option that was never offered" is a refusal here
+  // rather than a surprise inside the executor. `reply` is then written as the same answer in
+  // prose, which is why nothing downstream of `reply` had to learn a new shape.
+  const questions = askQuestions(ask);
+  let answers: AskAnswer[] | undefined;
+  let reply = text;
+  if (input.answers !== undefined) {
+    if (!questions)
+      return { event: null, result: { ok: false, malformed: true, code: ask.code,
+        message: "this park is not asking a question — reply with text" } };
+    const validated = validateAnswers(questions, input.answers);
+    if (!validated)
+      return { event: null, result: { ok: false, malformed: true, code: ask.code,
+        message: "answers do not match the questions being asked" } };
+    answers = validated;
+    reply = answersToReplyText(questions, validated);
+  }
+
   // no code: a legacy park, or a live mid-node harness permission ask (claude.ts / codex.ts
   // poll the log for this very event) — both keep their pre-0.2 meaning: logged, not rendered
-  const event = { type: "attention-resolved", node: ask.node, visit: ask.visit, reply: text, source: "operator" } as const;
+  const event = {
+    type: "attention-resolved", node: ask.node, visit: ask.visit, reply, source: "operator",
+    ...(answers ? { answers } : {}),
+  } as const;
   return {
     event,
     result: { ok: true, node: ask.node, visit: ask.visit, code: ask.code, rendered: rendersReply(ask, event) !== null },
@@ -451,13 +491,14 @@ export function decideReply(
  * lands and the other reads the first's resolution and gets NOTHING_AWAITING. The caller
  * clears the attention record and kicks a resume when `ok`.
  */
-export function resolveReply(runDir: string, text: string, opts: ReplyOpts): ReplyResult {
+export function resolveReply(runDir: string, input: string | ReplyInput, opts: ReplyOpts): ReplyResult {
   const path = join(runDir, "run.jsonl");
   const run = basename(runDir);
   if (!existsSync(path)) return { ok: false, message: `unknown run: ${run}` };
+  const reply: ReplyInput = typeof input === "string" ? { text: input } : input;
   let result: ReplyResult = { ok: false, message: NOTHING_AWAITING };
   new EventLog(path).appendIf((events) => {
-    const decision = decideReply(events, run, text, opts.graphs);
+    const decision = decideReply(events, run, reply, opts.graphs);
     result = decision.result;
     return decision.event;
   });

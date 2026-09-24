@@ -8,9 +8,12 @@ import { mapOpencodeEvent } from "./opencode";
 import { mapCursorEvent, cursorArgs } from "./cursor";
 import { harnessNames } from "../core/harnesses";
 import { CAPABILITIES } from "./capabilities";
+import { normalizeAskPayload } from "../core/ask";
 import type { AgentEvent } from "./events";
 
 const claudeFixture = readFileSync(join(import.meta.dir, "fixtures", "claude-turn.jsonl"));
+/** HOW-25: a REAL AskUserQuestion round trip captured from claude 2.1.278 */
+const askFixture = readFileSync(join(import.meta.dir, "fixtures", "claude-ask-user-question.jsonl"));
 const codexFixture = readFileSync(join(import.meta.dir, "fixtures", "codex-turn.jsonl"));
 
 describe("Claude argv", () => {
@@ -196,6 +199,66 @@ describe("opencode adapter + capability matrix", () => {
     // say so rather than claiming support the viewer would then offer
     expect(CAPABILITIES.cursor.resume).toBe("untested");
     expect(CAPABILITIES.cursor.permissions).toBe("no"); // print mode has no wire round-trip
+    // HOW-25: only claude has been seen to ask a human and take the answer back
+    expect(CAPABILITIES.claude.user_questions).toBe("yes");
+    expect(CAPABILITIES.codex.user_questions).toBe("no");
+    expect(CAPABILITIES.cursor.user_questions).toBe("no");
+    expect(CAPABILITIES.opencode.user_questions).toBe("untested");
+  });
+});
+
+/**
+ * HOW-25 — the ask-the-human round trip, pinned to a turn captured from the live CLI. What
+ * matters here is that a question is DISTINGUISHABLE from an ordinary permission (the executor
+ * routes on it) and that its payload survives the wire intact, including across chunk
+ * boundaries: the same replay the claude fixture gets, because the failure it guards against
+ * (a frame split mid-JSON) showed up as a permanent hang the last time it was not guarded.
+ */
+describe("Claude AskUserQuestion (HOW-25, captured fixture)", () => {
+  const events = replay(askFixture, askFixture.length).flatMap((r) => (r.ok ? mapClaudeEvent(r.value) : []));
+  const ask = events.find((e): e is Extract<AgentEvent, { type: "permission_request" }> => e.type === "permission_request");
+
+  test("the question arrives as a permission request that DECLARES it needs a human", () => {
+    expect(ask).toBeDefined();
+    expect(ask!.tool_name).toBe("AskUserQuestion");
+    expect(ask!.requires_user_interaction).toBe(true);
+    expect(ask!.tool_use_id).toBe("toolu_01Fex9FavrujxeGMr5U8yMh9");
+  });
+
+  test("the questions themselves survive the mapping", () => {
+    const qs = normalizeAskPayload(ask!.input);
+    expect(qs).toHaveLength(1);
+    expect(qs![0]!.question).toBe("Which approach should I take?");
+    expect(qs![0]!.header).toBe("Approach");
+    expect(qs![0]!.multiSelect).toBe(false);
+    expect(qs![0]!.options.map((o) => o.label)).toEqual(["Approach A", "Approach B"]);
+  });
+
+  test("an ordinary permission is NOT read as a question", () => {
+    const plain = mapClaudeEvent({
+      type: "control_request",
+      request_id: "r1",
+      request: { subtype: "can_use_tool", tool_name: "Write", input: { file_path: "a.txt" } },
+    })[0] as Extract<AgentEvent, { type: "permission_request" }>;
+    expect(plain.requires_user_interaction).toBeUndefined();
+    expect(plain.tool_use_id).toBeUndefined();
+    expect(normalizeAskPayload(plain.input)).toBeNull();
+  });
+
+  test("the captured answer reached the model as the tool result for that call", () => {
+    // the fixture holds the real reply we sent (a deny `message`) coming back as a tool_result
+    const result = events.find((e): e is Extract<AgentEvent, { type: "tool_result" }> => e.type === "tool_result");
+    expect(result!.id).toBe("toolu_01Fex9FavrujxeGMr5U8yMh9"); // the call it answers
+    expect(result!.content).toContain("The user answered:");
+    expect(result!.content).toContain("Approach B");
+    // and the model then acted on it, in the SAME turn — no second node-started
+    const end = events.find((e): e is Extract<AgentEvent, { type: "turn_end" }> => e.type === "turn_end");
+    expect(end!.result_text).toContain("Approach B");
+  });
+
+  test.each([1, 3, 7, 64, 4096])("byte-size %p slices carry the question intact", (size) => {
+    const sliced = replay(askFixture, size).flatMap((r) => (r.ok ? mapClaudeEvent(r.value) : []));
+    expect(sliced).toEqual(events);
   });
 });
 

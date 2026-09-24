@@ -224,6 +224,120 @@ describe("server API", () => {
     expect(again.status).toBe(409);
   });
 
+  /**
+   * HOW-25 — answering a question over the API. The shape check lives in core/ask.ts and runs
+   * under the log lock; what this pins is that the route SURFACES it correctly: a body that
+   * does not fit the questions is the caller's 400, a park that cannot take a reply is still
+   * a 409, and a good answer both records the pick and moves the run.
+   */
+  describe("answering a user-question park (HOW-25)", () => {
+    const QUESTIONS = [{
+      question: "Which approach should I take?", header: "Approach", multiSelect: false,
+      options: [{ label: "Approach A", description: "Take A." }, { label: "Approach B" }],
+    }];
+    function seedQuestionRun(id: string): EventLog {
+      const log = new EventLog(join(runsDir, id, "run.jsonl"), fixedClock());
+      log.append({ type: "run-started", graph: "write-doc", inputs: { goal: "g" }, pinned_prompts: {} });
+      log.append({ type: "node-started", node: "doc.draft", visit: 1, attempt_id: "doc.draft#1" });
+      log.append({
+        type: "attention-raised", node: "doc.draft", visit: 1, reason: "Which approach should I take?",
+        ask: { kind: "user-question", request_id: "r1", tool_name: "AskUserQuestion", questions: QUESTIONS },
+      });
+      return log;
+    }
+    const post = (id: string, body: unknown) =>
+      fetch(url(`/api/runs/${id}/reply`), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+
+    test("GET exposes the questions NORMALIZED — no component ever parses harness output", async () => {
+      seedQuestionRun("auq-get");
+      const d = (await (await fetch(url("/api/runs/auq-get"))).json()) as any;
+      expect(d.ask_questions).toEqual([{
+        id: "q0", header: "Approach", question: "Which approach should I take?", multiSelect: false,
+        options: [{ label: "Approach A", description: "Take A." }, { label: "Approach B" }],
+      }]);
+      // and the run says WHAT it is asking, not that a tool wants permission
+      expect(d.summary.needs_input_reason).toBe("Which approach should I take?");
+    });
+
+    test("a payload the harness malformed reads as null, not a 500", async () => {
+      const log = new EventLog(join(runsDir, "auq-bad", "run.jsonl"), fixedClock());
+      log.append({ type: "run-started", graph: "write-doc", inputs: { goal: "g" }, pinned_prompts: {} });
+      log.append({ type: "node-started", node: "doc.draft", visit: 1, attempt_id: "doc.draft#1" });
+      log.append({
+        type: "attention-raised", node: "doc.draft", visit: 1, reason: "?",
+        ask: { kind: "user-question", request_id: "r1", questions: [{ header: "no question text" }] },
+      });
+      const r = await fetch(url("/api/runs/auq-bad"));
+      expect(r.status).toBe(200);
+      expect(((await r.json()) as any).ask_questions).toBeNull();
+    });
+
+    test("a park that is not a question has no questions at all", async () => {
+      seedParkedRun(runsDir, "auq-none");
+      const d = (await (await fetch(url("/api/runs/auq-none"))).json()) as any;
+      expect(d.ask_questions).toBeNull();
+    });
+
+    test("a good answer is recorded as BOTH prose and picks, and moves the run", async () => {
+      seedQuestionRun("auq-ok");
+      const center = new AttentionCenter(attentionDir, []);
+      await center.raise({ run: "auq-ok", node: "doc.draft", visit: 1, reason: "Which approach should I take?" }).catch(() => {});
+      const r = await post("auq-ok", { answers: [{ id: "q0", selected: ["Approach B"] }] });
+      expect(r.status).toBe(200);
+
+      const resolved: any = readLog(join(runsDir, "auq-ok", "run.jsonl")).find((e) => e.type === "attention-resolved");
+      expect(resolved.reply).toBe("Approach: Approach B");
+      expect(resolved.answers).toEqual([{ id: "q0", selected: ["Approach B"] }]);
+      expect(center.pending().filter((p) => p.run === "auq-ok")).toHaveLength(0);
+      // the park is answered: the run no longer waits on a human, and nothing is left to ask
+      const d = (await (await fetch(url("/api/runs/auq-ok"))).json()) as any;
+      expect(d.summary.status).not.toBe("needs-input");
+      expect(d.ask).toBeNull();
+      expect(d.ask_questions).toBeNull();
+    });
+
+    test("a body that does not fit the questions is a 400 naming why — never a 500", async () => {
+      const bad = [
+        [{ id: "q9", selected: ["Approach A"] }],                 // no such question
+        [{ id: "q0", selected: ["Approach Z"] }],                 // no such option
+        [{ id: "q0", selected: ["Approach A", "Approach B"] }],   // two on a single-select
+        [{ id: "q0", selected: [] }],                             // answers nothing
+      ];
+      for (const [i, answers] of bad.entries()) {
+        const id = `auq-400-${i}`;
+        seedQuestionRun(id);
+        const r = await post(id, { answers });
+        expect(r.status).toBe(400);
+        expect(((await r.json()) as any).error).toContain("do not match the questions");
+        // refused means NOTHING was appended — the park is still answerable
+        expect(readLog(join(runsDir, id, "run.jsonl")).filter((e) => e.type === "attention-resolved")).toHaveLength(0);
+      }
+    });
+
+    test("answers that are not even an array are refused before the rules run", async () => {
+      seedQuestionRun("auq-shape");
+      const r = await post("auq-shape", { answers: "Approach A" });
+      expect(r.status).toBe(400);
+      expect(((await r.json()) as any).error).toBe("answers must be an array");
+    });
+
+    test("answers sent at a park that is not asking a question are refused", async () => {
+      seedParkedRun(runsDir, "auq-wrong");
+      const r = await post("auq-wrong", { answers: [{ id: "q0", selected: ["Approach A"] }] });
+      expect(r.status).toBe(400);
+      expect(((await r.json()) as any).error).toContain("not asking a question");
+    });
+
+    test("plain text still answers a question park — the CLI path is unchanged", async () => {
+      seedQuestionRun("auq-text");
+      const r = await post("auq-text", { text: "Approach A" });
+      expect(r.status).toBe(200);
+      const resolved: any = readLog(join(runsDir, "auq-text", "run.jsonl")).find((e) => e.type === "attention-resolved");
+      expect(resolved.reply).toBe("Approach A");
+      expect(resolved.answers).toBeUndefined();
+    });
+  });
+
   test("pause records a paused state and interrupts a live runner", async () => {
     const id = "pause-live";
     const log = new EventLog(join(runsDir, id, "run.jsonl"), fixedClock());
