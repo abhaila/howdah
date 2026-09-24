@@ -173,6 +173,25 @@ describe("saving a graph built in the viewer", () => {
     expect(shape.spec.nodes[0]!.title).toBe("Draft it");
   });
 
+  /**
+   * HOW-26. The builder's preview read "Draft it" while the tuner and every run's DAG read
+   * `draft`: `GraphShapeDto` has carried a title since HOW-22 and this route never filled it
+   * in. That is the whole of "everything looks weird" — a graph whose steps are called one
+   * thing in the place they were named and another everywhere they are watched.
+   */
+  test("the DAG's own node list carries the step titles, so the picture reads the same everywhere", async () => {
+    await put("/api/graphs/titled/builder", { intent: "create", spec: spec("titled"), prompts: prompts("titled") });
+    const shape = (await (await fetch(url("/api/graphs/titled"))).json()) as { nodes: Array<{ id: string; title?: string }> };
+    expect(shape.nodes.find((n) => n.id === "draft")!.title).toBe("Draft it");
+    // a step with no title of its own keeps none: the id IS its name, and GraphDag falls back
+    expect(shape.nodes.find((n) => n.id === "done")!.title).toBeUndefined();
+  });
+
+  test("a hand-written graph has no titles at all — the id is the name, unchanged", async () => {
+    const shape = (await (await fetch(url("/api/graphs/write-doc"))).json()) as { nodes: Array<{ title?: string }> };
+    expect(shape.nodes.every((n) => n.title === undefined)).toBe(true);
+  });
+
   test("saving it again updates rather than creating, and the change is live at once", async () => {
     await put("/api/graphs/updatable/builder", { intent: "create", spec: spec("updatable"), prompts: prompts("updatable") });
     const again = await put("/api/graphs/updatable/builder", {

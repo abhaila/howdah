@@ -27,7 +27,8 @@
  * round trip, and still cannot be the thing that decides a graph is legal.
  */
 import {
-  coerceOperand, emittableWrites, nameTakenProblem, promptIdFor, recoercePredicate, specProblems,
+  SPEC_NODE_ID, coerceOperand, emittableWrites, isBlocking, nameTakenProblem, promptIdFor, recoercePredicate,
+  specProblems,
   type EdgeSpec, type FieldKind, type FieldSpec, type GraphSpec, type NodeSpec, type Point, type Predicate,
   type ProblemPane, type SpecProblem,
 } from "../../../core/graph-spec";
@@ -73,8 +74,26 @@ export const FIELD_KINDS: Array<{ kind: FieldKind; label: string }> = [
 
 // ---- ids -------------------------------------------------------------------------------
 
-const slug = (text: string): string =>
-  text.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32);
+/**
+ * A step id out of whatever the operator called the step. It MUST satisfy SPEC_NODE_ID
+ * (core/graph-spec.ts) — a leading letter, then [a-z0-9._-] — because everything downstream
+ * treats an id as legal BY CONSTRUCTION: `specProblems` refuses a graph whose id is not,
+ * `newStep`'s approval case derives two FIELD keys from it, and the prompt file is named
+ * after it. Since HOW-26 the seed is operator free text rather than a menu label, so the
+ * leading-letter rule has to be ENFORCED here rather than assumed.
+ *
+ * A leading non-letter is PREFIXED, not stripped: `step-1st-draft` keeps the operator's own
+ * words — and the live preview under the name box shows it to them — where `st-draft` would
+ * silently eat one. (`uniqueFieldKey` below strips instead, deliberately: a field key is
+ * TYPED and echoed back verbatim, while a step id is DERIVED from prose.)
+ */
+const slug = (text: string): string => {
+  const core = text.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  if (!core) return "step";
+  // the 32-character cut can leave a dangling hyphen — legal under the regex, but not a name
+  // to hand anyone
+  return (/^[a-z]/.test(core) ? core : `step-${core}`).slice(0, 32).replace(/-+$/, "") || "step";
+};
 
 /**
  * A step id, derived ONCE from whatever the step is called when it is added, then frozen.
@@ -82,7 +101,7 @@ const slug = (text: string): string =>
  * is what an operator renames.
  */
 export function nextNodeId(spec: GraphSpec, seed: string): string {
-  const base = slug(seed) || "step";
+  const base = slug(seed);                       // always satisfies SPEC_NODE_ID, by construction
   const taken = new Set(spec.nodes.map((n) => n.id));
   if (!taken.has(base)) return base;
   for (let i = 2; ; i++) if (!taken.has(`${base}-${i}`)) return `${base}-${i}`;
@@ -109,6 +128,7 @@ export type DraftAction =
   | { type: "toggle-input"; key: string }
   | { type: "add-step"; node: NodeSpec; body?: string; fields?: FieldSpec[]; position?: Point }
   | { type: "update-step"; id: string; node: NodeSpec }
+  | { type: "rename-step"; id: string; to: string }
   | { type: "remove-step"; id: string }
   | { type: "move-step"; id: string; by: 1 | -1 }
   /** HOW-24: a step dragged on the canvas. Dispatched on drag END, never per frame — one
@@ -173,6 +193,78 @@ function renameGraph(draft: Draft, name: string): Draft {
     return { ...n, prompt: next };
   });
   return { ...draft, spec: { ...draft.spec, name, nodes }, prompts };
+}
+
+/**
+ * Whether `renameStep` below would actually land — the refusal, hoisted out so the BUTTON
+ * that offers a rename and the reducer that performs one are held to ONE rule.
+ *
+ * They drifted before: the form computed its suggestion over the whole spec, so a correctly
+ * named step was offered `<id>-2` and the refusal never fired; and a suggestion the reducer
+ * DID refuse still moved the dialog's open step to an id that does not exist, so the form
+ * returned null and the dialog vanished with nothing said. One predicate, two callers.
+ */
+export const canRenameStep = (spec: GraphSpec, id: string, to: string): boolean =>
+  spec.nodes.some((n) => n.id === id) && to !== id
+  && SPEC_NODE_ID.test(to) && !spec.nodes.some((n) => n.id === to);
+
+/**
+ * A step's ID, moved — and everything that names it moved with it (HOW-26).
+ *
+ * The id is FROZEN at add time everywhere else, and for a good reason: `${node}#${visit}` is
+ * run identity, so an id that moves rewrites nothing but stops matching what already
+ * happened. That reason survives here — a past run keeps the old id and its rows still read,
+ * because `web/derive.ts` builds the run view from the LOG and never looks at the graph. What
+ * it costs is a run PARKED at this step, which cannot be resumed afterwards ("unknown node",
+ * engine/run.ts loop). That is exactly the cost of REMOVING a step, which the builder has
+ * always allowed, so this is not a new hazard — and the form says it in those words.
+ *
+ * It exists because HOW-26's graph could not be repaired any other way: every step was named
+ * after the MENU ITEM that added it (`ask-an-agent-8`), and the id is what the prompt file is
+ * called, so the instructions were filed under a name that says nothing either. Remove-and-
+ * re-add was the only fix, and it loses the step's branching and its text.
+ *
+ * The cascade mirrors renameGraph's: id → its own prompt id (and the body under it) → every
+ * edge → the approval steps that redesign to it → the agent steps that wait on it → the
+ * entry. A no-op, an illegal id and a taken id all leave the draft alone, because a reducer
+ * that half-applies is worse than one that refuses.
+ */
+function renameStep(draft: Draft, id: string, to: string): Draft {
+  const spec = draft.spec;
+  const gone = spec.nodes.find((n) => n.id === id);
+  if (!gone || !canRenameStep(spec, id, to)) return draft;
+
+  // the instructions follow the step only when they are ITS OWN — two steps may legitimately
+  // share one body (remove-step relies on it), and moving a shared id would take the other
+  // step's text with it
+  const prompts = { ...draft.prompts };
+  const owned =
+    gone.kind === "agent" && gone.prompt === promptIdFor(spec.name, id)
+    && !spec.nodes.some((n) => n.kind === "agent" && n.id !== id && n.prompt === gone.prompt)
+      ? promptIdFor(spec.name, to)
+      : null;
+  if (owned && prompts[(gone as Extract<NodeSpec, { kind: "agent" }>).prompt] !== undefined) {
+    prompts[owned] = prompts[(gone as Extract<NodeSpec, { kind: "agent" }>).prompt]!;
+    delete prompts[(gone as Extract<NodeSpec, { kind: "agent" }>).prompt];
+  }
+
+  const swap = (ref: string) => (ref === id ? to : ref);
+  const nodes = spec.nodes.map((n) => {
+    const moved = n.id === id ? { ...n, id: to, ...(owned ? { prompt: owned } : {}) } : n;
+    if (moved.kind === "agent" && moved.requires) return { ...moved, requires: swap(moved.requires) };
+    if (moved.kind === "approval") return { ...moved, redesignTo: swap(moved.redesignTo) };
+    return moved;
+  });
+  return {
+    ...draft,
+    prompts,
+    spec: {
+      ...spec,
+      nodes,
+      edges: spec.edges.map((e) => ({ ...e, from: swap(e.from), to: swap(e.to) })),
+      entry: swap(spec.entry),
+    },
+  };
 }
 
 export function draftReducer(draft: Draft, action: DraftAction): Draft {
@@ -289,6 +381,8 @@ export function draftReducer(draft: Draft, action: DraftAction): Draft {
     }
     case "update-step":
       return { ...draft, spec: { ...spec, nodes: spec.nodes.map((n) => (n.id === action.id ? withEmittableWrites(action.node) : n)) } };
+    case "rename-step":
+      return renameStep(draft, action.id, action.to);
     case "remove-step": {
       const nodes = spec.nodes.filter((n) => n.id !== action.id);
       // the step's instructions go with it. graphs/builder.ts refuses a prompt body no step
@@ -451,6 +545,18 @@ export function problemsByPane(problems: SpecProblem[]): Record<ProblemPane, Spe
 }
 
 /**
+ * The verdict, split by how hard it is (HOW-26). One list arrives from `specProblems()` so
+ * that every pane keeps printing everything that belongs to it in one place — but "Ready to
+ * save" and the rail's alarm are about `blocking` ALONE, because advice describes a graph
+ * that loads, validates and runs and is merely not what was probably meant. Counting the two
+ * together would make the builder's own opinion read as a refusal; hiding advice from the
+ * panes would put it only at the end, which is the thing this ticket was filed against.
+ */
+export function bySeverity(problems: SpecProblem[]): { blocking: SpecProblem[]; advice: SpecProblem[] } {
+  return { blocking: problems.filter(isBlocking), advice: problems.filter((p) => !isBlocking(p)) };
+}
+
+/**
  * The bodies the spec's own agent steps name — what a save POSTS, rather than `draft.prompts`
  * wholesale. graphs/builder.ts refuses an id no step names (the id is a file path, so an id
  * from the network that nothing asked for has no business existing); deriving the payload
@@ -598,6 +704,87 @@ const PRESET_DEFS: Preset[] = [
       },
     }),
   },
+  {
+    id: "pr",
+    label: "Change some code and open a pull request",
+    description: "The whole round trip: a worktree, a review loop, a PR, and repairs driven by what the PR actually says.",
+    build: (name) => ({
+      saved: false,
+      prompts: {
+        [promptIdFor(name, "implement")]: "Make the change.\n\nGoal: {{ context.goal }}\n\nWork item: {{ context.work }}\n\nRun the project's checks, then return a summary of what you changed.",
+        [promptIdFor(name, "review")]:
+          "Review the change against the goal.\n\nGoal: {{ context.goal }}\n\nWork item: {{ context.work }}\n\nSummary: {{ context.summary }}\n\n" +
+          "Return review_verdict as exactly `reject` only when something must change before this is opened for review. Otherwise return exactly `pass`.",
+        // every repair edge comes back HERE (maxVisits: 5 says a revisit is normal flow), and a
+        // revisit is a fresh session with no memory of the last one. The guard is stated in PROSE
+        // because `reads` is derived from the body: a `{{ context.publication_summary }}` reference
+        // would be a key with no writer on the entry path, which validate() refuses. It is how the
+        // built-in this mirrors says it too (prompts/delivery.publish.md).
+        [promptIdFor(name, "publish")]:
+          "Inspect the worktree, the current branch and any pull request already open for it.\n\n" +
+          "Goal: {{ context.goal }}\n\nWork item: {{ context.work }}\n\nSummary: {{ context.summary }}\n\n" +
+          "Commit the work and push the branch. Then update the pull request already open for this branch, " +
+          "or open one if there is none — never open a second one.\n\nReturn the pull request's number and URL.",
+        [promptIdFor(name, "fix-ci")]: "CI is failing on the pull request.\n\nGoal: {{ context.goal }}\n\nThe pull request: {{ context.publication_summary }}\n\nRead the failing checks, fix the cause, and push. Return what you changed.",
+        [promptIdFor(name, "address-reviews")]: "A reviewer has asked for changes.\n\nGoal: {{ context.goal }}\n\nThe pull request: {{ context.publication_summary }}\n\nRead every unresolved comment, act on it, reply to it, and push. Return what you changed.",
+        [promptIdFor(name, "resolve-conflicts")]: "The pull request no longer merges cleanly.\n\nGoal: {{ context.goal }}\n\nThe pull request: {{ context.publication_summary }}\n\nRebase on the base branch, resolve the conflicts, re-run the checks and push. Return what you changed.",
+      },
+      spec: {
+        version: 1, name, description: "",
+        fields: [
+          { key: "goal", kind: "text", scope: "sticky", description: "what this run is for" },
+          { key: "work", kind: "text", scope: "sticky", description: "the ticket or work item" },
+          { key: "summary", kind: "text", scope: "sticky" },
+          { key: "review_verdict", kind: "choice", scope: "cleared", choices: ["pass", "reject"] },
+          { key: "review_findings", kind: "json", scope: "cleared" },
+          { key: "publication_summary", kind: "text", scope: "sticky", description: "the pull request that was opened" },
+          { key: "repair_summary", kind: "text", scope: "sticky" },
+          // probe:pr publishes exactly this key, and exactly these values (graphs/delivery.ts)
+          { key: "pr.state", kind: "choice", scope: "per-visit", choices: ["OPEN", "MERGED", "CLOSED", "CONFLICTS", "CI_FAILED", "CHANGES_REQUIRED"] },
+          { key: "worktree.clean", kind: "boolean", scope: "per-visit" },
+        ],
+        inputs: ["goal", "work"],
+        defaults: { permissionMode: "auto" },
+        entry: "make-worktree",
+        nodes: [
+          { id: "make-worktree", kind: "worktree", title: "Make a worktree", action: "create", writes: [] },
+          agent(name, "implement", "Make the change", ["summary"], { maxVisits: 4 }),
+          agent(name, "review", "Review the change", ["review_verdict", "review_findings"]),
+          agent(name, "publish", "Open the pull request", ["publication_summary"], { maxVisits: 5 }),
+          { id: "probe", kind: "command", title: "Check the pull request", run: "probe:pr", reads: [], writes: ["pr.state"] },
+          { id: "settle", kind: "wait", title: "Let CI and reviewers catch up", duration: "5 m" },
+          agent(name, "fix-ci", "Fix the failing checks", ["repair_summary"]),
+          agent(name, "address-reviews", "Address the review comments", ["repair_summary"]),
+          agent(name, "resolve-conflicts", "Resolve the merge conflicts", ["repair_summary"]),
+          { id: "clean-up", kind: "worktree", title: "Clean up the worktree", action: "remove", writes: ["worktree.clean"] },
+          { id: "done", kind: "terminal", outcome: "success", title: "Merged" },
+          { id: "closed", kind: "terminal", outcome: "failed", title: "Closed unmerged", label: "The pull request was closed — the worktree is kept so you can look at it" },
+          { id: "retained", kind: "terminal", outcome: "failed", title: "Worktree kept", label: "Worktree kept — it still has local work" },
+        ],
+        edges: [
+          { from: "make-worktree", to: "implement" },
+          { from: "implement", to: "review" },
+          { from: "review", to: "implement", when: { op: "equals", key: "review_verdict", value: "reject" } },
+          { from: "review", to: "publish", when: { op: "equals", key: "review_verdict", value: "pass" } },
+          { from: "publish", to: "probe" },
+          // the probe's rows are in weight order: the outcomes first, the repairs next, and
+          // "nothing has happened yet" as the Otherwise that waits and asks again
+          { from: "probe", to: "clean-up", when: { op: "equals", key: "pr.state", value: "MERGED" } },
+          { from: "probe", to: "closed", when: { op: "equals", key: "pr.state", value: "CLOSED" } },
+          { from: "probe", to: "resolve-conflicts", when: { op: "equals", key: "pr.state", value: "CONFLICTS" } },
+          { from: "probe", to: "fix-ci", when: { op: "equals", key: "pr.state", value: "CI_FAILED" } },
+          { from: "probe", to: "address-reviews", when: { op: "equals", key: "pr.state", value: "CHANGES_REQUIRED" } },
+          { from: "probe", to: "settle" },
+          { from: "settle", to: "probe" },
+          { from: "resolve-conflicts", to: "publish" },
+          { from: "fix-ci", to: "publish" },
+          { from: "address-reviews", to: "publish" },
+          { from: "clean-up", to: "done", when: { op: "is-true", key: "worktree.clean" } },
+          { from: "clean-up", to: "retained" },
+        ],
+      },
+    }),
+  },
 ];
 
 /**
@@ -616,8 +803,13 @@ export const PRESETS: Preset[] = PRESET_DEFS.map((p) => ({
 }));
 
 /** A new step of one kind, with the defaults its form would otherwise make you fill in. */
-export function newStep(spec: GraphSpec, kind: StepKind, title: string): { node: NodeSpec; body?: string; fields?: FieldSpec[] } {
-  const id = nextNodeId(spec, title);
+export function newStep(spec: GraphSpec, kind: StepKind, name: string): { node: NodeSpec; body?: string; fields?: FieldSpec[] } {
+  const id = nextNodeId(spec, name);
+  // a name that says nothing is stored as NO name rather than as an empty one: stepTitle()
+  // falls back to the id, and an empty string would be rendered into the saved module as
+  // `"title": ""` — noise that reads as a title the operator chose. The id is slug()'s answer
+  // for the same empty seed (`step`), which is what the live preview under the name box shows.
+  const title = name.trim() || undefined;
   switch (kind) {
     case "agent":
       return {

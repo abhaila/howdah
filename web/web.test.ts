@@ -93,6 +93,27 @@ describe("derive", () => {
     expect(sorted.map((r) => r.id)).toEqual(["wait-long", "wait-short", "run1", "done1"]);
   });
 
+  /**
+   * What lets the builder offer a step RENAME on a graph that is already saved (HOW-26):
+   * the run view is built from the LOG, never from the graph, so a run that happened under
+   * the old id keeps reading afterwards. That is asserted rather than trusted here, because
+   * it is the entire justification for the button — deriveDetail is not even GIVEN a graph.
+   *
+   * What the rename does cost is a run PARKED at the step, which cannot be resumed once the
+   * id it is waiting at no longer exists. That is exactly the cost of REMOVING a step, which
+   * the builder has always allowed, and the form says so in those words.
+   */
+  test("a run whose log names a since-renamed step still reads in full", () => {
+    const dir = mkdtempSync(join(tmpdir(), "howdah-web-"));
+    const log = seedParkedRun(dir, "r-renamed");
+    // the graph has since been rebuilt with `doc.draft` renamed; nothing about the log moved
+    const detail = deriveDetail("r-renamed", log.read());
+    expect(deriveTimeline(log.read()).map((r) => r.node)).toContain("doc.draft");
+    expect(detail.renders.some((r) => r.node === "doc.draft")).toBe(true);
+    expect(deriveLogRows(log.read()).some((r) => r.node === "doc.draft")).toBe(true);
+    expect(deriveStatus(log.read()).status).toBe("needs-input");
+  });
+
   test("deriveTimeline leaves an unfinished node running with null duration", () => {
     const dir = mkdtempSync(join(tmpdir(), "howdah-web-"));
     const log = new EventLog(join(dir, "r", "run.jsonl"), fixedClock());

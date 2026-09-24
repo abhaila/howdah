@@ -206,6 +206,15 @@ main { flex: 1; min-width: 0; min-height: 0; overflow: hidden; display: flex; fl
 /* form hints and errors — the fields themselves are Label/Input/Select/Textarea */
 .field-hint { color: var(--fg-muted); font-size: var(--type-sm); }
 .field-error { color: var(--status-failed-recoverable); font-size: var(--type-sm); }
+/* advice (HOW-26): a graph that RUNS and is probably not what was meant. Quiet on purpose —
+   it is not an error and it is not attention, which means exactly one thing in this palette. */
+.field-advice { color: var(--fg-muted); font-size: var(--type-sm); }
+/* a block, NOT a flex row: the message is one sentence with a bold title and code spans in
+   it, and flex made every inline child its own line ("Create a worktree / produces / work").
+   Which means the icon has to be made inline AGAIN: Tailwind's preflight sets `svg { display:
+   block }`, so the lightbulb took a line of its own above every sentence and the
+   `vertical-align` meant for it never applied to anything. */
+.field-advice svg { display: inline-block; vertical-align: -2px; margin-right: 4px; }
 
 /* git rail + PR links (T18) */
 .kv .path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 180px; }
@@ -362,6 +371,10 @@ main { flex: 1; min-width: 0; min-height: 0; overflow: hidden; display: flex; fl
 .gb-edge.needs-input { stroke: var(--attention); }
 .gb-edge-label { position: absolute; pointer-events: all; font-size: var(--type-3xs); }
 
+/* naming the step BEFORE it exists (HOW-26): the id is derived from this box and then frozen */
+.builder-naming { display: flex; align-items: flex-end; gap: 8px; padding: 8px 0 2px; }
+/* moving an id that is already wrong (HOW-26), behind its own disclosure */
+.builder-rename summary { list-style: none; }
 .builder-problem { padding-left: 26px; }
 .builder-verdict { display: flex; align-items: center; gap: 8px; color: var(--status-done); font-size: var(--type-sm); }
 

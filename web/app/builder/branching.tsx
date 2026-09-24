@@ -40,6 +40,8 @@
  *   alone cannot renumber, which is why editing a condition keeps the panel where it is.
  */
 import { ArrowDown, ArrowUp, Plus, Trash2 } from "lucide-react";
+import { isBlocking } from "../../../core/graph-spec";
+import { ProblemText } from "./problem";
 import {
   // coerceOperand lives in core beside Predicate and FieldKind, because a field's kind can
   // change AFTER a row is written and the reducer has to re-type the operand with the very
@@ -354,7 +356,14 @@ export function StepRoutes({ draft, from, problems, dispatch }: {
         <Button variant="outline" size="sm" disabled={spec.fields.length === 0} onClick={addRow}><Plus />Add a condition</Button>
         {spec.fields.length === 0 && <span className="field-hint">Add a field first — a condition tests one.</span>}
       </div>
-      {problems.map((p, i) => <div key={i} className="field-error builder-problem">{p.message}</div>)}
+      {/* by SEVERITY (HOW-26): a row compared against free text is ADVICE — the graph runs,
+          the row merely may never fire — and printing it in the refusal colour would say the
+          save is blocked when it is not. */}
+      {problems.map((p, i) => (
+        <div key={i} className={`${isBlocking(p) ? "field-error" : "field-advice"} builder-problem`}>
+          <ProblemText message={p.message} />
+        </div>
+      ))}
     </div>
   );
 }

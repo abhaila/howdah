@@ -31,6 +31,21 @@
  * instructions have been written and whose prompt file no other step shares. A wait step
  * dropped by mistake gets no dialog, deliberately — a confirmation that fires when nothing is
  * at stake is the kind that gets dismissed reflexively.
+ *
+ * Two things HOW-26 added here, both about the gap between a legal graph and the one meant:
+ *
+ *   THE WORDS A BRANCH NEEDS. Nothing tells an agent the values a condition compares against
+ *   — the outputs contract names KEYS only (core/template.ts) and a choice field's `choices`
+ *   are never rendered into a prompt. So for every "one of a few choices" field this step
+ *   produces, the form states the sentence the built-in prompts write by hand ("Return
+ *   review_verdict as exactly one of …") and offers to append it. The prompt is still the
+ *   only place that says it, which is why this is a button and not a hidden suffix: a suffix
+ *   would change what `rendered_hash` covers.
+ *
+ *   THE ID, MOVEABLE. It is still frozen by default and the panel still says why — but the
+ *   ticket's graph could not be repaired without moving it, so there is one explicit rename
+ *   that carries the prompt file, the edges and the entry with it (lib/spec-draft.ts
+ *   renameStep), and says plainly what it costs.
  */
 import { useMemo, useState } from "react";
 import { Plus, Trash2 } from "lucide-react";
@@ -39,7 +54,7 @@ import {
   COMMAND_BUILTINS, WORKTREE_FACTS, commandBuiltin, parseAgentConfig, SPEC_FIELD_KEY,
   type FieldSpec, type GraphSpec, type NodeSpec,
 } from "../../../core/graph-spec";
-import type { Draft, DraftAction } from "@/lib/spec-draft";
+import { canRenameStep, nextNodeId, type Draft, type DraftAction } from "@/lib/spec-draft";
 import { ConfigFields } from "../screens/graphs";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -108,15 +123,178 @@ function Produces({
   );
 }
 
+/** Append to the instructions on a line of its own — never running into the sentence that
+ *  was last typed. Two newlines because the bodies are paragraphs, and `{{ context.x }}` on
+ *  the end of a sentence renders as part of it. */
+const appendLine = (body: string, text: string): string => (body.trim() ? `${body.replace(/\s+$/, "")}\n\n${text}` : text);
+const appendRef = (body: string, key: string): string => appendLine(body, `{{ context.${key} }}`);
+
+/** The sentence a `choice` field needs in the body if a branch on it is ever to fire.
+ *  It is the house style of the hand-written prompts (prompts/implementation.local_review.md
+ *  ends with exactly this shape), written once here rather than remembered per prompt. */
+export const choiceSentence = (key: string, choices: readonly string[]): string =>
+  `Return \`${key}\` as exactly one of: ${choices.map((c) => `\`${c}\``).join(", ")}.`;
+
+/** The opening `choiceSentence` writes for a key — how we recognise a line WE wrote earlier,
+ *  whatever values it named at the time. The key may contain `.` (SPEC_FIELD_KEY), so it is
+ *  escaped rather than interpolated raw.
+ *
+ *  MULTILINE, because the same regex is asked both "does the body carry one" (a body whose
+ *  first line is prose) and "is THIS line one" — without `m` the first question is only ever
+ *  asked of character 0 and every reply is no, which is an append. No `g`: a global regex
+ *  carries lastIndex between .test() calls. */
+const choiceLine = (key: string): RegExp =>
+  new RegExp(`^Return \`${key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\` as exactly one of:`, "m");
+
+/**
+ * Say the allowed values for `key` in the instructions — REPLACING the sentence written for
+ * that key earlier rather than adding a second one. Editing a field's choices makes `said`
+ * false again and brings the button back, so an append-only handler left the agent two
+ * contradictory allowed sets in the pinned prompt, which is the mis-branching this whole
+ * affordance exists to prevent.
+ *
+ * The surviving sentence keeps its POSITION in the body — the operator may have put it
+ * somewhere deliberate — and any further copies are dropped, so a body that already carries
+ * two is repaired to one by the next click. A sentence the operator wrote in their OWN words
+ * is not matched and not touched: `said` is a substring test on purpose, and this only ever
+ * edits what it wrote.
+ */
+export const sayChoices = (body: string, key: string, choices: readonly string[]): string => {
+  const sentence = choiceSentence(key, choices);
+  const re = choiceLine(key);
+  if (!re.test(body)) return appendLine(body, sentence);
+  let first = true;
+  const kept = body.split("\n").filter((line) => {
+    if (!re.test(line)) return true;
+    const keep = first;
+    first = false;
+    return keep;
+  });
+  // dropping a duplicate leaves behind the blank line that was its paragraph break
+  return kept.map((line) => (re.test(line) ? sentence : line)).join("\n").replace(/\n{3,}/g, "\n\n");
+};
+
+/**
+ * For each "one of a few choices" field this step produces, whether the instructions actually
+ * say the words — and a button that adds the sentence if they do not.
+ *
+ * This is the hole HOW-26 fell through. The outputs contract appended to every agent prompt
+ * names the KEYS it wants back (core/template.ts) and nothing else; a field's `choices` reach
+ * the launch form and the condition rows and never the agent. So a graph could branch on
+ * three whole sentences of English that no prompt had ever asked for, validate clean, and at
+ * run time match none of them. Saying it in the prompt is the only fix that works today —
+ * teaching the contract about allowed values means a SUFFIX_VERSION bump, and the suffix is
+ * inside `rendered_hash`.
+ *
+ * "Says the words" is a substring test on purpose: it is looking for whether the operator has
+ * told the agent, in whatever wording they chose, and a stricter test would nag at a prompt
+ * that is already correct.
+ */
+function ChoiceWords({ spec, writes, body, onSay }: {
+  spec: GraphSpec;
+  writes: string[];
+  body: string;
+  /** the KEY and its current choices, not a finished sentence — the parent has to find what
+   *  it wrote for that key before to replace it rather than append a second one */
+  onSay: (key: string, choices: readonly string[]) => void;
+}) {
+  const needing = spec.fields.filter((f) => writes.includes(f.key) && f.kind === "choice" && (f.choices?.length ?? 0) > 0);
+  if (!needing.length) return null;
+  return (
+    <div className="flex flex-col gap-1.5">
+      {needing.map((f) => {
+        const said = (f.choices ?? []).every((c) => body.includes(c));
+        return (
+          <div key={f.key} className="flex flex-wrap items-center gap-2">
+            <span className="field-hint">
+              <code>{f.key}</code> must come back as one of{" "}
+              {(f.choices ?? []).map((c, i) => (
+                // the separators are TEXT, not a gap: read aloud, and copied out, "pass, reject"
+                // is the list and "passreject" is what a margin alone leaves behind
+                <span key={c}>{i > 0 ? ", " : ""}<code>{c}</code></span>
+              ))}
+              {said ? " — the instructions say so." : " — the instructions do not say so, so a branch on it may never fire."}
+            </span>
+            {!said && (
+              <Button variant="outline" size="sm" onClick={() => onSay(f.key, f.choices ?? [])}>
+                <Plus />Say it in the instructions
+              </Button>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * Moving a step's id (HOW-26). Frozen by default and it stays that way — this is a deliberate
+ * act behind its own disclosure, not a second name box — because the id is what a run's
+ * history was written against. What it moves is in lib/spec-draft.ts renameStep: the
+ * instructions file, every branch row, the entry, and anything waiting on this step.
+ */
+function RenameStep({ spec, node, dispatch, onRenamed }: {
+  spec: GraphSpec;
+  node: NodeSpec;
+  dispatch: (a: DraftAction) => void;
+  onRenamed?: (id: string) => void;
+}) {
+  // seeded from the TITLE, because a step whose id is wrong almost always has the right title
+  // by now — that is the order the ticket's operator did it in.
+  //
+  // Over the WHOLE spec the step's own id is always in the taken set, so a step already named
+  // after its title was offered `<id>-2` and the "already matches" state below was
+  // unreachable. It is not in its own way: exclude it.
+  const others = useMemo(
+    () => ({ ...spec, nodes: spec.nodes.filter((n) => n.id !== node.id) }),
+    [spec, node.id],
+  );
+  const suggested = nextNodeId(others, node.title?.trim() || node.id);
+  const can = canRenameStep(spec, node.id, suggested);
+  return (
+    <details className="builder-rename">
+      <summary className="cursor-pointer text-sm text-muted-foreground">
+        Step id <code>{node.id}</code> — change it
+      </summary>
+      <div className="flex flex-col gap-2 pt-2">
+        <div className="field-hint">
+          The id names this step in the run log, in <code>step#visit</code>, and in the file its
+          instructions live in. Renaming it here moves all of those and every branch that points
+          at it. Runs that already happened keep the old id and still read; a run PARKED at this
+          step cannot be resumed afterwards — the same as removing the step. The instructions
+          file under the OLD id is left on disk, exactly as a removed step's is, until you
+          delete it yourself.
+        </div>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline" size="sm" disabled={!can}
+            /* onRenamed only when the rename CAN land: it moves the surface's selection, and
+               pointing it at an id the reducer refused to create emptied the panel silently */
+            onClick={() => {
+              if (!can) return;
+              dispatch({ type: "rename-step", id: node.id, to: suggested });
+              onRenamed?.(suggested);
+            }}
+          >
+            {suggested === node.id ? "The id already matches the name" : `Rename it to ${suggested}`}
+          </Button>
+        </div>
+      </div>
+    </details>
+  );
+}
+
 /**
  * One step, as forms. `onRemoved` is how the surface that OWNS the selection learns the step
  * is gone — the panel cannot just stop rendering, because the canvas still has it selected.
  */
-export function StepFields({ draft, id, dispatch, onRemoved }: {
+export function StepFields({ draft, id, dispatch, onRemoved, onRenamed }: {
   draft: Draft;
   id: string;
   dispatch: (a: DraftAction) => void;
   onRemoved?: () => void;
+  /** the panel is keyed by id, so a rename has to tell the surface which step it is now on */
+  onRenamed?: (id: string) => void;
 }) {
   const spec = draft.spec;
   const node = spec.nodes.find((n) => n.id === id);
@@ -139,11 +317,11 @@ export function StepFields({ draft, id, dispatch, onRemoved }: {
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="field-hint">Step id <code>{node.id}</code> — it never changes, because a run's history is written against it.</div>
       <Label>
         What this step is called
         <Input value={title} onChange={(e) => set({ ...node, title: e.target.value })} placeholder="Draft the document" />
       </Label>
+      <RenameStep spec={spec} node={node} dispatch={dispatch} onRenamed={onRenamed} />
 
       {node.kind === "agent" && (
         <>
@@ -160,7 +338,10 @@ export function StepFields({ draft, id, dispatch, onRemoved }: {
             {spec.fields.map((f) => (
               <Button
                 key={f.key} variant="outline" size="sm"
-                onClick={() => dispatch({ type: "set-prompt", id: node.prompt, body: `${body}{{ context.${f.key} }}` })}
+                // on its OWN line: appending straight onto the body ran the reference into
+                // the end of whatever sentence was last typed, which reads as prose and
+                // renders as prose
+                onClick={() => dispatch({ type: "set-prompt", id: node.prompt, body: appendRef(body, f.key) })}
               >
                 {f.key}
               </Button>
@@ -174,6 +355,10 @@ export function StepFields({ draft, id, dispatch, onRemoved }: {
           <Produces
             spec={spec} value={node.writes} onChange={(writes) => set({ ...node, writes })} onAddField={(k) => addField(k)}
             hint="Howdah asks the agent for exactly these and refuses an answer that is missing one."
+          />
+          <ChoiceWords
+            spec={spec} writes={node.writes} body={body}
+            onSay={(key, choices) => dispatch({ type: "set-prompt", id: node.prompt, body: sayChoices(body, key, choices) })}
           />
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
             <Label>

@@ -20,13 +20,14 @@
  * one line: a problem that names a step belongs to that step, and one that does not belongs
  * to the graph.
  */
-import { CheckCircle2, ChevronLeft } from "lucide-react";
-import { parseAgentConfig, promptIdFor, type SpecProblem } from "../../../core/graph-spec";
-import { PRESETS, type Draft, type DraftAction } from "@/lib/spec-draft";
+import { CheckCircle2, ChevronLeft, Lightbulb } from "lucide-react";
+import { isBlocking, parseAgentConfig, promptIdFor, type SpecProblem } from "../../../core/graph-spec";
+import { PRESETS, bySeverity, type Draft, type DraftAction } from "@/lib/spec-draft";
 import { ConfigFields } from "../screens/graphs";
 import { FieldsPane } from "./fields";
 import { StepFields } from "./step-form";
 import { ConditionEditor, StepRoutes } from "./branching";
+import { ProblemText } from "./problem";
 import type { Selection } from "./canvas";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -64,7 +65,13 @@ export function Properties({ draft, dispatch, problems, selection, onSelect, onP
             <CardDescription>What this step does, and what happens after it.</CardDescription>
           </CardHeader>
           <CardContent>
-            <StepFields draft={draft} id={node.id} dispatch={dispatch} onRemoved={() => onSelect(null)} />
+            <StepFields
+              draft={draft} id={node.id} dispatch={dispatch}
+              onRemoved={() => onSelect(null)}
+              // a rename moves the id the selection is keyed by, so the panel follows it
+              // rather than emptying itself on an id that no longer exists (HOW-26)
+              onRenamed={(to) => onSelect({ kind: "step", id: to })}
+            />
           </CardContent>
         </Card>
         {node.kind !== "terminal" && (
@@ -80,8 +87,13 @@ export function Properties({ draft, dispatch, problems, selection, onSelect, onP
             </CardContent>
           </Card>
         )}
+        {/* by SEVERITY (HOW-26): advice describes a step that RUNS and is merely not what was
+            probably meant, and printing it in the refusal colour would say the save is
+            blocked when it is not. */}
         {mine.filter((p) => p.where !== "branching").map((p, i) => (
-          <div key={i} className="field-error builder-problem">{p.message}</div>
+          <div key={i} className={`${isBlocking(p) ? "field-error" : "field-advice"} builder-problem`}>
+            <ProblemText message={p.message} />
+          </div>
         ))}
         {spec.entry !== node.id && node.kind !== "terminal" && (
           <div className="actions">
@@ -136,8 +148,37 @@ function GraphPanel({ draft, dispatch, problems, onSelect, onPreset }: {
 }) {
   const { spec, saved } = draft;
   const agents = spec.nodes.filter((n) => n.kind === "agent");
+  const { blocking, advice } = bySeverity(problems);
   return (
     <div className="gb-panel">
+      {/* asked FIRST for a new graph (HOW-26). It used to sit below the name box, so the
+          ticket's operator typed a name, started on `blank` without ever seeing the list, and
+          hand-built — step by step, with no worktree — the graph the `code` and `pr` presets
+          already are. It is the biggest decision on this panel and it was the third thing on it. */}
+      {!saved && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Start from</CardTitle>
+            <CardDescription>A starting point, not a cage — every step, field and branch stays editable.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="flex flex-col gap-2">
+              {PRESETS.map((p) => (
+                <div key={p.id} className="flex items-center gap-3">
+                  <Button variant="outline" size="sm" onClick={() => onPreset(p.id)}>{p.label}</Button>
+                  <span className="field-hint">{p.description}</span>
+                </div>
+              ))}
+            </div>
+            <div className="field-hint">
+              Picking one replaces the steps and fields you have now — so pick it FIRST. Each one
+              is a graph that already works: nothing in it is advised against, and every agent
+              step is told what it needs.
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       <Card>
         <CardHeader>
           <CardTitle>What is it called?</CardTitle>
@@ -165,26 +206,6 @@ function GraphPanel({ draft, dispatch, problems, onSelect, onPreset }: {
         </CardContent>
       </Card>
 
-      {!saved && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Start from</CardTitle>
-            <CardDescription>A starting point, not a cage — every step, field and branch stays editable.</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="flex flex-col gap-2">
-              {PRESETS.map((p) => (
-                <div key={p.id} className="flex items-center gap-3">
-                  <Button variant="outline" size="sm" onClick={() => onPreset(p.id)}>{p.label}</Button>
-                  <span className="field-hint">{p.description}</span>
-                </div>
-              ))}
-            </div>
-            <div className="field-hint">Picking one replaces the steps and fields you have now.</div>
-          </CardContent>
-        </Card>
-      )}
-
       <FieldsPane draft={draft} dispatch={dispatch} />
 
       <Card>
@@ -197,32 +218,40 @@ function GraphPanel({ draft, dispatch, problems, onSelect, onPreset }: {
         </CardContent>
       </Card>
 
+      {/* HOW-26 splits the verdict in two, and the split is the whole point of the ticket.
+          What BLOCKS is what `validate()` refuses — "Ready to save" still means exactly that,
+          so the sentence keeps its meaning. What is ADVICE is a graph that will load, validate
+          and run and still not do what was meant: an agent told nothing, a branch on free
+          text, a loop with no limit. None of it is refused, here or at the server, because the
+          operator is the authority on their own graph — but it is counted and printed, because
+          the graph in the ticket said "Ready to save" and then spun forever on an
+          unconditional edge to itself. */}
       <Card>
         <CardHeader>
-          <CardTitle>{problems.length === 0 ? "Ready to save" : `${problems.length} thing${problems.length === 1 ? "" : "s"} to sort out`}</CardTitle>
+          <CardTitle>{blocking.length === 0 ? "Ready to save" : `${blocking.length} thing${blocking.length === 1 ? "" : "s"} to sort out`}</CardTitle>
           <CardDescription>
-            {problems.length === 0
+            {blocking.length === 0
               ? "Every step is reachable, every field a step reads is written before it gets there, and every branch goes somewhere."
               : "Saving is still allowed — the server checks again and keeps the last good version if it refuses."}
           </CardDescription>
         </CardHeader>
         <CardContent>
-          {problems.length === 0 ? (
+          {blocking.length === 0 ? (
             <div className="builder-verdict"><CheckCircle2 size={15} /> Nothing outstanding.</div>
           ) : (
             <div className="flex flex-col gap-1.5">
-              {problems.map((p, i) =>
+              {blocking.map((p, i) =>
                 p.node ? (
                   <Row
                     key={i} className="builder-problem" needsInput
                     aria-label={`Go to the step this is about: ${p.message}`}
                     onClick={() => onSelect({ kind: "step", id: p.node! })}
                   >
-                    <Badge variant="outline">{p.where}</Badge> {p.message}
+                    <Badge variant="outline">{p.where}</Badge> <ProblemText message={p.message} />
                   </Row>
                 ) : (
                   <div key={i} className="field-error builder-problem">
-                    <Badge variant="outline">{p.where}</Badge> {p.message}
+                    <Badge variant="outline">{p.where}</Badge> <ProblemText message={p.message} />
                   </div>
                 ),
               )}
@@ -230,6 +259,37 @@ function GraphPanel({ draft, dispatch, problems, onSelect, onPreset }: {
           )}
         </CardContent>
       </Card>
+
+      {advice.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle>{advice.length} thing{advice.length === 1 ? "" : "s"} worth a second look</CardTitle>
+            <CardDescription>
+              None of these stop the graph running, and none of them stop the save. They are the
+              things a graph can do and still not be the graph you meant.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="flex flex-col gap-1.5">
+              {advice.map((p, i) =>
+                p.node ? (
+                  <Row
+                    key={i} className="builder-problem"
+                    aria-label={`Go to the step this is about: ${p.message}`}
+                    onClick={() => onSelect({ kind: "step", id: p.node! })}
+                  >
+                    <Lightbulb size={13} /> <Badge variant="outline">{p.where}</Badge> <ProblemText message={p.message} />
+                  </Row>
+                ) : (
+                  <div key={i} className="field-advice builder-problem">
+                    <Lightbulb size={13} /> <Badge variant="outline">{p.where}</Badge> <ProblemText message={p.message} />
+                  </div>
+                ),
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       <Card>
         <CardHeader>

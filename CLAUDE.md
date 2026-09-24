@@ -132,7 +132,11 @@ Break one of these and the design stops working, so check them before changing t
   `specProblems()` the browser runs, over the spec it is about to write and BEFORE it writes
   anything, so "Ready to save" and a 422 cannot disagree and a refusal is phrased in the
   operator's words rather than `validate()`'s. The server stays stronger only where it must
-  (a prompt id shadowing one of the repo's own; the real `loadLocalGraph` import).
+  (a prompt id shadowing one of the repo's own; the real `loadLocalGraph` import). ONE verdict
+  at TWO severities (HOW-26): `specProblems()` also returns `advice` — a graph that will load
+  and run but is probably not what was meant (an unbounded loop, a field nothing reads, a
+  Finish step nothing reaches) — and only the `blocking` half can refuse a save, so
+  `graphs/builder.ts` filters through `isBlocking` and the canvas keeps advice off the picture.
   Two properties make the compiler unnecessary rather than bypassed:
   nothing is typed free-hand (keys come from the field registry, predicates are data, prompt
   ids are generated from step ids), and `core/graph-spec.ts` is NODE-FREE, so

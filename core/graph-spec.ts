@@ -486,12 +486,37 @@ export function buildGraph(spec: GraphSpec): Graph<any> {
  */
 export type ProblemPane = "basics" | "fields" | "steps" | "branching";
 
+/**
+ * How hard a problem is. ABSENT means `blocking`, which is why every report site in this file
+ * and every test over them is untouched by this existing at all — the addition is a second
+ * severity, not a second field to remember.
+ *
+ * `blocking`: the graph is wrong. `validate()` refuses it, or a key is not a field, or a step
+ * declares a fact its executor can never publish. Nothing should be saved over it.
+ *
+ * `advice`: the graph LOADS, VALIDATES and RUNS, and still does not do what was meant. Every
+ * defect in HOW-26 was one of these — seven agent steps that read nothing, a review verdict
+ * carried on the field the run was launched with, three branch rows comparing free text
+ * against whole sentences, and a step whose only fallback was itself. `validate()` cannot see
+ * any of them: it proves that every read HAS a writer, never that a step reads anything, and
+ * it has no opinion at all about whether a condition can plausibly match. So advice is
+ * exactly the gap between "this is a legal graph" and "this is the graph you meant", and it
+ * may never block a save — the operator, not this module, is the authority on their own graph.
+ */
+export type Severity = "blocking" | "advice";
+
 export interface SpecProblem {
   /** the step that owns the problem, so the rail can count it; absent = whole-graph */
   node?: string;
   where: ProblemPane;
   message: string;
+  /** absent = `blocking`; see Severity */
+  severity?: Severity;
 }
+
+/** Blocking is the DEFAULT, so an absent severity is one — read here rather than at the five
+ *  call sites that ask, since an `=== "blocking"` would silently pass every existing problem. */
+export const isBlocking = (p: SpecProblem): boolean => p.severity !== "advice";
 
 /**
  * The one refusal a spec cannot carry the evidence for: whether its NAME is already taken.
@@ -744,7 +769,142 @@ export function specProblems(spec: GraphSpec, opts: { knownPrompts?: readonly st
         node: n.id, where: "branching",
         message: `**${titleOf(spec, n.id)}** is never reached — no step goes to it. Give some step a "go to" that lands on it, or remove it.`,
       });
-  return problems;
+  if (problems.length) return problems;
+
+  // ADVICE, last of all and only over a draft nothing blocks — the same restraint the two
+  // checks above practise, for the same reason: a graph that cannot run yet does not need to
+  // be told its loop is unbounded. See specAdvice() for what it may and may not say.
+  return specAdvice(spec);
+}
+
+// ---- advice: a graph that will run, and still not do what was meant -----------------------
+
+/** The ops that carry an operand to compare against — the complement of NULLARY_OPS, derived
+ *  rather than restated so a seventh predicate cannot be missed by one of the two lists. */
+const OPERAND_OPS: readonly PredicateOp[] = PREDICATE_OPS.filter((op) => !NULLARY_OPS.includes(op));
+
+/**
+ * Every cycle in the graph, as groups of mutually-reachable steps (one group per strongly
+ * connected component that is actually a cycle), in step order.
+ *
+ * Reachability rather than Tarjan on purpose: at a builder graph's size the quadratic cost is
+ * nothing, and "u and v are on the same loop" being literally `u reaches v and v reaches u`
+ * is a sentence anyone can check against the code. A single step with an edge to itself is a
+ * group of one, which is why the self-reachability test is `reach(n).has(n)` and not a
+ * group-size comparison.
+ */
+function loops(spec: GraphSpec): string[][] {
+  const ids = spec.nodes.map((n) => n.id);
+  const next = new Map<string, string[]>();
+  for (const e of spec.edges) next.set(e.from, [...(next.get(e.from) ?? []), e.to]);
+  const reach = new Map<string, Set<string>>();
+  for (const id of ids) {
+    const seen = new Set<string>();
+    const queue = [...(next.get(id) ?? [])];
+    while (queue.length) {
+      const cur = queue.shift()!;
+      if (seen.has(cur)) continue;
+      seen.add(cur);
+      for (const to of next.get(cur) ?? []) queue.push(to);
+    }
+    reach.set(id, seen);
+  }
+  const cyclic = ids.filter((id) => reach.get(id)!.has(id));
+  const groups: string[][] = [];
+  const placed = new Set<string>();
+  for (const id of cyclic) {
+    if (placed.has(id)) continue;
+    const group = cyclic.filter((other) => reach.get(id)!.has(other) && reach.get(other)!.has(id));
+    for (const m of group) placed.add(m);
+    groups.push(group);
+  }
+  return groups;
+}
+
+/**
+ * The five things HOW-26 shipped that nothing could see.
+ *
+ * `Graph.validate()` proves STRUCTURE — every read has a writer on every path, every step goes
+ * somewhere, every step is reached. None of the ticket's defects were structural: the graph it
+ * produced validated clean and said "Ready to save". What it did instead was run seven agent
+ * steps that were told nothing, carry a review verdict on the field the run was launched with,
+ * branch on whole sentences of free text that no prompt asked for, and fall through to itself
+ * forever. Each of those is a property of the spec that can be read off it directly, and each
+ * is a JUDGEMENT rather than a proof — which is exactly why it is `advice`: it is printed
+ * beside the blocking problems, counted separately, and never stops a save (graphs/builder.ts
+ * refuses on the first BLOCKING problem only).
+ *
+ * The two carve-outs are as load-bearing as the rules. A loop containing a Wait step is a
+ * POLL — `graphs/delivery.ts` says in so many words that probe_pr ⇄ wait is "deliberately
+ * unbounded ... it waits on a human reviewer" — so advising a limit there would be advising
+ * against the house style. And a loop where ANY step carries `maxVisits` is bounded, because
+ * that is how the built-ins bound theirs: one ceiling per loop, not one per step.
+ */
+export function specAdvice(spec: GraphSpec): SpecProblem[] {
+  const out: SpecProblem[] = [];
+  const advise = (p: Omit<SpecProblem, "severity">) => out.push({ ...p, severity: "advice" });
+  const inputs = new Set(spec.inputs);
+  const who = (id: string) => `**${titleOf(spec, id)}**`;
+
+  for (const n of spec.nodes) {
+    // AN AGENT THAT IS GIVEN NOTHING. `reads` is derived from the instructions, so an empty one
+    // means the body names no field at all: the step is sent the seeded "Do the work." and is
+    // never told the goal, the ticket, or what the step before it produced.
+    if (n.kind === "agent" && n.reads.length === 0)
+      advise({
+        node: n.id, where: "steps",
+        message: `${who(n.id)} is given nothing — its instructions name no field, so the agent will not be told the goal, the work item, or anything an earlier step produced. Insert a field into the instructions.`,
+      });
+
+    // A STEP THAT OVERWRITES A LAUNCH INPUT. Legal, and almost never meant: the value you typed
+    // at launch is gone from that point on, and any later branch on the key is reading this
+    // step's answer rather than your instruction.
+    if ("writes" in n)
+      for (const key of n.writes)
+        if (inputs.has(key))
+          advise({
+            node: n.id, where: "steps",
+            message: `${who(n.id)} produces \`${key}\`, which the run is also launched with. What you typed at launch is replaced from here on, and any later branch on \`${key}\` reads this step's answer instead. Give the step a field of its own.`,
+          });
+  }
+
+  for (const e of spec.edges) {
+    // BRANCHING ON FREE TEXT. Nothing tells an agent the words a row compares against: the
+    // outputs contract names KEYS only (core/template.ts), and a choice field's `choices` are
+    // never rendered into a prompt either. The built-ins solve it in prose — "Return
+    // review_verdict as reject only when ... Otherwise return pass" — over a small set of
+    // values, which is what a `choice` field is for.
+    if (e.when && !e.when.path && OPERAND_OPS.includes(e.when.op) && spec.fields.find((f) => f.key === e.when!.key)?.kind === "text")
+      advise({
+        node: e.from, where: "branching",
+        message: `${who(e.from)} goes this way only when \`${predicateLabel(e.when)}\`, and \`${e.when.key}\` is free text — nothing tells the agent to answer in those words, so the row may never fire. Make \`${e.when.key}\` "one of a few choices" and say the words in the step's instructions.`,
+      });
+
+    // A STEP WHOSE FALLBACK IS ITSELF. An unconditional self-edge is the weight-0 fallback, so
+    // it is what runs when no condition matched — and it leads straight back to the same step,
+    // with nothing changed, until maxVisits or maxSteps stops the run.
+    if (!e.when && e.from === e.to)
+      advise({
+        node: e.from, where: "branching",
+        message: `${who(e.from)} has an "Otherwise" that goes back to itself, so whenever no other row matches it runs again with nothing changed, over and over. Send it somewhere else, or put a Wait step in between.`,
+      });
+  }
+
+  for (const group of loops(spec)) {
+    const nodes = group.map((id) => spec.nodes.find((n) => n.id === id)).filter((n): n is NodeSpec => n !== undefined);
+    if (nodes.length !== group.length) continue;
+    if (nodes.some((n) => "maxVisits" in n && n.maxVisits !== undefined)) continue;   // one ceiling bounds the loop
+    if (nodes.some((n) => n.kind === "wait")) continue;                               // a poll, not a spin
+    // the self-loop case is the sentence above, said better
+    if (group.length === 1 && spec.edges.some((e) => !e.when && e.from === group[0] && e.to === group[0])) continue;
+    const trail = [...group, group[0]!].map((id) => titleOf(spec, id)).join(" → ");
+    advise({
+      node: nodes[0]!.id, where: "steps",
+      message: `${who(nodes[0]!.id)} is in a loop with no limit on it (${trail}). Give one of those steps a maximum number of tries, so a loop that is not getting anywhere parks for you instead of spinning.`,
+    });
+  }
+
+  return out;
 }
 
 // ---- parsing an untrusted spec -------------------------------------------------------------
