@@ -24,7 +24,7 @@ three hand-written sheets (see the CSS contract below).
 
 ```bash
 bun install                      # required on a fresh clone (node_modules/ is gitignored)
-bun test                         # whole suite (1621 tests, ~3 min) — bun:test, happy-dom preloaded via bunfig.toml
+bun test                         # whole suite (1628 tests, ~3 min) — bun:test, happy-dom preloaded via bunfig.toml
 bun test engine/engine.test.ts   # one file
 bun test -t "resume"             # one test by name
 bun run check                    # tsc --noEmit + prompt-id codegen staleness gate
@@ -201,10 +201,20 @@ Break one of these and the design stops working, so check them before changing t
   form controls but not the `Button` that is the way into a step, so destroying a step — which
   takes its prompt body with it, with no undo — is a named control in the panel that says what
   goes, and asks first when the text cannot be got back. An edge has no identity of its own, so the
-  canvas addresses one by its INDEX in `spec.edges`; that is safe only because the two edit
-  paths are never on screen together (a step's whole routes list is `set-branching`, which may
-  renumber; a single selected edge is `update-edge`/`remove-edge`, which cannot), and because
-  the shell — not React Flow — owns the selection and drops one that no longer exists.
+  canvas addresses one by its INDEX in `spec.edges`, and that needs TWO things, not one. The two
+  edit paths are never on screen together (a step's whole routes list is `set-branching`, which
+  may renumber; a single selected edge is `update-edge`, which cannot). AND WHATEVER RENUMBERS
+  THE LIST DROPS THE SELECTION ITSELF: `remove-edge` slides every later edge down one — an index
+  list has no other way to shrink — so the edge panel calls `onRemoved`, the same callback the
+  step form already had, and the shell closes it. Without that the panel stayed open, silently
+  retargeted to the route that slid into that index, and a second press destroyed a route nobody
+  selected. The shell's own "a selection that no longer exists is a panel to close" still runs,
+  but it only ever catches the LAST edge. A PANEL THAT REBUILDS A COLLECTION MUST DRAW ALL OF IT:
+  `set-branching` substitutes a step's whole outgoing list, so `StepRoutes` renders one
+  "Otherwise" row per unconditional route rather than one row full stop. A second "Otherwise" is
+  legal to MAKE (two wires from one step on a fields-less draft, or "Make this the 'Otherwise'"
+  twice) and `specProblems` refuses it in the operator's words on that step — and the panel that
+  printed the refusal was deleting the row it was about on the next edit.
   A step's PLACE is part of the artifact (`NodeSpec.position`): a canvas whose boxes spring back
   on reload is not a canvas, and a sidecar keyed by graph name would split the artifact in two
   and break the round trip. `parseNode` accepts only two finite numbers (NaN serialises to

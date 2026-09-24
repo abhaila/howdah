@@ -1598,3 +1598,122 @@ describe("nothing is destroyed by a stray keystroke (finding 2)", () => {
     expect(card(el, "wait")).toBeUndefined();
   });
 });
+
+/** a Select by its spoken name — `box` is the same thing for inputs */
+const picker = (el: HTMLElement, label: string) =>
+  [...el.querySelectorAll("select")].find((x) => x.getAttribute("aria-label") === label) as HTMLSelectElement;
+/** every "Otherwise" row the panel draws for one step, however many that is */
+const otherwiseRows = (el: HTMLElement, from: string) =>
+  [...el.querySelectorAll("select")].filter((s) => {
+    const label = s.getAttribute("aria-label") ?? "";
+    return label.startsWith(`where ${from} `) && label.includes("no row fits");
+  });
+
+describe("a route removed is a route the panel stops editing (finding 1)", () => {
+  /** the doc preset's four edges, of which the reject branch is index 1 — NOT the last */
+  async function threeOrMoreRoutes(): Promise<HTMLElement> {
+    const el = await mount();
+    type(nameBox(el), "my-review");
+    click(byText(el, "Draft, review, revise"));
+    return el;
+  }
+
+  test("removing a route that is not the last one closes the panel", async () => {
+    const el = await threeOrMoreRoutes();
+    click(byLabel(el, "Route review_verdict == 'reject'"));
+    expect(el.textContent).toContain("This route");
+
+    click(byLabel(el, "remove this route"));
+    // `remove-edge` slides every later edge down one, so a panel that kept rendering would now
+    // be editing the pass branch under a card still captioned "This route"
+    expect(byLabel(el, "remove this route")).toBeUndefined();
+    expect(el.textContent).not.toContain("This route");
+    expect(el.textContent).toContain("What is it called?");
+  });
+
+  test("a second press cannot destroy the route that slid into its place", async () => {
+    const calls = serve();
+    const el = await threeOrMoreRoutes();
+    click(byLabel(el, "Route review_verdict == 'reject'"));
+    click(byLabel(el, "remove this route"));
+    expect(byLabel(el, "remove this route")).toBeUndefined();
+
+    // asserted through the PUT rather than the DOM: the property at risk is a route being
+    // destroyed in the artifact, and the pass branch is what index 1 became
+    await act(async () => { byText(el, "Save and add to the catalog")!.click(); });
+    expect(saved(calls).edges.map((e) => `${e.from}->${e.to}`))
+      .toEqual(["draft->review", "review->done", "revise->review"]);
+  });
+
+  test("removing the LAST route still closes the panel", async () => {
+    // the shell's own `index >= edges.length` guard — kept, and pinned beside the callback so
+    // the two cannot drift apart
+    const el = await mount();
+    click(byLabel(el, "Route otherwise"));
+    expect(el.textContent).toContain("This route");
+    click(byLabel(el, "remove this route"));
+    expect(byLabel(el, "remove this route")).toBeUndefined();
+    expect(el.textContent).toContain("What is it called?");
+  });
+});
+
+describe('a second "Otherwise" is drawn, not deleted (finding 2)', () => {
+  /** review ends up with two unconditional routes and no conditional one, made the way an
+   *  operator would: the same control, twice, on two different wires */
+  async function twoOtherwise(): Promise<HTMLElement> {
+    const el = await mount();
+    type(nameBox(el), "my-review");
+    click(byText(el, "Draft, review, revise"));
+    click(byLabel(el, "Route review_verdict == 'reject'"));
+    click(byText(el, 'Make this the "Otherwise"'));
+    click(byLabel(el, "Route review_verdict == 'pass'"));
+    click(byText(el, 'Make this the "Otherwise"'));
+    return el;
+  }
+
+  test("an edit to the routes keeps a second Otherwise", async () => {
+    const calls = serve();
+    const el = await twoOtherwise();
+    click(openStep(el, "Review it"));
+    // `set-branching` replaces the step's whole outgoing list, so ANY edit here used to drop
+    // the route the panel had no row for
+    type(picker(el, "where review goes when no row fits"), "draft");
+
+    await act(async () => { byText(el, "Save and add to the catalog")!.click(); });
+    expect(saved(calls).edges.filter((e) => e.from === "review"))
+      .toEqual([{ from: "review", to: "draft" }, { from: "review", to: "done" }]);
+  });
+
+  test("both are rows, and the second can be removed", async () => {
+    const calls = serve();
+    const el = await twoOtherwise();
+    click(openStep(el, "Review it"));
+    expect(picker(el, "where review goes when no row fits")).toBeDefined();
+    expect(picker(el, "where review also goes when no row fits (2)")).toBeDefined();
+
+    click(byLabel(el, "remove otherwise 2"));
+    await act(async () => { byText(el, "Save and add to the catalog")!.click(); });
+    expect(saved(calls).edges.filter((e) => e.from === "review")).toEqual([{ from: "review", to: "revise" }]);
+  });
+
+  test("the message and the rows agree", async () => {
+    const el = await twoOtherwise();
+    click(openStep(el, "Review it"));
+    // core already refuses this, in the operator's words and on this step. The defect was that
+    // it named a row the panel did not draw, so it could only be acted on out on the canvas.
+    expect(el.textContent).toContain('has more than one "Otherwise"');
+    expect(otherwiseRows(el, "review")).toHaveLength(2);
+  });
+
+  test("one Otherwise is still one row, and 'pause and ask me' still removes it", async () => {
+    const calls = serve();
+    const el = await mount();
+    type(nameBox(el), "my-review");
+    click(openStep(el, "Do the work"));
+    expect(otherwiseRows(el, "work")).toHaveLength(1);
+
+    type(picker(el, "where work goes when no row fits"), "");
+    await act(async () => { byText(el, "Save and add to the catalog")!.click(); });
+    expect(saved(calls).edges.filter((e) => e.from === "work")).toEqual([]);
+  });
+});

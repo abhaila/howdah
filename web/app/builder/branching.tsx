@@ -24,12 +24,20 @@
  *
  *   `StepRoutes` is a STEP's whole outgoing list, and edits it with `set-branching` — which
  *   replaces all of that step's edges at once, so reordering rows (= priority) is one action.
- *   This is the keyboard path to what dragging a wire does (D7).
+ *   This is the keyboard path to what dragging a wire does (D7). Replacing the lot is also why
+ *   it must DRAW every route it will emit: a route it renders no row for is a route the next
+ *   edit silently deletes, which is what a second "Otherwise" used to be (HOW-24 review,
+ *   finding 2).
  *
  *   `ConditionEditor` is ONE edge, reached by clicking its wire, and edits it by INDEX
- *   (`update-edge` / `remove-edge`), which nothing else can renumber while it is open. The two
- *   are never on screen together — the right panel shows a step or an edge, never both — which
- *   is what keeps "addressed by index" safe.
+ *   (`update-edge` / `remove-edge`). Two things make that safe, and it needs both. The two
+ *   panels are never on screen together — the right panel shows a step or an edge, never both —
+ *   so nothing else renumbers `spec.edges` while one edge is selected. And `remove-edge` itself
+ *   DOES renumber (an index list has no other way to shrink), so this panel tells the surface
+ *   that owns the selection that the route is gone — `onRemoved`, the same callback the step
+ *   form already has. Without it the panel stayed open on whatever slid into that index and a
+ *   second press destroyed a route nobody selected (HOW-24 review, finding 1). `update-edge`
+ *   alone cannot renumber, which is why editing a condition keeps the panel where it is.
  */
 import { ArrowDown, ArrowUp, Plus, Trash2 } from "lucide-react";
 import {
@@ -189,11 +197,17 @@ function TargetPicker({ spec, value, label, onChange }: {
 /**
  * ONE edge, the panel a selected wire opens (HOW-24). Addressed by its index in `spec.edges`,
  * which is what `add-edge` appended and what the canvas draws as `e<i>`.
+ *
+ * `onRemoved` is how the surface that OWNS the selection learns the route is gone — the same
+ * words `StepFields` uses, for the same reason, and here it is load-bearing: `remove-edge`
+ * renumbers every later edge, so a panel that just kept rendering would be editing the route
+ * that slid into this index.
  */
-export function ConditionEditor({ draft, index, dispatch }: {
+export function ConditionEditor({ draft, index, dispatch, onRemoved }: {
   draft: Draft;
   index: number;
   dispatch: (a: DraftAction) => void;
+  onRemoved?: () => void;
 }) {
   const { spec } = draft;
   const edge = spec.edges[index];
@@ -230,7 +244,10 @@ export function ConditionEditor({ draft, index, dispatch }: {
               <Plus />Give it a condition
             </Button>
           )}
-        <Button variant="destructive" size="sm" aria-label="remove this route" onClick={() => dispatch({ type: "remove-edge", index })}>
+        <Button
+          variant="destructive" size="sm" aria-label="remove this route"
+          onClick={() => { dispatch({ type: "remove-edge", index }); onRemoved?.(); }}
+        >
           <Trash2 />Remove this route
         </Button>
       </div>
@@ -252,34 +269,44 @@ export function StepRoutes({ draft, from, problems, dispatch }: {
   const { spec } = draft;
   const mine = spec.edges.filter((e) => e.from === from);
   const conditional = mine.filter((e) => e.when) as Array<EdgeSpec & { when: Predicate }>;
-  const fallback = mine.find((e) => !e.when);
-  const emit = (rows: Array<EdgeSpec & { when: Predicate }>, other: string | null) =>
+  // PLURAL on purpose. `set-branching` replaces this step's whole outgoing list, so every
+  // unconditional route has to survive the round trip through this component — and there can
+  // legally be more than one: two wires drawn from one step on a draft with no fields yet make
+  // a second (`add-edge`), and so does "Make this the 'Otherwise'" pressed twice. specProblems
+  // refuses it in the operator's words and prints the refusal in this very panel.
+  const fallbacks = mine.filter((e) => !e.when);
+  const kept = fallbacks.map((f) => f.to);
+  const emit = (rows: Array<EdgeSpec & { when: Predicate }>, others: string[]) =>
     dispatch({
       type: "set-branching",
       from,
-      edges: [...rows.map((r) => ({ to: r.to, when: r.when })), ...(other !== null ? [{ to: other }] : [])],
+      edges: [...rows.map((r) => ({ to: r.to, when: r.when })), ...others.map((to) => ({ to }))],
     });
 
   const setRow = (i: number, patch: Partial<EdgeSpec & { when: Predicate }>) =>
-    emit(conditional.map((r, j) => (j === i ? { ...r, ...patch } : r)), fallback?.to ?? null);
+    emit(conditional.map((r, j) => (j === i ? { ...r, ...patch } : r)), kept);
   const move = (i: number, by: 1 | -1) => {
     const j = i + by;
     if (j < 0 || j >= conditional.length) return;
     const next = [...conditional];
     [next[i], next[j]] = [next[j]!, next[i]!];
-    emit(next, fallback?.to ?? null);
+    emit(next, kept);
   };
 
   // the operand is seeded by seedPredicate, the same rule a drawn wire goes through: a bare ""
   // is a row that can never fire on a yes/no or number field, and it saved clean while showing
   // a blank operand (HOW-22 review, finding 3).
   const addRow = () =>
-    emit([...conditional, { from, to: spec.nodes[0]?.id ?? "", when: seedPredicate(spec) }], fallback?.to ?? null);
+    emit([...conditional, { from, to: spec.nodes[0]?.id ?? "", when: seedPredicate(spec) }], kept);
+
+  // always at least one row: with no unconditional route at all, the row is the empty pick that
+  // says the run pauses here, which is how that choice has always been made and unmade
+  const shown = kept.length ? kept : [""];
 
   return (
     <div className="flex flex-col gap-2">
       <div className="field-hint">The first row that fits decides. Order is priority — the top one wins.</div>
-      {conditional.length === 0 && !fallback && <div className="field-hint">No routes yet.</div>}
+      {conditional.length === 0 && fallbacks.length === 0 && <div className="field-hint">No routes yet.</div>}
       {conditional.map((e, i) => (
         <div key={i} className="builder-branch-row">
           <ConditionControls spec={spec} when={e.when} nth={i + 1} onChange={(when) => setRow(i, { when })} />
@@ -289,26 +316,40 @@ export function StepRoutes({ draft, from, problems, dispatch }: {
           <Button variant="ghost" size="icon" aria-label={`move row ${i + 1} down`} disabled={i === conditional.length - 1} onClick={() => move(i, 1)}><ArrowDown size={13} /></Button>
           <Button
             variant="ghost" size="icon" aria-label={`remove row ${i + 1}`}
-            onClick={() => emit(conditional.filter((_, j) => j !== i), fallback?.to ?? null)}
+            onClick={() => emit(conditional.filter((_, j) => j !== i), kept)}
           ><Trash2 size={13} /></Button>
         </div>
       ))}
-      <div className="builder-branch-row">
-        <span className="field-hint">Otherwise</span>
-        <Select
-          value={fallback?.to ?? ""} aria-label={`where ${from} goes when no row fits`}
-          onChange={(ev) => emit(conditional, ev.target.value || null)}
-        >
-          <option value="">pause and ask me</option>
-          {spec.nodes.map((n) => <option key={n.id} value={n.id}>go to {n.title?.trim() || n.id}</option>)}
-        </Select>
-        {!fallback && (
-          <span className="field-hint">
-            With nothing else matching, the run stops here and waits for you. That is a real
-            choice — leave it if there is no sensible default.
-          </span>
-        )}
-      </div>
+      {shown.map((to, i) => (
+        <div key={`otherwise-${i}`} className="builder-branch-row">
+          <span className="field-hint">{i === 0 ? "Otherwise" : "Otherwise, also"}</span>
+          <Select
+            value={to}
+            aria-label={i === 0 ? `where ${from} goes when no row fits` : `where ${from} also goes when no row fits (${i + 1})`}
+            // an unpicked target emits no unconditional edge at all — the same `|| null` this
+            // row has always had, said once for however many rows there are
+            onChange={(ev) => emit(conditional, shown.map((t, j) => (j === i ? ev.target.value : t)).filter(Boolean))}
+          >
+            {/* only the first row can be unmade by unpicking it; the rest have a control that
+                says so, because that is the only way to act on core's "more than one
+                'Otherwise'" where it is printed */}
+            {i === 0 && <option value="">pause and ask me</option>}
+            {spec.nodes.map((n) => <option key={n.id} value={n.id}>go to {n.title?.trim() || n.id}</option>)}
+          </Select>
+          {i > 0 && (
+            <Button
+              variant="ghost" size="icon" aria-label={`remove otherwise ${i + 1}`}
+              onClick={() => emit(conditional, shown.filter((_, j) => j !== i))}
+            ><Trash2 size={13} /></Button>
+          )}
+          {i === 0 && fallbacks.length === 0 && (
+            <span className="field-hint">
+              With nothing else matching, the run stops here and waits for you. That is a real
+              choice — leave it if there is no sensible default.
+            </span>
+          )}
+        </div>
+      ))}
       <div className="actions">
         <Button variant="outline" size="sm" disabled={spec.fields.length === 0} onClick={addRow}><Plus />Add a condition</Button>
         {spec.fields.length === 0 && <span className="field-hint">Add a field first — a condition tests one.</span>}

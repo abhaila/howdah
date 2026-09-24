@@ -839,6 +839,21 @@ run view gets built once inside a system that has been agreed, and T23 is UI-ind
     reducer put the step below everything — off-screen on any graph taller than the pane.
     `useCanvasCentre()` now goes through the same `screenToFlowPosition` a drop uses, and
     `freeSpotNear()` steps aside from what is already there.
+  - **Found in the second review — two facts about editing a list by INDEX, neither of them
+    about React Flow.** (1) AN INDEX-ADDRESSED SELECTION HAS TO BE DROPPED BY WHATEVER RENUMBERS
+    THE LIST. `remove-edge` filters by index, so every later edge slides down one; the shell's
+    "a selection that no longer exists is a panel to close" only fires for the LAST edge, so
+    removing any other left the route panel open and silently retargeted to the route that took
+    that index — and a second press destroyed it. The cure is the callback the step form already
+    had (`onRemoved` → `onSelect(null)`), not a smarter guard: it closes in the same render, and
+    the panel that did the removing is the one place that knows it happened. (2) A PANEL THAT
+    REBUILDS A COLLECTION WHOLESALE MUST RENDER EVERYTHING IT WILL WRITE BACK. `StepRoutes`
+    emits a step's whole outgoing list through `set-branching`, but drew only the FIRST
+    unconditional route; a second one — legal to make, and reported by `specProblems` on that
+    very step — was deleted by the next edit, and the message about it pointed at a row that was
+    not on screen. Rendering one "Otherwise" row per unconditional route makes preservation fall
+    out of the rendering instead of being a second rule to remember, and makes core's refusal
+    actionable where it is printed.
 
 ## GSTACK REVIEW REPORT
 

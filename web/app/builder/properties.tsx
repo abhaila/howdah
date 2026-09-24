@@ -104,7 +104,10 @@ export function Properties({ draft, dispatch, problems, selection, onSelect, onP
             <CardDescription>When the run takes it, and where it goes.</CardDescription>
           </CardHeader>
           <CardContent>
-            <ConditionEditor draft={draft} index={selection.index} dispatch={dispatch} />
+            {/* removing an edge renumbers every later one, so the panel that removed it closes
+                itself rather than silently retargeting to whatever slid into that index — the
+                same wiring `StepFields` has eleven lines above (HOW-24 review, finding 1) */}
+            <ConditionEditor draft={draft} index={selection.index} dispatch={dispatch} onRemoved={() => onSelect(null)} />
           </CardContent>
         </Card>
       </div>
