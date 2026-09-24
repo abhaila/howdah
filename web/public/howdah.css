@@ -283,24 +283,72 @@ main { flex: 1; min-width: 0; min-height: 0; overflow: hidden; display: flex; fl
 .tuner-panels { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; align-items: start; }
 .tuner-save { display: flex; align-items: center; gap: 10px; }
 
-/* graph builder (HOW-22) — the wizard is three columns: the rail says where you are and what
-   is outstanding, the middle is the pane you are answering, and the picture is the graph as
-   it stands. The picture is sticky because it is the thing you are checking your edits
-   against; scrolling a long Steps pane must not take it away. */
-.builder { max-width: none; }
-.builder-layout { display: grid; grid-template-columns: 220px minmax(0, 1fr) minmax(0, 440px); gap: 20px; align-items: start; }
-.builder-rail { display: flex; flex-direction: column; gap: 2px; position: sticky; top: 12px; }
-.builder-rail-item { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; padding: 7px 8px; }
-.builder-rail-label { font-size: var(--type-base); font-weight: 600; }
-.builder-main { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
-.builder-preview { display: flex; flex-direction: column; gap: 6px; position: sticky; top: 12px; overflow-x: auto; }
+/* graph builder (HOW-24) — three columns: the palette you pick steps out of, the canvas the
+   graph is BUILT on, and the panel showing whatever is selected. It fills the viewport,
+   because a canvas that scrolls with the page is a canvas you cannot arrange anything on. */
+/* the builder OWNS the viewport rather than scrolling inside it: a canvas you have to scroll
+   the page to see is a canvas you cannot arrange anything on. `.runs` scrolls by default, so
+   this turns that off and lets the two side panels scroll on their own instead. */
+.builder { max-width: none; display: flex; flex-direction: column; gap: 12px; min-height: 0; overflow: hidden; padding-bottom: 28px; }
+.gb-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; flex-shrink: 0; }
+.gb {
+  display: grid; grid-template-columns: 210px minmax(0, 1fr) minmax(320px, 430px);
+  gap: 14px; align-items: stretch; flex: 1; min-height: 420px;
+}
+.gb-palette { display: flex; flex-direction: column; gap: 6px; overflow-y: auto; }
+.gb-palette-title { font-size: var(--type-xs); text-transform: uppercase; letter-spacing: 0.06em; color: var(--fg-muted); }
+.gb-palette-item { justify-content: flex-start; width: 100%; cursor: grab; }
+.gb-palette-item:active { cursor: grabbing; }
+.gb-palette-label { text-align: left; }
+.gb-panel { display: flex; flex-direction: column; gap: 12px; min-width: 0; overflow-y: auto; }
+/* the field registry is a six-column table in a one-column panel: it keeps its columns and
+   scrolls sideways, rather than squeezing every name box down to three characters */
+.gb-panel table { min-width: 520px; }
 
-.builder-step { display: flex; flex-direction: column; gap: 3px; }
-.builder-step-head { display: flex; align-items: center; gap: 10px; width: 100%; padding: 7px 8px; }
-.builder-step-title { font-size: var(--type-base); font-weight: 600; }
-.builder-glyph { color: var(--fg-muted); font-family: var(--font-mono); font-size: var(--type-md); }
-.builder-step-actions { display: flex; align-items: center; gap: 4px; margin-left: auto; flex-shrink: 0; }
-.builder-add { display: flex; flex-wrap: wrap; gap: 6px; padding-top: 10px; }
+/* The canvas theme is React Flow's OWN custom properties, set here from tokens.css — the
+   vendor sheet is imported from main.tsx and never pasted into these files, so it stays out
+   of the "every rule has a consumer" scan and out of the palette's single source. */
+.gb-canvas {
+  min-height: 420px; height: 100%;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--bg-inset); overflow: hidden;
+  /* the RESOLVED names, not the `-props` ones: React Flow writes those itself from component
+     props, and a value set here would be the one the cascade does not reach */
+  --xy-background-pattern-color: var(--fg-faint);
+  --xy-edge-stroke: var(--fg-faint);
+  --xy-edge-stroke-selected: var(--status-running);
+  --xy-connectionline-stroke: var(--status-running);
+  --xy-handle-background-color: var(--fg-muted);
+  --xy-handle-border-color: var(--bg);
+  --xy-controls-button-background-color: var(--bg-raised);
+  --xy-controls-button-background-color-hover: var(--bg-inset);
+  --xy-controls-button-color: var(--fg);
+  --xy-controls-button-color-hover: var(--fg);
+  --xy-controls-button-border-color: var(--border);
+  --xy-attribution-background-color: transparent;
+}
+
+/* a step, as a card. The box is the SVG picture's box (180x52), so the same graph reads the
+   same in the builder and in the run view. */
+.gb-node {
+  width: 180px; min-height: 52px; box-sizing: border-box;
+  display: flex; flex-direction: column; gap: 1px; padding: 5px 8px;
+  background: var(--bg-raised); border: 1.2px solid var(--border-strong); border-radius: 9px;
+}
+.gb-node.selected { border-color: var(--status-running); border-width: 2px; }
+.gb-node.needs-input { border-color: var(--attention); background: var(--attention-bg); }
+.gb-node.kind-terminal { border-style: dashed; }
+.gb-node-head { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.gb-node-glyph { color: var(--fg-muted); font-family: var(--font-mono); font-size: var(--type-sm); }
+.gb-node-open { padding: 0 2px; height: auto; min-width: 0; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); font-size: var(--type-sm); font-weight: 600; }
+.gb-node-sub { color: var(--fg-muted); font-family: var(--font-mono); font-size: var(--type-3xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gb-node-entry { align-self: flex-start; }
+
+/* a route. The caption is a real control, because a hairline is not a click target and a
+   route has to be reachable without a mouse at all. */
+.gb-edge.needs-input { stroke: var(--attention); }
+.gb-edge-label { position: absolute; pointer-events: all; font-size: var(--type-3xs); }
+
 .builder-problem { padding-left: 26px; }
 .builder-verdict { display: flex; align-items: center; gap: 8px; color: var(--status-done); font-size: var(--type-sm); }
 

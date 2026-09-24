@@ -774,6 +774,87 @@ run view gets built once inside a system that has been agreed, and T23 is UI-ind
     reads context by name and a command step has no reads control to fix it with; a test pins
     that every built-in the command executor dispatches has a row.
 
+- [x] **HOW-24 (P1) — web — A full canvas graph creator** ✅ 2026-09-23
+  - Trigger: "The current workflow / graph creator is very confusing and the current UI doesn't
+    work. Can we have a full UI creator. We should use this example project and re-use same
+    approach — github.com/nobruf/shadcn-next-workflows."
+  - The confusion was STRUCTURAL, and the code said where it came from. The HOW-22 wizard split
+    ONE step across three panes — its identity in Steps, the values it passes in Fields, what
+    happens after it in Branching — and then had to keep re-uniting them. The picture beside the
+    rail could only be READ. And the thing an operator actually wants to say, "this step, then
+    that one", was a `<select>` row under the fourth tab, per step, whose default was "pause and
+    ask me". So the fix is not wording: the picture becomes the editor.
+  - Decision (from the ticket): **`@xyflow/react` v12**, which is what the named reference
+    project is built on. Its whole tree is zustand + classcat + d3-{drag,zoom,selection,
+    interpolate} — no Radix, so `web/app/css-contract.test.ts`'s no-Radix gate is untouched.
+    This is the viewer's first framework dependency and it contradicts CLAUDE.md's "No framework
+    beyond React + Tailwind"; that line is amended there with the reason rather than quietly
+    broken. Hand-rolling drag-to-connect, hit-testing, marquee select and pan/zoom on
+    `graph-dag.tsx`'s SVG was the alternative: several hundred lines of newly-owned interaction
+    code, and not "the same approach" the ticket asked for.
+  - Decision: **a step's position lives in the SPEC** (`NodeSpec.position`, additive, optional,
+    so `SPEC_VERSION` stays 1). A canvas whose steps spring back to an auto-layout on reload is
+    not a canvas. A sidecar file keyed by graph name was rejected on the repo's own rule — it
+    would split the artifact in two and break `buildGraph`'s exact round trip. `compileNode`
+    drops it, so the engine sees the identical `Graph`; `core/graph-spec.test.ts` pins that.
+  - Nothing below the presentation layer changed meaning. `PUT /api/graphs/:name/builder` takes
+    the same `{spec, prompts, intent}`, `graphs/builder.ts` runs the same `specProblems()` over
+    the spec it is about to write, and `graphs/builder.test.ts`'s "the browser's verdict and the
+    server's gate cannot disagree" passes unmodified — which is the strongest single signal that
+    this was a presentation change.
+  - `SpecProblem.where` was NOT re-spelled for the new regions. Its four values are named in ~40
+    messages in `core/graph-spec.ts` and consumed by `graphs/builder.ts`; changing core for a
+    presentation reason is the wrong trade. The UI maps instead, in one line: a problem that
+    names a step is drawn on that step, and one that names none belongs to the graph.
+  - Two rules the canvas had to be held to, because it is a NEW creation path and it was a
+    creation path forgetting one that produced HOW-22's finding 3. A drawn wire is born able to
+    fire (`seedPredicate`, shared with "Add a condition"), and appending it keeps row order —
+    which is priority — meaning what the operator saw.
+  - Nothing became mouse-only (HOW-16 P2 made the builder keyboard-operable and a canvas must
+    not quietly give that back). Every palette item is a `Button` that is also `draggable`;
+    every step's routes can be set from its panel without drawing a wire; the way INTO a step is
+    a real control on its card, not the card itself; and the caption on a wire is a `Button`,
+    because a hairline is not a click target.
+  - Deviations from the plan, each for a reason found in the building: no minimap (it covers a
+    corner of a five-to-ten-step graph, which is every graph this builds), the canvas gets its
+    own layout PITCH (its cards are taller and a condition is printed in the gap, not beside
+    it), and `css-contract.test.ts` gained a BEHAVIOURAL exemption list for React Flow's
+    `nodrag` / `nopan` — names a library reads in JavaScript, which the vendor sheet
+    deliberately gives no rules.
+  - **Found in review — three library facts that cost real time to find once, so they are
+    written down.** (1) A controlled `nodes` prop DISCARDS every node change unless
+    `onNodesChange` is supplied: `triggerNodeChanges` applies changes only when
+    `hasDefaultNodes`, so the first cut's card did not follow the pointer (it jumped at
+    mouse-up, because `onNodeDragStop` is handed the DRAG ITEM's position rather than the
+    store's) and React Flow's arrow-key nudge moved nothing at all. Fixed by supplying the
+    handler and keeping the in-flight positions in a local overlay — the DRAFT still changes
+    exactly once per gesture, which was the property the omission looked like it was
+    protecting. (2) `deleteKeyCode` defaults to `'Backspace'`, bound on `document`, and
+    `isInputDOMNode` exempts INPUT/SELECT/TEXTAREA and `contenteditable` — NOT a `BUTTON`,
+    which is the documented keyboard way into a step. Tab, Enter, Backspace destroyed a step
+    and its prompt body with no confirmation and no undo. The key is off (`deleteKeyCode={null}`)
+    and removal is a named control that says what goes and asks first when the text cannot be
+    got back. (3) A placement promised in UI copy has to be a placement the code makes: the
+    palette said "drop it in the middle" and the click path passed no position at all, so the
+    reducer put the step below everything — off-screen on any graph taller than the pane.
+    `useCanvasCentre()` now goes through the same `screenToFlowPosition` a drop uses, and
+    `freeSpotNear()` steps aside from what is already there.
+  - **Found in the second review — two facts about editing a list by INDEX, neither of them
+    about React Flow.** (1) AN INDEX-ADDRESSED SELECTION HAS TO BE DROPPED BY WHATEVER RENUMBERS
+    THE LIST. `remove-edge` filters by index, so every later edge slides down one; the shell's
+    "a selection that no longer exists is a panel to close" only fires for the LAST edge, so
+    removing any other left the route panel open and silently retargeted to the route that took
+    that index — and a second press destroyed it. The cure is the callback the step form already
+    had (`onRemoved` → `onSelect(null)`), not a smarter guard: it closes in the same render, and
+    the panel that did the removing is the one place that knows it happened. (2) A PANEL THAT
+    REBUILDS A COLLECTION WHOLESALE MUST RENDER EVERYTHING IT WILL WRITE BACK. `StepRoutes`
+    emits a step's whole outgoing list through `set-branching`, but drew only the FIRST
+    unconditional route; a second one — legal to make, and reported by `specProblems` on that
+    very step — was deleted by the next edit, and the message about it pointed at a row that was
+    not on screen. Rendering one "Otherwise" row per unconditional route makes preservation fall
+    out of the rendering instead of being a second rule to remember, and makes core's refusal
+    actionable where it is printed.
+
 ## GSTACK REVIEW REPORT
 
 | Review | Trigger | Why | Runs | Status | Findings |

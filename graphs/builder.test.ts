@@ -43,16 +43,18 @@ function everything(name = "kitchen-sink"): GraphSpec {
     inputs: ["goal", "work"],
     defaults: { permissionMode: "auto" },
     entry: "make-worktree",
+    // HOW-24: the canvas arrangement is part of the artifact, so the round trip has to carry
+    // it — and `compileNode` has to keep dropping it (core/graph-spec.test.ts)
     nodes: [
-      { id: "make-worktree", kind: "worktree", title: "Make a worktree", action: "create", writes: [] },
+      { id: "make-worktree", kind: "worktree", title: "Make a worktree", action: "create", writes: [], position: { x: 40, y: 40 } },
       { id: "plan-it", kind: "agent", title: "Plan the change", prompt: p("plan-it"), reads: ["goal", "work"], writes: ["plan", "plan_base"], readOnly: true, class: "planning" },
       { id: "approve", kind: "approval", title: "Get my approval", proposal: "plan", base: "plan_base", decision: "plan_decision", feedback: "plan_feedback", redesignTo: "plan-it" },
       { id: "build", kind: "agent", title: "Build it", prompt: p("build"), reads: ["goal", "plan"], writes: ["summary", "review_verdict"], maxVisits: 3, requires: "approve", config: { harness: "codex", effort: "high" } },
       { id: "settle", kind: "wait", title: "Let CI settle", duration: "30 s" },
       { id: "check-pr", kind: "command", title: "Check the PR", run: "probe:pr", reads: [], writes: ["pr.state"], timeoutMs: 60000 },
       { id: "clean-up", kind: "worktree", title: "Clean up", action: "remove", writes: ["worktree.clean"] },
-      { id: "done", kind: "terminal", outcome: "success", label: "shipped" },
-      { id: "stuck", kind: "terminal", outcome: "failed" },
+      { id: "done", kind: "terminal", outcome: "success", label: "shipped", position: { x: 40, y: 684 } },
+      { id: "stuck", kind: "terminal", outcome: "failed", position: { x: 250, y: 684 } },
     ],
     edges: [
       { from: "make-worktree", to: "plan-it" },

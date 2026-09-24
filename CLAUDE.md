@@ -12,13 +12,19 @@ shape parts (A*), decisions (D*/OV-*), and the task list (T1–T22). Source comm
 reference those IDs — when a comment says "OV-1" or "T18", `shaping.md` explains why.
 
 Runtime: **Bun** (TypeScript, ESM, no build step for server/CLI code). No framework beyond
-React + Tailwind for the viewer.
+React + Tailwind for the viewer, with ONE deliberate exception: `@xyflow/react` (HOW-24) draws
+the graph builder's canvas. It is the library the ticket named by reference, and it buys exactly
+the part that is expensive to own and cheap to borrow — drag-to-connect with a live preview wire,
+edge hit-testing, pan/zoom, marquee select. Its whole dependency tree is zustand, classcat and
+four d3 modules, so the no-Radix rule stands untouched. It is used ONLY under
+`web/app/builder/`, and its stylesheet is imported from `main.tsx` and never pasted into the
+three hand-written sheets (see the CSS contract below).
 
 ## Commands
 
 ```bash
 bun install                      # required on a fresh clone (node_modules/ is gitignored)
-bun test                         # whole suite (1143 tests, ~3 min) — bun:test, happy-dom preloaded via bunfig.toml
+bun test                         # whole suite (1628 tests, ~3 min) — bun:test, happy-dom preloaded via bunfig.toml
 bun test engine/engine.test.ts   # one file
 bun test -t "resume"             # one test by name
 bun run check                    # tsc --noEmit + prompt-id codegen staleness gate
@@ -115,7 +121,7 @@ Break one of these and the design stops working, so check them before changing t
   `Graph.validate()` + `core/validate.ts`: a forward MUST-analysis proving every read has a
   writer on *every* path from entry. `graphs/index.ts` validates every registered graph at
   import time, so a broken graph fails the registry rather than a run.
-- **A built graph is still a file; the spec is what is inside it (HOW-22).** The graph
+- **A built graph is still a file; the spec is what is inside it (HOW-22, HOW-24).** The graph
   builder (`/graphs/new`, `/graphs/:name/build`) is now the primary authoring path, and it
   changes nothing downstream: it writes an ordinary local `.ts` whose body is a `GraphSpec`
   literal plus one `buildGraph()` call (`core/graph-spec.ts`), which `graphs/local.ts`
@@ -131,8 +137,13 @@ Break one of these and the design stops working, so check them before changing t
   nothing is typed free-hand (keys come from the field registry, predicates are data, prompt
   ids are generated from step ids), and `core/graph-spec.ts` is NODE-FREE, so
   `buildGraph(draft).validate()` runs in the browser on every keystroke and `specProblems()`
-  rewrites each `Violation` into the operator's words, attributed to the step AND the pane
-  that fixes it. An agent step's `reads` is never declared: it is derived from the prompt
+  rewrites each `Violation` into the operator's words, attributed to the step AND the
+  `ProblemPane` that fixes it. HOW-24 replaced the five-pane wizard with a CANVAS and kept that
+  vocabulary untouched — `where` is named in ~40 messages in core/ and read by
+  `graphs/builder.ts`, so re-spelling it for new UI regions would be editing core for a
+  presentation reason. `web/app/builder/properties.tsx` maps instead, in one line: a problem
+  that NAMES a step is drawn on that step's card and listed against it; one that names none
+  belongs to the graph. An agent step's `reads` is never declared: it is derived from the prompt
   body with `templateReads()` — in the browser (`web/app/lib/spec-draft.ts`) and again on the
   server (`graphs/builder.ts`), which is the authority. So renaming a field rewrites the
   reference in the body (`renameTemplateRef`, still the one regex in `core/template-refs.ts`,
@@ -159,16 +170,68 @@ Break one of these and the design stops working, so check them before changing t
   rewrote that graph's prompt and returned ok. Two steps of ONE graph may still share a body,
   which is what a prefix rule permits and exact equality would not.
   Two consequences of the builder drawing and editing a draft rather than a finished graph.
-  THE PICTURE NEVER ASSERTS: `GraphDag` draws a half-built shape, so an edge whose endpoint
-  has no position is SKIPPED rather than dereferenced — a run's shape is server-derived and
-  consistent, a draft's is being typed ("go to [pick a step]"), and `web/app` has no error
-  boundary, so one `!` took the wizard and the unsaved draft down with it. What is missing is
-  reported in words by the verdict, in the pane that fixes it. AND A BOX IS CONTROLLED BY
+  THE PICTURE NEVER ASSERTS: it draws a half-built shape, so an edge whose endpoint does not
+  exist is SKIPPED rather than dereferenced — a run's shape is server-derived and consistent, a
+  draft's is being typed ("go to [pick a step]"), and `web/app` has no error boundary, so one
+  `!` took the wizard and the unsaved draft down with it. (`GraphDag` still reads that way for
+  the run view and the tuner; React Flow simply does not draw an edge whose endpoint it cannot
+  find.) What is missing is reported in words by the verdict, on the step that owns it. AND A BOX IS CONTROLLED BY
   MEANING, NOT BY SPELLING: the spec stores typed data on purpose (`3`, not `"3"`;
   `["pass","warn"]`, not `"pass, warn"`), so a control fed straight back from it destroys every
   intermediate keystroke the coercion trims. `useTypedText` (`web/app/lib/hooks.ts`) keeps what
   was typed while it still MEANS what the draft holds and follows the draft the moment it does
   not — which is why `3.5`, `-1` and a second comma-separated value are typeable at all.
+- **The canvas is a view of the draft; the draft is the only truth (HOW-24).** The builder is a
+  React Flow canvas (`web/app/builder/canvas.tsx`) with a palette on the left and a panel on the
+  right that shows whatever is selected — a step, a route, or the graph. `specToFlow()` is a
+  PURE function from the draft, and React Flow's own store is never asked what the graph is.
+  Every gesture dispatches an EXISTING `spec-draft.ts` action, because each one carries a
+  coupled rule a new creation path would otherwise have to remember — and it was a creation path
+  forgetting one that produced HOW-22's finding 3. So a WIRE IS BORN ABLE TO FIRE: `add-edge`
+  makes the first route out of a step its unconditional "Otherwise" and every later one a
+  condition seeded through `seedPredicate()`, the same function "Add a condition" calls, and it
+  APPENDS — which is what keeps row order, and therefore weight, meaning what the operator saw.
+  A drag commits `move-node` on drag END, never per frame, so one drag is one draft change
+  rather than sixty `draftProblems()` runs a second — but that only works because
+  `onNodesChange` IS supplied: React Flow's `triggerNodeChanges` applies a change only when it
+  owns the nodes, so a controlled `nodes` with no handler discards every one of them and the
+  card never follows the pointer at all. `canvas.tsx` keeps the frames of a drag in a local
+  overlay and lets only the settled change reach the draft. AND THERE IS NO DELETE KEY:
+  `deleteKeyCode` defaults to Backspace bound on `document`, and its input exemption covers
+  form controls but not the `Button` that is the way into a step, so destroying a step — which
+  takes its prompt body with it, with no undo — is a named control in the panel that says what
+  goes, and asks first when the text cannot be got back. An edge has no identity of its own, so the
+  canvas addresses one by its INDEX in `spec.edges`, and that needs TWO things, not one. The two
+  edit paths are never on screen together (a step's whole routes list is `set-branching`, which
+  may renumber; a single selected edge is `update-edge`, which cannot). AND WHATEVER RENUMBERS
+  THE LIST DROPS THE SELECTION ITSELF: `remove-edge` slides every later edge down one — an index
+  list has no other way to shrink — so the edge panel calls `onRemoved`, the same callback the
+  step form already had, and the shell closes it. Without that the panel stayed open, silently
+  retargeted to the route that slid into that index, and a second press destroyed a route nobody
+  selected. The shell's own "a selection that no longer exists is a panel to close" still runs,
+  but it only ever catches the LAST edge. A PANEL THAT REBUILDS A COLLECTION MUST DRAW ALL OF IT:
+  `set-branching` substitutes a step's whole outgoing list, so `StepRoutes` renders one
+  "Otherwise" row per unconditional route rather than one row full stop. A second "Otherwise" is
+  legal to MAKE (two wires from one step on a fields-less draft, or "Make this the 'Otherwise'"
+  twice) and `specProblems` refuses it in the operator's words on that step — and the panel that
+  printed the refusal was deleting the row it was about on the next edit.
+  A step's PLACE is part of the artifact (`NodeSpec.position`): a canvas whose boxes spring back
+  on reload is not a canvas, and a sidecar keyed by graph name would split the artifact in two
+  and break the round trip. `parseNode` accepts only two finite numbers (NaN serialises to
+  `null`, and a spec that cannot round-trip through JSON is not a spec) and `compileNode` drops
+  it, so the engine sees the identical `Graph` — pinned in `core/graph-spec.test.ts`.
+  `web/app/lib/layout.ts` holds the ONE layered-BFS placement, shared with `graph-dag.tsx` so
+  the builder and the run view do not draw one graph two ways; only the PITCH differs, because
+  the canvas prints a condition IN the gap between two cards rather than beside the wire.
+  NOTHING BECAME MOUSE-ONLY (HOW-16 P2 is not given back): every palette item is a `Button` that
+  is also `draggable`, every step's routes can be set from its panel without drawing a wire, the
+  way into a step is a real control on its card rather than the card itself, a wire's
+  caption is a `Button` — a hairline is not a click target — and a step is MOVED without a
+  mouse: Tab to its control, Enter to select it, then the arrow keys (Shift for 4x). React Flow's stylesheet is imported
+  from `main.tsx` and NEVER pasted into `tokens.css`/`howdah.css`/`globals.css`: those three are
+  scanned in both directions by `app/css-contract.test.ts`, and a few hundred unconsumed vendor
+  rules would fail "every rule has a consumer" instantly. The canvas is themed by setting React
+  Flow's own custom properties from tokens, under `.gb-canvas`.
 - **Prompt ids are generated, not typed by hand.** `prompts/<id>.md` (front-matter `id` must
   equal the filename) → `bun prompts/codegen.ts` → the `PromptId` union in
   `core/prompt-ids.ts`. Inline prompt text in a graph is a compile error by design.
@@ -298,7 +361,7 @@ Break one of these and the design stops working, so check them before changing t
 | `engine/` | `run.ts` (loop, routing, pinning, effects, attribution), `replay.ts`, `reconcile.ts` (git probes + worktree fingerprint), `attention.ts`, `control.ts` (replies, decisions, runner lock), `slice-decision.ts`, `slice-map.ts`, `executors/` |
 | `cli/` | `main.ts` verbs, `new-graph.ts` scaffolder (writes into `$HOWDAH_HOME`) |
 | `config/` | `config.json` workspaces + settings, `tuning.json` overlay, GitHub repo registration |
-| `web/` | Bun server (read model + reply/launch/control writes, SSE), `derive.ts` read model, React app in `app/`: `main.tsx` is the shell/nav/router only, screens in `app/screens/`, run-detail panes in `app/run/`, builder panes in `app/builder/` (HOW-22, one per wizard step), primitives in `app/components/ui/`, helpers in `app/lib/` |
+| `web/` | Bun server (read model + reply/launch/control writes, SSE), `derive.ts` read model, React app in `app/`: `main.tsx` is the shell/nav/router only, screens in `app/screens/`, run-detail panes in `app/run/`, builder in `app/builder/` (HOW-24: `canvas.tsx` + `node-card.tsx` + `edge.tsx` + `palette.tsx` + `properties.tsx`, with `step-form.tsx`/`branching.tsx`/`fields.tsx` as the panel bodies), primitives in `app/components/ui/`, helpers in `app/lib/` |
 | `reviser/` | GEPA-method revision script, eval case, generated proposals |
 | `watchdog/` | out-of-process heartbeat/attention checker + launchd plist |
 | `research/` | Orbital spec, feedback doc, DOT exports, UI captures — the inputs this design was built from |
@@ -363,7 +426,12 @@ class emitted with no rule, a rule with no consumer, or a `title=` used as a too
 (`app/css-contract.test.ts`, `app/components/components.test.tsx`). Those two files exist
 because the seam between the component layer and hand-CSS shipped two invisible defects
 (`.tab.on` matching nothing, `.chip` with modifiers but no base rule) that nothing else could
-see: TypeScript does not read CSS, and a missing rule renders as plain text.
+see: TypeScript does not read CSS, and a missing rule renders as plain text. A class may be
+exempt from "every emitted class has a rule" in exactly three lists, each of which has to say
+what feeds it: `COMPOSED_PREFIXES`/`COMPOSED_NAMES` (a name built at run time from data, so the
+scan cannot see the value) and `BEHAVIOURAL` (HOW-24 — a name a LIBRARY reads in JavaScript:
+React Flow's `nodrag`/`nopan` are its interaction opt-outs and its own sheet deliberately gives
+them no rules, so listing them is honest where an empty rule would be a lie).
 
 ## Conventions
 

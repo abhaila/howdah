@@ -171,12 +171,30 @@ export function recoercePredicate(p: Predicate, kind: FieldKind | undefined): Pr
   return base;
 }
 
+/** Where a step sits on the builder's canvas. Two finite numbers or nothing — see Point. */
+export interface Point {
+  x: number;
+  y: number;
+}
+
 interface NodeBase {
   id: string;
   /** the editable label; the ID never moves, because `${node}#${visit}` is run identity */
   title?: string;
   /** the tuner's bulk-update grouping (core/graph.ts NodeDef.class) */
   class?: string;
+  /**
+   * Where the operator put this step on the canvas (HOW-24). A LAYOUT fact in the artifact,
+   * deliberately: a canvas whose nodes spring back to an auto-layout on reload is not a
+   * canvas, and the alternative — a sidecar file keyed by graph name — would split the
+   * artifact in two and break `buildGraph`'s exact round trip. `compileNode` drops it, so the
+   * engine never sees one and a spec with positions compiles to the identical `Graph`.
+   *
+   * Optional and additive, so SPEC_VERSION stays 1: every graph already on disk still parses,
+   * and `autoLayout()` (web/app/lib/layout.ts) gives a pre-HOW-24 graph real positions the
+   * first time it is opened and saved.
+   */
+  position?: Point;
 }
 
 export type NodeSpec =
@@ -380,6 +398,8 @@ function writesOf(keys: string[], scopes: Record<string, Scope>, fields: FieldSp
   return out;
 }
 
+/** Every branch below names what it copies, which is how `position` (HOW-24) stays out of the
+ *  compiled graph: a canvas coordinate is the builder's, and the engine has no use for one. */
 function compileNode(n: NodeSpec, scopes: Record<string, Scope>, fields: FieldSpec[]): NodeDef<any> {
   const cls = n.class ? { class: n.class } : {};
   switch (n.kind) {
@@ -744,6 +764,17 @@ const posInt = (v: unknown): number | undefined => (typeof v === "number" && Num
 const oneOf = <T extends string>(v: unknown, allowed: readonly T[]): T | undefined =>
   typeof v === "string" && (allowed as readonly string[]).includes(v) ? (v as T) : undefined;
 
+/**
+ * Two finite numbers, or `undefined` (HOW-24). The same discipline `coerceOperand` applies to
+ * an operand: `NaN` and `Infinity` serialise to `null`, and a spec that cannot round-trip
+ * through JSON is not a spec — and this one is embedded in a module by `JSON.stringify`.
+ */
+export function point(v: unknown): Point | undefined {
+  if (!isObj(v)) return undefined;
+  const { x, y } = v;
+  return typeof x === "number" && typeof y === "number" && Number.isFinite(x) && Number.isFinite(y) ? { x, y } : undefined;
+}
+
 const SCOPES = ["sticky", "cleared", "per-visit"] as const;
 const FIELD_KINDS = ["text", "choice", "number", "boolean", "json"] as const;
 const OUTCOMES = ["success", "failed", "aborted"] as const;
@@ -801,7 +832,8 @@ function parseNode(v: unknown): NodeSpec | undefined {
   if (!id || !SPEC_NODE_ID.test(id)) return undefined;
   const title = str(v.title);
   const cls = str(v.class);
-  const base = { id, ...(title !== undefined ? { title } : {}), ...(cls ? { class: cls } : {}) };
+  const at = point(v.position);
+  const base = { id, ...(title !== undefined ? { title } : {}), ...(cls ? { class: cls } : {}), ...(at ? { position: at } : {}) };
   switch (str(v.kind)) {
     case "agent": {
       const prompt = str(v.prompt);
@@ -844,7 +876,11 @@ function parseNode(v: unknown): NodeSpec | undefined {
     case "terminal": {
       const outcome = oneOf(v.outcome, OUTCOMES);
       const label = str(v.label);
-      return outcome ? { id, kind: "terminal", outcome, ...(title !== undefined ? { title } : {}), ...(label ? { label } : {}) } : undefined;
+      // a terminal carries no `class` (compileNode ignores one there), but it is still a box on
+      // the canvas, so it keeps its position
+      return outcome
+        ? { id, kind: "terminal", outcome, ...(title !== undefined ? { title } : {}), ...(at ? { position: at } : {}), ...(label ? { label } : {}) }
+        : undefined;
     }
     default:
       return undefined;
