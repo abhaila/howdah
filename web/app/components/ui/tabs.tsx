@@ -1,7 +1,18 @@
 /**
- * Tabs + PanelTabs — hand-written in the house cva + cn pattern, because the shadcn
- * registry's `tabs` is @radix-ui/react-tabs and this project takes no Radix dependency
- * (HOW-16 P1.3). Both are controlled: the pane is app state, not widget state.
+ * Tabs + PanelTabs — the shadcn `tabs` behaviour on `@base-ui/react/tabs` (HOW-27), wearing
+ * Howdah's cva + cn styling. Both stay controlled: the pane is app state, not widget state.
+ *
+ * The `items={[{value,label}]}` API is KEPT rather than replaced by base-vega's
+ * `<Tabs><TabsList><TabsTrigger>` composition. Ten call sites pass a list — the run view's
+ * top switcher, every Steps pane switcher, the Logs filters, the scope toggle — and rewriting
+ * them to spell out three nested components each would be a large diff that buys nothing: the
+ * list IS the data here, and a component that takes it is the smaller interface.
+ *
+ * What the primitive buys, and the reason this moved: ARROW-KEY ROVING FOCUS. These were
+ * hand-written `role="tab"` buttons that handled Enter and Space and nothing else, so a
+ * keyboard user had to Tab through every tab in the strip instead of arrowing across it,
+ * which is the actual ARIA tabs pattern. Base UI implements the roving tabindex, Home/End,
+ * and the orientation-aware arrow keys; that is the part worth not owning.
  *
  * P0 DEFECT 1 LIVES HERE. `PanelTabs` used to emit `cn(itemClassName, selected && "on")`
  * while howdah.css defined `.tab.active` — a rule NOTHING emitted. Every pane switcher in
@@ -15,6 +26,7 @@
  * `.sd-scope`), appearance belongs to the component, and there is no longer a third place
  * for either to go missing.
  */
+import { Tabs as TabsPrimitive } from "@base-ui/react/tabs";
 import { cva } from "class-variance-authority";
 import { cn } from "@/lib/utils";
 
@@ -26,24 +38,27 @@ export function Tabs({ value, onValueChange, items, className }: {
   className?: string;
 }) {
   return (
-    <div className={cn("inline-flex gap-0.5 rounded-[var(--radius)] bg-muted p-0.5", className)} role="tablist">
-      {items.map((it) => (
-        <button
-          key={it.value}
-          type="button"
-          role="tab"
-          aria-selected={value === it.value}
-          onClick={() => onValueChange(it.value)}
-          className={cn(
-            "inline-flex cursor-pointer items-center gap-1.5 rounded-[5px] border-0 bg-transparent px-3 py-1 text-sm tracking-wide text-muted-foreground [&_svg]:size-3.5",
-            value === it.value && "bg-card text-foreground",
-          )}
-        >
-          {it.icon}
-          {it.label}
-        </button>
-      ))}
-    </div>
+    <TabsPrimitive.Root
+      data-slot="tabs"
+      value={value}
+      onValueChange={(v) => onValueChange(String(v))}
+    >
+      <TabsPrimitive.List className={cn("inline-flex gap-0.5 rounded-[var(--radius)] bg-muted p-0.5", className)}>
+        {items.map((it) => (
+          <TabsPrimitive.Tab
+            key={it.value}
+            value={it.value}
+            className={cn(
+              "inline-flex cursor-pointer items-center gap-1.5 rounded-[5px] border-0 bg-transparent px-3 py-1 text-sm tracking-wide text-muted-foreground [&_svg]:size-3.5",
+              value === it.value && "bg-card text-foreground",
+            )}
+          >
+            {it.icon}
+            {it.label}
+          </TabsPrimitive.Tab>
+        ))}
+      </TabsPrimitive.List>
+    </TabsPrimitive.Root>
   );
 }
 
@@ -87,26 +102,22 @@ export function PanelTabs<T extends string>({ value, onValueChange, items, class
   look?: "underline" | "chip";
 }) {
   return (
-    <div className={className} role="tablist">
-      {items.map((it) => (
-        <button
-          key={it.value}
-          type="button"
-          role="tab"
-          tabIndex={0}
-          aria-selected={value === it.value}
-          className={cn(panelTabVariants({ look, on: value === it.value }))}
-          onClick={() => onValueChange(it.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" || e.key === " ") {
-              e.preventDefault();
-              onValueChange(it.value);
-            }
-          }}
-        >
-          {it.label}
-        </button>
-      ))}
-    </div>
+    <TabsPrimitive.Root
+      data-slot="panel-tabs"
+      value={value}
+      onValueChange={(v) => onValueChange(v as T)}
+    >
+      <TabsPrimitive.List className={className}>
+        {items.map((it) => (
+          <TabsPrimitive.Tab
+            key={it.value}
+            value={it.value}
+            className={cn(panelTabVariants({ look, on: value === it.value }))}
+          >
+            {it.label}
+          </TabsPrimitive.Tab>
+        ))}
+      </TabsPrimitive.List>
+    </TabsPrimitive.Root>
   );
 }

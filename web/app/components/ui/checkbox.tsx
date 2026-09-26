@@ -6,6 +6,14 @@
  *
  * Replaces Settings' raw `<input type="checkbox" className="w-auto">`, which had no focus
  * treatment of its own and inherited a text field's `w-full` in both themes.
+ *
+ * HOW-27 MOVED THE PRIMITIVE LAYER ONTO base-vega AND DELIBERATELY LEFT THIS BEHIND. Its
+ * checkbox is `@base-ui/react/checkbox`, which renders a `<button role="checkbox">` beside a
+ * hidden input. That is a fine control, but it trades away the first sentence of this header —
+ * the box IS the input, so Space, form participation and `indeterminate` stay the platform's —
+ * and it changes the callback from `onChange(e)` to `onCheckedChange(checked)`, which is an API
+ * break at every call site for no behaviour this app uses. The registry's styling is already
+ * here; the primitive underneath would only add a layer.
  */
 import { forwardRef, useId } from "react";
 import type { InputHTMLAttributes } from "react";

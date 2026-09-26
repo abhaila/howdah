@@ -1,5 +1,12 @@
 @import "tailwindcss";
 
+/* shadcn's own Tailwind layer (HOW-27) — the @utility/@custom-variant definitions the
+   base-vega components are written against. Vendored under app/vendor/ and imported, never
+   pasted: css-contract.test.ts scans THIS file for rules in both directions, and a vendor
+   layer's few hundred rules have no consumer here. See that file's header for why it is a
+   copy rather than a dependency. */
+@import "./vendor/shadcn-tailwind.css";
+
 /* Map Howdah's tokens (tokens.css owns the values, themes included) into the shadcn
    contract — utilities like bg-card / text-muted-foreground resolve to our palette. */
 @theme inline {

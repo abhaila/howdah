@@ -1,10 +1,19 @@
 /**
- * HOW-25 — the central pane and the question card.
+ * HOW-25 — the central pane and the question card. HOW-27 — the same two things after the
+ * rebuild onto `message-scroller` and `questionnaire`.
  *
- * The ticket's complaint was that a question had nowhere to appear: the run parked, the card
- * drew a bare text box, and the question, its options and their descriptions stayed in the
- * log. So the assertions here are mostly about what is ON SCREEN, and about the exact body
- * the card posts — those two are the whole fix from the operator's side.
+ * HOW-25's complaint was that a question had nowhere to appear: the run parked, the card drew a
+ * bare text box, and the question, its options and their descriptions stayed in the log. So the
+ * assertions here are mostly about what is ON SCREEN, and about the exact body the card posts —
+ * those two are the whole fix from the operator's side, and neither changed in HOW-27.
+ *
+ * What DID change is the shape of the asking, so the assertions follow it: one question at a
+ * time rather than all of them at once, `1`…`9` on the options, Back/Next to move, Answer only
+ * on the last question. The navigation helpers below exist because a wizard's assertions have to
+ * say which question they are on — and `hidden` is how the primitive says it, which Tailwind's
+ * preflight backs with `display: none !important`, so an inactive question is genuinely not on
+ * screen even though its text is still in `textContent`. Assertions that care use `activeItem()`
+ * or `shown()` rather than reading the whole subtree.
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { act } from "react";
@@ -41,6 +50,9 @@ const QUESTIONS = [
   },
 ];
 
+/** the same ask with a single question, so Answer is the control on screen from the start */
+const ONE_QUESTION = [QUESTIONS[0]];
+
 /** a run that ran one step, said something, called a tool, and is now asking a question */
 function askingLog(questions: unknown[] = QUESTIONS): FakeLog {
   const log = new FakeLog();
@@ -70,49 +82,118 @@ function render(log: FakeLog): HTMLElement {
   return host;
 }
 
-const buttonsNamed = (el: HTMLElement, text: string) =>
-  [...el.querySelectorAll("button")].filter((b) => b.textContent?.trim() === text);
 const click = (el: Element) => act(() => { (el as HTMLElement).click(); });
 
+/** an element the operator can actually see: no `hidden` on it or on any ancestor */
+const shown = (el: Element) => !el.closest("[hidden]");
+const buttonsNamed = (el: HTMLElement, text: string) =>
+  [...el.querySelectorAll("button")].filter((b) => b.textContent?.trim() === text && shown(b));
+/** the question currently on screen — the primitive marks it `data-active` and hides the rest */
+const activeItem = (el: HTMLElement) => el.querySelector("fieldset[data-active]") as HTMLElement;
+const optionInputs = (el: HTMLElement) =>
+  [...activeItem(el).querySelectorAll("input[type=radio], input[type=checkbox]")] as HTMLInputElement[];
+/** the active question's free-text box */
+const otherBox = (el: HTMLElement) => activeItem(el).querySelector("input[type=text]") as HTMLInputElement;
+/** pick the active question's first option */
+const answerActive = (el: HTMLElement) => click(optionInputs(el)[0]!);
+/**
+ * Advance to the last question. Answering is part of advancing: every item is `required`, so
+ * Next refuses an untouched question — which is asserted on its own below.
+ */
+const toLastQuestion = (el: HTMLElement) => {
+  for (let i = 0; i < 10 && buttonsNamed(el, "Next").length > 0; i++) {
+    answerActive(el);
+    click(buttonsNamed(el, "Next")[0]!);
+  }
+};
+/** type into a controlled input the way the DOM would, then let React see it */
+const type = (box: HTMLInputElement, value: string) => {
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+  act(() => {
+    setter.call(box, value);
+    box.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+};
+
 describe("the question renders as itself", () => {
-  test("every question, header, option and description is on screen", () => {
+  test("the first question, its header, options and descriptions are on screen", () => {
     const el = render(askingLog());
-    const text = el.textContent ?? "";
-    expect(text).toContain("Which approach should I take?");
-    expect(text).toContain("Approach");
-    expect(text).toContain("Approach A");
-    expect(text).toContain("Rewrite the renderer.");
-    expect(text).toContain("Approach B");
-    expect(text).toContain("Patch the caller instead.");
-    expect(text).toContain("Which files may I touch?");
-    expect(text).toContain("Scope");
-    expect(text).toContain("the product code");
+    const shownText = activeItem(el).textContent ?? "";
+    expect(shownText).toContain("Which approach should I take?");
+    expect(shownText).toContain("Approach");
+    expect(shownText).toContain("Approach A");
+    expect(shownText).toContain("Rewrite the renderer.");
+    expect(shownText).toContain("Approach B");
+    expect(shownText).toContain("Patch the caller instead.");
   });
 
-  test("single-select draws option buttons; multi-select draws checkboxes", () => {
+  test("one question at a time, and the next one is a Next away", () => {
     const el = render(askingLog());
-    expect(buttonsNamed(el, "Approach A")).toHaveLength(1);
-    const boxes = [...el.querySelectorAll('input[type="checkbox"]')] as HTMLInputElement[];
-    // one per option of the multi-select question only
-    expect(boxes).toHaveLength(2);
+    // HOW-27: the second question exists but is hidden — asking all of them at once was the
+    // thing that did not read like the CLIs
+    expect(el.querySelectorAll("fieldset")).toHaveLength(2);
+    expect(el.querySelectorAll("fieldset[data-active]")).toHaveLength(1);
+    expect(activeItem(el).querySelector("legend")?.textContent).toBe("Which approach should I take?");
+    expect(el.textContent).toContain("Question 1 of 2");
+
+    answerActive(el);
+    click(buttonsNamed(el, "Next")[0]!);
+    expect(activeItem(el).querySelector("legend")?.textContent).toBe("Which files may I touch?");
+    expect(el.textContent).toContain("Question 2 of 2");
+    const shownText = activeItem(el).textContent ?? "";
+    expect(shownText).toContain("Scope");
+    expect(shownText).toContain("the product code");
+  });
+
+  test("a required question cannot be walked past, and says why", () => {
+    const el = render(askingLog());
+    click(buttonsNamed(el, "Next")[0]!); // nothing picked yet
+    expect(activeItem(el).querySelector("legend")?.textContent).toBe("Which approach should I take?");
+    expect(activeItem(el).querySelector('[role="alert"]')?.textContent).toContain("Choose an answer");
+  });
+
+  test("the options are numbered, which is how the CLI is driven", () => {
+    const el = render(askingLog());
+    expect(optionInputs(el).map((i) => i.getAttribute("aria-keyshortcuts"))).toEqual(["1", "2"]);
+  });
+
+  test("single-select draws radios; multi-select draws checkboxes", () => {
+    const el = render(askingLog());
+    // the asking tool's own `multiSelect` decides the control, and it still does
+    expect(optionInputs(el).map((i) => i.type)).toEqual(["radio", "radio"]);
+    expect(optionInputs(el).map((i) => i.getAttribute("value"))).toEqual(["Approach A", "Approach B"]);
+    answerActive(el);
+    click(buttonsNamed(el, "Next")[0]!);
+    expect(optionInputs(el).map((i) => i.type)).toEqual(["checkbox", "checkbox"]);
   });
 
   test("each question carries a free-text box, so \"neither\" is sayable", () => {
     const el = render(askingLog());
-    const others = [...el.querySelectorAll("textarea")];
-    expect(others).toHaveLength(2);
-    expect(others[0]!.getAttribute("aria-label")).toBe("other answer for Approach");
+    const labels = [...el.querySelectorAll("input[type=text]")].map((i) => i.getAttribute("aria-label"));
+    expect(labels).toEqual(["other answer for Approach", "other answer for Scope"]);
+    // and the one on screen belongs to the question on screen
+    expect(otherBox(el).getAttribute("aria-label")).toBe("other answer for Approach");
   });
 
   test("the card is the deep-link target a notification lands on", () => {
     expect(render(askingLog()).querySelector("#needs-input")).not.toBeNull();
   });
 
-  test("nothing is submittable until something is answered", () => {
+  test("Answer belongs to the last question; Back only appears after the first", () => {
     const el = render(askingLog());
-    const answer = buttonsNamed(el, "Answer")[0] as HTMLButtonElement;
-    expect(answer.disabled).toBe(true);
-    click(buttonsNamed(el, "Approach A")[0]!);
+    expect(buttonsNamed(el, "Answer")).toHaveLength(0); // not on question 1 of 2
+    expect(buttonsNamed(el, "Back")).toHaveLength(0);   // nowhere to go back to
+    answerActive(el);
+    click(buttonsNamed(el, "Next")[0]!);
+    expect(buttonsNamed(el, "Answer")).toHaveLength(1);
+    expect(buttonsNamed(el, "Next")).toHaveLength(0);
+    expect(buttonsNamed(el, "Back")).toHaveLength(1);
+  });
+
+  test("nothing is submittable until something is answered", () => {
+    const el = render(askingLog(ONE_QUESTION));
+    expect((buttonsNamed(el, "Answer")[0] as HTMLButtonElement).disabled).toBe(true);
+    answerActive(el);
     expect((buttonsNamed(el, "Answer")[0] as HTMLButtonElement).disabled).toBe(false);
   });
 });
@@ -126,10 +207,10 @@ describe("answering posts exactly what the park can accept", () => {
     }) as unknown as typeof fetch;
 
     const el = render(askingLog());
-    click(buttonsNamed(el, "Approach B")[0]!);
-    const boxes = [...el.querySelectorAll('input[type="checkbox"]')] as HTMLInputElement[];
-    click(boxes[0]!);
-    click(boxes[1]!);
+    click(optionInputs(el)[1]!);                 // Approach B, on question 1
+    click(buttonsNamed(el, "Next")[0]!);
+    click(optionInputs(el)[0]!);                 // src
+    click(optionInputs(el)[1]!);                 // and tests — multi-select accumulates
     await act(async () => { buttonsNamed(el, "Answer")[0]!.click(); });
 
     expect(sent).toHaveLength(1);
@@ -145,9 +226,9 @@ describe("answering posts exactly what the park can accept", () => {
       sent.push(JSON.parse(String(init.body)));
       return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
     }) as unknown as typeof fetch;
-    const el = render(askingLog());
-    click(buttonsNamed(el, "Approach A")[0]!);
-    click(buttonsNamed(el, "Approach B")[0]!);
+    const el = render(askingLog(ONE_QUESTION));
+    click(optionInputs(el)[0]!);                 // Approach A
+    click(optionInputs(el)[1]!);                 // then Approach B — a radio replaces, never adds
     await act(async () => { buttonsNamed(el, "Answer")[0]!.click(); });
     expect(sent[0]).toEqual({ answers: [{ id: "q0", selected: ["Approach B"] }] });
   });
@@ -158,15 +239,11 @@ describe("answering posts exactly what the park can accept", () => {
       sent.push(JSON.parse(String(init.body)));
       return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
     }) as unknown as typeof fetch;
-    const el = render(askingLog());
-    const box = el.querySelectorAll("textarea")[0] as HTMLTextAreaElement;
-    // React tracks the value internally; set it the way the DOM would and fire the event
-    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!;
-    act(() => {
-      setter.call(box, "neither — read the spec first");
-      box.dispatchEvent(new Event("input", { bubbles: true }));
-    });
+    const el = render(askingLog(ONE_QUESTION));
+    type(otherBox(el), "neither — read the spec first");
     await act(async () => { buttonsNamed(el, "Answer")[0]!.click(); });
+    // it rides as `other`, NOT as a `selected` label — which is the whole reason the card holds
+    // its own state instead of reading FormData, where the two are indistinguishable
     expect(sent[0]).toEqual({ answers: [{ id: "q0", selected: [], other: "neither — read the spec first" }] });
   });
 
@@ -175,8 +252,8 @@ describe("answering posts exactly what the park can accept", () => {
       new Response(JSON.stringify({ error: "answers do not match the questions being asked" }), {
         status: 400, headers: { "content-type": "application/json" },
       })) as unknown as typeof fetch;
-    const el = render(askingLog());
-    click(buttonsNamed(el, "Approach A")[0]!);
+    const el = render(askingLog(ONE_QUESTION));
+    answerActive(el);
     await act(async () => { buttonsNamed(el, "Answer")[0]!.click(); });
     expect(el.textContent).toContain("answers do not match the questions being asked");
     expect(el.querySelector('[role="alert"]')).not.toBeNull();
@@ -216,6 +293,25 @@ describe("the run reads as one conversation", () => {
     expect((answered as { text: string }).text).toContain("Approach B");
   });
 
+  test("a run parked on a question has not \"died inside this turn\"", () => {
+    // the mid-turn ask holds the session open on purpose, so there is no turn-finalized yet.
+    // Claiming a death here put the line two rows above the card asking for an answer.
+    const msgs = conversation(deriveDetail("r1", askingLog().events));
+    const beats = msgs.find((m) => m.kind === "beats") as Extract<typeof msgs[number], { kind: "beats" }>;
+    expect(beats.unfinished).toBe(false);
+  });
+
+  test("a turn that really was cut off still says so", () => {
+    // same un-finalized turn, but the run is NOT parked here — nothing is waiting on a human
+    const log = new FakeLog();
+    log.add({ type: "run-started", graph: "quick-task", inputs: { goal: "g" }, pinned_prompts: {} });
+    log.add({ type: "node-started", node: "do", visit: 1, attempt_id: "do#1" });
+    log.add({ type: "chunk", node: "do", visit: 1, turn: 1, index: 0, kind: "text", content: "half a thou" });
+    const msgs = conversation(deriveDetail("r1", log.events));
+    const beats = msgs.find((m) => m.kind === "beats") as Extract<typeof msgs[number], { kind: "beats" }>;
+    expect(beats.unfinished).toBe(true);
+  });
+
   test("what a step published closes it", () => {
     const log = askingLog();
     log.add({ type: "attention-resolved", node: "do", visit: 1, reply: "Approach B", source: "operator" });
@@ -230,16 +326,99 @@ describe("the run reads as one conversation", () => {
     expect(el.textContent).toContain("Let me check the renderer first.");
     expect(el.textContent).toContain("ls web"); // the tool's one-line summary
     const log = el.querySelector(".chat-log")!;
-    const standing = log.querySelector(".cv-standing")!;
-    expect(standing).not.toBeNull();
-    // it is the LAST thing in the conversation, which is what "at the foot" means
-    expect(log.lastElementChild).toBe(standing);
+    expect(log.querySelector(".cv-standing")).not.toBeNull();
+    // it is the LAST row in the conversation, which is what "at the foot" means. Compared by
+    // messageId rather than by node identity: the content box also carries the scroller's own
+    // trailing spacer, and a DOM-vs-DOM `toBe` that fails takes the whole run down when Bun's
+    // formatter tries to print two happy-dom trees.
+    const rows = [...log.querySelectorAll('[data-slot="message-scroller-item"]')];
+    expect(rows.at(-1)!.querySelector(".cv-standing")).not.toBeNull();
+  });
+
+  test("every row is its own scroller item, and a step is the anchor a new turn lands on", () => {
+    const el = render(askingLog());
+    const rows = [...el.querySelectorAll('[data-slot="message-scroller-item"]')];
+    // step, beats, asked, and the standing ask
+    expect(rows).toHaveLength(4);
+    // each row is addressable, which is what lets the viewport hold a position across renders.
+    // The ask row's id carries its log seq, so it is matched rather than pinned — the seq is an
+    // artefact of the fixture, not part of the contract.
+    const ids = rows.map((r) => r.getAttribute("data-message-id"));
+    expect(ids[0]).toBe("step:do@1");
+    expect(ids[1]).toBe("beats:do@1");
+    expect(ids[2]).toMatch(/^ask:\d+$/);
+    expect(ids[3]).toBe("needs-input");
+    // HOW-27: a step boundary IS the turn boundary, so a step is what the viewport anchors to
+    // and the agent's own prose is not — otherwise every chunk would re-anchor the view
+    expect(rows.map((r) => r.getAttribute("data-scroll-anchor"))).toEqual([
+      "true", "false", "false", "true",
+    ]);
   });
 
   test("a run with nothing in it says so rather than drawing an empty frame", () => {
     const log = new FakeLog();
     log.add({ type: "run-started", graph: "quick-task", inputs: { goal: "g" }, pinned_prompts: {} });
     expect(render(log).textContent).toContain("nothing has happened in this run yet");
+  });
+});
+
+describe("moving around a long transcript (HOW-27)", () => {
+  test("both pins are present, and each says which way it goes", () => {
+    const el = render(askingLog());
+    const pins = [...el.querySelectorAll('[data-slot="message-scroller-button"]')];
+    expect(pins.map((p) => p.getAttribute("data-direction"))).toEqual(["start", "end"]);
+    // a hairline arrow is not a label; each pin carries its own accessible name
+    expect(pins.map((p) => p.textContent?.trim())).toEqual(["Scroll to start", "Scroll to end"]);
+  });
+
+  test("a pin is inert while that direction is not scrollable", () => {
+    // happy-dom has no layout, so nothing is scrollable and BOTH pins report inactive —
+    // which is the assertion worth having: they are not drawn active by default
+    const el = render(askingLog());
+    const pins = [...el.querySelectorAll('[data-slot="message-scroller-button"]')];
+    expect(pins.map((p) => p.getAttribute("data-active"))).toEqual(["false", "false"]);
+  });
+});
+
+describe("collapsing the tool calls (HOW-27)", () => {
+  const bodies = (el: HTMLElement) => [...el.querySelectorAll(".act-tool-body")];
+  const toggle = (el: HTMLElement) =>
+    [...el.querySelectorAll("button")].find((b) => /tool call/.test(b.textContent ?? ""))!;
+
+  test("the control counts the tool calls it acts on", () => {
+    const el = render(askingLog());
+    expect(toggle(el).textContent).toContain("Expand 1 tool call");
+  });
+
+  test("it opens every tool call, then closes every one again", () => {
+    const el = render(askingLog());
+    expect(bodies(el)).toHaveLength(0);       // closed by default
+    click(toggle(el));
+    expect(bodies(el)).toHaveLength(1);
+    expect(toggle(el).textContent).toContain("Collapse 1 tool call");
+    click(toggle(el));
+    expect(bodies(el)).toHaveLength(0);
+  });
+
+  test("a single beat can still be toggled on its own after a bulk action", () => {
+    // the epoch is what protects this: a beat adopts the bulk value once, then is its own
+    // again, so a bulk expand does not nail every beat open for the rest of the session
+    const el = render(askingLog());
+    click(toggle(el));
+    expect(bodies(el)).toHaveLength(1);
+    const head = el.querySelector(".act-tool-head") as HTMLElement;
+    click(head);
+    expect(bodies(el)).toHaveLength(0);
+    expect(head.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  test("a run with no tool calls gets no control rather than an inert one", () => {
+    const log = new FakeLog();
+    log.add({ type: "run-started", graph: "quick-task", inputs: { goal: "g" }, pinned_prompts: {} });
+    log.add({ type: "node-started", node: "do", visit: 1, attempt_id: "do#1" });
+    log.add({ type: "chunk", node: "do", visit: 1, turn: 1, index: 0, kind: "text", content: "just prose" });
+    const el = render(log);
+    expect([...el.querySelectorAll("button")].filter((b) => /tool call/.test(b.textContent ?? ""))).toHaveLength(0);
   });
 });
 
@@ -250,13 +429,9 @@ describe("model output stays untrusted input", () => {
         status: 200, headers: { "content-type": "application/json" },
       })) as unknown as typeof fetch;
     const el = render(askingLog());
-    click([...el.querySelectorAll('[role="tab"]')].find((t) => t.textContent === "Ask")!);
+    // HOW-27: no tab to switch to — the composer is at the foot of the transcript, always
     const input = el.querySelector('input[aria-label="ask about this run"]') as HTMLInputElement;
-    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
-    act(() => {
-      setter.call(input, "what happened?");
-      input.dispatchEvent(new Event("input", { bubbles: true }));
-    });
+    type(input, "what happened?");
     await act(async () => { input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });
     expect(el.querySelector("img")).toBeNull();
     expect(el.textContent).toContain('<img src=x onerror="alert(1)">');

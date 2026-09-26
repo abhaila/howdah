@@ -1,15 +1,38 @@
 /**
  * The needs-input surface, one file (HOW-16 P1): the Ask card, the Question card (HOW-25),
  * the Effect card (HOW-3), the harness-login escape hatch the Ask card sometimes carries, and
- * the rule for reading WHY a step parked out of its turn. Which card a park gets is the
- * caller's choice, not this file's — it is decided by `ask.kind` where the cards are drawn.
+ * the rule for reading WHY a step parked out of its turn.
+ *
+ * Which card a park gets is decided HERE, by `StandingAsk`, and nowhere else (HOW-27). It used
+ * to be the caller's choice, and the two callers disagreed: the Chat pane dispatched on the
+ * ask's own kind, while the Steps pane rendered `AskCard` unconditionally at both of its call
+ * sites. So a run parked on an `AskUserQuestion` showed the full question — its options, their
+ * descriptions, single- or multi-select — in Chat, and a bare "your reply" textarea in Steps.
+ * That is exactly the defect HOW-25 was filed to fix, still live in the other pane, and a
+ * second caller was always going to re-introduce it. One dispatcher means a new park kind is
+ * added in one place and every pane gets it.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Send } from "lucide-react";
 import type { RunDetail } from "../../derive";
+import { askQuestions } from "../../../core/ask";
 import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  Questionnaire,
+  QuestionnaireActions,
+  QuestionnaireChoice,
+  QuestionnaireChoiceDescription,
+  QuestionnaireChoices,
+  QuestionnaireError,
+  QuestionnaireInput,
+  QuestionnaireItem,
+  QuestionnaireNext,
+  QuestionnairePrevious,
+  QuestionnaireProgress,
+  QuestionnaireSubmit,
+  QuestionnaireTitle,
+} from "@/components/ui/questionnaire";
 import { submitOnEnter } from "@/lib/keys";
 import { useToast } from "@/components/ui/toast";
 
@@ -22,7 +45,13 @@ export function attentionContext(detail: RunDetail, ask: NonNullable<RunDetail["
   if (marker) return `${marker[1]}: ${marker[2]}`;
   const failedTool = turn.parts.findLast((p) => p.kind === "tool_result" && /error|failed|exit \d|denied|no such file/i.test(p.content));
   if (failedTool) return failedTool.content.trim().slice(0, 1200);
-  if (!turn.finalized) return "The agent stopped before finalizing its turn.";
+  // An un-finalized turn is the normal state of a question park (HOW-27): the mid-turn ask
+  // holds the session open on purpose while `awaitOperator` waits, so there is no
+  // `turn-finalized` yet and nothing has stopped. Reporting it printed a red "The agent stopped
+  // before finalizing its turn." at the top of the very card that was asking the question.
+  // `askQuestions` is core/ask.ts's own reader — the same one `ask_questions` is derived from,
+  // not a second guess at what a question park looks like.
+  if (!turn.finalized && askQuestions(ask) === null) return "The agent stopped before finalizing its turn.";
   return null;
 }
 
@@ -144,22 +173,41 @@ export function AskCard({ runId, ask, detail, onResolved }: { runId: string; ask
 
 
 /**
- * HOW-25 — the card for a question the agent is asking the OPERATOR, and the reason this
+ * HOW-25 — the card for a question the agent is asking the OPERATOR, and the reason that
  * ticket exists. Before it, a question parked as "AskUserQuestion needs permission" and drew
  * a bare text box: the question, its options and their descriptions were all in the log and
  * none of them were on screen, so the only way to answer was to guess what was being asked.
  *
- * It renders the ask as itself — one group per question, the header as the label, every
- * option with its own description, single- or multi-select exactly as the asking tool
- * declared — plus a free-text box, because "neither, do this instead" is a real answer and
- * the harness accepts it.
+ * HOW-27 keeps every one of those guarantees and changes only the SHAPE of the asking, because
+ * the flat all-questions-at-once form was the thing that did not read like the CLIs this
+ * viewer is judged against. It is now `components/ui/questionnaire` — one question at a time,
+ * the options numbered, `1`…`9` to choose, Enter to advance, Previous to go back, a progress
+ * line saying where you are. That is Claude Code's own terminal behaviour, and it is a state
+ * machine (ordered items, active item, per-item answered status, required-ness, shortcuts that
+ * do not steal keys from a text field, `aria-keyshortcuts` on the right elements) worth
+ * borrowing rather than hand-rolling.
+ *
+ * THE ANSWER STATE IS CONTROLLED, and that is not a style preference. `QuestionnaireInput`
+ * joins the form under the ITEM's own field name — the same name the choices carry — as soon as
+ * it becomes that item's selected answer, which is to say the moment the operator types in it.
+ * `new FormData(form).getAll(id)` then returns picked labels and typed text indistinguishably,
+ * while `validateAnswers` REFUSES a `selected` value that is not one of the question's own
+ * option labels. Reading the form would therefore turn "something else" into a 400 exactly when
+ * it was used. `picked`/`other` stay the source of truth and `FormData` is never read, which
+ * also keeps free text able to contain anything — including something that reads like a label.
+ *
+ * NO SKIP CONTROL, deliberately. `validateAnswers` tolerates an untouched question, but a
+ * question reaching the model unanswered is the freeze HOW-25 exists to fix, and the CLI does
+ * not offer it either. Every item is `required`, and the primitive treats a filled free-text
+ * box as satisfying it (`required && !multiple && !hasInputAnswer`), so "neither, do this
+ * instead" is still a complete answer.
  *
  * Everything AskCard established is kept, because the run view depends on it: the
  * sending → delivered → collapsing lifecycle (the authored motion moment), a 409 shown
  * VERBATIM rather than collapsed into "failed", a toast beside the inline error, and
- * `id="needs-input"` so a notification's deep link lands on the control. A 400 is new and
- * distinct: it means this card sent something the park could not accept, which is a bug here
- * rather than something the operator can fix by retrying, so it says so.
+ * `id="needs-input"` so a notification's deep link lands on the control. A 400 is distinct: it
+ * means this card sent something the park could not accept, which is a bug here rather than
+ * something the operator can fix by retrying, so it says so.
  */
 export function AskQuestionCard({ runId, ask, questions, onResolved }: {
   runId: string;
@@ -171,9 +219,10 @@ export function AskQuestionCard({ runId, ask, questions, onResolved }: {
   const [other, setOther] = useState<Record<string, string>>({});
   const [state, setState] = useState<"idle" | "sending" | "delivered" | "failed" | "refused">("idle");
   const [refusal, setRefusal] = useState<string | null>(null);
-  const first = useRef<HTMLButtonElement>(null);
+  const card = useRef<HTMLDivElement>(null);
   const { toast } = useToast();
-  useEffect(() => { if (location.hash === "#needs-input") first.current?.focus(); }, []);
+  // the deep link lands on the card; the questionnaire moves focus to the active item itself
+  useEffect(() => { if (location.hash === "#needs-input") card.current?.focus(); }, []);
 
   const toggle = (q: (typeof questions)[number], label: string) =>
     setPicked((p) => {
@@ -218,64 +267,78 @@ export function AskQuestionCard({ runId, ask, questions, onResolved }: {
   }, [runId, answers, onResolved, toast, ask.node, ask.visit]);
 
   const busy = state === "sending" || state === "delivered";
+
+  /** what the primitive needs to know about the set: the order, and each item's own choices */
+  const items = questions.map((q) => ({
+    name: q.id,
+    required: true,
+    choices: q.options.map((o) => ({ value: o.label, disabled: busy })),
+  }));
+
   return (
-    <div className={`ask-card ${state === "delivered" ? "collapsing" : ""}`} id="needs-input">
+    <div
+      ref={card}
+      tabIndex={-1}
+      className={`ask-card ${state === "delivered" ? "collapsing" : ""}`}
+      id="needs-input"
+    >
       <h3>Needs you — {ask.node}@{ask.visit}</h3>
-      {questions.map((q, qi) => (
-        <div key={q.id} className="auq-group" role="group" aria-label={q.header}>
-          <div className="auq-header">{q.header}</div>
-          <div className="auq-question">{q.question}</div>
-          {q.options.length > 0 && (
-            <div className="auq-options">
-              {q.options.map((o, oi) =>
-                q.multiSelect ? (
-                  <div key={o.label} className="auq-option">
-                    <Checkbox
-                      label={o.label}
-                      checked={(picked[q.id] ?? []).includes(o.label)}
-                      disabled={busy}
-                      onChange={() => toggle(q, o.label)}
-                    />
-                    {o.description && <div className="auq-desc">{o.description}</div>}
-                  </div>
-                ) : (
-                  <div key={o.label} className="auq-option">
-                    <Button
-                      ref={qi === 0 && oi === 0 ? first : undefined}
-                      variant={(picked[q.id] ?? []).includes(o.label) ? "default" : "outline"}
-                      size="sm"
-                      disabled={busy}
-                      aria-pressed={(picked[q.id] ?? []).includes(o.label)}
-                      onClick={() => toggle(q, o.label)}
-                    >
-                      {o.label}
-                    </Button>
-                    {o.description && <div className="auq-desc">{o.description}</div>}
-                  </div>
-                ),
-              )}
-            </div>
-          )}
-          <Textarea
-            aria-label={`other answer for ${q.header}`}
-            value={other[q.id] ?? ""}
-            disabled={busy}
-            onChange={(e) => setOther((o) => ({ ...o, [q.id]: e.target.value }))}
-            placeholder={q.options.length ? "Something else…" : "Your answer…"}
-          />
-        </div>
-      ))}
-      <div className="actions">
-        <Button onClick={send} disabled={busy || answers.length === 0}>
-          <Send />{state === "sending" ? "Sending…" : state === "delivered" ? "Delivered" : "Answer"}
-        </Button>
-        {answers.length === 0 && state === "idle" && <span className="send-state">pick an option or type an answer</span>}
-        {state === "failed" && (
-          <span className="send-state">
-            failed — <Button variant="link" size="inline" onClick={send}>retry</Button>
-          </span>
-        )}
-      </div>
+      <Questionnaire
+        items={items}
+        shortcuts="numbers"
+        onSubmit={(e) => { e.preventDefault(); if (answers.length > 0 && !busy) void send(); }}
+      >
+        {questions.length > 1 && <QuestionnaireProgress />}
+        {questions.map((q) => (
+          <QuestionnaireItem key={q.id} name={q.id} required multiple={q.multiSelect}>
+            <div className="auq-header">{q.header}</div>
+            <QuestionnaireTitle>{q.question}</QuestionnaireTitle>
+            {q.options.length > 0 && (
+              <QuestionnaireChoices>
+                {q.options.map((o) => (
+                  <QuestionnaireChoice
+                    key={o.label}
+                    value={o.label}
+                    disabled={busy}
+                    checked={(picked[q.id] ?? []).includes(o.label)}
+                    onChange={() => toggle(q, o.label)}
+                  >
+                    <span>{o.label}</span>
+                    {o.description && (
+                      <QuestionnaireChoiceDescription className="text-xs">
+                        {o.description}
+                      </QuestionnaireChoiceDescription>
+                    )}
+                  </QuestionnaireChoice>
+                ))}
+              </QuestionnaireChoices>
+            )}
+            <QuestionnaireInput
+              aria-label={`other answer for ${q.header}`}
+              value={other[q.id] ?? ""}
+              disabled={busy}
+              onChange={(e) => setOther((o) => ({ ...o, [q.id]: e.target.value }))}
+              placeholder={q.options.length ? "Something else…" : "Your answer…"}
+            />
+            <QuestionnaireError />
+          </QuestionnaireItem>
+        ))}
+        <QuestionnaireActions>
+          <QuestionnairePrevious variant="outline" size="sm">Back</QuestionnairePrevious>
+          <QuestionnaireNext size="sm">Next</QuestionnaireNext>
+          <QuestionnaireSubmit size="sm" disabled={busy || answers.length === 0}>
+            <Send />{state === "sending" ? "Sending…" : state === "delivered" ? "Delivered" : "Answer"}
+          </QuestionnaireSubmit>
+        </QuestionnaireActions>
+      </Questionnaire>
+      {answers.length === 0 && state === "idle" && (
+        <span className="send-state">pick an option or type an answer</span>
+      )}
+      {state === "failed" && (
+        <span className="send-state">
+          failed — <Button variant="link" size="inline" onClick={send}>retry</Button>
+        </span>
+      )}
       {state === "refused" && refusal && <div className="send-state" role="alert">{refusal}</div>}
     </div>
   );
@@ -376,4 +439,36 @@ export function EffectCard({
       {refusal && <div className="send-state" role="alert">{refusal}</div>}
     </div>
   );
+}
+
+/**
+ * The park, drawn as whatever it actually is. The ONE place that maps an ask to its card:
+ * a question gets the question card, an ambiguous side effect gets the effect card, and
+ * everything else is answered in prose. Every pane that shows a standing ask calls this.
+ */
+export function StandingAsk({ runId, detail, ask, onResolved }: {
+  runId: string;
+  detail: RunDetail;
+  ask: NonNullable<RunDetail["ask"]>;
+  onResolved: () => void;
+}) {
+  // `ask_questions` is the read model's own answer to "is this a question park", parsed once
+  // by core/ask.ts — not re-derived here, and not guessed from the reason text
+  if (detail.ask_questions && detail.ask_questions.length > 0 && askIsCurrent(detail, ask))
+    return <AskQuestionCard runId={runId} ask={ask} questions={detail.ask_questions} onResolved={onResolved} />;
+  if (ask.code === "ambiguous-effect")
+    return <EffectCard runId={runId} ask={ask} effects={detail.ambiguous_effects} onResolved={onResolved} />;
+  return <AskCard runId={runId} ask={ask} detail={detail} onResolved={onResolved} />;
+}
+
+/**
+ * `detail.ask_questions` is derived from the run's CURRENT park. The Steps pane can hand this
+ * a different ask than that one (a rowless park, or a step other than the parked step), and
+ * answering a question card built from someone else's questions would post answers the park
+ * cannot accept — a 400 the operator did not cause. So the question card is used only when the
+ * ask being drawn IS the current park.
+ */
+function askIsCurrent(detail: RunDetail, ask: NonNullable<RunDetail["ask"]>): boolean {
+  const cur = detail.ask;
+  return cur !== null && cur !== undefined && cur.node === ask.node && cur.visit === ask.visit && cur.seq === ask.seq;
 }

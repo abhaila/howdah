@@ -12,6 +12,14 @@
  * cannot be styled, cannot say WHAT is about to happen in the app's own voice, and blocks
  * the whole tab. AlertDialog is the role-correct variant for a destructive choice
  * (`role="alertdialog"`, the cancel focused first, so Enter is never the destructive one).
+ *
+ * HOW-27 MOVED THE PRIMITIVE LAYER ONTO base-vega AND DELIBERATELY LEFT THIS BEHIND, for the
+ * reason the paragraph above already gives. `@base-ui/react` is a dependency now, so "no Radix"
+ * is no longer the argument; the argument is that `showModal()` gets the focus trap, the inert
+ * background, `::backdrop` and Esc from the PLATFORM, in the top layer, with no portal, no
+ * scroll-lock and no z-index. base-vega's dialog reimplements all of that in userland. This is
+ * one of the few places where the hand-written version is not the compromise — it is the better
+ * one, and moving it would be a regression bought with a larger file.
  */
 import { useCallback, useEffect, useId, useRef } from "react";
 import { cn } from "@/lib/utils";

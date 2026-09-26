@@ -111,18 +111,27 @@ describe("the panel's live timing", () => {
 });
 
 describe("panel tabs are keyboard tabs", () => {
-  test("role=tab, focusable, and Enter / Space switch panes", async () => {
+  /**
+   * HOW-27 moved PanelTabs onto `@base-ui/react/tabs`, so the strip is now a roving tabindex —
+   * one Tab stop, arrows within it — rather than one stop per tab. Space is asserted and Enter
+   * is not: a Base UI tab is a real `<button>`, so a browser turns Enter into a click for it
+   * and happy-dom does not synthesise that. The component test says the same thing.
+   */
+  test("role=tab, one roving focus stop, and Space switches panes", async () => {
     const log = new FakeLog();
     started(log);
     log.add({ type: "node-started", node: "map.drift", visit: 1, attempt_id: "map.drift#1" });
     log.add(drift([{ key: "a", outcome: "verified" }]));
     const el = renderStep(log, "map.drift", 1);
-    for (const t of tabs(el)) expect(t.getAttribute("tabindex")).toBe("0");
+    expect(tabs(el).filter((t) => t.tabIndex === 0)).toHaveLength(1);
+    expect(tabs(el).find((t) => t.getAttribute("aria-selected") === "true")!.tabIndex).toBe(0);
     const press = (label: string, key: string) =>
       act(async () => {
-        tabs(el).find((t) => t.textContent === label)!.dispatchEvent(new window.KeyboardEvent("keydown", { key, bubbles: true }));
+        const t = tabs(el).find((x) => x.textContent === label)!;
+        t.focus();
+        t.dispatchEvent(new window.KeyboardEvent("keydown", { key, bubbles: true }));
       });
-    await press("Output", "Enter");
+    await press("Output", " ");
     expect(selected(el)).toBe("Output");
     await press("Drift", " ");
     expect(selected(el)).toBe("Drift");
@@ -165,6 +174,50 @@ describe("an ask on a node with no step row", () => {
     proposeRound(log, ghostsV1());
     failApproval(log);
     expect(renderStep(log, "slice.approve", 1).querySelector('[data-testid="rowless-ask"]')).toBeNull();
+  });
+});
+
+/**
+ * HOW-27. The Steps pane rendered `AskCard` unconditionally at both of its ask call sites,
+ * so a run parked on an `AskUserQuestion` showed the whole question in Chat and a bare
+ * "your reply" box here — the exact defect HOW-25 was filed to fix, still live in this pane.
+ * `StandingAsk` is now the one dispatcher and both panes go through it.
+ */
+describe("a question park draws the question in THIS pane too (HOW-27)", () => {
+  function askingLog(): FakeLog {
+    const log = new FakeLog();
+    log.add({ type: "run-started", graph: "quick-task", inputs: { goal: "g" }, pinned_prompts: {} });
+    log.add({ type: "node-started", node: "do", visit: 1, attempt_id: "do#1" });
+    log.add({ type: "chunk", node: "do", visit: 1, turn: 1, index: 0, kind: "text", content: "I need a decision." });
+    log.add({
+      type: "attention-raised", node: "do", visit: 1, reason: "Which approach? (+0 more)",
+      ask: { kind: "user-question", request_id: "r1", tool_name: "AskUserQuestion", tool_use_id: "t1", questions: [
+        { question: "Which approach should I take?", header: "Approach", multiSelect: false,
+          options: [{ label: "Approach A", description: "Rewrite the renderer." }, { label: "Approach B" }] }] },
+    });
+    return log;
+  }
+
+  test("the options are on screen, not a bare reply box", () => {
+    const el = renderStep(askingLog(), "do");
+    const ask = [...el.querySelectorAll('[role="tab"]')].find((t) => t.textContent?.trim() === "Ask")!;
+    act(() => (ask as HTMLElement).click());
+    expect(el.textContent).toContain("Which approach should I take?");
+    expect(el.textContent).toContain("Approach A");
+    expect(el.textContent).toContain("Rewrite the renderer.");
+    // the question card, not the prose card
+    expect(el.querySelector("fieldset[data-active]")).not.toBeNull();
+    expect(el.querySelector('textarea[aria-label="your reply"]')).toBeNull();
+  });
+
+  test("a question park is not reported as an agent that stopped mid-turn", () => {
+    // the mid-turn ask holds the session open on purpose, so there is no turn-finalized yet.
+    // This printed a red "The agent stopped before finalizing its turn." on the card that was
+    // doing the asking.
+    const el = renderStep(askingLog(), "do");
+    const ask = [...el.querySelectorAll('[role="tab"]')].find((t) => t.textContent?.trim() === "Ask")!;
+    act(() => (ask as HTMLElement).click());
+    expect(el.textContent).not.toContain("stopped before finalizing");
   });
 });
 

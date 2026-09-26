@@ -103,15 +103,35 @@ describe("PanelTabs — the selected tab carries its own selected styling (P0.1)
     expect($$(el, '[role="tab"]')[1]!.getAttribute("aria-selected")).toBe("true");
     expect($$(el, '[role="tab"]')[1]!.className).toContain("border-b-[var(--fg)]");
 
-    press($$(el, '[role="tab"]')[0]!, "Enter");
+    // HOW-27: the keyboard is Base UI's composite now, and it reads the FOCUSED element — a
+    // bare keydown on an unfocused tab is not a keypress anybody made.
+    //
+    // Space is asserted and Enter is not, and that is a limit of the ENVIRONMENT rather than
+    // of the component. A Base UI tab is a real `<button>`, so a browser turns Enter into a
+    // click for it; happy-dom does not synthesise that, so asserting Enter here would assert
+    // happy-dom. Enter and the arrow keys are checked in a real browser instead — see the
+    // HOW-27 notes on the keyboard sweep.
+    const first = $$(el, '[role="tab"]')[0]!;
+    act(() => first.focus());
+    press(first, " ");
     expect($$(el, '[role="tab"]')[0]!.getAttribute("aria-selected")).toBe("true");
-    press($$(el, '[role="tab"]')[1]!, " ");
-    expect($$(el, '[role="tab"]')[1]!.getAttribute("aria-selected")).toBe("true");
+    expect($$(el, '[role="tab"]')[0]!.className).toContain("border-b-[var(--fg)]");
   });
 
-  test("every tab is a focus stop, so no pane is mouse-only", () => {
+  /**
+   * HOW-27 changed what "reachable without a mouse" MEANS here, and the assertion follows it.
+   * These used to be hand-rolled buttons each with `tabIndex={0}`, so Tab walked through every
+   * tab in the strip. On `@base-ui/react/tabs` it is a roving tabindex: the strip is ONE Tab
+   * stop and the arrows move within it, which is the actual ARIA tabs pattern and fewer stops
+   * between the operator and the pane they want. Still no pane is mouse-only — that is what
+   * the arrow-key test below proves.
+   */
+  test("the strip is one focus stop, with the roving tabindex on the selected tab", () => {
     const el = tabs();
-    for (const t of $$(el, '[role="tab"]')) expect(t.tabIndex).toBe(0);
+    const stops = $$(el, '[role="tab"]');
+    expect(stops.filter((t) => t.tabIndex === 0)).toHaveLength(1);
+    expect(stops.find((t) => t.getAttribute("aria-selected") === "true")!.tabIndex).toBe(0);
+    for (const t of stops.filter((t) => t.getAttribute("aria-selected") !== "true")) expect(t.tabIndex).toBe(-1);
   });
 
   test("the top-level Tabs switcher is a tablist with the same selected contract", () => {
@@ -303,15 +323,35 @@ describe("Dialog / AlertDialog — the confirmation surface (P1.4)", () => {
 });
 
 describe("Tooltip — hover AND focus AND tap, tied by aria-describedby (P1.4)", () => {
-  test("it is closed until something opens it, and opening it names the trigger's description", () => {
+  /**
+   * HOW-27: on `@base-ui/react/tooltip` the popup is PORTALLED and only mounted while open, so
+   * "closed" is now "absent from the document" rather than "present with [hidden]", and the
+   * query is document-wide rather than scoped to the host.
+   *
+   * The assertion that matters is unchanged and is the reason this component exists: opening it
+   * names the trigger's description. The primitive does NOT provide that — its popup carries no
+   * role, no id and sets no `aria-describedby` — so tooltip.tsx wires all three itself, and this
+   * is what stops that wiring being dropped as "the library handles it".
+   */
+  test("it is closed until something opens it, and opening it names the trigger's description", async () => {
     const el = renderPrimitive(<Tooltip content="Folder is gone"><span>Open in IDE</span></Tooltip>);
-    const tip = $(el, '[role="tooltip"]')!;
-    expect(tip.hasAttribute("hidden")).toBe(true);
+    const trigger = $(el, '[data-slot="tooltip-trigger"]')!;
+    expect(document.querySelector('[role="tooltip"]')).toBeNull();
+    expect(trigger.hasAttribute("aria-describedby")).toBe(false);
 
-    act(() => { el.firstElementChild!.dispatchEvent(new window.Event("focusin", { bubbles: true })); });
-    expect($(el, '[role="tooltip"]')!.hasAttribute("hidden")).toBe(false);
-    const described = $$(el, "span").find((s) => s.hasAttribute("aria-describedby"))!;
-    expect(described.getAttribute("aria-describedby")).toBe($(el, '[role="tooltip"]')!.id);
+    // awaited: the positioner measures and re-renders after the popup mounts, and an
+    // un-awaited act() leaves that update outside the test's act scope (React says so, loudly)
+    await act(async () => { trigger.dispatchEvent(new window.Event("focusin", { bubbles: true })); });
+    const tip = document.querySelector('[role="tooltip"]') as HTMLElement;
+    expect(tip).not.toBeNull();
+    expect(tip.textContent).toBe("Folder is gone");
+    expect(trigger.getAttribute("aria-describedby")).toBe(tip.id);
+    expect(tip.id).not.toBe("");
+  });
+
+  test("the trigger is a span, so a tooltip inside a control is not a nested button", () => {
+    const el = renderPrimitive(<Tooltip content="why"><span>text</span></Tooltip>);
+    expect($(el, '[data-slot="tooltip-trigger"]')!.tagName).toBe("SPAN");
   });
 
   test("empty content renders the trigger alone — never an empty floating box", () => {

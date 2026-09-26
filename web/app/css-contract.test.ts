@@ -178,8 +178,12 @@ function literals(expr: string, out: string[] = []): string[] {
 /** Class names a stylesheet defines. */
 function classesDefinedIn(css: string): Set<string> {
   // strip declaration blocks and comments, so `color: var(--x)` and prose cannot look like rules
+  // — and statement at-rules, because a FILENAME is not a selector: `@import
+  // "./vendor/shadcn-tailwind.css"` (HOW-27) otherwise reports `.css` as a rule with no
+  // consumer, which direction 2 then blames on the component layer.
   const selectorsOnly = css
     .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/@(?:import|charset|namespace|layer)[^;{]*;/g, "")
     .replace(/\{[^{}]*\}/g, "{}");
   const out = new Set<string>();
   for (const m of selectorsOnly.matchAll(RULE_RE)) out.add(m[1]!);
@@ -301,7 +305,16 @@ describe("tokens.css is the single source of colour and type (P3.12)", () => {
   });
 });
 
-describe("the no-Radix constraint (P1.3)", () => {
+/**
+ * HOW-27 widened this from "no Radix" to what the rule was always protecting. `@base-ui/react`
+ * is now a dependency (base-vega's primitives are built on it), so a test that only forbids the
+ * string `@radix-ui/` would pass while the layer quietly grew a second primitives library. What
+ * is asserted instead: Radix is still absent, and the three controls this project deliberately
+ * keeps on the PLATFORM stay there — the native `<select>`, the native `<dialog>` and the real
+ * `<input type="checkbox">`. Each one's file header says why it was left behind when the rest
+ * of the layer moved, and this is what stops "consistency" quietly undoing those reasons.
+ */
+describe("the primitives constraint (P1.3, widened in HOW-27)", () => {
   const pkg = JSON.parse(readFileSync(join(REPO, "package.json"), "utf8")) as {
     dependencies?: Record<string, string>; devDependencies?: Record<string, string>;
   };
@@ -318,8 +331,30 @@ describe("the no-Radix constraint (P1.3)", () => {
     }
   });
 
+  test("only ONE primitives library is installed — Base UI, not Base UI *and* Radix", () => {
+    const all = Object.keys({ ...pkg.dependencies, ...pkg.devDependencies });
+    expect(all.filter((d) => /^@radix-ui\/|^@headlessui\/|^@ariakit\//.test(d))).toEqual([]);
+  });
+
   test("Select is still a native <select>", () => {
     expect(readFileSync(join(APP, "components/ui/select.tsx"), "utf8")).toContain("<select");
+  });
+
+  test("Dialog is still the native <dialog>", () => {
+    const src = readFileSync(join(APP, "components/ui/dialog.tsx"), "utf8");
+    expect(src).toContain("<dialog");
+    expect(src).toContain("showModal");
+  });
+
+  test("Checkbox is still a real <input type=\"checkbox\">", () => {
+    expect(readFileSync(join(APP, "components/ui/checkbox.tsx"), "utf8")).toContain('type="checkbox"');
+  });
+
+  test("each control kept on the platform says WHY it was not migrated", () => {
+    for (const f of ["select", "dialog", "checkbox"]) {
+      const src = readFileSync(join(APP, `components/ui/${f}.tsx`), "utf8");
+      expect(src, `${f}.tsx must explain why it stayed on the platform`).toContain("DELIBERATELY LEFT THIS BEHIND");
+    }
   });
 });
 

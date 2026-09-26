@@ -19,7 +19,7 @@ import { Tooltip } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
 import { PanelResizer, PanelToggle } from "@/components/ui/panel";
 import { readStored, usePanel } from "@/lib/panel";
-import { AskCard } from "./ask";
+import { StandingAsk } from "./ask";
 import { StepActivity } from "./activity";
 import { PromptAndContext } from "./prompt-context";
 
@@ -225,7 +225,7 @@ export function StepDetail({ runId, row, detail, ask, now, onResolved }: {
   const rowlessAskCard = rowlessAsk && (
     <div className="sd-body sd-rowless-ask" data-testid="rowless-ask">
       <div className="pd-note">{rowlessAsk.node} has no step yet — it parked before its first attempt started</div>
-      <AskCard key={`${rowlessAsk.node}@${rowlessAsk.visit}#${rowlessAsk.seq}`} runId={runId} ask={rowlessAsk} detail={detail} onResolved={onResolved} />
+      <StandingAsk key={`${rowlessAsk.node}@${rowlessAsk.visit}#${rowlessAsk.seq}`} runId={runId} ask={rowlessAsk} detail={detail} onResolved={onResolved} />
     </div>
   );
   if (!row) return <div className="step-detail">{rowlessAskCard ?? <EmptyState>pick a step</EmptyState>}</div>;
@@ -311,7 +311,7 @@ export function StepDetail({ runId, row, detail, ask, now, onResolved }: {
               <SlicePane pane={shown} runId={runId} slice={detail.slice} row={row} onChanged={onResolved} />
             )}
             {shown === "ask" && (isAsking
-              ? <AskCard key={`${ask!.node}@${ask!.visit}#${ask!.seq}`} runId={runId} ask={ask!} detail={detail} onResolved={onResolved} />
+              ? <StandingAsk key={`${ask!.node}@${ask!.visit}#${ask!.seq}`} runId={runId} ask={ask!} detail={detail} onResolved={onResolved} />
               : <div className="pd-note">this step is not waiting on you</div>)}
             {shown === "activity" && (
               <StepActivity turns={detail.turns} render={render} row={row} context={detail.context} />

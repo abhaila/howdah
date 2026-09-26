@@ -17,11 +17,14 @@
     "typescript": "^7.0.2"
   },
   "dependencies": {
+    "@base-ui/react": "^1.8.0",
+    "@shadcn/react": "^0.3.1",
     "@tree-sitter-grammars/tree-sitter-kotlin": "1.1.0",
     "@xyflow/react": "^12.11.6",
     "bun-plugin-tailwind": "^0.1.2",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "cn": "^0.4.0",
     "lucide-react": "^1.45.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",

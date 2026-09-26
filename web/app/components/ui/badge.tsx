@@ -11,7 +11,9 @@
  * Colour stays out of it. `scope-cleared`'s dulled gold and `scope-per-visit`'s slate were
  * the two hues the old modifiers carried, and they are carried here by name.
  */
-import type { HTMLAttributes } from "react";
+
+import { mergeProps } from "@base-ui/react/merge-props";
+import { useRender } from "@base-ui/react/use-render";
 import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "@/lib/utils";
 
@@ -41,8 +43,24 @@ export const badgeVariants = cva(
 
 export type BadgeVariant = NonNullable<VariantProps<typeof badgeVariants>["variant"]>;
 
-export function Badge({ className, variant, ...props }: HTMLAttributes<HTMLSpanElement> & VariantProps<typeof badgeVariants>) {
-  return <span className={cn(badgeVariants({ variant }), className)} {...props} />;
+/**
+ * HOW-27: base-vega's badge is the `useRender` + `mergeProps` shape rather than a bare tag, so
+ * a caller can render the badge AS something else — `render={<a href=… />}` for a badge that
+ * navigates — without this file growing a variant per element. A plain `<span>` is still what
+ * it renders when nobody asks, so all sixteen existing call sites are untouched.
+ */
+export function Badge({
+  className,
+  variant = "default",
+  render,
+  ...props
+}: useRender.ComponentProps<"span"> & VariantProps<typeof badgeVariants>) {
+  return useRender({
+    defaultTagName: "span",
+    props: mergeProps<"span">({ className: cn(badgeVariants({ variant }), className) }, props),
+    render,
+    state: { slot: "badge", variant },
+  });
 }
 
 /** the scope a context key declares → its Badge variant (one mapping, not one per call site) */

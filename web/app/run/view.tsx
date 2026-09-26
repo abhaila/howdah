@@ -38,7 +38,6 @@ import { AlertDialog } from "@/components/ui/dialog";
 import { LoadingBlock } from "@/components/ui/skeleton";
 import { useToast } from "@/components/ui/toast";
 import { ScrollShell } from "@/components/scroll-shell";
-import { AskCard, EffectCard } from "./ask";
 import { PromptAndContext } from "./prompt-context";
 import { RunSteps, StepDetail, StepsSplit } from "./steps";
 import { RunLogs } from "./logs";

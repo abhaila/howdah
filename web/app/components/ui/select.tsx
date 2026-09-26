@@ -7,6 +7,17 @@
  * touch-correct for free, on every platform, with no listbox to reimplement — so the only
  * thing worth borrowing is the appearance. That is what this is: the registry's trigger
  * styling over a real `<select>`, with the chevron drawn beside it.
+ *
+ * HOW-27 MOVED THE PRIMITIVE LAYER ONTO base-vega AND DELIBERATELY LEFT THIS BEHIND. The
+ * original reason — "no Radix" — no longer applies, since `@base-ui/react` is a dependency now
+ * and base-vega's select is built on it rather than on Radix. What keeps this a native
+ * `<select>` is the OTHER half of the sentence above, which never depended on which library was
+ * banned: a native select is keyboard-correct, screen-reader-correct and touch-correct for
+ * free, on every platform. base-vega's replacement is 198 lines reimplementing a listbox —
+ * typeahead, roving focus, mobile behaviour — to buy styled option rows, which nothing in this
+ * app asks for. Swapping a correct 28-line control for a 198-line one to gain nothing is the
+ * over-engineering the component sweep exists to remove. If styled options are ever wanted the
+ * swap is one file, and every call site stays as it is.
  */
 import { forwardRef } from "react";
 import type { SelectHTMLAttributes } from "react";

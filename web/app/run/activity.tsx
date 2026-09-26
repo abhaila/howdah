@@ -26,7 +26,7 @@
  * them, and 2,252 blank rows are noise. If a harness ever does send thinking, it renders —
  * the content check is what decides, not the kind.
  */
-import { useState } from "react";
+import { createContext, useContext, useState } from "react";
 import { ChevronRight, Wrench, TriangleAlert, FileOutput, Sparkles } from "lucide-react";
 import type { CoalescedTurn, TurnPart } from "../../../log/coalesce";
 import type { RunDetail } from "../../derive";
@@ -58,11 +58,38 @@ export function toolSummary(input: string): string {
   return JSON.stringify(o).replace(/\s+/g, " ");
 }
 
+/**
+ * A transcript-wide "collapse/expand every tool call" instruction (HOW-27).
+ *
+ * Each `ToolBeat` owns its own open state, which is what makes one tool openable without
+ * disturbing its neighbours — so a bulk control cannot simply be a prop, or every beat would
+ * snap back to the bulk value the next time the pane re-rendered and per-beat toggling would
+ * stop working. It is an EPOCH instead: the provider bumps `epoch` when the operator asks for
+ * all-open or all-closed, and a beat adopts `open` exactly once per epoch it has not seen.
+ * Between epochs the beat is on its own again.
+ *
+ * The context is optional, so `StepActivity` and any other caller render unchanged without a
+ * provider — `null` means "nobody is asking", which is the pre-HOW-27 behaviour exactly.
+ */
+export interface ToolDisclosure {
+  epoch: number;
+  open: boolean;
+}
+export const ToolDisclosureContext = createContext<ToolDisclosure | null>(null);
+
 /** exported for the Chat transcript (HOW-25): one tool renderer, not two */
 export function ToolBeat({ call, result }: { call: TurnPart; result?: TurnPart }) {
   const failed = result !== undefined && FAILED.test(result.content);
   // a failure opens itself; everything else waits to be asked
   const [open, setOpen] = useState(failed);
+  const bulk = useContext(ToolDisclosureContext);
+  const [seenEpoch, setSeenEpoch] = useState(bulk?.epoch ?? 0);
+  // adjusting state during render rather than in an effect: React re-renders this component
+  // before touching the DOM, so the beat never paints in the stale state first
+  if (bulk !== null && bulk.epoch !== seenEpoch) {
+    setSeenEpoch(bulk.epoch);
+    setOpen(bulk.open);
+  }
   return (
     <div className={`act-tool${failed ? " failed" : ""}`} data-open={open ? "open" : "closed"}>
       <Row className="act-tool-head" aria-expanded={open} onClick={() => setOpen(!open)}>

@@ -12,13 +12,38 @@ shape parts (A*), decisions (D*/OV-*), and the task list (T1–T22). Source comm
 reference those IDs — when a comment says "OV-1" or "T18", `shaping.md` explains why.
 
 Runtime: **Bun** (TypeScript, ESM, no build step for server/CLI code). No framework beyond
-React + Tailwind for the viewer, with ONE deliberate exception: `@xyflow/react` (HOW-24) draws
-the graph builder's canvas. It is the library the ticket named by reference, and it buys exactly
-the part that is expensive to own and cheap to borrow — drag-to-connect with a live preview wire,
-edge hit-testing, pan/zoom, marquee select. Its whole dependency tree is zustand, classcat and
-four d3 modules, so the no-Radix rule stands untouched. It is used ONLY under
-`web/app/builder/`, and its stylesheet is imported from `main.tsx` and never pasted into the
-three hand-written sheets (see the CSS contract below).
+React + Tailwind for the viewer, with THREE deliberate exceptions. The first two are admitted
+on the same test — each buys a part that is expensive to own and cheap to borrow, its whole
+dependency tree is small enough to name in a sentence, and it is confined to the files that
+need it. The third, `@base-ui/react`, is the primitive layer's foundation and is a larger
+commitment made on purpose; see the components section below for what moved onto it, what
+deliberately did not, and why.
+
+`@xyflow/react` (HOW-24) draws the graph builder's canvas. It is the library the ticket named
+by reference, and it buys drag-to-connect with a live preview wire, edge hit-testing, pan/zoom
+and marquee select. Its whole dependency tree is zustand, classcat and four d3 modules. It is
+used ONLY under `web/app/builder/`, and its stylesheet is imported from `main.tsx` and never
+pasted into the three hand-written sheets (see the CSS contract below).
+
+`@shadcn/react` (HOW-27) is the headless half of `components/ui/message-scroller.tsx` and
+`components/ui/questionnaire.tsx`, which make the run's Chat pane read like an agentic chat —
+a transcript that holds the reader's position through streaming output, and a harness question
+asked one at a time with the options numbered. It is 20KB across three files with **zero
+runtime dependencies** and `react` as its only peer: the `base`, `radix` and `aria` flavours of
+`questionnaire.tsx` are byte-identical apart from the button import, which is the proof that
+the primitive under them is not a primitives library. Neither of the two imports
+`@base-ui/react` even now that it is installed — they need nothing from it. Both were pulled with `shadcn add` and are kept verbatim but for a documented
+deviation each (message-scroller substitutes four `scrollbar-*` utilities and `inset-s-*` that
+the vendored shadcn layer does not carry, and retargets two `Button` defaults onto howdah's own
+variant vocabulary). `components.json` therefore names a `base-*` style, and `cn` comes with
+them: `web/app/lib/utils.ts` keeps clsx+tailwind-merge for the twenty older primitives, and
+consolidating onto `cn` belongs with the rest of that migration.
+
+`web/app/vendor/shadcn-tailwind.css` is shadcn's own Tailwind layer (`@utility`,
+`@custom-variant`) that those two are written against — vendored rather than depended on,
+because the package carrying it is the shadcn CLI: 310 packages for 16KB of CSS. It is
+`@import`ed from `globals.css` because Tailwind has to process it, and it is deliberately NOT
+in `css-contract.test.ts`'s scan list, for the same reason React Flow's sheet is not.
 
 ## Commands
 
@@ -383,7 +408,7 @@ Break one of these and the design stops working, so check them before changing t
 | `engine/` | `run.ts` (loop, routing, pinning, effects, attribution), `replay.ts`, `reconcile.ts` (git probes + worktree fingerprint), `attention.ts`, `control.ts` (replies, decisions, runner lock), `slice-decision.ts`, `slice-map.ts`, `executors/` |
 | `cli/` | `main.ts` verbs, `new-graph.ts` scaffolder (writes into `$HOWDAH_HOME`) |
 | `config/` | `config.json` workspaces + settings, `tuning.json` overlay, GitHub repo registration |
-| `web/` | Bun server (read model + reply/launch/control writes, SSE), `derive.ts` read model, React app in `app/`: `main.tsx` is the shell/nav/router only, screens in `app/screens/`, run-detail panes in `app/run/` (Chat is the default: `run/chat.tsx` folds the run into one conversation and carries the standing ask inline, HOW-25), builder in `app/builder/` (HOW-24: `canvas.tsx` + `node-card.tsx` + `edge.tsx` + `palette.tsx` + `properties.tsx`, with `step-form.tsx`/`branching.tsx`/`fields.tsx` as the panel bodies), primitives in `app/components/ui/`, helpers in `app/lib/` |
+| `web/` | Bun server (read model + reply/launch/control writes, SSE), `derive.ts` read model, React app in `app/`: `main.tsx` is the shell/nav/router only, screens in `app/screens/`, run-detail panes in `app/run/` (Chat is the default: `run/chat.tsx` folds the run into one conversation and carries the standing ask inline, HOW-25; HOW-27 made it ONE scrolling transcript with the composer permanently at its foot — the Transcript/Ask tab split is gone, not moved, and the composer asks the read-only route and never replies to the agent, because one box that silently changes target on whether the run is parked is a box that sends the wrong one), builder in `app/builder/` (HOW-24: `canvas.tsx` + `node-card.tsx` + `edge.tsx` + `palette.tsx` + `properties.tsx`, with `step-form.tsx`/`branching.tsx`/`fields.tsx` as the panel bodies), primitives in `app/components/ui/`, helpers in `app/lib/` |
 | `reviser/` | GEPA-method revision script, eval case, generated proposals |
 | `watchdog/` | out-of-process heartbeat/attention checker + launchd plist |
 | `research/` | Orbital spec, feedback doc, DOT exports, UI captures — the inputs this design was built from |
@@ -444,10 +469,31 @@ control. Design tokens (palette, type scale, motion) live in `web/public/tokens.
 `app/globals.css` and are decided in `shaping.md`'s Design section; tokens.css is the ONLY
 place a hex or a `font-size: Npx` may appear. The components are shadcn patterns vendored and
 rewritten onto those tokens — one file each under `app/components/ui/`, wired to `shadcn add`
-by the root `components.json` and the `@/*` path in `tsconfig.json`. **No Radix**, ever:
-`Select` is a styled native `<select>`, `Dialog` is the native `<dialog>`, and anything that
-cannot be had without Radix is hand-written in the `cva` + `cn` pattern with its file header
-saying so. Every interactive element goes through a primitive — a raw `<button>`, `<input>`,
+by the root `components.json` (style `base-vega`) and the `@/*` path in `tsconfig.json`.
+
+**ONE primitives library, and three controls that stay on the platform** (HOW-27). The layer
+used to be hand-written under a `No Radix, ever` rule. It now sits on `@base-ui/react`, which
+is what base-vega's components are built on — `button`, `badge`, `input`, `separator`, `tabs`
+and `tooltip` moved, and `tabs` gained the roving tabindex it never had by hand. Radix is still
+refused, and so is a SECOND primitives library: `css-contract.test.ts` asserts that no
+`@radix-ui/`, `@headlessui/` or `@ariakit/` package is installed.
+
+`Select`, `Dialog` and `Checkbox` deliberately did NOT move, and the same test asserts each one
+still says why in its own header. The original reason ("no Radix") expired when Base UI
+arrived; the reason they stay is the one that never depended on it — the platform's version is
+better. A native `<select>` is keyboard-, screen-reader- and touch-correct on every platform
+in 28 lines where base-vega's listbox is 198; `showModal()` gets the focus trap, the inert
+background, `::backdrop` and Esc in the top layer with no portal or z-index; and a real
+`<input type="checkbox">` keeps Space, form participation and `indeterminate` and does not
+change `onChange(e)` into `onCheckedChange(checked)` at every call site. `Tooltip` is the
+instructive middle: it took Base UI's collision-aware POSITIONING (the hand-written popup was
+`left: 0; top: 100%` and overflowed in the inspector rail, which is exactly where it is used)
+but kept its own `role="tooltip"`, id and `aria-describedby`, because the primitive ships none
+of the three and HOW-16 P1.4 existed to gain them.
+
+The APIs are Howdah's, not base-vega's: `PanelTabs items={[…]}`, `Tooltip content=`,
+`Checkbox label=`, `Dialog open/onClose`. Adopting the registry's compositional spellings would
+have rewritten ~73 call sites to say the same thing in three components each. Every interactive element goes through a primitive — a raw `<button>`, `<input>`,
 `<select>`, `<textarea>` or `<label>` outside `components/ui/` is a test failure, and so is a
 class emitted with no rule, a rule with no consumer, or a `title=` used as a tooltip
 (`app/css-contract.test.ts`, `app/components/components.test.tsx`). Those two files exist
