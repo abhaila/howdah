@@ -55,7 +55,7 @@ import { typecheckLocalGraph } from "../graphs/typecheck";
 import { newGraph, type GraphKind } from "../cli/new-graph";
 import { readLocalPrompt, saveBuilderGraph } from "../graphs/builder";
 import { parseGraphSpec, specOf, SPEC_PROMPT_ID } from "../core/graph-spec";
-import { ensureHowdahHome, howdahHome, loadConfig, saveConfig } from "../config/config";
+import { ensureHowdahHome, howdahHome, loadConfig, saveConfig, typesafeKeyState } from "../config/config";
 import { listGithubRepos, registerGithubRepo } from "../config/github";
 import { loadTuning, saveTuning, pruneTuning } from "../config/tuning";
 import {
@@ -518,11 +518,23 @@ export function createHowdahServer(opts: ServerOpts) {
           const c = loadConfig();
           for (const k of ["editorCommand", "slackWebhook", "theme", "chime"] as const)
             if (k in body) (c as any)[k] = body[k];
+          // The key is write-only and the form PUTs the whole object on every save, so an
+          // absent or blank field means "leave it alone" — otherwise saving the chime
+          // checkbox would silently clear a key the screen is not allowed to show back.
+          // `null` is the explicit clear, which is why there is a Clear button.
+          if ("typesafeApiKey" in body) {
+            const v = body.typesafeApiKey;
+            if (v === null) delete c.typesafeApiKey;
+            else if (typeof v === "string" && v.trim()) c.typesafeApiKey = v.trim();
+          }
           saveConfig(c);
           return json({ ok: true });
         }
-        const { repos, folders, ...settings } = loadConfig();
-        return json(settings);
+        // A credential is never served back into the bundle — only whether one is in force
+        // and where it came from. 127.0.0.1 with the Host/Origin guards makes echoing it
+        // low-stakes, not harmless, and the screen has no use for the value.
+        const { repos, folders, typesafeApiKey, ...settings } = loadConfig();
+        return json({ ...settings, typesafeApiKeyState: typesafeKeyState({ ...settings, typesafeApiKey, repos, folders }) });
       }
       if (url.pathname === "/api/github/repos") {
         try {

@@ -151,7 +151,15 @@ export function AddWorkspace({ onAdded, hint }: { onAdded: () => void; hint?: st
   );
 }
 
-interface SettingsDto { editorCommand?: string; slackWebhook?: string; chime?: boolean }
+interface SettingsDto {
+  editorCommand?: string;
+  slackWebhook?: string;
+  chime?: boolean;
+  /** the key itself is never served back — only whether one is in force, and from where */
+  typesafeApiKeyState?: "env" | "saved" | "unset";
+  /** write-only: what the operator just typed. Blank means "leave it"; null means "clear it". */
+  typesafeApiKey?: string | null;
+}
 
 export function Settings() {
   const [s, setS] = useState<SettingsDto | null>(null);
@@ -170,6 +178,9 @@ export function Settings() {
   if (!s) return <LoadingBlock label="Loading settings" rows={3} />;
   const save = async () => {
     const r = await fetch("/api/settings", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(s) }).catch(() => null);
+    // The key is write-only, so the screen cannot know the new state on its own: re-read it,
+    // and drop whatever was typed so the box does not keep holding a credential.
+    if (r?.ok) await getJSON<SettingsDto>("/api/settings").then(setS).catch(() => {});
     setSaved(true);
     toast(r?.ok ? "settings saved" : "could not save settings", r?.ok ? "default" : "error");
     setTimeout(() => setSaved(false), 1500);
@@ -187,6 +198,28 @@ export function Settings() {
             Slack webhook (attention DMs)
             <Input value={s.slackWebhook ?? ""} onChange={(e) => setS({ ...s, slackWebhook: e.target.value })} placeholder="https://hooks.slack.com/…" />
           </Label>
+          <Label>
+            TypeSafe API key (Jev decision calls)
+            {s.typesafeApiKeyState === "env" ? (
+              <div className="field-hint">
+                Set by <code>TYPESAFE_API_KEY</code> in the environment, which wins over anything saved here.
+              </div>
+            ) : (
+              <Input
+                type="password"
+                value={s.typesafeApiKey ?? ""}
+                onChange={(e) => setS({ ...s, typesafeApiKey: e.target.value })}
+                placeholder={s.typesafeApiKeyState === "saved" ? "A key is saved — type a new one to replace it" : "console.typesafe.ai/keys"}
+              />
+            )}
+          </Label>
+          {s.typesafeApiKeyState === "saved" && (
+            <div className="field-hint">
+              Howdah never shows a saved key back.{" "}
+              <Button variant="link" size="inline" onClick={() => { setS({ ...s, typesafeApiKey: null }); }}>Clear it</Button>
+              {s.typesafeApiKey === null && " — press Save to confirm."}
+            </div>
+          )}
           <Checkbox label="Attention chime" checked={s.chime !== false} onChange={(e) => setS({ ...s, chime: e.target.checked })} />
           <Button onClick={save} className="self-start">{saved ? "Saved" : "Save"}</Button>
         </CardContent>

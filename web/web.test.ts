@@ -11,6 +11,7 @@ import { seedAwaitingRun } from "../engine/slice-decision.fixtures";
 import { defineGraph } from "../core/graph";
 import { claimRunner, releaseRunner } from "../engine/control";
 import { processStart } from "../log/lockfile";
+import { loadConfig, resolveTypesafeApiKey } from "../config/config";
 
 function fixedClock(startMs = 1757750000000): () => Date {
   let t = 0;
@@ -472,6 +473,42 @@ describe("settings + open-ide (T19)", () => {
     const s = (await (await fetch(url2("/api/settings"))).json()) as any;
     expect(s).toMatchObject({ editorCommand: "idea", chime: false });
     expect(s.repos).toBeUndefined(); // workspaces are not settings
+  });
+
+  test("the TypeSafe key is write-only: never served back, a blank save keeps it, null clears it, env wins", async () => {
+    process.env.HOWDAH_HOME = base2;
+    delete process.env.TYPESAFE_API_KEY;
+    const get = async () => (await (await fetch(url2("/api/settings"))).json()) as any;
+    const put = (body: unknown) =>
+      fetch(url2("/api/settings"), { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+
+    expect((await get()).typesafeApiKeyState).toBe("unset");
+
+    await put({ typesafeApiKey: "  sk-not-a-real-key  " });
+    const saved = await get();
+    expect(saved.typesafeApiKeyState).toBe("saved");
+    expect(saved.typesafeApiKey).toBeUndefined(); // the value never reaches the bundle
+    expect(JSON.parse(readFileSync(join(base2, "config.json"), "utf8")).typesafeApiKey).toBe("sk-not-a-real-key"); // trimmed
+
+    // Saving any other field must not wipe the key — the form PUTs the whole object.
+    await put({ chime: true });
+    expect((await get()).typesafeApiKeyState).toBe("saved");
+    await put({ typesafeApiKey: "" });
+    expect((await get()).typesafeApiKeyState).toBe("saved");
+    await put({ typesafeApiKey: "   " });
+    expect((await get()).typesafeApiKeyState).toBe("saved");
+
+    // The environment beats the saved key, and says so.
+    process.env.TYPESAFE_API_KEY = "sk-not-a-real-env-key";
+    expect((await get()).typesafeApiKeyState).toBe("env");
+    expect(resolveTypesafeApiKey(loadConfig(base2))).toBe("sk-not-a-real-env-key");
+    delete process.env.TYPESAFE_API_KEY;
+    expect(resolveTypesafeApiKey(loadConfig(base2))).toBe("sk-not-a-real-key");
+
+    // null is the explicit clear.
+    await put({ typesafeApiKey: null });
+    expect((await get()).typesafeApiKeyState).toBe("unset");
+    expect(resolveTypesafeApiKey(loadConfig(base2))).toBeUndefined();
   });
 
   test("open-ide: 404 no folder, 410 cleaned worktree, 409 unconfigured; detail carries the button facts", async () => {

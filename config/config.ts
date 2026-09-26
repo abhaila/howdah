@@ -36,6 +36,15 @@ export interface HowdahConfig {
   defaultHarness?: string;
   fallbackChain?: string[];
   slackWebhook?: string;
+  /**
+   * TypeSafe (Jev) API key for the System One decision calls — see
+   * docs/notes/2026-09-26-typesafe-jev-research.md. `TYPESAFE_API_KEY` in the environment
+   * beats it, the same way HOWDAH_HARNESS beats `defaultHarness`: the env var is how one
+   * shell or one run uses a different key without editing the file every operator's viewer
+   * writes to. Absent from both is not an error anywhere — every call site falls back to the
+   * behaviour it had before Jev existed (decision 2A).
+   */
+  typesafeApiKey?: string;
   viewerBase?: string;
   theme?: "system" | "dark" | "light";
   chime?: boolean;
@@ -110,4 +119,22 @@ export function resolveWorkspace(config: HowdahConfig, name: string): WorkspaceR
   const folder = config.folders[name];
   if (folder) return { kind: "plain", name, path: folder.path };
   return null;
+}
+
+/**
+ * The TypeSafe key in force, or undefined. Env first (see `typesafeApiKey` above); an
+ * all-whitespace value in either place counts as unset, because a half-filled settings box
+ * must read as "no key" rather than as a key the API will 401 on.
+ */
+export function resolveTypesafeApiKey(config: HowdahConfig = loadConfig()): string | undefined {
+  const fromEnv = process.env.TYPESAFE_API_KEY?.trim();
+  if (fromEnv) return fromEnv;
+  const fromConfig = config.typesafeApiKey?.trim();
+  return fromConfig ? fromConfig : undefined;
+}
+
+/** Where the key in force came from — what the settings screen reports, never the key itself. */
+export function typesafeKeyState(config: HowdahConfig = loadConfig()): "env" | "saved" | "unset" {
+  if (process.env.TYPESAFE_API_KEY?.trim()) return "env";
+  return config.typesafeApiKey?.trim() ? "saved" : "unset";
 }
