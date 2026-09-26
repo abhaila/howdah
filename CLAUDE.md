@@ -555,3 +555,57 @@ Key routing rules:
 - Save progress → invoke /context-save
 - Resume context → invoke /context-restore
 - Author a backlog-ready spec/issue → invoke /spec
+
+### Disambiguation (mattpocock-skills, installed 2026-09-26)
+
+Most of that plugin's skills are `disable-model-invocation: true` — `to-spec`, `to-tickets`,
+`implement`, `triage`, `wayfinder` and `improve-codebase-architecture` fire ONLY when typed
+by name, so they never win a routing decision on their own. The rules below are for the ones
+that CAN auto-fire, plus the two places where typing the wrong name writes to the wrong home.
+
+**Reviewing a diff — three skills, split by the question being asked:**
+- "Is this code correct?" (bugs in the diff) → `/code-review`, the built-in. It is the only
+  one with effort levels, `--fix` and `--comment`.
+- "Does this match the ticket it came from?" → `mattpocock-skills:code-review`. Two axes,
+  Standards and Spec, in parallel sub-agents. It needs an originating ticket to check
+  against, so it is worth reaching for only when the work started from a `.scratch/` ticket.
+- "Is this ready to land?" (pre-landing gate) → `/review` (gstack), which stays the default
+  for the routing line above.
+
+**A bug — `/investigate` (gstack) stays the default.** `mattpocock-skills:diagnosing-bugs`
+also auto-fires on "debug this" / "it's throwing"; prefer `/investigate` unless the user names
+the other. `abstack:debugging` is the Kotlin-side one and does not apply to this repo.
+
+**Writing a spec — the two are complementary, not rivals:**
+- From a vague standing start, with an interview → `/spec` (gstack), five phases.
+- From a design conversation that already happened → `mattpocock-skills:to-spec`, which
+  explicitly does NOT interview and publishes straight to `.scratch/` (see Agent skills below).
+
+**Breaking work into tickets → `mattpocock-skills:to-tickets`**, now that a tracker is
+configured: it writes tracer-bullet slices with blocking edges into `.scratch/`.
+`abstack:writing-user-stories` writes user stories with acceptance criteria and no tracker
+home — use it only when the user asks for stories by name.
+
+**No competitor, safe to route to:** `tdd`, `prototype`, `research`, `domain-modeling`,
+`codebase-design`, `resolving-merge-conflicts`, `wizard`, `grilling`, `writing-for-agents`
+(the last auto-fires whenever this file or a skill is edited, which is intended).
+
+`/health` (gstack, a quality dashboard) and `improve-codebase-architecture` (deepening
+opportunities as an HTML report) answer different questions; neither replaces the other.
+
+## Agent skills
+
+### Issue tracker
+
+Issues live as markdown under `.scratch/<feature>/`, one file per ticket. `shaping.md` and
+`TODOS.md` are design and backlog, not the tracker. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five canonical roles, written as a `Status:` line in each issue file. See
+`docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: `CONTEXT.md` + `docs/adr/` at the repo root. Neither exists yet; they are
+created lazily by `/domain-modeling`. See `docs/agents/domain.md`.
