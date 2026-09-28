@@ -86,7 +86,7 @@ describe("StepActivity", () => {
   test("streamed prose renders as one paragraph, not six fragments", () => {
     // coalesce() has already stitched the deltas; this is the pane not re-shredding them
     const el = render([turn([{ kind: "text", content: "I'll explore the harness abstraction before designing the slice." }])]);
-    const paras = el.querySelectorAll("p.act-text");
+    const paras = el.querySelectorAll(".act-text p");
     expect(paras).toHaveLength(1);
     expect(paras[0]!.textContent).toBe("I'll explore the harness abstraction before designing the slice.");
   });
@@ -132,6 +132,45 @@ describe("StepActivity", () => {
     const wrote = el.querySelector(".act-wrote")!.textContent!;
     expect(wrote).toContain("slice.proposal");
     expect(wrote).not.toContain("someone.else"); // another node's write is not this step's
+  });
+
+  test("HOW-29: prose is markdown, and the outputs object becomes a document, not a JSON line", () => {
+    const plan = "# Plan\n\n## Steps\n\n1. **Port** the adapter\n2. Add `SigningTaskQueue`\n   - in-memory double\n\nThat is the whole plan, written at length so it reads as a document rather than a value.";
+    const text = `I've written the plan. **The fix:** skip queued quotes.\n\n${JSON.stringify({ outputs: { implementation_plan: plan, verdict: "pass" } })}`;
+    const el = render([turn([{ kind: "text", content: text }])]);
+    // the summary is rendered, not printed with its asterisks
+    expect(el.querySelector(".act-text strong")!.textContent).toBe("The fix:");
+    // no escaped JSON anywhere on screen
+    expect(el.textContent).not.toContain('{"outputs"');
+    expect(el.textContent).not.toContain("\\n");
+    // the plan is a document card with real structure
+    const doc = el.querySelector(".out-doc")!;
+    expect(doc.querySelector(".out-doc-name")!.textContent).toBe("implementation_plan");
+    expect(doc.querySelector("h2")!.textContent).toBe("Steps");
+    expect(doc.querySelectorAll("ol > li")).toHaveLength(2);
+    expect(doc.querySelector("ol li ul li")!.textContent).toBe("in-memory double");
+    // a short value stays a value
+    expect(el.querySelector(".out-value")!.textContent).toContain("pass");
+  });
+
+  test("HOW-29: the document card expands in place and opens in the reader", () => {
+    const plan = "## Plan\n\n" + "a line of the plan\n\n".repeat(40);
+    const el = render([turn([{ kind: "text", content: JSON.stringify({ outputs: { implementation_plan: plan } }) }])]);
+    const doc = el.querySelector(".out-doc")!;
+    expect(doc.getAttribute("data-expanded")).toBe("closed");
+    const expand = [...doc.querySelectorAll("button")].find((b) => b.textContent === "Expand")!;
+    act(() => expand.click());
+    expect(doc.getAttribute("data-expanded")).toBe("open");
+    expect(document.querySelector("dialog")).toBeNull();
+    act(() => (doc.querySelector('[aria-label="read implementation_plan"]') as HTMLButtonElement).click());
+    const dialog = document.querySelector("dialog")!;
+    expect(dialog.querySelector(".doc-reader h2")!.textContent).toBe("Plan");
+  });
+
+  test("HOW-29: an outputs object still streaming is named, not printed half-written", () => {
+    const el = render([{ ...turn([{ kind: "text", content: 'Done.\n{"outputs": {"implementation_plan": "# Pla' }]), finalized: false }]);
+    expect(el.textContent).not.toContain('{"outputs"');
+    expect(el.querySelector(".act-note-quiet")!.textContent).toContain("writing outputs");
   });
 
   test("a step with nothing in it says so instead of rendering an empty frame", () => {

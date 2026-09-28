@@ -26,13 +26,16 @@
  * them, and 2,252 blank rows are noise. If a harness ever does send thinking, it renders —
  * the content check is what decides, not the kind.
  */
-import { createContext, useContext, useState } from "react";
+import { createContext, useContext, useMemo, useState } from "react";
 import { ChevronRight, Wrench, TriangleAlert, FileOutput, Sparkles } from "lucide-react";
 import type { CoalescedTurn, TurnPart } from "../../../log/coalesce";
 import type { RunDetail } from "../../derive";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Badge } from "@/components/ui/badge";
 import { Row } from "@/components/ui/row";
+import { Markdown } from "@/components/ui/markdown";
+import { splitOutputs } from "../../../core/outputs";
+import { OutputDocs } from "./document";
 
 /** a tool result that reads as a failure — same test the thread used, kept in one place */
 const FAILED = /\berror\b|\bfailed\b|exit [1-9]|denied|not found|traceback/i;
@@ -139,6 +142,25 @@ export function beatsOf(parts: readonly TurnPart[]): Array<{ kind: "text" | "thi
   return out;
 }
 
+/**
+ * One run of the agent's own words (HOW-29). Prose is markdown, so it is drawn as markdown; and
+ * the `{"outputs": ...}` object the step closes with is lifted out of it and drawn as what it
+ * published — a plan as a document, a verdict as a value — instead of one JSON line of `\n`
+ * escapes. A contract still being streamed is named rather than printed half-written.
+ * Exported for the Chat transcript: one prose renderer, not two.
+ */
+export function AgentProse({ text }: { text: string }) {
+  const split = useMemo(() => splitOutputs(text.trim()), [text]);
+  return (
+    <>
+      {split.before.trim() && <Markdown className="act-text" text={split.before} />}
+      {split.outputs && <OutputDocs outputs={split.outputs} />}
+      {split.pending && <div className="act-note-quiet">writing outputs…</div>}
+      {split.after.trim() && <Markdown className="act-text" text={split.after} />}
+    </>
+  );
+}
+
 export function StepActivity({ turns, render, row, context }: {
   turns: CoalescedTurn[];
   render?: RunDetail["renders"][number];
@@ -174,7 +196,9 @@ export function StepActivity({ turns, render, row, context }: {
         b.kind === "tool" ? (
           <ToolBeat key={i} call={b.part} result={b.result} />
         ) : (
-          <p key={i} className={b.kind === "thinking" ? "act-thinking" : "act-text"}>{b.part.content.trim()}</p>
+          b.kind === "thinking"
+            ? <p key={i} className="act-thinking">{b.part.content.trim()}</p>
+            : <AgentProse key={i} text={b.part.content} />
         ),
       )}
 
