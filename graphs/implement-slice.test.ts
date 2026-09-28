@@ -6,7 +6,8 @@
  *     before review or publish;
  *   - a CI fix that breaks a ghost surfaces as drift BEFORE the next publish (real map built-ins
  *     over the fixture repo, scripted in-process agents);
- *   - validateProposal refuses a ghost set that does not fit the base, or an ignored expected_file.
+ *   - validateProposal refuses a ghost set that does not fit the base, or an ignored expected_file;
+ *   - verify.run (HOW-12): a red verification goes back to implement even on a reviewer's pass.
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
@@ -26,6 +27,7 @@ import type { LoggedEvent } from "../log/events";
 import { EventLog } from "../log/write";
 import type { SliceDrift } from "../engine/slice-map";
 import type { BaseSnapshot } from "../engine/slice-decision";
+import type { VerifyVerdict } from "../core/verify";
 import {
   sliceRepo, applyEdits, commitAll, implementedV2, GHOSTS_V1, GHOSTS_V2, API_TS, DELETE_USER_TS, DELETE_ROUTE, DELETE_FETCH, SLICE_GOAL, SLICE_WORK,
 } from "./slice-fixture";
@@ -155,6 +157,8 @@ interface Script {
   onPropose?: (repo: string, visit: number) => void;
   /** the map object store the built-ins write to, relative to the run's HOWDAH_HOME (default: maps) */
   storeDir?: string;
+  /** HOW-12: the workspace's registered verification command (default: none registered) */
+  verify?: string;
 }
 
 function sliceRun(script: Script) {
@@ -177,6 +181,7 @@ function sliceRun(script: Script) {
   };
   const command = commandExecutor({
     map: { workers: 0, ...(script.storeDir !== undefined ? { storeDir: join(home, script.storeDir) } : {}) },
+    verify: { verifyCommandFor: () => ({ workspace: "slice", command: script.verify ?? "" }) },
     prProbe: () => {
       const state = prs.length > 1 ? prs.shift() : prs[0];
       return state === null || state === undefined ? null : { state, url: "https://example.test/pr/1" };
@@ -541,5 +546,68 @@ describe("an implementation that is not committed verifies nothing", () => {
     for (const g of GHOSTS_V2.entities) expect(drift!.items.find((i) => i.key === g.id && i.op !== null)?.outcome).toBe("not-checked");
     const after = finishesOf(run.events(), "map.reextract")[0]!.writes["map.after"] as { dirty: boolean };
     expect(after.dirty).toBe(true);
+  });
+});
+
+// HOW-12: behavioural evidence. The verification command here is a stand-in for a test suite —
+// it passes only once the web half exists — and the reviewer is scripted to PASS every time,
+// which is the case the mechanism exists for: a review that did not turn a red check into a
+// rejection must still not be able to publish it.
+describe("verify.run: the workspace's own checks gate publish", () => {
+  const VERIFY = `grep -q "export async function deleteUser" ${API_TS} && echo '{"passed": 1}' || { echo "deleteUser is not exported" >&2; exit 1; }`;
+  const script = (verify?: string): Script => ({
+    pr: ["MERGED"],
+    ...(verify !== undefined ? { verify } : {}),
+    agents: {
+      "implementation.implement": (visit, repo) => {
+        const [app, api] = implementedV2(repo);
+        applyEdits(repo, visit === 1 ? [app!] : [app!, api!]); // the web half only on the second attempt
+        commitAll(repo, `implement ${visit}`);
+        return { implementation_summary: `attempt ${visit}` };
+      },
+      "implementation.local_review": () => ({ review_verdict: "pass", review_findings: [] }),
+      "delivery.publish": () => ({ publication_summary: "PR" }),
+      complete_ticket: () => ({ completion_summary: "done" }),
+    },
+  });
+
+  test("the graph runs verify.run between drift and review, and review's edges read the verdict", () => {
+    const edges = edgeList(implementSlice.def.edges);
+    expect(edges).toContain("map.drift -> verify.run");
+    expect(edges).toContain("verify.run -> implementation.local_review");
+    expect(edges).not.toContain("map.drift -> implementation.local_review");
+    expect(edges.filter((e) => e.startsWith("implementation.local_review ->")).every((e) => e.includes("reads=review_verdict,verify.verdict"))).toBe(true);
+  });
+
+  test("a failing check sends a PASSED review back to implement; the retry passes and publishes once", async () => {
+    const run = sliceRun(script(VERIFY));
+    expect(await run.engine().start(START)).toMatchObject(AWAITING);
+    approve(run.runDir);
+    expect(await run.engine().resume()).toEqual({ state: "finished", outcome: "success" });
+
+    const events = run.events();
+    expect(started(events).filter((n) => n === "implementation.implement")).toHaveLength(2);
+    expect(started(events).filter((n) => n === "delivery.publish")).toHaveLength(1);
+    const verdicts = finishesOf(events, "verify.run").map((f) => f.writes["verify.verdict"] as VerifyVerdict);
+    expect(verdicts.map((v) => v.status)).toEqual(["fail", "pass"]);
+    expect(verdicts[0]).toMatchObject({ exit_code: 1, timed_out: false, workspace: "slice", uncommitted: 0, commit: expect.stringMatching(/^[0-9a-f]{40}$/) });
+    expect(verdicts[0]!.output_tail).toContain("deleteUser is not exported");
+    expect(verdicts[1]).toMatchObject({ exit_code: 0, facts: { passed: 1 } });
+    // the reviewer SAW the failure it (wrongly) passed — the prompt carries the verdict
+    const review = run.prompts.find((p) => p.node === "implementation.local_review")!.prompt;
+    expect(review).toContain("deleteUser is not exported");
+    expect(edgesTaken(events)).toContain("implementation.local_review -> implementation.implement");
+  });
+
+  test("a workspace with no command is NOT a pass: the verdict says not-configured, the thread says so, and the run proceeds", async () => {
+    const run = sliceRun(script());
+    await run.engine().start(START);
+    approve(run.runDir);
+    expect(await run.engine().resume()).toEqual({ state: "finished", outcome: "success" });
+    const [finished] = finishesOf(run.events(), "verify.run");
+    expect(finished!.writes["verify.verdict"]).toMatchObject({ status: "not-configured", command: null, exit_code: null, workspace: "slice" });
+    expect(started(run.events()).filter((n) => n === "implementation.implement")).toHaveLength(1);
+    const texts = run.events().flatMap((e) => (e.type === "chunk" && e.node === "verify.run" ? [e.content] : []));
+    expect(texts.join("\n")).toContain("howdah workspace verify");
   });
 });

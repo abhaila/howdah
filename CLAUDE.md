@@ -82,6 +82,7 @@ bun cli/main.ts resume|pause|abort <run-id>  # pause/abort also interrupt a PROV
 bun cli/main.ts jump <run-id> <node> [msg]   # move a dead run to a node, injecting an instruction
 bun cli/main.ts up                           # supervisor: heartbeat + resume dead runs
 bun cli/main.ts workspace add|add-github|remove|list
+bun cli/main.ts workspace verify <name> "<command>"   # HOW-12: what verify:run executes (--clear, or no command to print)
 bun cli/main.ts new-graph <name> --kind doc|research|code|custom   # writes to $HOWDAH_HOME/graphs
 bun cli/main.ts resume <run-id> --force      # break a runner lock whose holder is NOT this run's runner
 bun cli/main.ts approve|send-feedback <run-id> [--proposal <id>]      # decide the current slice round
@@ -437,7 +438,17 @@ the contract, the claude and codex executors ask ONCE more on the same session/t
 from decision events; agent nodes may declare `requires: { approvalOf }` (a pre-start gate
 that also re-checks the live worktree fingerprint) and `readOnly: true` (plan mode that no
 override can raise). Command built-ins beside `probe:pr`: `map:extract`, `map:reextract`,
-`map:drift` (`engine/executors/map.ts`) and `runs:launch` (`engine/executors/launch.ts`).
+`map:drift` (`engine/executors/map.ts`), `runs:launch` (`engine/executors/launch.ts`) and
+`verify:run` (HOW-12, `engine/executors/verify.ts`, contract in `core/verify.ts`).
+
+`verify:run` is the only BEHAVIOURAL evidence before publish — drift proves the code parses
+the way the design said, not that it runs. It executes the workspace's `verifyCommand`
+(config.json, human-set with `workspace verify`; never guessed by an agent) in the worktree
+and publishes `verify.verdict`. The exit code alone decides `pass`/`fail`; the final JSON
+line is carried as `facts`, never allowed to overturn it. A red command is a verdict, not a
+failed attempt — the graph routes on it (implement-slice sends it back to implement even on a
+reviewer's `pass`). No command registered is `not-configured`, never `pass`, and does not
+park: it proceeds with a thread note, so a pre-HOW-12 workspace keeps delivering.
 
 Routing: highest-weight passing condition wins; an unconditional edge is the weight-0
 fallback; no matching edge parks the run (Orbital semantics), so exhaustive conditional sets

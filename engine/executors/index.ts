@@ -24,6 +24,7 @@ import { cursorExecutor } from "./cursor";
 import { defaultHarness, type HarnessName } from "../../core/harnesses";
 import { commandExecutor, worktreeExecutor } from "./worktree";
 import type { WorkspaceLookup } from "./launch";
+import type { VerifyCommand } from "./verify";
 import { approvalExecutor } from "./approval";
 import type { Notifier } from "../attention";
 import { join } from "node:path";
@@ -66,6 +67,8 @@ export interface LiveExecutorDeps {
   runsDir?: string;
   /** HOW-23: the workspace registry `runs:launch` resolves a slice's workspace through */
   workspaces?: WorkspaceLookup;
+  /** HOW-12: the verification command registered for a repo path (`verify:run`) */
+  verifyCommandFor?: (repoPath: string) => VerifyCommand | null;
   viewerBase?: string;
   notifiers?: Notifier[];
   claudeBinary?: string;
@@ -98,6 +101,7 @@ export function liveExecutors(deps: LiveExecutorDeps): EngineOpts["executors"] {
         runsDir: deps.runsDir ?? join(deps.attentionDir, "..", "runs"),
         ...(deps.workspaces ? { workspaces: deps.workspaces } : {}),
       },
+      ...(deps.verifyCommandFor ? { verify: { verifyCommandFor: deps.verifyCommandFor } } : {}),
     }),
     worktree: worktreeExecutor({
       reposDir: deps.reposDir ?? join(deps.attentionDir, "..", "repos"),

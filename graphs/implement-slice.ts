@@ -5,8 +5,8 @@
  * create_worktree → map.extract → slice.propose (read-only) → slice.approve ─┬─ approved ──▶ [requires gate] implementation.implement ◀────┐
  *                       ▲                ▲                                   ├─ feedback ─┐                  │                              │
  *                       │                └───────────────────────────────────┼────────────┘                  ▼                              │
- *                       ├──────────────────── stale ─────────────────────────┘                   map.reextract → map.drift                  │
- *                       │                                                                                        │                          │
+ *                       ├──────────────────── stale ─────────────────────────┘                   map.reextract → map.drift → verify.run     │
+ *                       │                                                                                                        │          │
  *                       └── redesign <run> <msg> (any time)          delivery (shared) ◀── pass ── implementation.local_review ── reject ──┘
  *                                                                         │ repairs (fix_ci / address_reviews / resolve_conflicts)
  *                                                                         └──▶ delivery.reextract → delivery.drift ─┬─ new problems ─▶ revise_repairs
@@ -23,7 +23,8 @@
  * | implementation.implement    | agent, maxVisits 3, requires approval | goal, work, slice.ghosts, slice.approval, slice.drift, review_findings | implementation_summary (sticky) |
  * | map.reextract               | command `map:reextract`               | map.base                                       | map.after (per-visit)                              |
  * | map.drift                   | command `map:drift`                   | slice.ghosts, map.base, map.after              | slice.drift (per-visit)                            |
- * | implementation.local_review | agent                                 | goal, work, slice.ghosts, implementation_summary, slice.drift | review_verdict, review_findings (cleared) |
+ * | verify.run                  | command `verify:run` (HOW-12)         | —  (the command is the workspace's)            | verify.verdict (per-visit)                         |
+ * | implementation.local_review | agent                                 | goal, work, slice.ghosts, implementation_summary, slice.drift, verify.verdict | review_verdict, review_findings (cleared) |
  *
  * Why the map nodes are ids with dots (`map.extract`) while their built-ins are `map:extract`:
  * the node id is the graph's name for the step (like `delivery.probe_pr` running `probe:pr`).
@@ -39,6 +40,14 @@
  *   attempt-failed with the errors, and the proposer's retry is TOLD them: the engine logs the
  *   refusal on node-finished and renders it into the next attempt (core/template.ts suffix v3).
  * - Delivery is the shared deliveryGraph({ verifyAfterRepair: true }) (graphs/delivery.ts).
+ * - verify.run (HOW-12) is the BEHAVIOURAL half of the check: drift proves the code parses the
+ *   way the design said, verify.run proves the workspace's own command passes on it. It runs
+ *   before the review so the reviewer sees the output and turns a failure into findings, and
+ *   the review's two edges also read `verify.verdict` themselves, so a failed verification can
+ *   never reach publish on a reviewer's `pass` — that is the difference between evidence and
+ *   an instruction in a prompt. `not-configured` (no command registered for the workspace)
+ *   proceeds as before HOW-12, but says so in the thread and to the reviewer. Delivery's repair
+ *   loop is unchanged: after publish, CI is the behavioural signal.
  */
 import { defineGraph, type ProposalRun } from "../core/graph";
 import { DELIVERY_ENTRY, deliveryGraph, type VerifiedDeliveryCtx } from "./delivery";
@@ -46,12 +55,14 @@ import type { ApprovalDecision, FeedbackItem } from "../engine/slice-decision";
 import { readBase } from "../engine/slice-decision";
 import { ignoredExpectedFiles, loadSnapshot } from "../engine/slice-map";
 import { validateGhostSet } from "../map/ghosts";
+import { verifyFailed, type VerifyVerdict } from "../core/verify";
 
 export interface ImplementSliceCtx extends VerifiedDeliveryCtx {
   "map.neighbourhood": string;
   "slice.feedback": FeedbackItem[];
   "slice.approval": ApprovalDecision;
   implementation_summary: string;
+  "verify.verdict": VerifyVerdict;
 }
 
 const sticky = { scope: "sticky" } as const;
@@ -142,10 +153,13 @@ export const implementSlice = defineGraph<ImplementSliceCtx>({
       writes: { "slice.drift": perVisit },
       class: "map",
     },
+    // HOW-12: no reads — which command runs is the workspace's business (config.json), not
+    // the graph's, so one graph verifies every registered repo the way that repo verifies
+    "verify.run": { kind: "command", run: "verify:run", writes: { "verify.verdict": perVisit }, class: "implementation" },
     "implementation.local_review": {
       kind: "agent",
       prompt: "slice.local_review",
-      reads: ["goal", "work", "slice.ghosts", "implementation_summary", "slice.drift"],
+      reads: ["goal", "work", "slice.ghosts", "implementation_summary", "slice.drift", "verify.verdict"],
       writes: { review_verdict: cleared, review_findings: cleared },
       class: "implementation",
     },
@@ -176,17 +190,29 @@ export const implementSlice = defineGraph<ImplementSliceCtx>({
     },
     { from: "implementation.implement", to: "map.reextract" },
     { from: "map.reextract", to: "map.drift" },
-    { from: "map.drift", to: "implementation.local_review" },
+    { from: "map.drift", to: "verify.run" },
+    { from: "verify.run", to: "implementation.local_review" },
+    // a failed verification goes back to implement WHATEVER the reviewer returned: the review
+    // is asked to turn the failure into findings, and these two conditions make sure a review
+    // that did not still cannot publish code whose own checks are red
     {
       from: "implementation.local_review",
       to: "implementation.implement",
-      condition: { reads: ["review_verdict"], test: (v) => v.review_verdict === "reject", label: "review_verdict == 'reject'" },
+      condition: {
+        reads: ["review_verdict", "verify.verdict"],
+        test: (v) => v.review_verdict === "reject" || verifyFailed(v["verify.verdict"]),
+        label: "review_verdict == 'reject' || verify.verdict.status == 'fail'",
+      },
       weight: 2,
     },
     {
       from: "implementation.local_review",
       to: DELIVERY_ENTRY,
-      condition: { reads: ["review_verdict"], test: (v) => v.review_verdict === "pass", label: "review_verdict == 'pass'" },
+      condition: {
+        reads: ["review_verdict", "verify.verdict"],
+        test: (v) => v.review_verdict === "pass" && !verifyFailed(v["verify.verdict"]),
+        label: "review_verdict == 'pass' && verify.verdict.status != 'fail'",
+      },
       weight: 1,
     },
 

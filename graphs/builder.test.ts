@@ -14,6 +14,7 @@ import { COMMAND_BUILTINS, WORKTREE_FACTS, coerceOperand, isBlocking, keepPath, 
 // know. This file is node-side, so it imports the executors' own constants and pins the repetition.
 import { LAUNCH_BUILTIN, LAUNCH_PRODUCES, LAUNCH_READS } from "../engine/executors/launch";
 import { MAP_BUILTINS } from "../engine/executors/map";
+import { VERIFY_BUILTIN, VERIFY_PRODUCES } from "../engine/executors/verify";
 // the reducer is plain data over core/ — no React, no DOM — so the browser's verdict can be
 // driven from here and compared against this file's gate, which is the whole point below
 import { PRESETS, bySeverity, draftProblems, draftReducer, newStep, pickPrompts, type Draft, type DraftAction } from "../web/app/lib/spec-draft";
@@ -374,7 +375,14 @@ describe("what an executor can emit — the table checked against the executors 
    * returns undefined, which MEANS "anything the operator declares is legal".
    */
   test("every built-in the command executor dispatches is in the table", () => {
-    expect([...MAP_BUILTINS, LAUNCH_BUILTIN, "probe:pr"].sort()).toEqual(COMMAND_BUILTINS.map((b) => b.run).sort());
+    expect([...MAP_BUILTINS, LAUNCH_BUILTIN, VERIFY_BUILTIN, "probe:pr"].sort()).toEqual(COMMAND_BUILTINS.map((b) => b.run).sort());
+  });
+
+  // HOW-12: the row is built from core/verify.ts's constants, so this pins that the executor
+  // publishes through the same key rather than a string of its own
+  test("verify:run publishes exactly what the table claims", () => {
+    expect(COMMAND_BUILTINS.find((b) => b.run === VERIFY_BUILTIN)!.produces).toEqual([...VERIFY_PRODUCES]);
+    expect(executor("verify.ts")).toMatch(/\[VERIFY_KEY\]: verdict/);
   });
 });
 
