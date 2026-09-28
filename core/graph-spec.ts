@@ -48,6 +48,7 @@ import { Graph, defineGraph, type AgentConfig, type Condition, type EdgeDef, typ
 import { isHarness } from "./harnesses";
 import type { Scope } from "./context";
 import type { Violation } from "./validate";
+import { VERIFY_BUILTIN, VERIFY_PRODUCES } from "./verify";
 
 export const SPEC_VERSION = 1;
 
@@ -242,9 +243,9 @@ export interface GraphSpec {
 
 /**
  * What each built-in command produces — the executor emits exactly these and nothing else.
- * `probe:pr` DROPS an undeclared key silently (engine/executors/worktree.ts) and the `map:*`
- * and `runs:launch` built-ins refuse (engine/executors/map.ts declaredWrites, and
- * engine/executors/launch.ts before it spawns anything); either way a step declaring something
+ * `probe:pr` DROPS an undeclared key silently (engine/executors/worktree.ts) and the `map:*`,
+ * `runs:launch` and `verify:run` built-ins refuse (engine/executors/map.ts declaredWrites, and
+ * engine/executors/launch.ts / verify.ts before they spawn anything); either way a step declaring something
  * else is wrong before it ever runs, which is what emittableWrites() is for.
  *
  * `reads` is the OTHER half of a built-in's contract, and only `runs:launch` has one: it is the
@@ -261,6 +262,9 @@ export const COMMAND_BUILTINS: Array<{ run: string; label: string; produces: str
   { run: "map:reextract", label: "Re-extract the system map", produces: ["map.after"] },
   { run: "map:drift", label: "Compare the map against the approved design", produces: ["slice.drift"] },
   { run: "runs:launch", label: "Launch one run per approved slice", produces: ["launched"], reads: ["plan.slices", "tickets"] },
+  // HOW-12: node-free, so the row is built from the contract's own constants rather than
+  // repeating them — the executor imports the same ones
+  { run: VERIFY_BUILTIN, label: "Run the workspace's verification command", produces: [...VERIFY_PRODUCES] },
 ];
 
 /** A worktree CLEAN-UP step emits these two facts and no others (engine/executors/worktree.ts). */

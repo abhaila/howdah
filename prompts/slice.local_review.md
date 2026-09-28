@@ -1,6 +1,6 @@
 ---
 id: slice.local_review
-version: 1
+version: 2
 tags: [implement-slice]
 provenance: system-map 1c — implementation.local_review, judged against the approved ghost set and its drift
 ---
@@ -24,6 +24,12 @@ Deterministic — computed by re-extracting the map after the implementation, no
 
 {{ context.slice.drift }}
 
+## Verification: the workspace's own checks, run on this code
+
+Deterministic — the workspace's registered verification command, run in the worktree by the engine after the implementation, not by an agent. `status` is decided by the exit code alone: `pass` (exited 0), `fail` (non-zero, or killed at its timeout — `timed_out`), `not-configured` (no command is registered, so NOTHING was run). `commit` and `uncommitted` say which code it ran against; `output_tail` is the end of its output and `facts` any structured result it printed.
+
+{{ context.verify.verdict }}
+
 ## Implementation summary
 
 {{ context.implementation_summary }}
@@ -34,6 +40,8 @@ Review the current change against the approved design, the work scope, goal and 
 - A `dirty` drift means the implementation is not committed: reject until it is.
 - Treat `unexpected` items as scope questions: reject changes outside the work scope; accept ones required to make the design compile and pass its checks.
 - `not-checked` items are gaps in the map, not defects: check those parts of the design by reading the code.
+- A `fail` verification is blocking whatever else you find: reject, and report it as a finding whose `evidence` quotes the failing part of `output_tail` and whose `correction` says what must change. A failure you judge unrelated to this change is still a finding — say why in its `evidence`; the run cannot publish while the check is red.
+- A `not-configured` verification means the code was never run. It is not blocking on its own, but drift is not behavioural evidence: read the diff knowing nothing has executed it.
 
 Review only requirements and defects that can be verified through automated checks or code inspection. Reject unmet requirements, correctness or security defects, violations of mandatory repository rules and missing verification of required behaviour. Treat preferences as non-blocking unless repository instructions require them. Human reviews, manual acceptance and visual approval are non-blocking.
 

@@ -15,7 +15,8 @@
  * built-in `probe:pr` routes through the reconciler: gh is the source, forge-unreachable
  * THROWS (parks the run) rather than reading as "no PR". The map built-ins (map:extract,
  * map:reextract, map:drift — system-map 1c, engine/executors/map.ts) dispatch from here too,
- * as does `runs:launch` (HOW-23, engine/executors/launch.ts).
+ * as does `runs:launch` (HOW-23, engine/executors/launch.ts) and `verify:run` (HOW-12,
+ * engine/executors/verify.ts).
  */
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { effectiveCwd, readWorktreeRecord, worktreeRecordPath, type WorktreeRecord } from "./worktree-record";
@@ -24,6 +25,7 @@ import type { Executor } from "../run";
 import { probeGit, ghForgeProbe, type ForgeProbe } from "../reconcile";
 import { isMapBuiltin, mapBuiltinExecutor, type MapBuiltinOpts } from "./map";
 import { isLaunchBuiltin, launchBuiltinExecutor, type LaunchBuiltinOpts } from "./launch";
+import { isVerifyBuiltin, verifyBuiltinExecutor, type VerifyBuiltinOpts } from "./verify";
 
 export { type WorktreeRecord, worktreeRecordPath, readWorktreeRecord, effectiveCwd } from "./worktree-record";
 
@@ -157,11 +159,14 @@ export interface CommandExecutorOpts {
   map?: MapBuiltinOpts;
   /** HOW-23: where `runs:launch` launches children from, and what it launches them through */
   launch?: LaunchBuiltinOpts;
+  /** HOW-12: where `verify:run` finds the workspace's registered verification command */
+  verify?: VerifyBuiltinOpts;
 }
 
 export function commandExecutor(opts: CommandExecutorOpts = {}): Executor {
   const mapBuiltins = mapBuiltinExecutor(opts.map);
   const launchBuiltin = launchBuiltinExecutor(opts.launch);
+  const verifyBuiltin = verifyBuiltinExecutor({ defaultTimeoutMs: opts.defaultTimeoutMs, ...opts.verify });
   return async (args) => {
     const { nodeId, def, visit, cwd, log, reads } = args;
     if (def.kind !== "command") throw new Error("commandExecutor on non-command node");
@@ -170,6 +175,9 @@ export function commandExecutor(opts: CommandExecutorOpts = {}): Executor {
     // HOW-23: `runs:launch` spawns a child run per approved slice — exactly-once, so it needs
     // the engine's effects handle rather than a shell
     if (isLaunchBuiltin(def.run)) return launchBuiltin(args);
+    // HOW-12: `verify:run` runs the WORKSPACE's command, and a red result is a verdict to
+    // route on rather than a failed attempt to park on
+    if (isVerifyBuiltin(def.run)) return verifyBuiltin(args);
     const workDir = effectiveCwd(log.path, cwd);
     const declared = Object.keys(def.writes ?? {});
     let index = 0;

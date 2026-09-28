@@ -10,6 +10,8 @@
  *   howdah reply <run-id> <text>
  *   howdah resolve-effect <run-id> <effect> happened|not-happened [--node <node>]
  *   howdah graphs --json
+ *   howdah workspace verify <name> [<command…>|--clear]
+ *     the workspace's verification command — what `verify:run` executes in a run's worktree (HOW-12)
  *
  * Approval verbs (system-map 1a) — the same engine/control.ts functions the web routes call:
  *   howdah approve <run-id> [--proposal <id>]                        approve the current proposal round
@@ -38,7 +40,7 @@ import { harnessNames, harnessSpec, isHarness } from "../core/harnesses";
 import { GRAPHS, graphCatalog } from "../graphs/index";
 import { loadRegistry, catalogOf } from "../graphs/registry";
 import { promptSearchPath } from "../graphs/local";
-import { howdahHome, loadConfig, saveConfig, resolveWorkspace, repoNameFor, workspaceNameFor, ensureHowdahHome } from "../config/config";
+import { howdahHome, loadConfig, saveConfig, resolveWorkspace, repoNameFor, workspaceNameFor, verifyCommandFor, ensureHowdahHome } from "../config/config";
 import { loadTuning } from "../config/tuning";
 import { normalizeRunName } from "../core/run-name";
 import {
@@ -68,6 +70,9 @@ function executors() {
           repoNames: () => Object.keys(loadConfig(base).repos),
           nameFor: (path) => workspaceNameFor(loadConfig(base), path),
         },
+        // HOW-12: read per call, like the rest — a command registered mid-run is used by the
+        // next verification rather than after a restart
+        verifyCommandFor: (path) => verifyCommandFor(loadConfig(base), path),
       });
 }
 
@@ -392,6 +397,7 @@ export function setupCommand(): void {
   console.log("Next:");
   console.log("  howdah doctor");
   console.log("  howdah workspace add <name> <path>");
+  console.log('  howdah workspace verify <name> "<command>"   # what verify:run executes (HOW-12)');
   console.log("  howdah up");
 }
 
@@ -597,9 +603,25 @@ if (import.meta.main) {
         delete config.folders[name];
         saveConfig(config, base);
         console.log(`removed "${name}"`);
+      } else if (action === "verify" && name) {
+        // HOW-12: `workspace verify <name> <command…>` sets it; `--clear` removes it; no
+        // command prints what is set. The command is everything after the name, so it needs
+        // no quoting unless the shell would otherwise eat part of it.
+        const ws = config.repos[name] ?? config.folders[name];
+        if (!ws) throw new Error(`unknown workspace "${name}" — register it with \`howdah workspace add\` first`);
+        const command = rest.slice(2).join(" ").trim();
+        if (command === "--clear") {
+          delete ws.verifyCommand;
+          saveConfig(config, base);
+          console.log(`cleared the verification command for "${name}" — verify:run will report not-configured`);
+        } else if (command) {
+          ws.verifyCommand = command;
+          saveConfig(config, base);
+          console.log(`"${name}" verifies with: ${command}`);
+        } else console.log(ws.verifyCommand ? ws.verifyCommand : `"${name}" has no verification command`);
       } else if (action === "list" || action === undefined) {
         console.log(JSON.stringify({ repos: config.repos, folders: config.folders }, null, 2));
-      } else throw new Error("usage: howdah workspace add <name> <path> | add-github <owner/name> | remove <name> | list");
+      } else throw new Error("usage: howdah workspace add <name> <path> | add-github <owner/name> | verify <name> [<command>|--clear] | remove <name> | list");
     }
     else if (verb === "new-graph") {
       const { newGraph } = await import("./new-graph");

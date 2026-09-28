@@ -14,10 +14,13 @@ export interface RepoWorkspace {
   defaultBranch?: string;
   /** run after worktree create (copy .env, install deps) */
   setupScript?: string;
+  /** HOW-12: how to RUN this workspace's checks — what `verify:run` executes (see below) */
+  verifyCommand?: string;
 }
 
 export interface PlainWorkspace {
   path: string;
+  verifyCommand?: string;
 }
 
 export interface HowdahConfig {
@@ -119,6 +122,23 @@ export function resolveWorkspace(config: HowdahConfig, name: string): WorkspaceR
   const folder = config.folders[name];
   if (folder) return { kind: "plain", name, path: folder.path };
   return null;
+}
+
+/**
+ * HOW-12 (with the part of HOW-15 it needs): the verification command registered for the
+ * workspace at `path`, for `verify:run`. `bash -c`'d in the run's worktree; exit 0 is a pass.
+ *
+ * Human-authored, set with `howdah workspace verify <name> "<command>"` — never guessed by an
+ * agent, because a verdict is only evidence if nobody made up the check that produced it.
+ * Three answers, kept apart on purpose: null (no workspace is registered at this path), a
+ * workspace with an empty command (registered, nothing to run — the verdict says
+ * `not-configured` and NAMES the workspace to configure), or the command.
+ */
+export function verifyCommandFor(config: HowdahConfig, path: string): { workspace: string; command: string } | null {
+  const name = workspaceNameFor(config, path);
+  if (!name) return null;
+  const ws = config.repos[name] ?? config.folders[name];
+  return { workspace: name, command: ws?.verifyCommand?.trim() ?? "" };
 }
 
 /**
