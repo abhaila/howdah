@@ -11,6 +11,7 @@
  * side; the builder is re-exported for existing callers.
  */
 export { buildOutputInstruction } from "../../core/template";
+import { locateOutputs } from "../../core/outputs";
 
 /**
  * Asked as a follow-up turn when the final message arrived without the contract. Observed
@@ -34,39 +35,17 @@ export interface ParsedOutputs {
   problem?: string;
 }
 
-/** Find the LAST {"outputs": ...} object in the text; tolerate fences and surrounding prose. */
+/**
+ * Find the LAST {"outputs": ...} object in the text; tolerate fences and surrounding prose.
+ * The scan itself is `core/outputs.ts` locateOutputs, shared with the viewer (HOW-29).
+ */
 export function parseOutputs(text: string, expectedKeys: string[]): ParsedOutputs {
   if (expectedKeys.length === 0) return { ok: true, writes: {} };
-  const matches = [...text.matchAll(/\{"outputs"\s*:\s*\{/g)];
-  const last = matches.at(-1);
-  if (!last || last.index === undefined)
+  const span = locateOutputs(text);
+  if (!span)
     return { ok: false, writes: {}, problem: `no {"outputs": ...} object found in the final message` };
-
-  // balance braces from the match start to find the object's end
-  const start = last.index;
-  let depth = 0;
-  let end = -1;
-  let inString = false;
-  let escaped = false;
-  for (let i = start; i < text.length; i++) {
-    const ch = text[i]!;
-    if (inString) {
-      if (escaped) escaped = false;
-      else if (ch === "\\") escaped = true;
-      else if (ch === '"') inString = false;
-      continue;
-    }
-    if (ch === '"') inString = true;
-    else if (ch === "{") depth++;
-    else if (ch === "}") {
-      depth--;
-      if (depth === 0) {
-        end = i + 1;
-        break;
-      }
-    }
-  }
-  if (end < 0) return { ok: false, writes: {}, problem: "unterminated outputs object" };
+  const { start, end } = span;
+  if (end === null) return { ok: false, writes: {}, problem: "unterminated outputs object" };
 
   let parsed: unknown;
   try {

@@ -833,7 +833,7 @@ main { flex: 1; min-width: 0; min-height: 0; overflow: hidden; display: flex; fl
    hold: rows not cards, shape before colour, and the failure red only where the code actually
    failed — here, a tool result that reads as an error. */
 .activity { display: flex; flex-direction: column; gap: 10px; }
-.act-text { margin: 0; font-size: var(--type-body); line-height: 1.6; color: var(--fg); white-space: pre-wrap; overflow-wrap: anywhere; }
+.act-text { font-size: var(--type-body); color: var(--fg); }
 /* thinking is the agent talking to itself: present, quieter, never competing with its answer */
 .act-thinking { margin: 0; font-size: var(--type-sm); line-height: 1.55; color: var(--fg-muted); font-style: italic; white-space: pre-wrap; }
 .act-beat { display: flex; align-items: flex-start; gap: 7px; color: var(--fg-muted); font-size: var(--type-sm); }
@@ -844,6 +844,7 @@ main { flex: 1; min-width: 0; min-height: 0; overflow: hidden; display: flex; fl
 .act-prompt-id { color: var(--fg); }
 .act-prompt-read { color: var(--fg-faint); font-size: var(--type-xs); }
 .act-note { font-size: var(--type-xs); color: var(--status-failed-recoverable); }
+.act-note-quiet { font-size: var(--type-xs); color: var(--fg-faint); font-style: italic; }
 
 /* one line, opening to the whole thing */
 .act-tool { border-top: 1px solid var(--border); }
@@ -866,3 +867,62 @@ main { flex: 1; min-width: 0; min-height: 0; overflow: hidden; display: flex; fl
   font-family: var(--font-mono); font-size: var(--type-code); line-height: 1.5; color: var(--fg-muted);
   white-space: pre-wrap; overflow-wrap: anywhere; max-height: 320px; overflow-y: auto;
 }
+
+/* ---- Markdown (HOW-29) -------------------------------------------------------------------
+   Agent prose and published documents. Styled by element under one class, because the
+   renderer emits plain elements: a plan is a document, so it gets document rhythm — headings
+   that separate, lists that indent, code that is visibly code — at the pane's own type scale. */
+.md { line-height: 1.6; overflow-wrap: anywhere; min-width: 0; }
+.md > :first-child { margin-top: 0; }
+.md > :last-child { margin-bottom: 0; }
+.md p { margin: 0 0 0.7em; }
+.md h1, .md h2, .md h3, .md h4, .md h5, .md h6 { margin: 1.2em 0 0.45em; line-height: 1.3; font-weight: 600; color: var(--fg); }
+.md h1 { font-size: var(--type-xl); }
+.md h2 { font-size: var(--type-lg); padding-bottom: 4px; border-bottom: 1px solid var(--border); }
+.md h3 { font-size: var(--type-md); }
+.md h4, .md h5, .md h6 { font-size: var(--type-body); color: var(--fg-muted); }
+.md ul, .md ol { margin: 0 0 0.7em; padding-left: 1.4em; }
+/* Tailwind's preflight strips list markers; a plan's numbering is part of what it says */
+.md ul { list-style: disc; }
+.md ol { list-style: decimal; }
+.md li > ul { list-style: circle; }
+.md li { margin: 0.2em 0; }
+.md li > ul, .md li > ol { margin: 0.2em 0 0.3em; }
+.md strong { font-weight: 600; color: var(--fg); }
+.md code {
+  font-family: var(--font-mono); font-size: var(--type-code); padding: 1px 4px;
+  background: var(--bg-inset); border-radius: var(--radius-sm);
+}
+.md pre {
+  margin: 0 0 0.8em; padding: 8px 10px; background: var(--bg-inset); border-radius: var(--radius-sm);
+  overflow-x: auto; line-height: 1.5;
+}
+.md pre code { padding: 0; background: none; white-space: pre; overflow-wrap: normal; }
+.md blockquote { margin: 0 0 0.7em; padding-left: 10px; border-left: 2px solid var(--border-strong); color: var(--fg-muted); }
+.md hr { border: 0; border-top: 1px solid var(--border); margin: 1em 0; }
+.md a { color: var(--ring); text-decoration: underline; text-underline-offset: 2px; }
+.md-table { overflow-x: auto; margin: 0 0 0.8em; }
+.md table { border-collapse: collapse; font-size: var(--type-sm); }
+.md th, .md td { border: 1px solid var(--border); padding: 4px 8px; vertical-align: top; }
+.md th { background: var(--bg-inset); font-weight: 600; text-align: left; }
+
+/* what a step published: a short value on one line, a long one as a document card that
+   previews, expands in place, or opens in the reader */
+.out-docs { display: flex; flex-direction: column; gap: 8px; }
+.out-value { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; font-size: var(--type-sm); min-width: 0; }
+.out-value-v { color: var(--fg); overflow-wrap: anywhere; }
+.out-doc { border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--bg-raised); min-width: 0; }
+.out-doc-head {
+  display: flex; align-items: center; gap: 7px; padding: 6px 8px 6px 10px;
+  border-bottom: 1px solid var(--border); color: var(--fg-muted);
+}
+.out-doc-name { color: var(--fg); font-size: var(--type-sm); }
+.out-doc-meta { font-size: var(--type-2xs); color: var(--fg-faint); white-space: nowrap; }
+.out-doc-actions { margin-left: auto; display: flex; gap: 4px; }
+.out-doc-body { padding: 10px 12px; font-size: var(--type-sm); color: var(--fg); }
+/* collapsed is a preview: the opening of the document, fading out so it reads as "more" */
+.out-doc[data-expanded="closed"] .out-doc-body {
+  max-height: 220px; overflow: hidden;
+  mask-image: linear-gradient(to bottom, black 70%, transparent);
+}
+.doc-reader { max-height: 72vh; overflow-y: auto; padding-right: 6px; font-size: var(--type-body); color: var(--fg); }

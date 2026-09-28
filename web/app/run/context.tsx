@@ -17,6 +17,7 @@ import { usePanel } from "@/lib/panel";
 import { Badge, scopeVariant } from "@/components/ui/badge";
 import { Row } from "@/components/ui/row";
 import { EmptyState } from "@/components/ui/empty-state";
+import { OutputDoc, isDocument } from "./document";
 
 export const SCOPE_MEANS: Record<string, string> = {
   sticky: "the last good value stays visible when a writer re-enters, until a newer one lands",
@@ -93,7 +94,9 @@ export function ContextDetail({ entry }: { entry: RunDetail["context"][number] }
         {entry.veiled ? (
           <div className="pd-note">veiled: its writer is mid-attempt, so the old value must not be read as current</div>
         ) : entry.written ? (
-          <pre className="sd-raw">{fmtValue(entry.value)}</pre>
+          isDocument(entry.value)
+            ? <OutputDoc name={entry.key} text={entry.value} />
+            : <pre className="sd-raw">{fmtValue(entry.value)}</pre>
         ) : (
           <div className="pd-note">nothing has written this yet — {entry.declared_writers.join(", ") || "no declared writer"} would</div>
         )}

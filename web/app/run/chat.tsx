@@ -50,7 +50,7 @@ import { Sparkles, FileOutput, UserRound, HelpCircle, ChevronsDownUp, ChevronsUp
 import { submitOnEnter } from "@/lib/keys";
 import type { RunDetail } from "../../derive";
 import { citeParts } from "../../cite";
-import { beatsOf, ToolBeat, ToolDisclosureContext } from "./activity";
+import { AgentProse, beatsOf, ToolBeat, ToolDisclosureContext } from "./activity";
 import { Button } from "@/components/ui/button";
 import { StandingAsk } from "./ask";
 import { Chip } from "@/components/ui/chip";
@@ -160,7 +160,9 @@ function Row({ m, onPickStep }: { m: ChatMessage; onPickStep: (key: string) => v
           {m.beats.map((b, i) =>
             b.kind === "tool"
               ? <ToolBeat key={i} call={b.part} result={b.result} />
-              : <p key={i} className={b.kind === "thinking" ? "act-thinking" : "act-text"}>{b.part.content.trim()}</p>,
+              : b.kind === "thinking"
+                ? <p key={i} className="act-thinking">{b.part.content.trim()}</p>
+                : <AgentProse key={i} text={b.part.content} />,
           )}
           {m.unfinished && <div className="act-note">the process died inside this turn — what you see is what it had said</div>}
         </div>

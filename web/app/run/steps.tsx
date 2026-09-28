@@ -22,6 +22,7 @@ import { readStored, usePanel } from "@/lib/panel";
 import { StandingAsk } from "./ask";
 import { StepActivity } from "./activity";
 import { PromptAndContext } from "./prompt-context";
+import { OutputDocs, stepOutputs } from "./document";
 
 /** Status is a SHAPE first (DESIGN.md): the glyph alone must carry the state. */
 export function StepGlyph({ status }: { status: "running" | "succeeded" | "failed" | "needs-input" }) {
@@ -321,11 +322,14 @@ export function StepDetail({ runId, row, detail, ask, now, onResolved }: {
               : <div className="pd-note">this step rendered no prompt (it is not an agent step)</div>)}
             {shown === "output" && (() => {
               const finished = detail.outcomes.find((o) => o.node === row.node && o.visit === row.visit);
+              const published = stepOutputs(detail, row.node, row.visit);
               return (
                 <>
                   <div className="kv"><span className="k">status</span><span className="v">{row.status}</span></div>
                   {finished?.verdict_downstream && <div className="kv"><span className="k">routed</span><span className="v">{finished.verdict_downstream}</span></div>}
                   {!finished && <div className="pd-note">no outcome recorded for {key} yet</div>}
+                  {published && <h2 className="rh">Published</h2>}
+                  {published && <OutputDocs outputs={published} />}
                 </>
               );
             })()}
