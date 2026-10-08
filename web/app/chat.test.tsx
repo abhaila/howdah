@@ -107,8 +107,11 @@ const toLastQuestion = (el: HTMLElement) => {
   }
 };
 /** type into a controlled input the way the DOM would, then let React see it */
-const type = (box: HTMLInputElement, value: string) => {
-  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+const type = (box: HTMLInputElement | HTMLTextAreaElement, value: string) => {
+  // React tracks the value through the element's OWN prototype setter, so an input and a
+  // textarea each need theirs
+  const proto = box instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+  const setter = Object.getOwnPropertyDescriptor(proto, "value")!.set!;
   act(() => {
     setter.call(box, value);
     box.dispatchEvent(new Event("input", { bubbles: true }));
@@ -493,8 +496,71 @@ describe("reading a transcript that is mostly tool work (HOW-30)", () => {
     const send = el.querySelector('button[aria-label="Ask"]') as HTMLButtonElement;
     expect(send).not.toBeNull();
     expect(send.disabled).toBe(true);
-    type(el.querySelector('input[aria-label="ask about this run"]') as HTMLInputElement, "why?");
+    type(el.querySelector('textarea[aria-label="ask about this run"]') as HTMLTextAreaElement, "why?");
     expect((el.querySelector('button[aria-label="Ask"]') as HTMLButtonElement).disabled).toBe(false);
+  });
+});
+
+describe("the shape around the transcript (HOW-30)", () => {
+  test("a starting question is a card naming what it is about, and sends the full question", async () => {
+    let sent = "";
+    globalThis.fetch = (async (_: unknown, init?: RequestInit) => {
+      sent = JSON.parse(String(init?.body)).question;
+      return new Response(JSON.stringify({ answer: "it is waiting on you" }), { status: 200, headers: { "content-type": "application/json" } });
+    }) as unknown as typeof fetch;
+    const el = render(askingLog());
+    const card = el.querySelector(".chat-suggestion") as HTMLElement;
+    expect(card.querySelector(".chat-suggestion-title")!.textContent).toBe("What is it waiting for?");
+    expect(card.querySelector(".chat-suggestion-detail")!.textContent).toBe("do@1");
+    await act(async () => { card.click(); });
+    expect(sent).toBe("What is it waiting for?");
+    // asked once, the cards make way for the conversation they started
+    expect(el.querySelector(".chat-suggestion")).toBeNull();
+  });
+
+  test("a failed step offers \"Why did it fail?\" about that step", () => {
+    const log = new FakeLog();
+    log.add({ type: "run-started", graph: "quick-task", inputs: { goal: "g" }, pinned_prompts: {} });
+    log.add({ type: "node-started", node: "do", visit: 1, attempt_id: "do#1" });
+    log.add({ type: "node-finished", node: "do", visit: 1, status: "failed", writes: {} } as never);
+    const cards = [...render(log).querySelectorAll(".chat-suggestion")];
+    const failed = cards.find((c) => c.textContent?.includes("Why did it fail?"));
+    expect(failed?.getAttribute("aria-label")).toBe("Why did do@1 fail?");
+  });
+
+  test("a step reads as a labelled heading: where it sits, then its name", () => {
+    const el = render(askingLog());
+    const step = el.querySelector(".cv-step")!;
+    expect(step.querySelector(".chat-eyebrow")!.textContent).toContain("Step 1 · visit 1 · doc.draft v1 · read goal");
+    const name = step.querySelector(".cv-step-key")!;
+    expect(name.textContent).toBe("do");
+    expect(name.getAttribute("aria-label")).toBe("open do@1 in Steps");
+  });
+
+  test("the toolbar counts the run's steps and tool calls", () => {
+    expect(render(askingLog()).querySelector(".chat-head .chat-eyebrow")!.textContent).toBe("1 step · 1 tool call");
+  });
+
+  test("a run with nothing in it gets a headline, not a bare line", () => {
+    const log = new FakeLog();
+    log.add({ type: "run-started", graph: "quick-task", inputs: { goal: "g" }, pinned_prompts: {} });
+    const el = render(log);
+    expect(el.querySelector(".chat-empty-title")!.textContent).toBe("Waiting for the first step");
+  });
+
+  test("Shift+Enter is a new line in the composer, Enter asks", async () => {
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls++;
+      return new Response(JSON.stringify({ answer: "ok" }), { status: 200, headers: { "content-type": "application/json" } });
+    }) as unknown as typeof fetch;
+    const el = render(askingLog());
+    const box = el.querySelector('textarea[aria-label="ask about this run"]') as HTMLTextAreaElement;
+    type(box, "first line");
+    await act(async () => { box.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", shiftKey: true, bubbles: true })); });
+    expect(calls).toBe(0);
+    await act(async () => { box.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });
+    expect(calls).toBe(1);
   });
 });
 
@@ -506,7 +572,7 @@ describe("model output stays untrusted input", () => {
       })) as unknown as typeof fetch;
     const el = render(askingLog());
     // HOW-27: no tab to switch to — the composer is at the foot of the transcript, always
-    const input = el.querySelector('input[aria-label="ask about this run"]') as HTMLInputElement;
+    const input = el.querySelector('textarea[aria-label="ask about this run"]') as HTMLTextAreaElement;
     type(input, "what happened?");
     await act(async () => { input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });
     expect(el.querySelector("img")).toBeNull();

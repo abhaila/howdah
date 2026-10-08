@@ -54,7 +54,7 @@
  * rewrites and is unchanged.
  */
 import { useMemo, useState } from "react";
-import { Sparkles, FileOutput, UserRound, HelpCircle, ChevronsDownUp, ChevronsUpDown, ArrowUp, ArrowDown, TriangleAlert } from "lucide-react";
+import { FileOutput, UserRound, HelpCircle, ChevronsDownUp, ChevronsUpDown, ArrowUp, ArrowDown, ArrowUpRight, TriangleAlert, Hourglass, CircleX, GitCompare } from "lucide-react";
 import { submitOnEnter } from "@/lib/keys";
 import type { RunDetail } from "../../derive";
 import { citeParts } from "../../cite";
@@ -63,8 +63,7 @@ import { Button } from "@/components/ui/button";
 import { StandingAsk } from "./ask";
 import { Chip } from "@/components/ui/chip";
 import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
-import { EmptyState } from "@/components/ui/empty-state";
+import { Textarea } from "@/components/ui/textarea";
 import {
   MessageScroller,
   MessageScrollerButton,
@@ -74,19 +73,37 @@ import {
   MessageScrollerViewport,
 } from "@/components/ui/message-scroller";
 
-export function suggestionsFor(detail: RunDetail, ask: RunDetail["ask"]): string[] {
-  const out: string[] = [];
-  if (ask) out.push("What is it waiting for?");
+/**
+ * A starting question, drawn as a card (HOW-30): a short title that says what kind of
+ * question it is, the specific thing it is about, and the exact question that is sent. The
+ * card says less than the question so three of them can sit side by side and still be read.
+ */
+export interface Suggestion {
+  kind: "waiting" | "failed" | "changed";
+  title: string;
+  detail: string;
+  question: string;
+}
+
+const SUGGESTION_ICON = { waiting: Hourglass, failed: CircleX, changed: GitCompare } as const;
+
+export function suggestionsFor(detail: RunDetail, ask: RunDetail["ask"]): Suggestion[] {
+  const out: Suggestion[] = [];
+  if (ask) out.push({ kind: "waiting", title: "What is it waiting for?", detail: `${ask.node}@${ask.visit}`, question: "What is it waiting for?" });
   const failed = detail.timeline.find((t) => t.status === "failed");
-  if (failed) out.push(`Why did ${failed.node}@${failed.visit} fail?`);
+  if (failed) {
+    const key = `${failed.node}@${failed.visit}`;
+    out.push({ kind: "failed", title: "Why did it fail?", detail: key, question: `Why did ${key} fail?` });
+  }
   const rewritten = detail.context.find((c) => c.writes.length > 1);
-  if (rewritten) out.push(`What changed in ${rewritten.key}?`);
+  if (rewritten)
+    out.push({ kind: "changed", title: "What changed?", detail: `${rewritten.key}, written ${rewritten.writes.length} times`, question: `What changed in ${rewritten.key}?` });
   return out.slice(0, 3);
 }
 
 /** one message in the transcript — the parts model, in the order the run produced them */
 export type ChatMessage =
-  | { kind: "step"; key: string; node: string; visit: number; prompt: { id: string; version: number; read: string[] } | null }
+  | { kind: "step"; key: string; node: string; visit: number; index: number; prompt: { id: string; version: number; read: string[] } | null }
   | { kind: "beats"; key: string; beats: ReturnType<typeof beatsOf>; unfinished: boolean }
   | { kind: "asked"; key: string; reason: string }
   | { kind: "answered"; key: string; text: string }
@@ -108,7 +125,7 @@ type AskTurn = { q: string; a: string | null; error?: string; cost?: number };
  */
 export function conversation(detail: RunDetail): ChatMessage[] {
   const out: ChatMessage[] = [];
-  for (const row of detail.timeline) {
+  for (const [i, row] of detail.timeline.entries()) {
     const key = `${row.node}@${row.visit}`;
     const render = detail.renders.find((r) => r.node === row.node && r.visit === row.visit);
     out.push({
@@ -116,6 +133,7 @@ export function conversation(detail: RunDetail): ChatMessage[] {
       key: `step:${key}`,
       node: row.node,
       visit: row.visit,
+      index: i + 1,
       prompt: render ? { id: render.prompt, version: render.prompt_version, read: Object.keys(render.context_read) } : null,
     });
 
@@ -149,17 +167,23 @@ function Row({ m, onPickStep }: { m: ChatMessage; onPickStep: (key: string) => v
   switch (m.kind) {
     case "step":
       return (
+        // HOW-30: a small uppercase label over a name that reads as a heading — where the
+        // step sits in the run and what it was given, then the step itself, which is also the
+        // way into it on the Steps pane
         <div className="cv-step">
-          <Chip className="cv-step-key" onClick={() => onPickStep(`${m.node}@${m.visit}`)}>
-            {m.node}@{m.visit}
-          </Chip>
-          {m.prompt && (
-            <span className="cv-prompt">
-              <Sparkles size={12} aria-hidden />
-              <span className="m">{m.prompt.id} v{m.prompt.version}</span>
-              <span className="cv-read">read {m.prompt.read.join(", ") || "nothing"}</span>
-            </span>
-          )}
+          <div className="chat-eyebrow">
+            Step {m.index} · visit {m.visit}
+            {m.prompt && <> · {m.prompt.id} v{m.prompt.version} · read {m.prompt.read.join(", ") || "nothing"}</>}
+          </div>
+          <Button
+            variant="ghost"
+            size="inline"
+            className="cv-step-key"
+            aria-label={`open ${m.node}@${m.visit} in Steps`}
+            onClick={() => onPickStep(`${m.node}@${m.visit}`)}
+          >
+            {m.node}
+          </Button>
         </div>
       );
     case "beats":
@@ -260,6 +284,9 @@ export function RunChat({ runId, detail, ask, onPickStep, onResolved }: {
       <MessageScrollerProvider autoScroll defaultScrollPosition="last-anchor" scrollPreviousItemPeek={64}>
         <div className="chat-head">
           <div className="chat-col chat-head-row">
+            <span className="chat-eyebrow">
+              {detail.timeline.length} {detail.timeline.length === 1 ? "step" : "steps"} · {toolCount} tool {toolCount === 1 ? "call" : "calls"}
+            </span>
             {/* HOW-30: the Top pin is a toolbar control, not a float. Floated, it sat centred over
                 the first line of text it was meant to take you back to. It still appears only
                 when there is somewhere to go — the primitive marks it inert otherwise. */}
@@ -297,7 +324,14 @@ export function RunChat({ runId, detail, ask, onPickStep, onResolved }: {
                 component's default `gap-8` would double it */}
             <MessageScrollerContent className="chat-log chat-col gap-0">
               {messages.length === 0 && turns.length === 0 && (
-                <EmptyState>nothing has happened in this run yet</EmptyState>
+                <div className="chat-empty">
+                  <div className="chat-eyebrow">Nothing has run yet</div>
+                  <h2 className="chat-empty-title">Waiting for the first step</h2>
+                  <p className="chat-empty-sub">
+                    nothing has happened in this run yet — each step, what the agent said and did,
+                    and anything it asks you will appear here as it happens.
+                  </p>
+                </div>
               )}
               {messages.map((m) => (
                 <MessageScrollerItem key={m.key} messageId={m.key} scrollAnchor={m.kind === "step"}>
@@ -343,34 +377,43 @@ export function RunChat({ runId, detail, ask, onPickStep, onResolved }: {
         <div className="chat-col">
           {turns.length === 0 && suggestions.length > 0 && (
             <div className="chat-suggestions">
-              {suggestions.map((sug) => (
-                <Chip key={sug} onClick={() => send(sug)}>{sug}</Chip>
-              ))}
+              {suggestions.map((sug) => {
+                const Icon = SUGGESTION_ICON[sug.kind];
+                return (
+                  <Button key={sug.question} variant="outline" className="chat-suggestion" aria-label={sug.question} onClick={() => send(sug.question)}>
+                    <Icon className="chat-suggestion-icon" aria-hidden />
+                    <ArrowUpRight className="chat-suggestion-go" aria-hidden />
+                    <span className="chat-suggestion-title">{sug.title}</span>
+                    <span className="chat-suggestion-detail">{sug.detail}</span>
+                  </Button>
+                );
+              })}
             </div>
           )}
-          {/* HOW-30: the composer is a card with its send control INSIDE it, the way every chat
-              surface draws one — a flat grey input with nothing to press read as disabled. The
-              read-only note is the card's own footer, one line, because it describes this box
-              and nothing else. */}
+          {/* HOW-30: the composer is a held object — a roomy box with the field on top and its
+              controls along the bottom edge inside it, send last. What the box CANNOT do is said
+              once, quietly, underneath, beside how to use it. */}
           <div className="chat-input" data-busy={busy ? "true" : "false"}>
-            <div className="chat-input-row">
-              <Input
-                className="chat-input-field"
-                aria-label="ask about this run"
-                placeholder="Ask about this run…"
-                value={q}
-                disabled={busy}
-                onChange={(e) => setQ(e.target.value)}
-                onKeyDown={submitOnEnter(() => send(q), { enabled: !busy })}
-              />
-              <Button size="icon" aria-label="Ask" disabled={busy || !q.trim()} onClick={() => send(q)}>
+            <Textarea
+              className="chat-input-field"
+              rows={2}
+              aria-label="ask about this run"
+              placeholder="Ask about this run…"
+              value={q}
+              disabled={busy}
+              onChange={(e) => setQ(e.target.value)}
+              onKeyDown={submitOnEnter(() => send(q), { enabled: !busy })}
+            />
+            <div className="chat-input-bar">
+              <Badge>read-only</Badge>
+              <Button size="icon" className="chat-send" aria-label="Ask" disabled={busy || !q.trim()} onClick={() => send(q)}>
                 <ArrowUp aria-hidden />
               </Button>
             </div>
-            <div className="chat-note">
-              <Badge>read-only</Badge> Answers from this run's steps, prompts and context. It cannot reply to the
-              agent — to answer what the run is waiting for, use the card above.
-            </div>
+          </div>
+          <div className="chat-hint">
+            <span>Enter to ask · Shift + Enter for a new line</span>
+            <span>Reads this run only. It can't reply to the agent — answer the run on the card above.</span>
           </div>
         </div>
       </div>

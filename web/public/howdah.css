@@ -792,7 +792,29 @@ main { flex: 1; min-width: 0; min-height: 0; overflow: hidden; display: flex; fl
    the middle of the last sentence. */
 .chat-top-pin { position: static; }
 .chat-end-pin { background: var(--bg-raised); border-color: var(--border-strong); color: var(--fg); }
-.chat-suggestions { display: flex; flex-wrap: wrap; gap: 6px; padding-bottom: 8px; }
+/* HOW-30: the micro-label — uppercase mono over the thing it names (a step, the toolbar's
+   count, an empty run). The rail's section headings are the same idea at a larger size. */
+.chat-eyebrow {
+  font-family: var(--font-mono); font-size: var(--type-2xs); text-transform: uppercase;
+  letter-spacing: 0.12em; color: var(--fg-faint);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
+}
+/* a run with nothing in it yet: label, headline, one line of what will appear */
+.chat-empty { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 10px; padding: 72px 0 32px; }
+.chat-empty-title { margin: 0; font-size: var(--type-xl); font-weight: 600; color: var(--fg); }
+.chat-empty-sub { margin: 0; max-width: 460px; font-size: var(--type-body); line-height: 1.6; color: var(--fg-muted); }
+/* starting questions as cards: icon and ↗ on the top edge, title and subject below. auto-FILL,
+   not auto-fit: one card keeps a card's width instead of stretching across the column. */
+.chat-suggestions { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px; padding-bottom: 12px; }
+.chat-suggestion {
+  position: relative; display: flex; flex-direction: column; align-items: flex-start; gap: 4px;
+  height: auto; padding: 12px 14px; white-space: normal; text-align: left;
+  border-radius: var(--radius-card); background: var(--bg-raised);
+}
+.chat-suggestion-icon { margin-bottom: 8px; color: var(--fg-muted); }
+.chat-suggestion-go { position: absolute; top: 12px; right: 12px; color: var(--fg-faint); }
+.chat-suggestion-title { font-size: var(--type-body); font-weight: 500; color: var(--fg); }
+.chat-suggestion-detail { font-size: var(--type-sm); color: var(--fg-muted); overflow-wrap: anywhere; }
 /* HOW-27: the content box inside the scroller's viewport. It no longer scrolls itself —
    MessageScrollerViewport is the scrolling element, and two overflow contexts would fight
    over who owns the reader's position, which is the whole point of the component. */
@@ -815,12 +837,10 @@ main { flex: 1; min-width: 0; min-height: 0; overflow: hidden; display: flex; fl
    border: the break already says where a step starts, and a 2px rail down every step was
    the third vertical line on a screen that only needed one. */
 .cv-step {
-  display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
-  margin: 28px 0 12px; padding-top: 14px; border-top: 1px solid var(--border);
+  display: flex; flex-direction: column; align-items: flex-start; gap: 4px;
+  margin: 32px 0 14px; padding-top: 18px; border-top: 1px solid var(--border);
 }
-.cv-step-key { flex-shrink: 0; }
-.cv-prompt { display: inline-flex; align-items: center; gap: 6px; font-size: var(--type-2xs); color: var(--fg-faint); }
-.cv-read { color: var(--fg-faint); }
+.cv-step-key { font-size: var(--type-lg); font-weight: 600; color: var(--fg); padding: 1px 4px; margin-left: -4px; }
 .cv-agent { display: flex; flex-direction: column; gap: 6px; }
 .cv-unfinished { display: flex; align-items: center; gap: 6px; margin-top: 4px; }
 .cv-asked, .cv-answered {
@@ -832,18 +852,26 @@ main { flex: 1; min-width: 0; min-height: 0; overflow: hidden; display: flex; fl
 .cv-wrote { display: flex; align-items: center; gap: 7px; margin: 8px 0 4px; font-size: var(--type-2xs); color: var(--fg-faint); }
 /* the standing park sits at the foot of the conversation — where the ticket wanted it */
 .cv-standing { margin-top: 10px; }
-.chat-foot { padding: 10px 0 14px; }
+.chat-foot { padding: 12px 0 16px; }
 .chat-input {
-  background: var(--bg-raised); border: 1px solid var(--border-strong); border-radius: var(--radius);
-  padding: 8px 8px 7px 12px;
+  display: flex; flex-direction: column; gap: 6px;
+  background: var(--bg-raised); border: 1px solid var(--border-strong); border-radius: var(--radius-card);
+  padding: 14px 12px 10px 16px;
   transition: border-color var(--dur-fast) var(--ease-out-strong);
 }
 .chat-input:focus-within { border-color: var(--ring); }
-.chat-input-row { display: flex; align-items: center; gap: 8px; }
 /* the field is the card's body, so it gives up its own box — the card is the box */
-.chat-input-field { border: 0; background: transparent; padding-inline: 0; font-family: var(--font-display); font-size: var(--type-body); }
+.chat-input-field {
+  min-height: 0; border: 0; background: transparent; padding: 0; resize: none;
+  font-family: var(--font-display); font-size: var(--type-md); line-height: 1.5;
+}
 .chat-input-field:focus-visible { outline: none; }
-.chat-note { font-size: var(--type-2xs); color: var(--fg-faint); margin-top: 6px; line-height: 1.5; }
+.chat-input-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.chat-send { border-radius: 999px; }
+.chat-hint {
+  display: flex; flex-wrap: wrap; justify-content: center; column-gap: 20px; row-gap: 2px;
+  margin-top: 8px; font-size: var(--type-2xs); color: var(--fg-faint);
+}
 
 /* Graph source editor (D2/D9): local graphs are edited as what they are — TypeScript. The
    editor is deliberately plain and monospaced rather than a syntax-highlighted widget: the

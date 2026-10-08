@@ -66,7 +66,9 @@ Density comes from removing chrome, not from shrinking text.
 - **Rows are rows.** No `background + border + radius` per row. A hairline (`--border`) and
   spacing separate them. The selected or waiting row is marked by an inset rule, not a box.
 - Row height 26px in dense lists (steps, logs, context, prompts, runs).
-- `--radius` is 3px and `--radius-sm` is 2px. Rounded cards are the look we left behind.
+- `--radius` is 8px, `--radius-sm` 6px, `--radius-xs` 4px, and `--radius-card` 12px for the
+  composer and suggestion cards only (HOW-30, softened from 3px/2px). Soft corners on the boxes
+  that exist; still no box per row.
 - Panels are separated by a 1px `--border` and a change of ground, never by a shadow.
 
 ## Layout

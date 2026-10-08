@@ -109,10 +109,15 @@
   /* the dulled gold a `cleared` context key reads in — veiled, not gone */
   --scope-cleared: #8C7A4A;
 
-  /* shape: near-square. Rounded cards are the dashboard look we left behind. */
-  --radius: 3px;
-  --radius-sm: 2px;
-  --radius-xs: 2px;
+  /* shape: soft, not round (HOW-30). Near-square (3px/2px) read as severe beside the chat
+     surfaces operators compare it to, and a rounded CONTROL is not the dashboard card we
+     left behind — DESIGN.md still forbids a box per row; what changed is the corner on the
+     boxes that are allowed to exist. `--radius-card` is for the two surfaces that are meant
+     to read as a held object: the composer and a suggestion card. */
+  --radius-card: 12px;
+  --radius: 8px;
+  --radius-sm: 6px;
+  --radius-xs: 4px;
 }
 
 /* ---- light: supported, not the target ---------------------------------------------
