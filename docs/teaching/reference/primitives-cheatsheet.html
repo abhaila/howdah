@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Jev primitives — cheat sheet</title>
+<link rel="stylesheet" href="../assets/lesson.css">
+</head>
+<body>
+<main class="wide">
+
+<p class="eyebrow">Reference · jev-1.13 · checked 2026-09-26</p>
+<h1>Jev primitives — cheat sheet</h1>
+<p class="lede">One page. Print it.</p>
+
+<h2>Request</h2>
+<pre><code>POST https://api.typesafe.ai/v1/systemone
+Authorization: Bearer $TYPESAFE_API_KEY
+Content-Type: application/json
+
+{ "state": string | object | array,   // ≤32k tokens, with the longest question
+  "model": "jev-latest",              // → jev-1.13.0; response echoes what answered
+  "questions": { "<your key>": { … } } }</code></pre>
+
+<h2>The three question types</h2>
+<table>
+<tr><th></th><th>Noul</th><th>Choice</th><th>Score</th></tr>
+<tr><td><strong>Asks</strong></td><td>Is this statement true?</td><td>Which one of these?</td><td>Where on this rubric?</td></tr>
+<tr><td><strong><code>criteria</code></strong></td><td>optional <code>{true, false}</code></td><td>map of option → description (<code>null</code> ok)</td><td>ordered array of levels</td></tr>
+<tr><td><strong>Limit</strong></td><td>—</td><td>≤255 options</td><td>2–10 levels</td></tr>
+<tr><td><strong>Returns</strong></td><td><code>noul</code> 0–1</td><td><code>choice</code>, <code>probabilities</code>, <code>confidence</code></td><td><code>score</code>, <code>legend</code>, <code>probabilities</code>, <code>confidence</code></td></tr>
+<tr><td><strong><code>confidence</code>?</strong></td><td><strong>No</strong> — the value is the probability</td><td>Yes</td><td>Yes</td></tr>
+<tr><td><strong>Nature</strong></td><td>Absolute</td><td>Relative</td><td>Ordered</td></tr>
+</table>
+
+<h2>Confidence</h2>
+<pre><code>confidence = (n · max(p) − 1) / (n − 1)     // n = number of options/levels</code></pre>
+<p>Derived from <code>probabilities</code>, so you can recompute or replace it. Flat
+distribution → low confidence → the model is telling you it does not know. Three-band
+pattern: act automatically · proceed with caution · do not act. <strong>Thresholds scale with
+the stakes of the action, not with the question.</strong></p>
+<p><em>Calibration is measured across groups of predictions; it does not guarantee that an
+individual answer is correct.</em></p>
+
+<h2>Limits and cost</h2>
+<table>
+<tr><th>Context</th><td>64k total per request; 32k for state + longest question</td></tr>
+<tr><th>Input</th><td>Text only — strings, JSON objects, arrays of text. No images.</td></tr>
+<tr><th>Price</th><td>$0.042 / MTok input. <strong>Output free.</strong></td></tr>
+<tr><th>Rate</th><td>250,000 tok/s · 1,200 req/min</td></tr>
+<tr><th>Errors</th><td>401 auth · 422 bad body · 429 rate · 529 overloaded (back off on the last two)</td></tr>
+</table>
+
+<h2>The nine jagged edges</h2>
+<table>
+<tr><th>#</th><th>Failure mode</th><th>Do this instead</th></tr>
+<tr><td>1</td><td>Literal reading</td><td>State the exact condition; put boundary cases in criteria</td></tr>
+<tr><td>2</td><td>Math, numbers, counting</td><td>Keep arithmetic in code; one Noul per item, sum yourself</td></tr>
+<tr><td>3</td><td>Date and time comparison</td><td>Extract parts as Choices; compare in code</td></tr>
+<tr><td>4</td><td>Indirection</td><td>Reduce hops; name the relevant state directly</td></tr>
+<tr><td>5</td><td>Large state, irrelevant detail</td><td>Filter first — <q>Jev suffers from context rot</q></td></tr>
+<tr><td>6</td><td>Adversarial content</td><td>State is <strong>not</strong> treated as hostile. Be explicit; test.</td></tr>
+<tr><td>7</td><td>Contradictory instructions vs criteria</td><td>Align them; never map <code>true</code>→no</td></tr>
+<tr><td>8</td><td>No structural invariants</td><td>Don't carry thresholds across types; don't expect sums</td></tr>
+<tr><td>9</td><td>Generation</td><td>Use a generative model. Turn extraction into a Choice.</td></tr>
+</table>
+
+<h2>Four rules of thumb</h2>
+<ol>
+<li><strong>Use code when you can.</strong> If a regex or a parser can compute it exactly, it
+does not belong in a question.</li>
+<li><strong>One snap judgement per question.</strong> A judgement that depends on three things
+is three questions, combined with weights you own.</li>
+<li><strong>Ask everything in one call.</strong> Questions can't contaminate each other, and
+the state is paid for once. Ignore the answers you don't need.</li>
+<li><strong>Two requests only when the second can't be built without the first</strong> — new
+data to fetch, or different options to offer.</li>
+</ol>
+
+<div class="footer">
+<p><a href="../lessons/0001-three-primitives.html">Lesson 01 — Three primitives</a>
+<a href="https://docs.typesafe.ai/api.md">API reference</a>
+<a href="https://docs.typesafe.ai/model-jaggedness/jev-1.13.md">Jaggedness</a></p>
+</div>
+
+</main>
+</body>
+</html>

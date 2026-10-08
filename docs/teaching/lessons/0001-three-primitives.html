@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 01 — Three primitives</title>
+<link rel="stylesheet" href="../assets/lesson.css">
+</head>
+<body>
+<main>
+
+<p class="eyebrow">Lesson 01 · System One · ~12 minutes</p>
+<h1>Three primitives, and why they are not interchangeable</h1>
+<p class="lede">Jev answers in exactly three shapes. Choosing the wrong one does not produce
+an error — it produces a plausible number that means something other than what you asked.</p>
+
+<h2>The shape of every request</h2>
+
+<p>There is one endpoint and one idea. You send a <strong>state</strong> — the thing being
+judged — and a map of named <strong>questions</strong>. You get back one typed
+<strong>answer</strong> per question, under the same names.</p>
+
+<pre><code>POST https://api.typesafe.ai/v1/systemone
+
+{ "state":     "Help! My payouts have been failing for 3 days.",
+  "model":     "jev-latest",
+  "questions": { "is_urgent": { "type": "noul", "instructions": "Does this convey urgency?" } } }
+
+→ { "answers": { "is_urgent": { "type": "noul", "noul": 0.95 } },
+    "usage":   { "input_tokens": 296, "output_tokens": 20 } }</code></pre>
+
+<p>Two things follow from this and are worth holding onto. The question keys are
+<em>yours</em> — <q>The key is not sent to the underlying model and is not used in
+inference.</q> And every question in one request is evaluated <strong>independently and in
+parallel</strong>: one answer never becomes context for another.</p>
+
+<div class="note"><strong>Why that matters.</strong> Because questions don't see each other,
+batching is free of contamination — and the state is only paid for once. TypeSafe measured 13
+questions in one call at <strong>12.2× cheaper and 10.0× faster</strong> than 13 calls,
+<q>with no change in answers</q>. The habit to build: ask everything you <em>might</em> need,
+then ignore the answers you don't. It is called <a
+href="https://docs.typesafe.ai/patterns/fan-out.md">speculative fan-out</a>.</div>
+
+<h2>The three primitives</h2>
+
+<h3>Noul — one yes/no probability</h3>
+<p>Returns a single number from 0 to 1: the probability the statement is true. <strong>No
+<code>confidence</code> field</strong> — the value <em>is</em> the probability.</p>
+<pre><code>{ "type": "noul",
+  "instructions": "The findings describe a defect that would break a user-facing behaviour",
+  "criteria": { "true": "…what a yes means…", "false": "…what a no means…" } }</code></pre>
+
+<h3>Choice — one option from a set</h3>
+<p>Returns the winning option, a probability for <em>every</em> option (summing to 1), and a
+<code>confidence</code>. Up to 255 options.</p>
+<pre><code>{ "type": "choice",
+  "instructions": "Why did this CLI exit before speaking the protocol?",
+  "criteria": { "unauthenticated": "Credentials missing or expired",
+                "rate_limited":    "Allowance or quota exhausted",
+                "crashed":         "Started, then died for another reason" } }</code></pre>
+
+<h3>Score — a position on an ordered rubric</h3>
+<p>Returns a probability-weighted number that can land <em>between</em> levels, plus a
+<code>legend</code>, the per-level probabilities, and a <code>confidence</code>. Two to ten
+levels, and they must be <strong>ordered</strong>.</p>
+<pre><code>{ "type": "score",
+  "instructions": "How independently shippable is this slice?",
+  "criteria": ["Cannot ship without another slice",
+               "Ships but leaves a seam",
+               "Ships alone and is useful alone"] }</code></pre>
+
+<h2>The trap: the same question, two primitives, two answers</h2>
+
+<p>This is the part that costs people a day. It is the reason this is lesson one.</p>
+
+<p>Take the ticket <q>I'm not happy with the fit. What are my options here?</q> and ask
+<q>Is the customer asking for a refund?</q> — first as a Noul, then as a yes/no Choice.
+TypeSafe publishes what comes back:</p>
+
+<table>
+<tr><th>Noul <code>noul</code></th><th>Choice <code>yes</code></th><th>Choice <code>no</code></th><th>Choice <code>confidence</code></th></tr>
+<tr><td>0.22</td><td>0.01</td><td>0.99</td><td>0.97</td></tr>
+</table>
+
+<p>0.22 versus 0.01. Same sentence, same question, same model. A threshold you tuned on the
+Noul is meaningless on the Choice.</p>
+
+<p>And the identities you would expect to hold do not. Ask <q>Is the customer asking for a
+refund?</q> and <q>Is the customer asking for something <em>other than</em> a refund?</q> as
+two Nouls on <q>I was charged twice for the same order. Can someone look into this?</q>:</p>
+
+<table>
+<tr><th>refund</th><th>not_refund</th><th>sum</th></tr>
+<tr><td>0.72</td><td>0.47</td><td>1.19</td></tr>
+</table>
+
+<div class="note"><strong>The rule.</strong> <q>Don't rely on expected structural invariance…
+Don't carry a threshold tuned on a Noul over to a Choice, and don't hold the model to
+arithmetic identities between separate questions.</q> A Choice is <strong>relative</strong> —
+it settles <em>which</em> option wins. A Noul is <strong>absolute</strong> — and can be low
+for every option you ask about.</div>
+
+<p>That distinction is the whole lesson. Say it back to yourself before you pick a primitive:
+<em>am I choosing between options, or am I testing one statement?</em></p>
+
+<h2>Practise: pick the primitive</h2>
+<p>Five real decisions from Howdah. First press counts. <span id="q-score" class="mono"></span></p>
+
+<div class="q" data-answer="Choice">
+  <p class="q-stem">1. A harness CLI died without speaking the protocol. It was one of:
+  not logged in, out of allowance, a network failure, a bad config, or a crash. Which?
+  <span class="mono">(engine/executors/harness-failure.ts)</span></p>
+  <div class="q-opts"><button>Choice</button><button>Score</button><button>Noul</button></div>
+  <div class="q-why" hidden><strong>Choice.</strong> Five mutually exclusive causes, exactly
+  one true. You want the full distribution so a spread one parks instead of guessing. A Score
+  is wrong because the causes have no order — <q>network</q> is not between <q>auth</q> and
+  <q>crash</q>.</div>
+</div>
+
+<div class="q" data-answer="Noul">
+  <p class="q-stem">2. Given one review finding, should it block the merge?
+  <span class="mono">(the <code>blocking</code> field, present on 5 of 35 real findings)</span></p>
+  <div class="q-opts"><button>Choice</button><button>Score</button><button>Noul</button></div>
+  <div class="q-why" hidden><strong>Noul.</strong> One statement, tested absolutely, per
+  finding — and crucially you ask it <em>once per finding</em> and sum in code. A Choice over
+  findings would force exactly one to win, when the honest answer may be all of them or none.</div>
+</div>
+
+<div class="q" data-answer="Score">
+  <p class="q-stem">3. How independently shippable is this slice, before Howdah fans out one
+  real run, worktree and PR per slice? <span class="mono">(engine/executors/launch.ts)</span></p>
+  <div class="q-opts"><button>Choice</button><button>Score</button><button>Noul</button></div>
+  <div class="q-why" hidden><strong>Score.</strong> The levels are genuinely ordered — each
+  is more shippable than the last — and you want to threshold on the number. Note the jagged
+  edge: use the score to test a threshold, never to reconstruct an exact magnitude between
+  two levels.</div>
+</div>
+
+<div class="q" data-answer="Noul">
+  <p class="q-stem">4. Does this failed attempt's output mean the harness ran out of
+  allowance? Getting it wrong burns a harness for the whole run.
+  <span class="mono">(engine/run.ts:840)</span></p>
+  <div class="q-opts"><button>Choice</button><button>Score</button><button>Noul</button></div>
+  <div class="q-why" hidden><strong>Noul.</strong> One statement about one attempt. The
+  tempting answer is Choice over <q>rate limited / not rate limited</q> — but a binary Choice
+  buys you nothing a Noul doesn't already give, and lands you with a `confidence` that means
+  something different from the probability you actually wanted.</div>
+</div>
+
+<div class="q" data-answer="Score">
+  <p class="q-stem">5. How much irrelevant detail does this state carry for the question being
+  asked? You want to rank thirty candidate states worst-first.</p>
+  <div class="q-opts"><button>Choice</button><button>Score</button><button>Noul</button></div>
+  <div class="q-why" hidden><strong>Score.</strong> Ranking needs an ordered magnitude, which
+  is what a Score is for. A Noul gives a probability you <em>could</em> sort on, but it answers
+  <q>is this true</q>, not <q>how much</q> — and the levels are where you get to say what each
+  rung means.</div>
+</div>
+
+<h2>One thing to carry away</h2>
+<p>Before you write any question, answer this: <strong>am I choosing between options
+(Choice), testing one statement (Noul), or placing something on an ordered rubric
+(Score)?</strong> The three are not three syntaxes for the same thing. They ask different
+questions and return numbers that are not comparable.</p>
+
+<div class="note"><strong>Read this next — the primary source.</strong> <a
+href="https://docs.typesafe.ai/model-jaggedness/jev-1.13.md">Jev 1.13 jaggedness</a>. Nine
+documented failure modes, each with a fix. It is the highest-value page in the docs and the
+source of the two tables above. Fifteen minutes, and it will save you a day.</div>
+
+<div class="footer">
+<p><strong>Next up:</strong> writing a question that survives literal reading — and the four
+jagged edges that bite hardest in a codebase.</p>
+<p><a href="../reference/primitives-cheatsheet.html">Reference: primitives cheat sheet</a>
+<a href="../MISSION.md">Mission</a>
+<a href="../RESOURCES.md">Resources</a></p>
+<p class="noprint"><em>Anything unclear, or want to argue with a quiz answer? Ask me — I'm your
+teacher here, not just the person who wrote the page.</em></p>
+</div>
+
+</main>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

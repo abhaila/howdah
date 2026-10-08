@@ -1,0 +1,78 @@
+/* Shared stylesheet for every lesson and reference doc in this workspace.
+   Tufte-ish: one measure, generous leading, sidenotes, prints cleanly. */
+:root {
+  --ink: #16150f; --ink-soft: #5c584a; --faint: #8a8578;
+  --bg: #fffef9; --rule: #dedacd; --band: #f4f1e6;
+  --accent: #7a2f6a; --yes: #2c6e49; --no: #a3302a;
+  --mono: ui-monospace, "SF Mono", Menlo, monospace;
+  --serif: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+  --measure: 34rem;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ink: #eceadf; --ink-soft: #b3ae9e; --faint: #857f70;
+    --bg: #14130f; --rule: #33302a; --band: #1e1c17;
+    --accent: #e0a3d2; --yes: #7fc9a0; --no: #eb9089;
+  }
+}
+:root[data-theme="dark"] {
+  --ink: #eceadf; --ink-soft: #b3ae9e; --faint: #857f70;
+  --bg: #14130f; --rule: #33302a; --band: #1e1c17;
+  --accent: #e0a3d2; --yes: #7fc9a0; --no: #eb9089;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--ink); font-family: var(--serif);
+  font-size: 1.0625rem; line-height: 1.62; margin: 0;
+  padding: 3rem 1rem 6rem; -webkit-font-smoothing: antialiased;
+}
+main { max-width: var(--measure); margin: 0 auto; }
+.wide { max-width: 46rem; margin: 0 auto; }
+h1 { font-size: 1.9rem; line-height: 1.2; margin: 0 0 .25rem; font-weight: 600; letter-spacing: -.01em; }
+h2 { font-size: 1.25rem; margin: 2.75rem 0 .6rem; font-weight: 600; }
+h3 { font-size: 1.02rem; margin: 1.75rem 0 .4rem; font-weight: 600; }
+.eyebrow { font-family: var(--mono); font-size: .7rem; letter-spacing: .1em;
+  text-transform: uppercase; color: var(--faint); margin: 0 0 1.2rem; }
+.lede { font-size: 1.16rem; color: var(--ink-soft); margin: .8rem 0 2rem; }
+p, li { margin: 0 0 .85rem; }
+code, .mono { font-family: var(--mono); font-size: .87em; }
+code { background: var(--band); padding: .1em .32em; border-radius: 3px; }
+pre { background: var(--band); border-left: 2px solid var(--rule); padding: .85rem 1rem;
+  overflow-x: auto; font-size: .82rem; line-height: 1.5; border-radius: 0 3px 3px 0; }
+pre code { background: none; padding: 0; font-size: 1em; }
+a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+hr { border: 0; border-top: 1px solid var(--rule); margin: 2.5rem 0; }
+table { border-collapse: collapse; width: 100%; font-size: .9rem; margin: 1rem 0 1.4rem; }
+th, td { text-align: left; padding: .45rem .6rem; border-bottom: 1px solid var(--rule);
+  vertical-align: top; }
+th { font-family: var(--mono); font-size: .7rem; letter-spacing: .07em;
+  text-transform: uppercase; color: var(--faint); font-weight: 500; }
+.note { background: var(--band); border-left: 2px solid var(--accent);
+  padding: .8rem 1rem; margin: 1.4rem 0; font-size: .95rem; }
+.note strong:first-child { color: var(--accent); }
+figure { margin: 1.6rem 0; }
+figcaption { font-size: .8rem; color: var(--faint); margin-top: .5rem; font-style: italic; }
+.footer { margin-top: 4rem; padding-top: 1.2rem; border-top: 1px solid var(--rule);
+  font-size: .85rem; color: var(--ink-soft); }
+.footer a { display: inline-block; margin-right: 1rem; }
+@media print {
+  body { padding: 0; font-size: 10.5pt; } .noprint { display: none !important; }
+  pre, .note, .q { break-inside: avoid; } a { color: var(--ink); }
+}
+
+/* ---- quiz widget (assets/quiz.js) ---- */
+.q { border-top: 1px solid var(--rule); padding: 1.1rem 0 .4rem; }
+.q-stem { font-weight: 600; margin-bottom: .7rem; }
+.q-opts { display: flex; gap: .5rem; flex-wrap: wrap; margin-bottom: .6rem; }
+.q-opts button {
+  font-family: var(--mono); font-size: .82rem; padding: .4rem .9rem; cursor: pointer;
+  background: var(--bg); color: var(--ink); border: 1px solid var(--rule); border-radius: 3px;
+  min-width: 5.5rem; min-height: 2.5rem;
+}
+.q-opts button:hover { background: var(--band); }
+.q-opts button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.q-opts button.ok { border-color: var(--yes); color: var(--yes); font-weight: 600; }
+.q-opts button.bad { border-color: var(--no); color: var(--no); text-decoration: line-through; }
+.q-why { font-size: .92rem; color: var(--ink-soft); border-left: 2px solid var(--rule);
+  padding-left: .8rem; }
+#q-score { font-family: var(--mono); font-size: .8rem; color: var(--faint); }
