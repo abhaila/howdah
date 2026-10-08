@@ -7,3 +7,5 @@ node_modules/
 web/public/app.js
 web/public/app.css
 .gstack/
+.env
+*.swp
