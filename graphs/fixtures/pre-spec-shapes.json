@@ -1,0 +1,2022 @@
+{
+  "implement-slice": {
+    "name": "implement-slice",
+    "description": "Design a vertical slice on the code map, get it approved, build it and verify it against the design",
+    "defaults": {
+      "permissionMode": "auto"
+    },
+    "entry": "create_worktree",
+    "inputs": [
+      "goal",
+      "work"
+    ],
+    "nodes": {
+      "cleanup_closed": {
+        "kind": "worktree",
+        "action": "remove",
+        "writes": {
+          "worktree.clean": {
+            "scope": "per-visit"
+          }
+        }
+      },
+      "cleanup_merged": {
+        "kind": "worktree",
+        "action": "remove",
+        "writes": {
+          "worktree.clean": {
+            "scope": "per-visit"
+          }
+        }
+      },
+      "cleanup_pending": {
+        "kind": "terminal",
+        "outcome": "failed",
+        "label": "Worktree retained to preserve local work"
+      },
+      "closed": {
+        "kind": "terminal",
+        "outcome": "aborted"
+      },
+      "complete": {
+        "kind": "terminal",
+        "outcome": "success"
+      },
+      "complete_ticket": {
+        "kind": "agent",
+        "prompt": "complete_ticket",
+        "reads": [
+          "goal",
+          "work",
+          "publication_summary"
+        ],
+        "writes": {
+          "completion_summary": {
+            "scope": "sticky"
+          }
+        }
+      },
+      "create_worktree": {
+        "kind": "worktree",
+        "action": "create"
+      },
+      "delivery.address_reviews": {
+        "kind": "agent",
+        "prompt": "slice.address_reviews",
+        "reads": [
+          "goal",
+          "work",
+          "publication_summary",
+          "review_verdict",
+          "review_findings",
+          "slice.ghosts",
+          "slice.drift"
+        ],
+        "writes": {
+          "repair_summary": {
+            "scope": "sticky"
+          }
+        },
+        "class": "delivery"
+      },
+      "delivery.drift": {
+        "kind": "command",
+        "run": "map:drift --since delivery.publish",
+        "reads": [
+          "slice.ghosts",
+          "map.base",
+          "map.after"
+        ],
+        "writes": {
+          "slice.drift": {
+            "scope": "per-visit"
+          }
+        },
+        "class": "delivery"
+      },
+      "delivery.drift_revision": {
+        "kind": "command",
+        "run": "map:drift --since delivery.publish",
+        "reads": [
+          "slice.ghosts",
+          "map.base",
+          "map.after"
+        ],
+        "writes": {
+          "slice.drift": {
+            "scope": "per-visit"
+          }
+        },
+        "class": "delivery"
+      },
+      "delivery.fix_ci": {
+        "kind": "agent",
+        "prompt": "slice.fix_ci",
+        "reads": [
+          "goal",
+          "work",
+          "publication_summary",
+          "review_verdict",
+          "review_findings",
+          "slice.ghosts",
+          "slice.drift"
+        ],
+        "writes": {
+          "repair_summary": {
+            "scope": "sticky"
+          }
+        },
+        "class": "delivery"
+      },
+      "delivery.probe_pr": {
+        "kind": "command",
+        "run": "probe:pr",
+        "reads": [
+          "publication_summary"
+        ],
+        "writes": {
+          "pr.state": {
+            "scope": "per-visit"
+          }
+        },
+        "class": "delivery"
+      },
+      "delivery.publish": {
+        "kind": "agent",
+        "prompt": "delivery.publish",
+        "reads": [
+          "goal",
+          "work"
+        ],
+        "writes": {
+          "publication_summary": {
+            "scope": "sticky"
+          }
+        },
+        "class": "delivery",
+        "maxVisits": 5
+      },
+      "delivery.reextract": {
+        "kind": "command",
+        "run": "map:reextract",
+        "reads": [
+          "map.base"
+        ],
+        "writes": {
+          "map.after": {
+            "scope": "per-visit"
+          }
+        },
+        "class": "delivery"
+      },
+      "delivery.reextract_revision": {
+        "kind": "command",
+        "run": "map:reextract",
+        "reads": [
+          "map.base"
+        ],
+        "writes": {
+          "map.after": {
+            "scope": "per-visit"
+          }
+        },
+        "class": "delivery"
+      },
+      "delivery.resolve_conflicts": {
+        "kind": "agent",
+        "prompt": "slice.resolve_conflicts",
+        "reads": [
+          "goal",
+          "work",
+          "publication_summary",
+          "slice.ghosts",
+          "slice.drift"
+        ],
+        "writes": {
+          "repair_summary": {
+            "scope": "sticky"
+          }
+        },
+        "class": "delivery"
+      },
+      "delivery.review_repairs": {
+        "kind": "agent",
+        "prompt": "slice.review_repairs",
+        "reads": [
+          "goal",
+          "work",
+          "publication_summary",
+          "repair_summary",
+          "slice.ghosts",
+          "slice.drift"
+        ],
+        "writes": {
+          "review_findings": {
+            "scope": "cleared"
+          },
+          "review_verdict": {
+            "scope": "cleared"
+          }
+        },
+        "class": "delivery"
+      },
+      "delivery.revise_repairs": {
+        "kind": "agent",
+        "prompt": "slice.revise_repairs",
+        "reads": [
+          "goal",
+          "work",
+          "publication_summary",
+          "repair_summary",
+          "review_verdict",
+          "review_findings",
+          "slice.ghosts",
+          "slice.drift"
+        ],
+        "writes": {
+          "repair_summary": {
+            "scope": "sticky"
+          }
+        },
+        "class": "delivery",
+        "maxVisits": 3
+      },
+      "delivery.wait": {
+        "kind": "wait",
+        "duration": "5m",
+        "class": "delivery"
+      },
+      "implementation.implement": {
+        "kind": "agent",
+        "prompt": "slice.implement",
+        "requires": {
+          "approvalOf": "slice.approve"
+        },
+        "reads": [
+          "goal",
+          "work",
+          "slice.ghosts",
+          "slice.approval",
+          "slice.drift",
+          "review_findings"
+        ],
+        "writes": {
+          "implementation_summary": {
+            "scope": "sticky"
+          }
+        },
+        "maxVisits": 3,
+        "class": "implementation"
+      },
+      "implementation.local_review": {
+        "kind": "agent",
+        "prompt": "slice.local_review",
+        "reads": [
+          "goal",
+          "work",
+          "slice.ghosts",
+          "implementation_summary",
+          "slice.drift",
+          "verify.result"
+        ],
+        "writes": {
+          "review_findings": {
+            "scope": "cleared"
+          },
+          "review_verdict": {
+            "scope": "cleared"
+          }
+        },
+        "class": "implementation"
+      },
+      "map.drift": {
+        "kind": "command",
+        "run": "map:drift",
+        "reads": [
+          "slice.ghosts",
+          "map.base",
+          "map.after"
+        ],
+        "writes": {
+          "slice.drift": {
+            "scope": "per-visit"
+          }
+        },
+        "class": "map"
+      },
+      "map.extract": {
+        "kind": "command",
+        "run": "map:extract",
+        "reads": [
+          "goal",
+          "work"
+        ],
+        "writes": {
+          "map.base": {
+            "scope": "sticky"
+          },
+          "map.neighbourhood": {
+            "scope": "sticky"
+          },
+          "review_findings": {
+            "scope": "cleared"
+          },
+          "slice.drift": {
+            "scope": "per-visit"
+          }
+        },
+        "maxVisits": 5,
+        "class": "map"
+      },
+      "map.reextract": {
+        "kind": "command",
+        "run": "map:reextract",
+        "reads": [
+          "map.base"
+        ],
+        "writes": {
+          "map.after": {
+            "scope": "per-visit"
+          }
+        },
+        "class": "map"
+      },
+      "slice.approve": {
+        "kind": "approval",
+        "proposal": "slice.ghosts",
+        "base": "map.base",
+        "decision": "slice.approval",
+        "feedback": "slice.feedback",
+        "redesignTo": "map.extract",
+        "class": "slice"
+      },
+      "slice.propose": {
+        "kind": "agent",
+        "prompt": "slice.propose",
+        "readOnly": true,
+        "reads": [
+          "goal",
+          "work",
+          "map.base",
+          "map.neighbourhood",
+          "slice.feedback"
+        ],
+        "writes": {
+          "slice.ghosts": {
+            "scope": "per-visit"
+          }
+        },
+        "class": "slice"
+      },
+      "verify.run": {
+        "kind": "command",
+        "run": "verify:run",
+        "writes": {
+          "verify.result": {
+            "scope": "per-visit"
+          }
+        },
+        "class": "implementation"
+      }
+    },
+    "edges": [
+      {
+        "from": "create_worktree",
+        "to": "map.extract"
+      },
+      {
+        "from": "map.extract",
+        "to": "slice.propose"
+      },
+      {
+        "from": "slice.propose",
+        "to": "slice.approve"
+      },
+      {
+        "from": "slice.approve",
+        "to": "implementation.implement",
+        "weight": 3,
+        "label": "slice.approval == 'approved'",
+        "reads": [
+          "slice.approval"
+        ]
+      },
+      {
+        "from": "slice.approve",
+        "to": "slice.propose",
+        "weight": 2,
+        "label": "slice.approval == 'feedback'",
+        "reads": [
+          "slice.approval"
+        ]
+      },
+      {
+        "from": "slice.approve",
+        "to": "map.extract",
+        "weight": 1,
+        "label": "slice.approval == 'stale'",
+        "reads": [
+          "slice.approval"
+        ]
+      },
+      {
+        "from": "implementation.implement",
+        "to": "map.reextract"
+      },
+      {
+        "from": "map.reextract",
+        "to": "map.drift"
+      },
+      {
+        "from": "map.drift",
+        "to": "verify.run"
+      },
+      {
+        "from": "verify.run",
+        "to": "implementation.local_review"
+      },
+      {
+        "from": "implementation.local_review",
+        "to": "implementation.implement",
+        "weight": 2,
+        "label": "review_verdict == 'reject'",
+        "reads": [
+          "review_verdict"
+        ]
+      },
+      {
+        "from": "implementation.local_review",
+        "to": "delivery.publish",
+        "weight": 1,
+        "label": "review_verdict == 'pass'",
+        "reads": [
+          "review_verdict"
+        ]
+      },
+      {
+        "from": "delivery.publish",
+        "to": "delivery.probe_pr"
+      },
+      {
+        "from": "delivery.probe_pr",
+        "to": "complete_ticket",
+        "weight": 6,
+        "label": "pr.state == 'MERGED'",
+        "reads": [
+          "pr.state"
+        ]
+      },
+      {
+        "from": "delivery.probe_pr",
+        "to": "cleanup_closed",
+        "weight": 5,
+        "label": "pr.state == 'CLOSED'",
+        "reads": [
+          "pr.state"
+        ]
+      },
+      {
+        "from": "delivery.probe_pr",
+        "to": "delivery.resolve_conflicts",
+        "weight": 4,
+        "label": "pr.state == 'CONFLICTS'",
+        "reads": [
+          "pr.state"
+        ]
+      },
+      {
+        "from": "delivery.probe_pr",
+        "to": "delivery.address_reviews",
+        "weight": 3,
+        "label": "pr.state == 'CHANGES_REQUIRED'",
+        "reads": [
+          "pr.state"
+        ]
+      },
+      {
+        "from": "delivery.probe_pr",
+        "to": "delivery.fix_ci",
+        "weight": 2,
+        "label": "pr.state == 'CI_FAILED'",
+        "reads": [
+          "pr.state"
+        ]
+      },
+      {
+        "from": "delivery.probe_pr",
+        "to": "delivery.wait"
+      },
+      {
+        "from": "delivery.review_repairs",
+        "to": "delivery.revise_repairs",
+        "weight": 2,
+        "label": "review_verdict == 'reject'",
+        "reads": [
+          "review_verdict"
+        ]
+      },
+      {
+        "from": "delivery.review_repairs",
+        "to": "delivery.publish",
+        "weight": 1,
+        "label": "review_verdict == 'pass'",
+        "reads": [
+          "review_verdict"
+        ]
+      },
+      {
+        "from": "delivery.wait",
+        "to": "delivery.probe_pr"
+      },
+      {
+        "from": "complete_ticket",
+        "to": "cleanup_merged"
+      },
+      {
+        "from": "cleanup_merged",
+        "to": "complete",
+        "weight": 1,
+        "label": "worktree.clean == true",
+        "reads": [
+          "worktree.clean"
+        ]
+      },
+      {
+        "from": "cleanup_merged",
+        "to": "cleanup_pending"
+      },
+      {
+        "from": "cleanup_closed",
+        "to": "closed",
+        "weight": 1,
+        "label": "worktree.clean == true",
+        "reads": [
+          "worktree.clean"
+        ]
+      },
+      {
+        "from": "cleanup_closed",
+        "to": "cleanup_pending"
+      },
+      {
+        "from": "delivery.resolve_conflicts",
+        "to": "delivery.reextract"
+      },
+      {
+        "from": "delivery.fix_ci",
+        "to": "delivery.reextract"
+      },
+      {
+        "from": "delivery.address_reviews",
+        "to": "delivery.reextract"
+      },
+      {
+        "from": "delivery.reextract",
+        "to": "delivery.drift"
+      },
+      {
+        "from": "delivery.drift",
+        "to": "delivery.revise_repairs",
+        "weight": 1,
+        "label": "slice.drift has new problems (missing / changed-unexpectedly / still-present / unchanged)",
+        "reads": [
+          "slice.drift"
+        ]
+      },
+      {
+        "from": "delivery.drift",
+        "to": "delivery.review_repairs"
+      },
+      {
+        "from": "delivery.revise_repairs",
+        "to": "delivery.reextract_revision"
+      },
+      {
+        "from": "delivery.reextract_revision",
+        "to": "delivery.drift_revision"
+      },
+      {
+        "from": "delivery.drift_revision",
+        "to": "delivery.revise_repairs",
+        "weight": 1,
+        "label": "slice.drift has new problems (missing / changed-unexpectedly / still-present / unchanged)",
+        "reads": [
+          "slice.drift"
+        ]
+      },
+      {
+        "from": "delivery.drift_revision",
+        "to": "delivery.publish"
+      }
+    ]
+  },
+  "implement-ticket": {
+    "name": "implement-ticket",
+    "description": "Deliver one ticket through reviewed implementation and a merged PR",
+    "defaults": {
+      "permissionMode": "auto"
+    },
+    "entry": "create_worktree",
+    "inputs": [
+      "goal",
+      "work"
+    ],
+    "nodes": {
+      "cleanup_closed": {
+        "kind": "worktree",
+        "action": "remove",
+        "writes": {
+          "worktree.clean": {
+            "scope": "per-visit"
+          }
+        }
+      },
+      "cleanup_merged": {
+        "kind": "worktree",
+        "action": "remove",
+        "writes": {
+          "worktree.clean": {
+            "scope": "per-visit"
+          }
+        }
+      },
+      "cleanup_pending": {
+        "kind": "terminal",
+        "outcome": "failed",
+        "label": "Worktree retained to preserve local work"
+      },
+      "closed": {
+        "kind": "terminal",
+        "outcome": "aborted"
+      },
+      "complete": {
+        "kind": "terminal",
+        "outcome": "success"
+      },
+      "complete_ticket": {
+        "kind": "agent",
+        "prompt": "complete_ticket",
+        "reads": [
+          "goal",
+          "work",
+          "publication_summary"
+        ],
+        "writes": {
+          "completion_summary": {
+            "scope": "sticky"
+          }
+        }
+      },
+      "create_worktree": {
+        "kind": "worktree",
+        "action": "create"
+      },
+      "delivery.address_reviews": {
+        "kind": "agent",
+        "prompt": "delivery.address_reviews",
+        "reads": [
+          "goal",
+          "work",
+          "publication_summary",
+          "review_verdict",
+          "review_findings"
+        ],
+        "writes": {
+          "repair_summary": {
+            "scope": "sticky"
+          }
+        },
+        "class": "delivery"
+      },
+      "delivery.fix_ci": {
+        "kind": "agent",
+        "prompt": "delivery.fix_ci",
+        "reads": [
+          "goal",
+          "work",
+          "publication_summary",
+          "review_verdict",
+          "review_findings"
+        ],
+        "writes": {
+          "repair_summary": {
+            "scope": "sticky"
+          }
+        },
+        "class": "delivery"
+      },
+      "delivery.probe_pr": {
+        "kind": "command",
+        "run": "probe:pr",
+        "reads": [
+          "publication_summary"
+        ],
+        "writes": {
+          "pr.state": {
+            "scope": "per-visit"
+          }
+        },
+        "class": "delivery"
+      },
+      "delivery.publish": {
+        "kind": "agent",
+        "prompt": "delivery.publish",
+        "reads": [
+          "goal",
+          "work"
+        ],
+        "writes": {
+          "publication_summary": {
+            "scope": "sticky"
+          }
+        },
+        "class": "delivery",
+        "maxVisits": 5
+      },
+      "delivery.resolve_conflicts": {
+        "kind": "agent",
+        "prompt": "delivery.resolve_conflicts",
+        "reads": [
+          "goal",
+          "work",
+          "publication_summary"
+        ],
+        "writes": {
+          "repair_summary": {
+            "scope": "sticky"
+          }
+        },
+        "class": "delivery"
+      },
+      "delivery.review_repairs": {
+        "kind": "agent",
+        "prompt": "delivery.review_repairs",
+        "reads": [
+          "goal",
+          "work",
+          "publication_summary",
+          "repair_summary"
+        ],
+        "writes": {
+          "review_findings": {
+            "scope": "cleared"
+          },
+          "review_verdict": {
+            "scope": "cleared"
+          }
+        },
+        "class": "delivery"
+      },
+      "delivery.revise_repairs": {
+        "kind": "agent",
+        "prompt": "delivery.revise_repairs",
+        "reads": [
+          "goal",
+          "work",
+          "publication_summary",
+          "repair_summary",
+          "review_verdict",
+          "review_findings"
+        ],
+        "writes": {
+          "repair_summary": {
+            "scope": "sticky"
+          }
+        },
+        "class": "delivery",
+        "maxVisits": 3
+      },
+      "delivery.wait": {
+        "kind": "wait",
+        "duration": "5m",
+        "class": "delivery"
+      },
+      "implementation.implement": {
+        "kind": "agent",
+        "prompt": "implementation.implement",
+        "reads": [
+          "goal",
+          "work",
+          "implementation_plan"
+        ],
+        "writes": {
+          "implementation_summary": {
+            "scope": "sticky"
+          }
+        },
+        "class": "implementation"
+      },
+      "implementation.implement_review": {
+        "kind": "agent",
+        "prompt": "implementation.implement_review",
+        "reads": [
+          "goal",
+          "work",
+          "implementation_plan",
+          "implementation_summary",
+          "review_verdict",
+          "review_findings"
+        ],
+        "writes": {
+          "implementation_summary": {
+            "scope": "sticky"
+          }
+        },
+        "class": "implementation"
+      },
+      "implementation.local_review": {
+        "kind": "agent",
+        "prompt": "implementation.local_review",
+        "reads": [
+          "goal",
+          "work",
+          "implementation_plan",
+          "implementation_summary"
+        ],
+        "writes": {
+          "review_findings": {
+            "scope": "cleared"
+          },
+          "review_verdict": {
+            "scope": "cleared"
+          }
+        },
+        "class": "implementation"
+      },
+      "implementation.plan": {
+        "kind": "agent",
+        "prompt": "implementation.plan",
+        "reads": [
+          "goal",
+          "work"
+        ],
+        "writes": {
+          "implementation_plan": {
+            "scope": "sticky"
+          }
+        },
+        "class": "implementation"
+      },
+      "implementation.plan_review": {
+        "kind": "agent",
+        "prompt": "implementation.plan_review",
+        "reads": [
+          "goal",
+          "work",
+          "implementation_plan",
+          "implementation_summary",
+          "review_verdict",
+          "review_findings"
+        ],
+        "writes": {
+          "implementation_plan": {
+            "scope": "sticky"
+          }
+        },
+        "class": "implementation",
+        "maxVisits": 3
+      }
+    },
+    "edges": [
+      {
+        "from": "create_worktree",
+        "to": "implementation.plan"
+      },
+      {
+        "from": "implementation.plan",
+        "to": "implementation.implement"
+      },
+      {
+        "from": "implementation.implement",
+        "to": "implementation.local_review"
+      },
+      {
+        "from": "implementation.local_review",
+        "to": "implementation.plan_review",
+        "weight": 2,
+        "label": "review_verdict == 'reject'",
+        "reads": [
+          "review_verdict"
+        ]
+      },
+      {
+        "from": "implementation.local_review",
+        "to": "delivery.publish",
+        "weight": 1,
+        "label": "review_verdict == 'pass'",
+        "reads": [
+          "review_verdict"
+        ]
+      },
+      {
+        "from": "implementation.plan_review",
+        "to": "implementation.implement_review"
+      },
+      {
+        "from": "implementation.implement_review",
+        "to": "implementation.local_review"
+      },
+      {
+        "from": "delivery.publish",
+        "to": "delivery.probe_pr"
+      },
+      {
+        "from": "delivery.probe_pr",
+        "to": "complete_ticket",
+        "weight": 6,
+        "label": "pr.state == 'MERGED'",
+        "reads": [
+          "pr.state"
+        ]
+      },
+      {
+        "from": "delivery.probe_pr",
+        "to": "cleanup_closed",
+        "weight": 5,
+        "label": "pr.state == 'CLOSED'",
+        "reads": [
+          "pr.state"
+        ]
+      },
+      {
+        "from": "delivery.probe_pr",
+        "to": "delivery.resolve_conflicts",
+        "weight": 4,
+        "label": "pr.state == 'CONFLICTS'",
+        "reads": [
+          "pr.state"
+        ]
+      },
+      {
+        "from": "delivery.probe_pr",
+        "to": "delivery.address_reviews",
+        "weight": 3,
+        "label": "pr.state == 'CHANGES_REQUIRED'",
+        "reads": [
+          "pr.state"
+        ]
+      },
+      {
+        "from": "delivery.probe_pr",
+        "to": "delivery.fix_ci",
+        "weight": 2,
+        "label": "pr.state == 'CI_FAILED'",
+        "reads": [
+          "pr.state"
+        ]
+      },
+      {
+        "from": "delivery.probe_pr",
+        "to": "delivery.wait"
+      },
+      {
+        "from": "delivery.address_reviews",
+        "to": "delivery.review_repairs"
+      },
+      {
+        "from": "delivery.fix_ci",
+        "to": "delivery.review_repairs"
+      },
+      {
+        "from": "delivery.resolve_conflicts",
+        "to": "delivery.review_repairs"
+      },
+      {
+        "from": "delivery.review_repairs",
+        "to": "delivery.revise_repairs",
+        "weight": 2,
+        "label": "review_verdict == 'reject'",
+        "reads": [
+          "review_verdict"
+        ]
+      },
+      {
+        "from": "delivery.review_repairs",
+        "to": "delivery.publish",
+        "weight": 1,
+        "label": "review_verdict == 'pass'",
+        "reads": [
+          "review_verdict"
+        ]
+      },
+      {
+        "from": "delivery.revise_repairs",
+        "to": "delivery.publish"
+      },
+      {
+        "from": "delivery.wait",
+        "to": "delivery.probe_pr"
+      },
+      {
+        "from": "complete_ticket",
+        "to": "cleanup_merged"
+      },
+      {
+        "from": "cleanup_merged",
+        "to": "complete",
+        "weight": 1,
+        "label": "worktree.clean == true",
+        "reads": [
+          "worktree.clean"
+        ]
+      },
+      {
+        "from": "cleanup_merged",
+        "to": "cleanup_pending"
+      },
+      {
+        "from": "cleanup_closed",
+        "to": "closed",
+        "weight": 1,
+        "label": "worktree.clean == true",
+        "reads": [
+          "worktree.clean"
+        ]
+      },
+      {
+        "from": "cleanup_closed",
+        "to": "cleanup_pending"
+      }
+    ]
+  },
+  "improve-codebase": {
+    "name": "improve-codebase",
+    "description": "Continuously discover and deliver one worthwhile codebase improvement at a time",
+    "defaults": {
+      "permissionMode": "auto"
+    },
+    "entry": "discover",
+    "inputs": [
+      "goal"
+    ],
+    "nodes": {
+      "cleanup": {
+        "kind": "worktree",
+        "action": "remove",
+        "writes": {
+          "outcome": {
+            "scope": "per-visit"
+          },
+          "worktree.clean": {
+            "scope": "per-visit"
+          }
+        }
+      },
+      "cleanup_wait": {
+        "kind": "wait",
+        "duration": "5m"
+      },
+      "create_worktree": {
+        "kind": "worktree",
+        "action": "create"
+      },
+      "delivery.address_reviews": {
+        "kind": "agent",
+        "prompt": "delivery.address_reviews",
+        "reads": [
+          "goal",
+          "work",
+          "publication_summary",
+          "review_verdict",
+          "review_findings"
+        ],
+        "writes": {
+          "repair_summary": {
+            "scope": "sticky"
+          }
+        },
+        "class": "delivery"
+      },
+      "delivery.fix_ci": {
+        "kind": "agent",
+        "prompt": "delivery.fix_ci",
+        "reads": [
+          "goal",
+          "work",
+          "publication_summary",
+          "review_verdict",
+          "review_findings"
+        ],
+        "writes": {
+          "repair_summary": {
+            "scope": "sticky"
+          }
+        },
+        "class": "delivery"
+      },
+      "delivery.probe_pr": {
+        "kind": "command",
+        "run": "probe:pr",
+        "reads": [
+          "publication_summary"
+        ],
+        "writes": {
+          "pr.state": {
+            "scope": "per-visit"
+          }
+        },
+        "class": "delivery"
+      },
+      "delivery.publish": {
+        "kind": "agent",
+        "prompt": "delivery.publish",
+        "reads": [
+          "goal",
+          "work"
+        ],
+        "writes": {
+          "publication_summary": {
+            "scope": "sticky"
+          }
+        },
+        "class": "delivery"
+      },
+      "delivery.resolve_conflicts": {
+        "kind": "agent",
+        "prompt": "delivery.resolve_conflicts",
+        "reads": [
+          "goal",
+          "work",
+          "publication_summary"
+        ],
+        "writes": {
+          "repair_summary": {
+            "scope": "sticky"
+          }
+        },
+        "class": "delivery"
+      },
+      "delivery.review_repairs": {
+        "kind": "agent",
+        "prompt": "delivery.review_repairs",
+        "reads": [
+          "goal",
+          "work",
+          "publication_summary",
+          "repair_summary"
+        ],
+        "writes": {
+          "review_findings": {
+            "scope": "cleared"
+          },
+          "review_verdict": {
+            "scope": "cleared"
+          }
+        },
+        "class": "delivery"
+      },
+      "delivery.revise_repairs": {
+        "kind": "agent",
+        "prompt": "delivery.revise_repairs",
+        "reads": [
+          "goal",
+          "work",
+          "publication_summary",
+          "repair_summary",
+          "review_verdict",
+          "review_findings"
+        ],
+        "writes": {
+          "repair_summary": {
+            "scope": "sticky"
+          }
+        },
+        "class": "delivery"
+      },
+      "delivery.wait": {
+        "kind": "wait",
+        "duration": "5m",
+        "class": "delivery"
+      },
+      "discover": {
+        "kind": "agent",
+        "prompt": "discover",
+        "reads": [
+          "goal"
+        ],
+        "writes": {
+          "discovery": {
+            "scope": "per-visit"
+          },
+          "work": {
+            "scope": "sticky"
+          }
+        }
+      },
+      "idle_wait": {
+        "kind": "wait",
+        "duration": "30m"
+      },
+      "implementation.implement": {
+        "kind": "agent",
+        "prompt": "implementation.implement",
+        "reads": [
+          "goal",
+          "work",
+          "implementation_plan"
+        ],
+        "writes": {
+          "implementation_summary": {
+            "scope": "sticky"
+          }
+        },
+        "class": "implementation"
+      },
+      "implementation.implement_review": {
+        "kind": "agent",
+        "prompt": "implementation.implement_review",
+        "reads": [
+          "goal",
+          "work",
+          "implementation_plan",
+          "implementation_summary",
+          "review_verdict",
+          "review_findings"
+        ],
+        "writes": {
+          "implementation_summary": {
+            "scope": "sticky"
+          }
+        },
+        "class": "implementation"
+      },
+      "implementation.local_review": {
+        "kind": "agent",
+        "prompt": "implementation.local_review",
+        "reads": [
+          "goal",
+          "work",
+          "implementation_plan",
+          "implementation_summary"
+        ],
+        "writes": {
+          "review_findings": {
+            "scope": "cleared"
+          },
+          "review_verdict": {
+            "scope": "cleared"
+          }
+        },
+        "class": "implementation"
+      },
+      "implementation.plan": {
+        "kind": "agent",
+        "prompt": "implementation.plan",
+        "reads": [
+          "goal",
+          "work"
+        ],
+        "writes": {
+          "implementation_plan": {
+            "scope": "sticky"
+          }
+        },
+        "class": "implementation"
+      },
+      "implementation.plan_review": {
+        "kind": "agent",
+        "prompt": "implementation.plan_review",
+        "reads": [
+          "goal",
+          "work",
+          "implementation_plan",
+          "implementation_summary",
+          "review_verdict",
+          "review_findings"
+        ],
+        "writes": {
+          "implementation_plan": {
+            "scope": "sticky"
+          }
+        },
+        "class": "implementation"
+      }
+    },
+    "edges": [
+      {
+        "from": "discover",
+        "to": "create_worktree",
+        "weight": 2,
+        "label": "discovery == 'candidate'",
+        "reads": [
+          "discovery"
+        ]
+      },
+      {
+        "from": "discover",
+        "to": "idle_wait",
+        "weight": 1,
+        "label": "discovery == 'idle'",
+        "reads": [
+          "discovery"
+        ]
+      },
+      {
+        "from": "idle_wait",
+        "to": "discover"
+      },
+      {
+        "from": "create_worktree",
+        "to": "implementation.plan"
+      },
+      {
+        "from": "implementation.plan",
+        "to": "implementation.implement"
+      },
+      {
+        "from": "implementation.implement",
+        "to": "implementation.local_review"
+      },
+      {
+        "from": "implementation.local_review",
+        "to": "implementation.plan_review",
+        "weight": 2,
+        "label": "review_verdict == 'reject'",
+        "reads": [
+          "review_verdict"
+        ]
+      },
+      {
+        "from": "implementation.local_review",
+        "to": "delivery.publish",
+        "weight": 1,
+        "label": "review_verdict == 'pass'",
+        "reads": [
+          "review_verdict"
+        ]
+      },
+      {
+        "from": "implementation.plan_review",
+        "to": "implementation.implement_review"
+      },
+      {
+        "from": "implementation.implement_review",
+        "to": "implementation.local_review"
+      },
+      {
+        "from": "delivery.publish",
+        "to": "delivery.probe_pr"
+      },
+      {
+        "from": "delivery.probe_pr",
+        "to": "cleanup",
+        "weight": 6,
+        "label": "pr.state == 'MERGED'",
+        "reads": [
+          "pr.state"
+        ]
+      },
+      {
+        "from": "delivery.probe_pr",
+        "to": "cleanup",
+        "weight": 5,
+        "label": "pr.state == 'CLOSED'",
+        "reads": [
+          "pr.state"
+        ]
+      },
+      {
+        "from": "delivery.probe_pr",
+        "to": "delivery.resolve_conflicts",
+        "weight": 4,
+        "label": "pr.state == 'CONFLICTS'",
+        "reads": [
+          "pr.state"
+        ]
+      },
+      {
+        "from": "delivery.probe_pr",
+        "to": "delivery.address_reviews",
+        "weight": 3,
+        "label": "pr.state == 'CHANGES_REQUIRED'",
+        "reads": [
+          "pr.state"
+        ]
+      },
+      {
+        "from": "delivery.probe_pr",
+        "to": "delivery.fix_ci",
+        "weight": 2,
+        "label": "pr.state == 'CI_FAILED'",
+        "reads": [
+          "pr.state"
+        ]
+      },
+      {
+        "from": "delivery.probe_pr",
+        "to": "delivery.wait"
+      },
+      {
+        "from": "delivery.address_reviews",
+        "to": "delivery.review_repairs"
+      },
+      {
+        "from": "delivery.fix_ci",
+        "to": "delivery.review_repairs"
+      },
+      {
+        "from": "delivery.resolve_conflicts",
+        "to": "delivery.review_repairs"
+      },
+      {
+        "from": "delivery.review_repairs",
+        "to": "delivery.revise_repairs",
+        "weight": 2,
+        "label": "review_verdict == 'reject'",
+        "reads": [
+          "review_verdict"
+        ]
+      },
+      {
+        "from": "delivery.review_repairs",
+        "to": "delivery.publish",
+        "weight": 1,
+        "label": "review_verdict == 'pass'",
+        "reads": [
+          "review_verdict"
+        ]
+      },
+      {
+        "from": "delivery.revise_repairs",
+        "to": "delivery.publish"
+      },
+      {
+        "from": "delivery.wait",
+        "to": "delivery.probe_pr"
+      },
+      {
+        "from": "cleanup",
+        "to": "cleanup_wait",
+        "weight": 2,
+        "label": "outcome == 'failed'",
+        "reads": [
+          "outcome"
+        ]
+      },
+      {
+        "from": "cleanup",
+        "to": "discover",
+        "weight": 1,
+        "label": "worktree.clean == true",
+        "reads": [
+          "worktree.clean"
+        ]
+      },
+      {
+        "from": "cleanup",
+        "to": "cleanup_wait"
+      },
+      {
+        "from": "cleanup_wait",
+        "to": "cleanup"
+      }
+    ]
+  },
+  "plan-feature": {
+    "name": "plan-feature",
+    "description": "Plan a large feature into vertical slices, raise a ticket each, and launch a run per slice",
+    "defaults": {
+      "permissionMode": "auto"
+    },
+    "entry": "create_worktree",
+    "inputs": [
+      "goal",
+      "work"
+    ],
+    "nodes": {
+      "cleanup": {
+        "kind": "worktree",
+        "action": "remove",
+        "writes": {
+          "worktree.clean": {
+            "scope": "per-visit"
+          }
+        },
+        "class": "cleanup"
+      },
+      "cleanup_pending": {
+        "kind": "terminal",
+        "outcome": "failed",
+        "label": "Worktree retained to preserve local work"
+      },
+      "create_worktree": {
+        "kind": "worktree",
+        "action": "create"
+      },
+      "launched": {
+        "kind": "terminal",
+        "outcome": "success"
+      },
+      "map.extract": {
+        "kind": "command",
+        "run": "map:extract",
+        "reads": [
+          "goal",
+          "work"
+        ],
+        "writes": {
+          "map.base": {
+            "scope": "sticky"
+          },
+          "map.neighbourhood": {
+            "scope": "sticky"
+          }
+        },
+        "maxVisits": 5,
+        "class": "map"
+      },
+      "plan.approve": {
+        "kind": "approval",
+        "proposal": "plan.slices",
+        "base": "map.base",
+        "decision": "plan.approval",
+        "feedback": "plan.feedback",
+        "redesignTo": "map.extract",
+        "class": "plan"
+      },
+      "plan.propose": {
+        "kind": "agent",
+        "prompt": "plan.propose",
+        "readOnly": true,
+        "reads": [
+          "goal",
+          "work",
+          "map.base",
+          "map.neighbourhood",
+          "plan.feedback"
+        ],
+        "writes": {
+          "plan.slices": {
+            "scope": "per-visit"
+          }
+        },
+        "class": "plan"
+      },
+      "runs.launch": {
+        "kind": "command",
+        "run": "runs:launch",
+        "reads": [
+          "plan.slices",
+          "tickets"
+        ],
+        "writes": {
+          "launched": {
+            "scope": "sticky"
+          }
+        },
+        "maxVisits": 3,
+        "class": "tickets"
+      },
+      "tickets.create": {
+        "kind": "agent",
+        "prompt": "plan.tickets",
+        "requires": {
+          "approvalOf": "plan.approve"
+        },
+        "reads": [
+          "goal",
+          "work",
+          "plan.slices",
+          "plan.approval"
+        ],
+        "writes": {
+          "tickets": {
+            "scope": "sticky"
+          }
+        },
+        "maxVisits": 2,
+        "class": "tickets"
+      }
+    },
+    "edges": [
+      {
+        "from": "create_worktree",
+        "to": "map.extract"
+      },
+      {
+        "from": "map.extract",
+        "to": "plan.propose"
+      },
+      {
+        "from": "plan.propose",
+        "to": "plan.approve"
+      },
+      {
+        "from": "plan.approve",
+        "to": "tickets.create",
+        "weight": 3,
+        "label": "plan.approval == 'approved'",
+        "reads": [
+          "plan.approval"
+        ]
+      },
+      {
+        "from": "plan.approve",
+        "to": "plan.propose",
+        "weight": 2,
+        "label": "plan.approval == 'feedback'",
+        "reads": [
+          "plan.approval"
+        ]
+      },
+      {
+        "from": "plan.approve",
+        "to": "map.extract",
+        "weight": 1,
+        "label": "plan.approval == 'stale'",
+        "reads": [
+          "plan.approval"
+        ]
+      },
+      {
+        "from": "tickets.create",
+        "to": "runs.launch"
+      },
+      {
+        "from": "runs.launch",
+        "to": "cleanup"
+      },
+      {
+        "from": "cleanup",
+        "to": "launched",
+        "weight": 1,
+        "label": "worktree.clean",
+        "reads": [
+          "worktree.clean"
+        ]
+      },
+      {
+        "from": "cleanup",
+        "to": "cleanup_pending"
+      }
+    ]
+  },
+  "quick-task": {
+    "name": "quick-task",
+    "description": "TODO: one line on what this graph does",
+    "defaults": {
+      "permissionMode": "auto"
+    },
+    "entry": "quick-task.work",
+    "inputs": [
+      "goal"
+    ],
+    "nodes": {
+      "done": {
+        "kind": "terminal",
+        "outcome": "success"
+      },
+      "quick-task.work": {
+        "kind": "agent",
+        "prompt": "quick-task.work",
+        "reads": [
+          "goal"
+        ],
+        "writes": {
+          "summary": {
+            "scope": "sticky"
+          }
+        }
+      }
+    },
+    "edges": [
+      {
+        "from": "quick-task.work",
+        "to": "done"
+      }
+    ]
+  },
+  "research": {
+    "name": "research",
+    "description": "Plan, investigate, and synthesize a research question into a cited report",
+    "defaults": {
+      "permissionMode": "auto"
+    },
+    "entry": "research.plan",
+    "inputs": [
+      "goal"
+    ],
+    "nodes": {
+      "done": {
+        "kind": "terminal",
+        "outcome": "success",
+        "label": "report approved"
+      },
+      "research.investigate": {
+        "kind": "agent",
+        "prompt": "research.investigate",
+        "reads": [
+          "goal",
+          "research_questions"
+        ],
+        "writes": {
+          "findings_summary": {
+            "scope": "sticky"
+          }
+        }
+      },
+      "research.plan": {
+        "kind": "agent",
+        "prompt": "research.plan",
+        "reads": [
+          "goal"
+        ],
+        "writes": {
+          "research_questions": {
+            "scope": "sticky"
+          }
+        }
+      },
+      "research.review": {
+        "kind": "agent",
+        "prompt": "research.review",
+        "reads": [
+          "goal",
+          "report_summary"
+        ],
+        "writes": {
+          "review_findings": {
+            "scope": "cleared"
+          },
+          "review_verdict": {
+            "scope": "cleared"
+          }
+        }
+      },
+      "research.synthesize": {
+        "kind": "agent",
+        "prompt": "research.synthesize",
+        "reads": [
+          "goal",
+          "research_questions",
+          "findings_summary"
+        ],
+        "writes": {
+          "report_summary": {
+            "scope": "sticky"
+          }
+        },
+        "maxVisits": 3
+      }
+    },
+    "edges": [
+      {
+        "from": "research.plan",
+        "to": "research.investigate"
+      },
+      {
+        "from": "research.investigate",
+        "to": "research.synthesize"
+      },
+      {
+        "from": "research.synthesize",
+        "to": "research.review"
+      },
+      {
+        "from": "research.review",
+        "to": "research.synthesize",
+        "weight": 2,
+        "label": "review_verdict == 'reject'",
+        "reads": [
+          "review_verdict"
+        ]
+      },
+      {
+        "from": "research.review",
+        "to": "done",
+        "weight": 1,
+        "label": "review_verdict == 'pass'",
+        "reads": [
+          "review_verdict"
+        ]
+      }
+    ]
+  },
+  "review-teammate-pr": {
+    "name": "review-teammate-pr",
+    "description": "Pull a teammate's PR into a local worktree and run three read-only reviews in sequence, then compile every finding into one color-coded local report",
+    "defaults": {
+      "permissionMode": "auto"
+    },
+    "entry": "create_worktree",
+    "inputs": [
+      "goal",
+      "pull_request"
+    ],
+    "nodes": {
+      "checkout.pull_pr": {
+        "kind": "agent",
+        "prompt": "checkout.pull_pr",
+        "reads": [
+          "pull_request"
+        ],
+        "writes": {
+          "pr_context": {
+            "scope": "sticky"
+          }
+        }
+      },
+      "complete": {
+        "kind": "terminal",
+        "outcome": "success"
+      },
+      "create_worktree": {
+        "kind": "worktree",
+        "action": "create"
+      },
+      "report.compile": {
+        "kind": "agent",
+        "prompt": "report.compile",
+        "reads": [
+          "pr_context",
+          "sonarqube_findings",
+          "uncle_bob_findings",
+          "seq_review_findings"
+        ],
+        "writes": {
+          "finding_counts": {
+            "scope": "sticky"
+          },
+          "report_path": {
+            "scope": "sticky"
+          }
+        }
+      },
+      "review.seq_review": {
+        "kind": "agent",
+        "prompt": "review.seq_review",
+        "reads": [
+          "pr_context"
+        ],
+        "writes": {
+          "seq_review_findings": {
+            "scope": "sticky"
+          }
+        }
+      },
+      "review.sonarqube": {
+        "kind": "agent",
+        "prompt": "review.sonarqube",
+        "reads": [
+          "pr_context"
+        ],
+        "writes": {
+          "sonarqube_findings": {
+            "scope": "sticky"
+          }
+        }
+      },
+      "review.uncle_bob": {
+        "kind": "agent",
+        "prompt": "review.uncle_bob",
+        "reads": [
+          "pr_context"
+        ],
+        "writes": {
+          "uncle_bob_findings": {
+            "scope": "sticky"
+          }
+        }
+      }
+    },
+    "edges": [
+      {
+        "from": "create_worktree",
+        "to": "checkout.pull_pr"
+      },
+      {
+        "from": "checkout.pull_pr",
+        "to": "review.sonarqube"
+      },
+      {
+        "from": "review.sonarqube",
+        "to": "review.uncle_bob"
+      },
+      {
+        "from": "review.uncle_bob",
+        "to": "review.seq_review"
+      },
+      {
+        "from": "review.seq_review",
+        "to": "report.compile"
+      },
+      {
+        "from": "report.compile",
+        "to": "complete"
+      }
+    ]
+  },
+  "write-doc": {
+    "name": "write-doc",
+    "description": "Outline, draft, and review a document in a plain folder — no repo required",
+    "defaults": {
+      "permissionMode": "auto"
+    },
+    "entry": "doc.outline",
+    "inputs": [
+      "goal",
+      "work"
+    ],
+    "nodes": {
+      "doc.draft": {
+        "kind": "agent",
+        "prompt": "doc.draft",
+        "reads": [
+          "goal",
+          "work",
+          "doc_outline"
+        ],
+        "writes": {
+          "doc_summary": {
+            "scope": "sticky"
+          }
+        }
+      },
+      "doc.outline": {
+        "kind": "agent",
+        "prompt": "doc.outline",
+        "reads": [
+          "goal",
+          "work"
+        ],
+        "writes": {
+          "doc_outline": {
+            "scope": "sticky"
+          }
+        }
+      },
+      "doc.review": {
+        "kind": "agent",
+        "prompt": "doc.review",
+        "reads": [
+          "goal",
+          "work",
+          "doc_outline",
+          "doc_summary"
+        ],
+        "writes": {
+          "review_findings": {
+            "scope": "cleared"
+          },
+          "review_verdict": {
+            "scope": "cleared"
+          }
+        }
+      },
+      "doc.revise": {
+        "kind": "agent",
+        "prompt": "doc.revise",
+        "reads": [
+          "goal",
+          "work",
+          "doc_outline",
+          "doc_summary",
+          "review_findings"
+        ],
+        "writes": {
+          "doc_summary": {
+            "scope": "sticky"
+          }
+        },
+        "maxVisits": 3
+      },
+      "done": {
+        "kind": "terminal",
+        "outcome": "success",
+        "label": "document approved"
+      }
+    },
+    "edges": [
+      {
+        "from": "doc.outline",
+        "to": "doc.draft"
+      },
+      {
+        "from": "doc.draft",
+        "to": "doc.review"
+      },
+      {
+        "from": "doc.review",
+        "to": "doc.revise",
+        "weight": 2,
+        "label": "review_verdict == 'reject'",
+        "reads": [
+          "review_verdict"
+        ]
+      },
+      {
+        "from": "doc.review",
+        "to": "done",
+        "weight": 1,
+        "label": "review_verdict == 'pass'",
+        "reads": [
+          "review_verdict"
+        ]
+      },
+      {
+        "from": "doc.revise",
+        "to": "doc.review"
+      }
+    ]
+  }
+}

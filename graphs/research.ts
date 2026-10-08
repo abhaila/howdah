@@ -5,8 +5,13 @@
  *
  *   plan → investigate → synthesize → review ─┬─pass───▶ done
  *                                             └─reject─▶ synthesize   (max 3 visits)
+ *
+ * B1 (HOW-31, docs/designs/graph-drafting.md): written as a `GraphSpec` literal compiled by
+ * `buildGraph`, so the graph carries its own spec. The compiled `Graph` is identical, pinned
+ * against a pre-conversion snapshot by `graphs/spec-equivalence.test.ts`. Freshness moved from
+ * per-node-per-key to once per field; no key in any built-in is written at two scopes.
  */
-import { defineGraph } from "../core/graph";
+import { buildGraph, type GraphSpec } from "../core/graph-spec";
 
 export interface ResearchCtx {
   goal: string;
@@ -17,59 +22,55 @@ export interface ResearchCtx {
   review_findings: unknown;
 }
 
-const sticky = { scope: "sticky" } as const;
-const cleared = { scope: "cleared" } as const;
-
-export const research = defineGraph<ResearchCtx>({
+export const spec: GraphSpec = {
+  version: 1,
   name: "research",
+  description: "Plan, investigate, and synthesize a research question into a cited report",
   // Claude runs in auto mode by default; Codex uses full-access sandboxing in its executor.
   defaults: { permissionMode: "auto" },
-  description: "Plan, investigate, and synthesize a research question into a cited report",
   entry: "research.plan",
   inputs: ["goal"],
-  nodes: {
-    "research.plan": {
-      kind: "agent",
-      prompt: "research.plan",
-      reads: ["goal"],
-      writes: { research_questions: sticky },
-    },
-    "research.investigate": {
+  fields: [
+    { key: "goal", kind: "text", scope: "sticky" },
+    { key: "research_questions", kind: "text", scope: "sticky" },
+    { key: "findings_summary", kind: "text", scope: "sticky" },
+    { key: "report_summary", kind: "text", scope: "sticky" },
+    { key: "review_verdict", kind: "choice", scope: "cleared", choices: ["pass", "reject"] },
+    { key: "review_findings", kind: "json", scope: "cleared" },
+  ],
+  nodes: [
+    { id: "research.plan", kind: "agent", prompt: "research.plan", reads: ["goal"], writes: ["research_questions"] },
+    {
+      id: "research.investigate",
       kind: "agent",
       prompt: "research.investigate",
       reads: ["goal", "research_questions"],
-      writes: { findings_summary: sticky },
+      writes: ["findings_summary"],
     },
-    "research.synthesize": {
+    {
+      id: "research.synthesize",
       kind: "agent",
       prompt: "research.synthesize",
       reads: ["goal", "research_questions", "findings_summary"],
-      writes: { report_summary: sticky },
+      writes: ["report_summary"],
       maxVisits: 3,
     },
-    "research.review": {
+    {
+      id: "research.review",
       kind: "agent",
       prompt: "research.review",
       reads: ["goal", "report_summary"],
-      writes: { review_verdict: cleared, review_findings: cleared },
+      writes: ["review_verdict", "review_findings"],
     },
-    done: { kind: "terminal", outcome: "success", label: "report approved" },
-  },
+    { id: "done", kind: "terminal", outcome: "success", label: "report approved" },
+  ],
   edges: [
     { from: "research.plan", to: "research.investigate" },
     { from: "research.investigate", to: "research.synthesize" },
     { from: "research.synthesize", to: "research.review" },
-    {
-      from: "research.review",
-      to: "research.synthesize",
-      condition: { reads: ["review_verdict"], test: (v) => v.review_verdict === "reject", label: "review_verdict == 'reject'" },
-      weight: 2,
-    },
-    {
-      from: "research.review",
-      to: "done",
-      condition: { reads: ["review_verdict"], test: (v) => v.review_verdict === "pass", label: "review_verdict == 'pass'" },
-      weight: 1,
-    },
+    { from: "research.review", to: "research.synthesize", when: { op: "equals", key: "review_verdict", value: "reject" } },
+    { from: "research.review", to: "done", when: { op: "equals", key: "review_verdict", value: "pass" } },
   ],
-});
+};
+
+export const research = buildGraph(spec);
