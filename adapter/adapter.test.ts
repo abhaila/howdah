@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { JsonlChunkParser, type JsonlRecord } from "./parse";
-import { mapClaudeEvent, buildClaudePermissionResponse, buildClaudeUserTurn, claudeArgs } from "./claude";
+import { mapClaudeEvent, buildClaudePermissionResponse, buildClaudeUserTurn, claudeArgs, looksContextExceeded } from "./claude";
 import { mapCodexEvent, buildCodexApprovalResponse } from "./codex";
 import { mapOpencodeEvent } from "./opencode";
 import { mapCursorEvent, cursorArgs } from "./cursor";
@@ -173,6 +173,61 @@ describe("codex adapter mapping", () => {
   test("usedPercent 100 maps to exhausted with remaining 0", () => {
     const rl = events.find((e) => e.type === "rate_limit")!;
     expect(rl).toMatchObject({ state: "exhausted", remaining: 0 });
+  });
+});
+
+// HOW-14: shapes read from claude 2.1.283's SDK types and codex 0.154.0's generated schema,
+// not captured turns — the adapters say so in their headers
+describe("context exhaustion and compaction (HOW-14)", () => {
+  test("claude: compact_boundary maps to context_compacted with its trigger and size", () => {
+    expect(mapClaudeEvent({ type: "system", subtype: "compact_boundary", compact_metadata: { trigger: "auto", pre_tokens: 167000, post_tokens: 9000 } }))
+      .toEqual([{ type: "context_compacted", trigger: "auto", pre_tokens: 167000 }]);
+    // metadata missing or garbled: still the fact, never a throw
+    expect(mapClaudeEvent({ type: "system", subtype: "compact_boundary" })).toEqual([{ type: "context_compacted" }]);
+    expect(mapClaudeEvent({ type: "system", subtype: "compact_boundary", compact_metadata: { trigger: 3, pre_tokens: "lots" } }))
+      .toEqual([{ type: "context_compacted" }]);
+  });
+
+  test("claude: a 'Prompt is too long' error result is flagged context_exceeded; another error is not", () => {
+    expect(mapClaudeEvent({ type: "result", subtype: "success", is_error: true, result: "Prompt is too long" }))
+      .toEqual([expect.objectContaining({ type: "turn_end", error: "Prompt is too long", context_exceeded: true })]);
+    const [plain] = mapClaudeEvent({ type: "result", subtype: "error_max_turns", is_error: true, result: "max turns" });
+    expect(plain).not.toHaveProperty("context_exceeded");
+    // a SUCCESSFUL result whose text merely mentions it is not an error at all
+    const [ok] = mapClaudeEvent({ type: "result", subtype: "success", is_error: false, result: "Prompt is too long, so I trimmed it" });
+    expect(ok).not.toHaveProperty("context_exceeded");
+  });
+
+  test("looksContextExceeded: the CLI's constant and narrow 'exceeds the context window' phrasings only", () => {
+    for (const yes of ["Prompt is too long", "prompt is too long: 210000 tokens > 200000 maximum", "Input exceeds the context window of this model"])
+      expect(looksContextExceeded(yes)).toBe(true);
+    for (const no of ["max turns", "the context of this change is unclear", "the prompt was long but fine", "context window"])
+      expect(looksContextExceeded(no)).toBe(false);
+  });
+
+  test("codex: a FAILED turn/completed carries its error; contextWindowExceeded also flags it", () => {
+    const [failed] = mapCodexEvent({ method: "turn/completed", params: { turn: { id: "t", status: "failed", error: { message: "boom", codexErrorInfo: "other" } } } });
+    expect(failed).toMatchObject({ type: "turn_end", error: "boom" });
+    expect(failed).not.toHaveProperty("context_exceeded");
+    const [full] = mapCodexEvent({ method: "turn/completed", params: { turn: { id: "t", status: "failed", error: { message: "no room", codexErrorInfo: "contextWindowExceeded" } } } });
+    expect(full).toMatchObject({ type: "turn_end", error: "no room", context_exceeded: true });
+    // a completed turn is still a plain turn_end, and a failed one with no error object still fails
+    const [done] = mapCodexEvent({ method: "turn/completed", params: { turn: { id: "t", status: "completed" } } });
+    expect(done).not.toHaveProperty("error");
+    expect(mapCodexEvent({ method: "turn/completed", params: { turn: { status: "failed" } } })[0]).toMatchObject({ error: "codex turn failed" });
+  });
+
+  test("codex: an error notification naming contextWindowExceeded is flagged", () => {
+    expect(mapCodexEvent({ method: "error", params: { error: { message: "no room", codexErrorInfo: "contextWindowExceeded" }, willRetry: false } }))
+      .toEqual([{ type: "error", message: "no room", context_exceeded: true }]);
+    expect(mapCodexEvent({ method: "error", params: { error: { message: "MCP auth expired" } } })).toEqual([{ type: "error", message: "MCP auth expired" }]);
+  });
+
+  test("codex: a contextCompaction item and the legacy thread/compacted both map to context_compacted", () => {
+    expect(mapCodexEvent({ method: "item/started", params: { item: { type: "contextCompaction", id: "c1" } } })).toEqual([{ type: "context_compacted" }]);
+    expect(mapCodexEvent({ method: "thread/compacted", params: { threadId: "x", turnId: "t" } })).toEqual([{ type: "context_compacted" }]);
+    // completion of the compaction item is not a second compaction
+    expect(mapCodexEvent({ method: "item/completed", params: { item: { type: "contextCompaction", id: "c1" } } })).toEqual([]);
   });
 });
 

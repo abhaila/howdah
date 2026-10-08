@@ -320,7 +320,7 @@ describe("validateProposal (GhostSet against the base the proposal was drawn on)
     expect(retry).toContain("com.example.api.<top>.nope(Request)");
     const retryRender = run.events().filter((e) => e.type === "prompt-rendered" && e.node === "slice.propose")[1]!;
     if (retryRender.type !== "prompt-rendered") throw new Error("no render");
-    expect(retryRender.suffix_version).toBe(3);
+    expect(retryRender.suffix_version).toBe(4);
     expect(reconstructRender(run.runDir, retryRender.rendered_hash)).toMatchObject({ verified: true, text: retry });
 
     // ...once: the redraw after operator feedback does not repeat it

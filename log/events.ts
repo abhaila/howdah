@@ -42,6 +42,12 @@ export type ParkCode =
   | "attempt-failed"
   /** the harness CLI is not logged in: outside the graph's control, fixed by a human, then resume */
   | "harness-unauthenticated"
+  /**
+   * HOW-14: the agent's turn died because its context window filled. Not the model breaking
+   * its contract and not an allowance problem — so it never hops harnesses; a reply is carried
+   * into the retry, and the retry is rendered with a re-entry briefing (core/template.ts v4).
+   */
+  | "context-exhausted"
   | "executor-threw"
   | "max-visits"
   | "no-edge"
@@ -133,6 +139,12 @@ export type RunEvent =
        * versions — prompt_version alone does not identify the text when an included prompt moved
        */
       includes?: Record<string, number>;
+      /**
+       * HOW-14: the visit of this node whose context window filled, when this render carries the
+       * re-entry briefing (suffix v4+). A suffix INPUT like `skills`, so reconstruction rebuilds
+       * the briefing from the log rather than guessing. Absent: no briefing was rendered.
+       */
+      reentry_after_visit?: number;
     }
   | {
       type: "chunk";

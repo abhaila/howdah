@@ -503,6 +503,10 @@ export interface ReconstructedRender {
  * parks never are — the engine never renders them.
  * Only versions with a reply builder get reply candidates; v1 and legacy events are
  * rebuilt exactly as before.
+ *
+ * HOW-14: a v4+ render that carried the context re-entry briefing logged
+ * `reentry_after_visit`, its input. It is fed to every candidate as-is — it is a recorded
+ * fact about this render, not one more thing to try.
  */
 export function reconstructRender(runDir: string, renderedHashWanted: string): ReconstructedRender | null {
   const logPath = join(runDir, "run.jsonl");
@@ -551,10 +555,15 @@ export function reconstructRender(runDir: string, renderedHashWanted: string): R
   if (render.suffix_version === undefined) {
     // pre-0.1 event: the hash never covered the skill hint or outputs contract
     candidates = jumpOptions.map((m) => (m === undefined ? plain : plain + operatorInstructionSuffix(m)));
-  } else if (builders) {
+  } else if (builders && (render.reentry_after_visit === undefined || builders.reentryInstruction)) {
     const suffixVersion = render.suffix_version;
     const assemble = (jumpMessage?: string, replyMessage?: string, refusalMessage?: string) =>
-      assemblePrompt({ body: plain, jumpMessage, replyMessage, refusalMessage, skills: render.skills ?? [], outputKeys: render.output_keys ?? [], suffixVersion });
+      assemblePrompt({
+        body: plain, jumpMessage, replyMessage, refusalMessage,
+        // HOW-14: LOGGED, not guessed — so it is the same input for every candidate, not another axis
+        reentryAfterVisit: render.reentry_after_visit,
+        skills: render.skills ?? [], outputKeys: render.output_keys ?? [], suffixVersion,
+      });
     // [plain, ...jumps, ...replies] — never both: a jump clears any pending reply (replay.ts),
     // and v1 has no reply builder, so a v1 render cannot have carried one. A refusal (v3+) comes
     // with no jump (a jump drops it) and with or without a reply.
@@ -567,7 +576,8 @@ export function reconstructRender(runDir: string, renderedHashWanted: string): R
       : [];
     candidates = [...base, ...refused];
   } else {
-    candidates = []; // a suffix version this code never had — do not guess
+    // a suffix version this code never had, or a re-entry it could not have rendered — do not guess
+    candidates = [];
   }
   const verifiedText = candidates.find((c) => renderedHash(c) === renderedHashWanted);
 

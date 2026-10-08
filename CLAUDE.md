@@ -306,6 +306,21 @@ Break one of these and the design stops working, so check them before changing t
   human logging in (`claude -p` has no TTY to do it through) and the run has to say so.
   `doctor` asks each harness `auth status` / `login status` — being on PATH is not being
   logged in.
+- **Context exhaustion is a park, not a hop (HOW-14).** A turn whose context window filled
+  fails `context-exhausted`, decided by the ADAPTER from the harness's own signal (claude's
+  `Prompt is too long` result, codex's `contextWindowExceeded`) and flagged on `turn_end`, so
+  no executor re-reads error text. It never takes the allowance fallback — another harness
+  does not make the window bigger — and that is guarded twice: explicitly in the failure
+  branch, and in `priorLimitFailureHarnesses`, because the hop's evidence is a regex
+  (`RATE_LIMIT_TEXT`, `engine/executors/harness-failure.ts`) over the attempt's transcript,
+  and an agent writing rate-limiting code says "rate limit". The wording written for this case
+  is pinned against that same regex. The node's next attempt is rendered with a re-entry
+  briefing (suffix v4: orient with git, continue rather than restart, commit as you go),
+  derived from the log and logged as `reentry_after_visit`, so a resume in a fresh process
+  briefs it identically and reconstruction stays VERIFIED. A mid-turn compaction is only a
+  transcript line. A FAILED codex `turn/completed` is a turn error now — it used to read as
+  success and blame the model with "output contract violation". Cursor and opencode have no
+  verified signal and keep degrading to `attempt-failed` with the CLI's own words.
 - **A harness question reaches a human, or the run says why it did not (HOW-25).** An
   `AskUserQuestion` is NOT a permission: it arrives as a `can_use_tool` carrying
   `requires_user_interaction`, and the CLI's response schema (`allow` + `updatedInput`, or

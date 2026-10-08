@@ -29,6 +29,12 @@
  * them instead of drawing the same thing again. Its source is the refusal logged on that
  * attempt's node-finished (engine/replay.ts refusalNote), so reconstruction rebuilds it.
  *
+ * HOW-14: v4 = v3 + reentryInstruction — when this node's previous visit died because its
+ * context window filled, the retry is told it is RE-ENTERING a step that may be partly done,
+ * and to get its bearings from the working directory before continuing. Its source is the
+ * log (engine/run.ts reentryAfterVisit), logged as `reentry_after_visit`, so reconstruction
+ * rebuilds it exactly.
+ *
  * Includes (system-map 1c review): `{{> prompt.id }}` pulls another prompt file's body in AT
  * PIN TIME — expandIncludes() runs when a run pins its prompts, and the pinned file holds the
  * expanded text. Rendering, rendered_hash and reconstruction therefore never see an include:
@@ -83,7 +89,7 @@ export function operatorInstructionSuffix(message: string): string {
 // ---- suffixes (system-map 0.1) ---------------------------------------------------
 
 /** The suffix wording new renders use. Bump it — and add a builder set — to reword. */
-export const SUFFIX_VERSION = 3;
+export const SUFFIX_VERSION = 4;
 
 /** The versioned builders: what a render's `suffix_version` pins. */
 export interface SuffixBuilders {
@@ -101,6 +107,11 @@ export interface SuffixBuilders {
    * that predate it (v1, v2) — such a version cannot have rendered a refusal.
    */
   refusalInstruction?(reason: string): string;
+  /**
+   * HOW-14: the re-entry briefing after a visit that ran out of context window. Absent from
+   * versions that predate it (v1–v3) — such a version cannot have rendered one.
+   */
+  reentryInstruction?(previousVisit: number): string;
 }
 
 /**
@@ -136,9 +147,22 @@ const V3: SuffixBuilders = {
     `\n\n## Your previous proposal was refused\nThe previous attempt at this step produced a proposal the graph's validator refused. Fix every problem below and return the corrected proposal:\n${reason}`,
 };
 
-const SUFFIX_BUILDERS: Readonly<Record<number, SuffixBuilders>> = { 1: V1, 2: V2, 3: V3 };
+/** v4 (HOW-14) = v3 + the context re-entry briefing. NEVER edit a published version. */
+const V4: SuffixBuilders = {
+  ...V3,
+  reentryInstruction: (previousVisit) =>
+    `\n\n## Re-entering this step\n` +
+    `Visit ${previousVisit} of this step ran out of context window space before it finished. ` +
+    `Its work may already be partly done in the working directory, and you do not have its conversation. ` +
+    `Get your bearings before changing anything:\n` +
+    `1. Run \`git status\`, \`git diff --stat\` and \`git log --oneline -20\` to see what is already done.\n` +
+    `2. Re-read the task above.\n` +
+    `3. Continue from where the work stands rather than starting over, and commit as you go so progress survives if this happens again.`,
+};
+
+const SUFFIX_BUILDERS: Readonly<Record<number, SuffixBuilders>> = { 1: V1, 2: V2, 3: V3, 4: V4 };
 /** the builders new renders use; bump together with SUFFIX_VERSION */
-const CURRENT: SuffixBuilders = V3;
+const CURRENT: SuffixBuilders = V4;
 
 /** The builders a logged `suffix_version` pins, or undefined for a version this code never had. */
 export function suffixBuilders(version: number): SuffixBuilders | undefined {
@@ -180,6 +204,8 @@ export interface PromptParts {
   replyMessage?: string;
   /** system-map 1c: the validator's refusal of the previous attempt's proposal — raw text */
   refusalMessage?: string;
+  /** HOW-14: the visit of this node whose context window filled — renders the re-entry briefing */
+  reentryAfterVisit?: number;
   /** skills named in the hint — already filtered by skillsForHarness */
   skills: readonly string[];
   /** the node's declared write keys, in declaration order */
@@ -189,11 +215,11 @@ export interface PromptParts {
 
 /**
  * The ONE assembly of a prompt as sent. Fixed order:
- *   template body → operator jump → operator reply (0.2) → proposal refusal (1c) → skill hint
- *   → outputs contract.
+ *   template body → operator jump → operator reply (0.2) → proposal refusal (1c)
+ *   → context re-entry (HOW-14) → skill hint → outputs contract.
  * Throws on a suffix version with no builders — the engine only ever passes SUFFIX_VERSION,
- * and reconstruction checks suffixBuilders() first — and on a reply under a version with
- * no reply builder, which no engine ever produced.
+ * and reconstruction checks suffixBuilders() first — and on a reply, refusal or re-entry
+ * under a version with no builder for it, which no engine ever produced.
  */
 export function assemblePrompt(parts: PromptParts): string {
   const builders = suffixBuilders(parts.suffixVersion);
@@ -208,11 +234,17 @@ export function assemblePrompt(parts: PromptParts): string {
     if (!builders.refusalInstruction) throw new Error(`suffix version ${parts.suffixVersion} has no refusal builder`);
     refusal = builders.refusalInstruction(parts.refusalMessage);
   }
+  let reentry = "";
+  if (parts.reentryAfterVisit !== undefined) {
+    if (!builders.reentryInstruction) throw new Error(`suffix version ${parts.suffixVersion} has no re-entry builder`);
+    reentry = builders.reentryInstruction(parts.reentryAfterVisit);
+  }
   return (
     parts.body +
     (parts.jumpMessage !== undefined ? operatorInstructionSuffix(parts.jumpMessage) : "") +
     reply +
     refusal +
+    reentry +
     builders.skillHint(parts.skills) +
     builders.outputContract(parts.outputKeys)
   );

@@ -22,6 +22,15 @@
  * `allow` runs the tool with no one to ask and returns "The user did not answer the
  * questions." Both halves were probed against the live CLI before this was written.
  * Re-verify on upgrade; the meaning of the payload lives in core/ask.ts.
+ *
+ * HOW-14 — context exhaustion. Read from claude 2.1.283's own strings and SDK types, NOT from
+ * a captured turn (unverified-live, like the cursor adapter; capture one into fixtures/ the
+ * first time it happens for real):
+ *   - turn died: `result { is_error: true, result: "Prompt is too long…" }` — the CLI's own
+ *     constant. Mapped to turn_end.context_exceeded so executors never re-read the text.
+ *   - context summarised mid-turn: `system { subtype: "compact_boundary",
+ *     compact_metadata: { trigger: "manual"|"auto", pre_tokens, post_tokens? } }` →
+ *     `context_compacted`. Not a failure; the turn goes on, on a summary.
  */
 import type { AgentEvent } from "./events";
 
@@ -41,6 +50,16 @@ export function claudeArgs(opts: { sessionId: string; permissionMode?: string; r
   ];
 }
 
+/**
+ * HOW-14: does this turn error say the context window filled? Claude's constant first, then a
+ * narrow fallback for "exceeds the context window" phrasings. Kept narrow on purpose: a miss
+ * degrades to an ordinary `turn error` park carrying the CLI's own words, a false hit would
+ * brief the next attempt about a problem it never had.
+ */
+export function looksContextExceeded(text: string): boolean {
+  return /^\s*prompt is too long/i.test(text) || (/\bcontext window\b/i.test(text) && /\bexceed/i.test(text));
+}
+
 export function mapClaudeEvent(raw: unknown): AgentEvent[] {
   const e = raw as Record<string, any>;
   if (e === null || typeof e !== "object") return [];
@@ -49,6 +68,14 @@ export function mapClaudeEvent(raw: unknown): AgentEvent[] {
     case "system":
       if (e.subtype === "init" && typeof e.session_id === "string")
         return [{ type: "session_started", session_id: e.session_id }];
+      if (e.subtype === "compact_boundary") {
+        const meta = e.compact_metadata ?? {};
+        return [{
+          type: "context_compacted",
+          ...(typeof meta.trigger === "string" ? { trigger: meta.trigger } : {}),
+          ...(typeof meta.pre_tokens === "number" ? { pre_tokens: meta.pre_tokens } : {}),
+        }];
+      }
       return [];
 
     case "stream_event": {
@@ -95,7 +122,8 @@ export function mapClaudeEvent(raw: unknown): AgentEvent[] {
         }];
       return [];
 
-    case "result":
+    case "result": {
+      const error = e.is_error ? String(e.result ?? e.subtype ?? "error") : undefined;
       return [{
         type: "turn_end",
         usage: {
@@ -103,9 +131,11 @@ export function mapClaudeEvent(raw: unknown): AgentEvent[] {
           output_tokens: e.usage?.output_tokens,
           cost_usd: e.total_cost_usd,
         },
-        error: e.is_error ? String(e.result ?? e.subtype ?? "error") : undefined,
+        error,
         result_text: !e.is_error && typeof e.result === "string" ? e.result : undefined,
+        ...(error !== undefined && looksContextExceeded(error) ? { context_exceeded: true as const } : {}),
       }];
+    }
 
     case "rate_limit_event": {
       const status = e.rate_limit?.status ?? e.status;

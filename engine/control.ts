@@ -377,6 +377,7 @@ const useJump: Rule = ({ run }) => ({
 export const REPLY_RULES: Readonly<Record<ParkCode, Rule>> = {
   "attempt-failed": retryWithReply,
   "harness-unauthenticated": loginThenRetry,
+  "context-exhausted": retryWithReply, // HOW-14: the retry is briefed to re-enter; a reply steers it
   "executor-threw": retryWithReply,
   "max-visits": useJump,
   "no-edge": useJump,

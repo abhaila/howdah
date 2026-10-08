@@ -37,6 +37,21 @@ export type AgentEvent =
       error?: string;
       /** the final assistant text — where the outputs contract is parsed from */
       result_text?: string;
+      /**
+       * HOW-14: the adapter's verdict that the turn died because the model's context window
+       * filled. Set from the harness's own signal, so executors never re-parse error text.
+       */
+      context_exceeded?: true;
+    }
+  | {
+      /**
+       * HOW-14: the harness summarised earlier turns to make room (claude `compact_boundary`,
+       * codex `contextCompaction`). Not a failure — the turn carries on — but the agent now
+       * works from a summary, which is worth a visible line in the transcript.
+       */
+      type: "context_compacted";
+      trigger?: string;
+      pre_tokens?: number;
     }
   | {
       type: "rate_limit";
@@ -45,4 +60,4 @@ export type AgentEvent =
       resets_at?: string;
       raw: unknown;
     }
-  | { type: "error"; message: string };
+  | { type: "error"; message: string; context_exceeded?: true };

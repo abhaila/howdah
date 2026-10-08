@@ -15,6 +15,14 @@
  * The auth patterns are matched against stderr text, which is a harness's wording and can
  * change. That is why a miss degrades to `attempt-failed` WITH the stderr tail attached
  * rather than to a wrong diagnosis: an unrecognised message still reaches the human intact.
+ *
+ * HOW-14: the second failure that is not the model breaking its contract is a turn that ran
+ * out of context window. The adapters decide THAT from the harness's own signal (claude's
+ * "Prompt is too long" result, codex's `contextWindowExceeded`); this file words what the
+ * operator is told, beside the auth wording, because both answer "why did this attempt fail
+ * when the agent did nothing wrong". The words matter for a second reason: the allowance
+ * fallback reads failed attempts' text with RATE_LIMIT_TEXT, so a reason that said
+ * "exhausted" or "limit" would hop harnesses — which does nothing for a full context.
  */
 import { harnessSpec, harnessSpecForCommand, isHarness } from "../../core/harnesses";
 import type { ParkCode } from "../../log/events";
@@ -48,6 +56,39 @@ const AUTH_PATTERNS = [
 
 export function looksUnauthenticated(stderr: string): boolean {
   return AUTH_PATTERNS.some((re) => re.test(stderr));
+}
+
+/**
+ * The wording that makes a failed attempt read as "out of allowance" to the engine's harness
+ * fallback (engine/run.ts). It lives here, not in the engine, so the context-exhaustion text
+ * below can be tested against the very regex it must not trip.
+ */
+export const RATE_LIMIT_TEXT = /\b(rate.?limit|usage limit|session limit|quota|allowance|exhausted)\b/i;
+
+/**
+ * HOW-14: what the operator is told when a turn's context window filled. Deliberately avoids
+ * every RATE_LIMIT_TEXT word (pinned in harness-failure.test.ts) — see the header.
+ */
+export function contextExhaustedFailure(harness: string): { code: ParkCode; reason: string; note: string } {
+  return {
+    code: "context-exhausted",
+    reason:
+      `${harness} ran out of context window space before finishing this step. Work may be ` +
+      `partly done in the worktree; resume (or reply) to retry, and the next attempt starts ` +
+      `with a re-entry briefing telling it to get its bearings first.`,
+    note: `\n[${harness} ran out of context window space — this attempt cannot finish]`,
+  };
+}
+
+/**
+ * HOW-14: the transcript line for a mid-turn compaction (claude `compact_boundary`, codex
+ * `contextCompaction`). Not a failure — it lives beside contextExhaustedFailure so both
+ * executors word the two context facts in one place.
+ */
+export function compactionNote(trigger?: string, preTokens?: number): string {
+  const how = trigger ? ` (${trigger})` : "";
+  const size = preTokens !== undefined ? `~${preTokens} tokens summarised` : "earlier turns summarised";
+  return `\n[context compacted${how}: ${size} — earlier turns are now a summary]`;
 }
 
 /** the last of stderr, trimmed and collapsed, safe to put in a log line */
