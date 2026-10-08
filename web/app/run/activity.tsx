@@ -80,26 +80,52 @@ export interface ToolDisclosure {
 }
 export const ToolDisclosureContext = createContext<ToolDisclosure | null>(null);
 
-/** exported for the Chat transcript (HOW-25): one tool renderer, not two */
-export function ToolBeat({ call, result }: { call: TurnPart; result?: TurnPart }) {
-  const failed = result !== undefined && FAILED.test(result.content);
-  // a failure opens itself; everything else waits to be asked
-  const [open, setOpen] = useState(failed);
+/**
+ * The open/closed state every disclosure in a transcript shares: its own default, toggled on
+ * its own, and adopting a bulk instruction exactly once per epoch. One hook, because the tool
+ * beat and the tool group (HOW-30) must obey the same bulk control the same way — two copies
+ * of the epoch dance is how one of them starts snapping back.
+ */
+function useDisclosure(initial: boolean): [boolean, (open: boolean) => void] {
   const bulk = useContext(ToolDisclosureContext);
+  // a disclosure MOUNTED after a bulk instruction starts in it: a beat inside a group the bulk
+  // control just opened, or one streamed in after "Expand all", is covered by what was asked
+  const [open, setOpen] = useState(bulk !== null && bulk.epoch > 0 ? bulk.open : initial);
   const [seenEpoch, setSeenEpoch] = useState(bulk?.epoch ?? 0);
   // adjusting state during render rather than in an effect: React re-renders this component
-  // before touching the DOM, so the beat never paints in the stale state first
+  // before touching the DOM, so the disclosure never paints in the stale state first
   if (bulk !== null && bulk.epoch !== seenEpoch) {
     setSeenEpoch(bulk.epoch);
     setOpen(bulk.open);
   }
+  return [open, setOpen];
+}
+
+/**
+ * The name a tool is shown under (HOW-30). An MCP tool arrives as `mcp__<server>__<tool>`, and
+ * `mcp__claude_ai_Linear__save_issue` printed in full was the longest, loudest thing on a row
+ * whose point is the argument after it. The server's own trailing segment and the tool are
+ * what a reader needs; the raw name is still in the opened body's input for anyone who wants it.
+ */
+export function toolLabel(name: string): string {
+  const m = /^mcp__(.+?)__(.+)$/.exec(name);
+  if (!m || m[1] === undefined || m[2] === undefined) return name;
+  const server = m[1].split("_").filter(Boolean).at(-1) ?? m[1];
+  return `${server} · ${m[2]}`;
+}
+
+/** exported for the Chat transcript (HOW-25): one tool renderer, not two */
+export function ToolBeat({ call, result }: { call: TurnPart; result?: TurnPart }) {
+  const failed = result !== undefined && FAILED.test(result.content);
+  // a failure opens itself; everything else waits to be asked
+  const [open, setOpen] = useDisclosure(failed);
   return (
     <div className={`act-tool${failed ? " failed" : ""}`} data-open={open ? "open" : "closed"}>
       <Row className="act-tool-head" aria-expanded={open} onClick={() => setOpen(!open)}>
         <ChevronRight className="act-caret" size={12} aria-hidden />
         {failed ? <TriangleAlert size={12} aria-hidden /> : <Wrench size={12} aria-hidden />}
-        <span className="m act-tool-name">{call.tool_name ?? "tool"}</span>
-        <span className="act-tool-sum">{toolSummary(call.content)}</span>
+        <span className="act-tool-name">{toolLabel(call.tool_name ?? "tool")}</span>
+        <span className="m act-tool-sum">{toolSummary(call.content)}</span>
         {failed && <Badge variant="destructive">failed</Badge>}
       </Row>
       {open && (
@@ -118,14 +144,72 @@ export function ToolBeat({ call, result }: { call: TurnPart; result?: TurnPart }
   );
 }
 
+export type Beat = { kind: "text" | "thinking" | "tool"; part: TurnPart; result?: TurnPart };
+export type BeatGroup = Beat | { kind: "tools"; beats: Beat[] };
+
+/**
+ * Fold every run of two or more ADJACENT tool beats into one group (HOW-30). On the run in the
+ * ticket's screenshot the agent's own sentences were one row in eight; the rest was tool calls,
+ * each a full-width line at the same weight as the prose, so the transcript read as a command
+ * log with the occasional remark. A run of tools is one thing the agent DID between two things
+ * it SAID, and is drawn as one line until opened. Prose is never folded, and a lone tool stays
+ * a beat: a group of one is a second click for nothing.
+ */
+export function groupBeats(beats: readonly Beat[]): BeatGroup[] {
+  const out: BeatGroup[] = [];
+  let run: Beat[] = [];
+  const flush = () => {
+    if (run.length === 1 && run[0] !== undefined) out.push(run[0]);
+    else if (run.length > 1) out.push({ kind: "tools", beats: run });
+    run = [];
+  };
+  for (const b of beats) {
+    if (b.kind === "tool") run.push(b);
+    else {
+      flush();
+      out.push(b);
+    }
+  }
+  flush();
+  return out;
+}
+
+/**
+ * One line for a run of tool calls: how many, and which. It opens itself when any call inside
+ * failed, for the same reason a failed beat does — and the failed beat inside is then already
+ * open, so the failure is two levels deep and zero clicks away.
+ */
+export function ToolGroup({ beats }: { beats: Beat[] }) {
+  const failedCount = beats.filter((b) => b.result !== undefined && FAILED.test(b.result.content)).length;
+  const [open, setOpen] = useDisclosure(failedCount > 0);
+  const names = [...new Set(beats.map((b) => toolLabel(b.part.tool_name ?? "tool")))];
+  const shown = names.slice(0, 3).join(", ") + (names.length > 3 ? ` +${names.length - 3} more` : "");
+  return (
+    <div className={`act-group${failedCount ? " failed" : ""}`} data-open={open ? "open" : "closed"}>
+      <Row className="act-tool-head act-group-head" aria-expanded={open} onClick={() => setOpen(!open)}>
+        <ChevronRight className="act-caret" size={12} aria-hidden />
+        {failedCount ? <TriangleAlert size={12} aria-hidden /> : <Wrench size={12} aria-hidden />}
+        <span className="act-tool-name">Used {beats.length} tools</span>
+        <span className="act-tool-sum">{shown}</span>
+        {failedCount > 0 && <Badge variant="destructive">{failedCount} failed</Badge>}
+      </Row>
+      {open && (
+        <div className="act-group-body">
+          {beats.map((b, i) => <ToolBeat key={i} call={b.part} result={b.result} />)}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /**
  * Pair each tool_result with the call it answers. The stream carries them as separate parts;
  * `tool_id` is what ties them, and a result whose call never arrived still gets drawn rather
  * than silently dropped — an orphan result is a fact about the run, not a rendering problem.
  */
-export function beatsOf(parts: readonly TurnPart[]): Array<{ kind: "text" | "thinking" | "tool"; part: TurnPart; result?: TurnPart }> {
+export function beatsOf(parts: readonly TurnPart[]): Beat[] {
   const used = new Set<number>();
-  const out: Array<{ kind: "text" | "thinking" | "tool"; part: TurnPart; result?: TurnPart }> = [];
+  const out: Beat[] = [];
   parts.forEach((p, i) => {
     if (used.has(i)) return;
     if (p.kind === "tool_call") {

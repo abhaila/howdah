@@ -367,8 +367,17 @@ describe("moving around a long transcript (HOW-27)", () => {
     const el = render(askingLog());
     const pins = [...el.querySelectorAll('[data-slot="message-scroller-button"]')];
     expect(pins.map((p) => p.getAttribute("data-direction"))).toEqual(["start", "end"]);
-    // a hairline arrow is not a label; each pin carries its own accessible name
-    expect(pins.map((p) => p.textContent?.trim())).toEqual(["Scroll to start", "Scroll to end"]);
+    // a hairline arrow is not a label; each pin carries its own accessible name AND a visible
+    // word (HOW-30) — a bare arrow floating over prose read as part of the text
+    expect(pins.map((p) => p.getAttribute("aria-label"))).toEqual(["Scroll to start", "Scroll to end"]);
+    expect(pins.map((p) => p.textContent?.trim())).toEqual(["Top", "Latest"]);
+  });
+
+  test("the Top pin is in the toolbar, not floating over the transcript (HOW-30)", () => {
+    const el = render(askingLog());
+    const top = el.querySelector('[data-slot="message-scroller-button"][data-direction="start"]')!;
+    expect(top.closest(".chat-head")).not.toBeNull();
+    expect(top.closest('[data-slot="message-scroller"]')).toBeNull();
   });
 
   test("a pin is inert while that direction is not scrollable", () => {
@@ -419,6 +428,73 @@ describe("collapsing the tool calls (HOW-27)", () => {
     log.add({ type: "chunk", node: "do", visit: 1, turn: 1, index: 0, kind: "text", content: "just prose" });
     const el = render(log);
     expect([...el.querySelectorAll("button")].filter((b) => /tool call/.test(b.textContent ?? ""))).toHaveLength(0);
+  });
+});
+
+describe("reading a transcript that is mostly tool work (HOW-30)", () => {
+  /** a turn whose prose is separated by runs of tools — the shape of the ticket's screenshot */
+  const toolHeavyLog = (results: string[] = ["ok", "ok", "ok"]) => {
+    const log = new FakeLog();
+    log.add({ type: "run-started", graph: "quick-task", inputs: { goal: "g" }, pinned_prompts: {} });
+    log.add({ type: "node-started", node: "do", visit: 1, attempt_id: "do#1" });
+    let i = 0;
+    const chunk = (c: Record<string, unknown>) =>
+      log.add({ type: "chunk", node: "do", visit: 1, turn: 1, index: i++, ...c } as never);
+    chunk({ kind: "text", content: "Checking the PR." });
+    results.forEach((r, n) => {
+      chunk({ kind: "tool_call", tool_id: `t${n}`, tool_name: n === 1 ? "mcp__claude_ai_Linear__get_issue" : "Bash", content: JSON.stringify({ command: `cmd ${n}` }) });
+      chunk({ kind: "tool_result", tool_id: `t${n}`, content: r });
+    });
+    chunk({ kind: "text", content: "All merged." });
+    return log;
+  };
+
+  test("a run of adjacent tool calls is one line, between the sentences it sits between", () => {
+    const el = render(toolHeavyLog());
+    const agent = el.querySelector(".cv-agent")!;
+    expect(agent.querySelectorAll(".act-group")).toHaveLength(1);
+    expect(agent.querySelector(".act-group-head")!.textContent).toContain("Used 3 tools");
+    // the group names what ran, by the short label, de-duplicated
+    expect(agent.querySelector(".act-group-head")!.textContent).toContain("Bash, Linear · get_issue");
+    // closed, its beats are not on screen — the prose is what is
+    expect(agent.querySelectorAll(".act-tool")).toHaveLength(0);
+    expect(agent.textContent).toContain("Checking the PR.");
+    expect(agent.textContent).toContain("All merged.");
+  });
+
+  test("opening the group shows each tool as its own beat, still closed", () => {
+    const el = render(toolHeavyLog());
+    click(el.querySelector(".act-group-head") as HTMLElement);
+    expect(el.querySelectorAll(".act-group .act-tool")).toHaveLength(3);
+    expect(el.querySelectorAll(".act-tool-body")).toHaveLength(0);
+  });
+
+  test("a group with a failure inside opens itself, and so does the failed beat", () => {
+    const el = render(toolHeavyLog(["ok", "error: not found", "ok"]));
+    const group = el.querySelector(".act-group")!;
+    expect(group.getAttribute("data-open")).toBe("open");
+    expect(group.querySelector(".act-group-head")!.textContent).toContain("1 failed");
+    expect(el.querySelectorAll(".act-tool-body")).toHaveLength(1);
+  });
+
+  test("the bulk control opens the groups AND every call inside them", () => {
+    const el = render(toolHeavyLog());
+    const toggle = [...el.querySelectorAll("button")].find((b) => /tool call/.test(b.textContent ?? ""))!;
+    expect(toggle.textContent).toContain("Expand 3 tool calls");
+    click(toggle);
+    expect(el.querySelector(".act-group")!.getAttribute("data-open")).toBe("open");
+    expect(el.querySelectorAll(".act-tool-body")).toHaveLength(3);
+    click(toggle);
+    expect(el.querySelector(".act-group")!.getAttribute("data-open")).toBe("closed");
+  });
+
+  test("the composer has a send control that is off until there is something to send", () => {
+    const el = render(askingLog());
+    const send = el.querySelector('button[aria-label="Ask"]') as HTMLButtonElement;
+    expect(send).not.toBeNull();
+    expect(send.disabled).toBe(true);
+    type(el.querySelector('input[aria-label="ask about this run"]') as HTMLInputElement, "why?");
+    expect((el.querySelector('button[aria-label="Ask"]') as HTMLButtonElement).disabled).toBe(false);
   });
 });
 

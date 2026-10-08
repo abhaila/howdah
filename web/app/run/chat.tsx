@@ -38,6 +38,14 @@
  * is the opposite trade and that is why it is here: `@shadcn/react` is 20KB with no runtime
  * dependencies and no primitives library under it.
  *
+ * HOW-30 is the same complaint a third time, this time about how it LOOKED, with t3.chat as
+ * the reference. What was taken is structure, not skin (howdah's radii and palette stay):
+ * one centred reading column instead of 1500px lines; a run of adjacent tool calls folded into
+ * one "Used N tools" line so the agent's sentences are what the eye lands on; a step as a
+ * section break rather than a floating chip; scroll pins that never sit on top of the text
+ * (Top in the toolbar, Latest a labelled pill); and a composer drawn as a card with its send
+ * control inside it, because a flat input with nothing to press read as disabled.
+ *
  * Tool work is drawn by activity.tsx's `beatsOf` + `ToolBeat` — the same renderer the Steps
  * pane uses, not a second one, so a failed tool still opens itself here.
  *
@@ -46,11 +54,11 @@
  * rewrites and is unchanged.
  */
 import { useMemo, useState } from "react";
-import { Sparkles, FileOutput, UserRound, HelpCircle, ChevronsDownUp, ChevronsUpDown } from "lucide-react";
+import { Sparkles, FileOutput, UserRound, HelpCircle, ChevronsDownUp, ChevronsUpDown, ArrowUp, ArrowDown, TriangleAlert } from "lucide-react";
 import { submitOnEnter } from "@/lib/keys";
 import type { RunDetail } from "../../derive";
 import { citeParts } from "../../cite";
-import { AgentProse, beatsOf, ToolBeat, ToolDisclosureContext } from "./activity";
+import { AgentProse, beatsOf, groupBeats, ToolBeat, ToolGroup, ToolDisclosureContext } from "./activity";
 import { Button } from "@/components/ui/button";
 import { StandingAsk } from "./ask";
 import { Chip } from "@/components/ui/chip";
@@ -157,14 +165,21 @@ function Row({ m, onPickStep }: { m: ChatMessage; onPickStep: (key: string) => v
     case "beats":
       return (
         <div className="cv-agent">
-          {m.beats.map((b, i) =>
-            b.kind === "tool"
-              ? <ToolBeat key={i} call={b.part} result={b.result} />
-              : b.kind === "thinking"
-                ? <p key={i} className="act-thinking">{b.part.content.trim()}</p>
-                : <AgentProse key={i} text={b.part.content} />,
+          {groupBeats(m.beats).map((b, i) =>
+            b.kind === "tools"
+              ? <ToolGroup key={i} beats={b.beats} />
+              : b.kind === "tool"
+                ? <ToolBeat key={i} call={b.part} result={b.result} />
+                : b.kind === "thinking"
+                  ? <p key={i} className="act-thinking">{b.part.content.trim()}</p>
+                  : <AgentProse key={i} text={b.part.content} />,
           )}
-          {m.unfinished && <div className="act-note">the process died inside this turn — what you see is what it had said</div>}
+          {m.unfinished && (
+            <div className="act-note cv-unfinished">
+              <TriangleAlert size={12} aria-hidden />
+              the process died inside this turn — what you see is what it had said
+            </div>
+          )}
         </div>
       );
     case "asked":
@@ -230,37 +245,57 @@ export function RunChat({ runId, detail, ask, onPickStep, onResolved }: {
     setBusy(false);
   };
 
+  // HOW-30: everything the reader reads sits in ONE centred column (`.chat-col`) — the
+  // transcript, the suggestions and the composer — while the scroller itself still spans the
+  // pane, so the scrollbar is at the pane's edge and a wheel anywhere over it scrolls. HOW-27
+  // removed an 820px cap on the PANE because it left a dead strip nothing could reclaim; this
+  // caps the LINE instead, which is what made a 1500px sentence unreadable.
   return (
     <div className="chat-panel">
-      <div className="chat-head">
-        <span className="chat-title">The run, as a conversation</span>
-        {/* one control for every tool call in the transcript — a long run is mostly tool work,
-            and opening or closing it one beat at a time is not skimming. Absent when the run
-            has no tool calls to act on, rather than present and inert. */}
-        {toolCount > 0 && (
-          <Button
-            className="chat-disclosure"
-            variant="outline"
-            size="sm"
-            aria-pressed={disclosure.epoch > 0 && disclosure.open}
-            onClick={() => setDisclosure((d) => ({ epoch: d.epoch + 1, open: !d.open }))}
-          >
-            {disclosure.open ? <ChevronsDownUp /> : <ChevronsUpDown />}
-            {disclosure.open ? "Collapse" : "Expand"} {toolCount} tool {toolCount === 1 ? "call" : "calls"}
-          </Button>
-        )}
-      </div>
-
+      <ToolDisclosureContext.Provider value={disclosureValue}>
       {/* `last-anchor` opens on the newest step rather than the very bottom, so the step that
           is running is at the top of the view with its own prompt visible — and the peek keeps
-          the tail of the previous step on screen, which is the context you need to read it. */}
-      <ToolDisclosureContext.Provider value={disclosureValue}>
+          the tail of the previous step on screen, which is the context you need to read it.
+          The provider wraps the head too: the Top pin lives there now (HOW-30). */}
       <MessageScrollerProvider autoScroll defaultScrollPosition="last-anchor" scrollPreviousItemPeek={64}>
+        <div className="chat-head">
+          <div className="chat-col chat-head-row">
+            {/* HOW-30: the Top pin is a toolbar control, not a float. Floated, it sat centred over
+                the first line of text it was meant to take you back to. It still appears only
+                when there is somewhere to go — the primitive marks it inert otherwise. */}
+            <MessageScrollerButton
+              direction="start"
+              variant="ghost"
+              size="sm"
+              aria-label="Scroll to start"
+              className="chat-top-pin static translate-x-0 start-auto"
+            >
+              {/* ArrowDown on purpose: the primitive rotates a start pin's icon 180° itself */}
+              <ArrowDown aria-hidden />Top
+            </MessageScrollerButton>
+            {/* one control for every tool call in the transcript — a long run is mostly tool work,
+                and opening or closing it one beat at a time is not skimming. Absent when the run
+                has no tool calls to act on, rather than present and inert. */}
+            {toolCount > 0 && (
+              <Button
+                className="chat-disclosure"
+                variant="ghost"
+                size="sm"
+                aria-pressed={disclosure.epoch > 0 && disclosure.open}
+                onClick={() => setDisclosure((d) => ({ epoch: d.epoch + 1, open: !d.open }))}
+              >
+                {disclosure.open ? <ChevronsDownUp /> : <ChevronsUpDown />}
+                {disclosure.open ? "Collapse" : "Expand"} {toolCount} tool {toolCount === 1 ? "call" : "calls"}
+              </Button>
+            )}
+          </div>
+        </div>
+
         <MessageScroller className="flex-1">
           <MessageScrollerViewport preserveScrollOnPrepend aria-label="the run, as a conversation" tabIndex={0}>
             {/* gap-0: the rows carry their own vertical rhythm in howdah.css, and the
                 component's default `gap-8` would double it */}
-            <MessageScrollerContent className="chat-log gap-0">
+            <MessageScrollerContent className="chat-log chat-col gap-0">
               {messages.length === 0 && turns.length === 0 && (
                 <EmptyState>nothing has happened in this run yet</EmptyState>
               )}
@@ -294,35 +329,49 @@ export function RunChat({ runId, detail, ask, onPickStep, onResolved }: {
               )}
             </MessageScrollerContent>
           </MessageScrollerViewport>
-          {/* Both pins, the way the Logs pane's ScrollShell has always had them: Top to get
-              back to the start of a long run, Bottom to return to the live edge after reading
-              away from it. Each one is inert and invisible until that direction is actually
-              scrollable, so an unscrollable transcript shows neither. */}
-          <MessageScrollerButton direction="start" />
-          <MessageScrollerButton direction="end" />
+          {/* HOW-30: the live-edge pin is a labelled pill sitting just above the composer, not a
+              bare arrow over the middle of a sentence. It is the one float left in the pane, and
+              it only appears once you have scrolled away from the bottom. */}
+          <MessageScrollerButton direction="end" variant="outline" size="sm" aria-label="Scroll to end" className="chat-end-pin">
+            <ArrowDown aria-hidden />Latest
+          </MessageScrollerButton>
         </MessageScroller>
       </MessageScrollerProvider>
       </ToolDisclosureContext.Provider>
 
-      {turns.length === 0 && suggestions.length > 0 && (
-        <div className="chat-suggestions">
-          {suggestions.map((sug) => (
-            <Chip key={sug} onClick={() => send(sug)}>{sug}</Chip>
-          ))}
-        </div>
-      )}
-      <div className="chat-input">
-        <Input
-          aria-label="ask about this run"
-          placeholder="Ask about this run…"
-          value={q}
-          disabled={busy}
-          onChange={(e) => setQ(e.target.value)}
-          onKeyDown={submitOnEnter(() => send(q), { enabled: !busy })}
-        />
-        <div className="chat-note">
-          <Badge>read-only</Badge> Reads this run's steps, prompts and context. It cannot reply to the agent or move
-          the run — to answer what the run is waiting for, use the card above.
+      <div className="chat-foot">
+        <div className="chat-col">
+          {turns.length === 0 && suggestions.length > 0 && (
+            <div className="chat-suggestions">
+              {suggestions.map((sug) => (
+                <Chip key={sug} onClick={() => send(sug)}>{sug}</Chip>
+              ))}
+            </div>
+          )}
+          {/* HOW-30: the composer is a card with its send control INSIDE it, the way every chat
+              surface draws one — a flat grey input with nothing to press read as disabled. The
+              read-only note is the card's own footer, one line, because it describes this box
+              and nothing else. */}
+          <div className="chat-input" data-busy={busy ? "true" : "false"}>
+            <div className="chat-input-row">
+              <Input
+                className="chat-input-field"
+                aria-label="ask about this run"
+                placeholder="Ask about this run…"
+                value={q}
+                disabled={busy}
+                onChange={(e) => setQ(e.target.value)}
+                onKeyDown={submitOnEnter(() => send(q), { enabled: !busy })}
+              />
+              <Button size="icon" aria-label="Ask" disabled={busy || !q.trim()} onClick={() => send(q)}>
+                <ArrowUp aria-hidden />
+              </Button>
+            </div>
+            <div className="chat-note">
+              <Badge>read-only</Badge> Answers from this run's steps, prompts and context. It cannot reply to the
+              agent — to answer what the run is waiting for, use the card above.
+            </div>
+          </div>
         </div>
       </div>
     </div>

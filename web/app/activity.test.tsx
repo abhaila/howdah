@@ -12,7 +12,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import type { CoalescedTurn, TurnPart } from "../../log/coalesce";
 import type { RunDetail } from "../derive";
-import { StepActivity, beatsOf, toolSummary } from "./run/activity";
+import { StepActivity, beatsOf, groupBeats, toolLabel, toolSummary } from "./run/activity";
 
 let root: Root | null = null;
 let host: HTMLElement | null = null;
@@ -176,5 +176,36 @@ describe("StepActivity", () => {
   test("a step with nothing in it says so instead of rendering an empty frame", () => {
     const el = render([]);
     expect(el.textContent).toContain("nothing ran in this step yet");
+  });
+});
+
+describe("toolLabel (HOW-30)", () => {
+  test("an MCP tool is shown as its server's last segment and the tool", () => {
+    expect(toolLabel("mcp__claude_ai_Linear__save_issue")).toBe("Linear · save_issue");
+    expect(toolLabel("mcp__github__create_pr")).toBe("github · create_pr");
+  });
+  test("anything else is left exactly as the harness named it", () => {
+    expect(toolLabel("Bash")).toBe("Bash");
+    expect(toolLabel("mcp__")).toBe("mcp__");
+    expect(toolLabel("mcp__only")).toBe("mcp__only");
+  });
+});
+
+describe("groupBeats (HOW-30)", () => {
+  const p = (kind: TurnPart["kind"], content = "x"): TurnPart => ({ kind, content }) as TurnPart;
+  const tool = { kind: "tool" as const, part: p("tool_call") };
+  const text = { kind: "text" as const, part: p("text") };
+
+  test("two or more adjacent tools fold into one group; prose splits runs", () => {
+    const g = groupBeats([text, tool, tool, text, tool, tool, tool]);
+    expect(g.map((b) => b.kind)).toEqual(["text", "tools", "text", "tools"]);
+    expect(g.map((b) => (b.kind === "tools" ? b.beats.length : 1))).toEqual([1, 2, 1, 3]);
+  });
+  test("a lone tool stays a beat — a group of one is a click for nothing", () => {
+    expect(groupBeats([text, tool, text]).map((b) => b.kind)).toEqual(["text", "tool", "text"]);
+    expect(groupBeats([tool]).map((b) => b.kind)).toEqual(["tool"]);
+  });
+  test("nothing in, nothing out", () => {
+    expect(groupBeats([])).toEqual([]);
   });
 });
