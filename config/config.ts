@@ -14,6 +14,12 @@ export interface RepoWorkspace {
   defaultBranch?: string;
   /** run after worktree create (copy .env, install deps) */
   setupScript?: string;
+  /**
+   * HOW-12: the command `verify:run` runs in a run's worktree before the local review (e.g.
+   * "bun test", "./gradlew test") — exit 0 is a pass. Unset, the verdict is `not-checked`,
+   * never a pass. HOW-15's environment contract is the wider home for this and may subsume it.
+   */
+  verifyCommand?: string;
 }
 
 export interface PlainWorkspace {
@@ -94,6 +100,32 @@ export type WorkspaceRef =
 export function repoNameFor(config: HowdahConfig, repoPath: string): string {
   const registered = Object.entries(config.repos).find(([, r]) => r.path === repoPath);
   return registered ? registered[0] : basename(repoPath);
+}
+
+/**
+ * HOW-12: the verify command registered for a repo path, or undefined. Matched by path, as
+ * `repoNameFor` is — the run knows its repo by path (worktree.json `repo`), not by name. A
+ * blank command counts as unset: a half-filled setting must read as "not configured", never as
+ * a script `bash -c` runs as a no-op and reports as a pass.
+ */
+export function verifyCommandFor(config: HowdahConfig, repoPath: string): string | undefined {
+  const cmd = Object.values(config.repos).find((r) => r.path === repoPath)?.verifyCommand?.trim();
+  return cmd ? cmd : undefined;
+}
+
+/**
+ * HOW-12: set an existing REPO workspace's verify command, or clear it with a blank one.
+ * Throws in words for an unknown name or a Plain folder (which has no worktree to run in).
+ */
+export function setVerifyCommand(config: HowdahConfig, name: string, command: string | undefined): void {
+  const repo = config.repos[name];
+  if (!repo) {
+    if (config.folders[name]) throw new Error(`"${name}" is a Plain folder — verify:run only runs in a repo's worktree`);
+    throw new Error(`unknown repo workspace "${name}"`);
+  }
+  const cmd = command?.trim();
+  if (cmd) repo.verifyCommand = cmd;
+  else delete repo.verifyCommand;
 }
 
 /**

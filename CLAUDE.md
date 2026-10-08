@@ -452,7 +452,14 @@ the contract, the claude and codex executors ask ONCE more on the same session/t
 from decision events; agent nodes may declare `requires: { approvalOf }` (a pre-start gate
 that also re-checks the live worktree fingerprint) and `readOnly: true` (plan mode that no
 override can raise). Command built-ins beside `probe:pr`: `map:extract`, `map:reextract`,
-`map:drift` (`engine/executors/map.ts`) and `runs:launch` (`engine/executors/launch.ts`).
+`map:drift` (`engine/executors/map.ts`), `runs:launch` (`engine/executors/launch.ts`) and
+`verify:run` (HOW-12, `engine/executors/verify.ts`), which runs the repo workspace's
+`verifyCommand` (config.json; `workspace add … --verify "<cmd>"` / `workspace verify <name>
+<cmd>`) in the worktree and publishes `verify.result` — `pass`, `fail` (the attempt still
+SUCCEEDS: a red suite is evidence for the reviewer, not a park) or `not-checked` with a reason,
+never a silent pass. implement-slice runs it between `map.drift` and the local review. General
+commands and verify share one spawn (`engine/executors/shell.ts`), which kills the script's
+whole process group on timeout.
 
 Routing: highest-weight passing condition wins; an unconditional edge is the weight-0
 fallback; no matching edge parks the run (Orbital semantics), so exhaustive conditional sets

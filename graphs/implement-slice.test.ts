@@ -155,6 +155,8 @@ interface Script {
   onPropose?: (repo: string, visit: number) => void;
   /** the map object store the built-ins write to, relative to the run's HOWDAH_HOME (default: maps) */
   storeDir?: string;
+  /** HOW-12: the workspace's verify command for the fixture repo (default: none configured) */
+  verifyCommand?: string;
 }
 
 function sliceRun(script: Script) {
@@ -177,6 +179,7 @@ function sliceRun(script: Script) {
   };
   const command = commandExecutor({
     map: { workers: 0, ...(script.storeDir !== undefined ? { storeDir: join(home, script.storeDir) } : {}) },
+    verify: { commandFor: (p) => (p === repo ? script.verifyCommand : undefined) },
     prProbe: () => {
       const state = prs.length > 1 ? prs.shift() : prs[0];
       return state === null || state === undefined ? null : { state, url: "https://example.test/pr/1" };
@@ -392,6 +395,94 @@ describe("approve → map.extract on stale", () => {
     expect(started(run.events()).filter((n) => n === "map.extract")).toHaveLength(5);
     const reasons = finishesOf(run.events(), "slice.approve").map((f) => (f.writes["slice.approval"] as { reason: string }).reason);
     expect(reasons.every((r) => r.includes("worktree changed during slice.propose"))).toBe(true);
+  });
+});
+
+// ---- HOW-12: the code is RUN before it is reviewed ----------------------------------------
+
+describe("verify.run: behavioural evidence before the local review", () => {
+  test("the only way into local_review is map.drift → verify.run, and local_review reads the verdict", () => {
+    const { edges, nodes } = implementSlice.def;
+    expect(edgeList(edges.filter((e) => e.from === "map.drift"))).toEqual(["map.drift -> verify.run"]);
+    expect(edgeList(edges.filter((e) => e.from === "verify.run"))).toEqual(["verify.run -> implementation.local_review"]);
+    expect(edges.filter((e) => e.to === "implementation.local_review").map((e) => e.from)).toEqual(["verify.run"]);
+    const verify = nodes["verify.run"];
+    expect(verify?.kind === "command" && verify.run).toBe("verify:run");
+    expect(implementSlice.writesOf("verify.run")["verify.result"]?.scope).toBe("per-visit");
+    const review = nodes["implementation.local_review"];
+    expect(review?.kind === "agent" && review.reads).toContain("verify.result");
+  });
+
+  test("a failing suite reaches the reviewer as evidence — the run does not park on it", async () => {
+    const run = sliceRun({
+      pr: ["MERGED"],
+      verifyCommand: "echo '1 test failed: deleteUser returns 500' >&2; exit 1",
+      agents: {
+        "implementation.implement": (visit, repo) => (applyEdits(repo, implementedV2(repo)), commitAll(repo, `implement ${visit}`), { implementation_summary: `attempt ${visit}` }),
+        "implementation.local_review": (visit) =>
+          visit === 1 ? { review_verdict: "reject", review_findings: ["tests fail"] } : { review_verdict: "pass", review_findings: [] },
+        "delivery.publish": () => ({ publication_summary: "PR" }),
+        complete_ticket: () => ({ completion_summary: "done" }),
+      },
+    });
+    expect(await run.engine().start(START)).toMatchObject(AWAITING);
+    approve(run.runDir);
+    expect(await run.engine().resume()).toEqual({ state: "finished", outcome: "success" });
+
+    const events = run.events();
+    const order = started(events);
+    const reviewAt = order.indexOf("implementation.local_review");
+    expect(order.slice(reviewAt - 3, reviewAt + 1)).toEqual(["map.reextract", "map.drift", "verify.run", "implementation.local_review"]);
+    expect(events.filter((e) => e.type === "attention-raised").map((e) => e.type === "attention-raised" && e.code)).toEqual(["awaiting-approval"]);
+
+    const verdict = events.find((e) => e.type === "node-finished" && e.node === "verify.run");
+    expect(verdict?.type === "node-finished" && verdict.status).toBe("succeeded");
+    expect(verdict?.type === "node-finished" && verdict.writes["verify.result"]).toMatchObject({ outcome: "fail", exit_code: 1, timed_out: false });
+
+    const review = run.prompts.find((p) => p.node === "implementation.local_review")!.prompt;
+    expect(review).toContain("## Behaviour: the workspace's tests, run against this code");
+    expect(review).toContain(`"outcome":"fail"`);
+    expect(review).toContain("1 test failed: deleteUser returns 500");
+    expect(review).toContain("A `fail` verify outcome is a blocking finding");
+  });
+
+  test("an unconfigured workspace reaches the reviewer as not-checked, never as a pass", async () => {
+    const run = sliceRun({
+      pr: ["MERGED"],
+      agents: {
+        "implementation.implement": (_v, repo) => (applyEdits(repo, implementedV2(repo)), commitAll(repo, "implement"), { implementation_summary: "built" }),
+        "implementation.local_review": () => ({ review_verdict: "pass", review_findings: [] }),
+        "delivery.publish": () => ({ publication_summary: "PR" }),
+        complete_ticket: () => ({ completion_summary: "done" }),
+      },
+    });
+    expect(await run.engine().start(START)).toMatchObject(AWAITING);
+    approve(run.runDir);
+    expect(await run.engine().resume()).toEqual({ state: "finished", outcome: "success" });
+    const review = run.prompts.find((p) => p.node === "implementation.local_review")!.prompt;
+    expect(review).toContain(`"outcome":"not-checked"`);
+    expect(review).toContain("no verify command is configured");
+    expect(review).toContain("A `not-checked` verify outcome is never a pass");
+  });
+
+  test("the rendered review prompt reconstructs VERIFIED with the verdict in it", async () => {
+    const run = sliceRun({
+      pr: ["MERGED"],
+      verifyCommand: `echo '{"tests":3}'`,
+      agents: {
+        "implementation.implement": (_v, repo) => (applyEdits(repo, implementedV2(repo)), commitAll(repo, "implement"), { implementation_summary: "built" }),
+        "implementation.local_review": () => ({ review_verdict: "pass", review_findings: [] }),
+        "delivery.publish": () => ({ publication_summary: "PR" }),
+        complete_ticket: () => ({ completion_summary: "done" }),
+      },
+    });
+    await run.engine().start(START);
+    approve(run.runDir);
+    await run.engine().resume();
+    const rendered = run.events().find((e): e is Extract<LoggedEvent, { type: "prompt-rendered" }> => e.type === "prompt-rendered" && e.node === "implementation.local_review")!;
+    expect(rendered.context_read["verify.result"]).toMatchObject({ outcome: "pass", facts: { tests: 3 } });
+    expect(reconstructRender(run.runDir, rendered.rendered_hash)).toMatchObject({ verified: true });
+    expect(run.prompts.find((p) => p.node === "implementation.local_review")!.prompt).toContain(`"facts":{"tests":3}`);
   });
 });
 

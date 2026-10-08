@@ -1,8 +1,8 @@
 ---
 id: slice.local_review
-version: 1
+version: 2
 tags: [implement-slice]
-provenance: system-map 1c — implementation.local_review, judged against the approved ghost set and its drift
+provenance: system-map 1c — implementation.local_review, judged against the approved ghost set and its drift; v2 (HOW-12) adds the behavioural verdict from verify.run
 ---
 Discover and use relevant installed skills for code review and communicating findings.
 
@@ -24,6 +24,12 @@ Deterministic — computed by re-extracting the map after the implementation, no
 
 {{ context.slice.drift }}
 
+## Behaviour: the workspace's tests, run against this code
+
+Deterministic — `verify.run` ran the workspace's configured test command in the worktree after the implementation, not an agent. Drift above proves the code is shaped as designed; this is the only evidence that it runs. `outcome` is `pass` (exit 0), `fail` (non-zero exit or `timed_out`), or `not-checked` (nothing was run — `reason` says why). `commit` names what it ran against; `dirty` means uncommitted changes were on top of it. `output_tail` is the end of the output; `facts` is the command's final JSON line, when it printed one.
+
+{{ context.verify.result }}
+
 ## Implementation summary
 
 {{ context.implementation_summary }}
@@ -34,6 +40,9 @@ Review the current change against the approved design, the work scope, goal and 
 - A `dirty` drift means the implementation is not committed: reject until it is.
 - Treat `unexpected` items as scope questions: reject changes outside the work scope; accept ones required to make the design compile and pass its checks.
 - `not-checked` items are gaps in the map, not defects: check those parts of the design by reading the code.
+- A `fail` verify outcome is a blocking finding: reject, quoting the failing tests from `output_tail` as the evidence, unless you have verified in the code that every failure predates this change and is outside the work scope — then say so in the finding rather than passing silently.
+- A `not-checked` verify outcome is never a pass: the code was not run. Say so explicitly in your findings or summary, with its `reason`, and judge the behaviour by reading the code and its tests. Do not reject for it alone.
+- A `pass` verify outcome on a `commit` other than the one under review, or `dirty`, verifies only what it ran against: note it.
 
 Review only requirements and defects that can be verified through automated checks or code inspection. Reject unmet requirements, correctness or security defects, violations of mandatory repository rules and missing verification of required behaviour. Treat preferences as non-blocking unless repository instructions require them. Human reviews, manual acceptance and visual approval are non-blocking.
 

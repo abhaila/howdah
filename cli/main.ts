@@ -38,7 +38,7 @@ import { harnessNames, harnessSpec, isHarness } from "../core/harnesses";
 import { GRAPHS, graphCatalog } from "../graphs/index";
 import { loadRegistry, catalogOf } from "../graphs/registry";
 import { promptSearchPath } from "../graphs/local";
-import { howdahHome, loadConfig, saveConfig, resolveWorkspace, repoNameFor, workspaceNameFor, ensureHowdahHome } from "../config/config";
+import { howdahHome, loadConfig, saveConfig, resolveWorkspace, repoNameFor, workspaceNameFor, verifyCommandFor, setVerifyCommand, ensureHowdahHome } from "../config/config";
 import { loadTuning } from "../config/tuning";
 import { normalizeRunName } from "../core/run-name";
 import {
@@ -68,6 +68,9 @@ function executors() {
           repoNames: () => Object.keys(loadConfig(base).repos),
           nameFor: (path) => workspaceNameFor(loadConfig(base), path),
         },
+        // HOW-12: read lazily for the same reason — an edited verify command applies to the
+        // next verify:run, not the next runner
+        verifyCommandFor: (repoPath) => verifyCommandFor(loadConfig(base), repoPath),
       });
 }
 
@@ -103,6 +106,15 @@ function harnessSettings(): { default?: string; fallbackChain?: string[] } {
 
 function spawnResume(runId: string): void {
   Bun.spawn(["bun", import.meta.path, "resume", runId], { env: { ...process.env }, stdout: "ignore", stderr: "ignore" }).unref();
+}
+
+/** HOW-12: lift `--verify <cmd>` out of a `workspace` argv; a flag with no value is an error. */
+export function splitVerifyFlag(argv: string[]): { rest: string[]; verify?: string } {
+  const i = argv.indexOf("--verify");
+  if (i < 0) return { rest: argv };
+  const value = argv[i + 1]?.trim();
+  if (!value) throw new Error("--verify needs a command (quote it if it has spaces)");
+  return { rest: [...argv.slice(0, i), ...argv.slice(i + 2)], verify: value };
 }
 
 export function parseRunArgs(argv: string[]) {
@@ -391,7 +403,7 @@ export function setupCommand(): void {
   console.log("");
   console.log("Next:");
   console.log("  howdah doctor");
-  console.log("  howdah workspace add <name> <path>");
+  console.log('  howdah workspace add <name> <path> [--verify "<test command>"]');
   console.log("  howdah up");
 }
 
@@ -572,7 +584,9 @@ if (import.meta.main) {
       for (const p of reg.problems) console.error(`! ${p.name}: ${p.error}`);
     }
     else if (verb === "workspace") {
-      const [action, name, rawPath] = rest;
+      // HOW-12: `--verify <cmd>` may sit anywhere after the action; it is lifted out first
+      const { rest: positional, verify } = splitVerifyFlag(rest);
+      const [action, name, rawPath] = positional;
       const config = loadConfig(base);
       if (action === "add" && name && rawPath) {
         const p = rawPath.replace(/^~(?=\/|$)/, process.env.HOME ?? "~");
@@ -580,9 +594,12 @@ if (import.meta.main) {
         if (config.repos[name] || config.folders[name]) throw new Error(`workspace "${name}" already exists`);
         const probe = Bun.spawnSync(["git", "-C", p, "rev-parse", "--is-inside-work-tree"], { stdout: "pipe", stderr: "pipe" });
         if (probe.exitCode === 0 && new TextDecoder().decode(probe.stdout).trim() === "true") {
-          config.repos[name] = { path: p };
-          console.log(`registered repo "${name}" → ${p}`);
+          config.repos[name] = { path: p, ...(verify ? { verifyCommand: verify } : {}) };
+          console.log(`registered repo "${name}" → ${p}${verify ? ` (verify: ${verify})` : ""}`);
         } else {
+          // a Plain folder gets no worktree, so verify:run could never run there — say so
+          // rather than store a command nothing will read
+          if (verify) throw new Error(`--verify needs a git repo, and ${p} is not one (it would register as a Plain folder)`);
           config.folders[name] = { path: p };
           console.log(`registered folder "${name}" → ${p} (not a git repo — Plain workspace)`);
         }
@@ -592,6 +609,12 @@ if (import.meta.main) {
         const r = registerGithubRepo(config, name);
         saveConfig(config, base);
         console.log(`registered repo "${r.name}" → ${r.path} (${r.cloned ? "cloned" : "existing clone"}, default ${r.defaultBranch})`);
+      } else if (action === "verify" && name) {
+        // HOW-12: set (or, with no command, clear) an existing repo's verify command
+        setVerifyCommand(config, name, positional.slice(2).join(" ") || verify);
+        saveConfig(config, base);
+        const now = config.repos[name]?.verifyCommand;
+        console.log(now ? `verify command for "${name}": ${now}` : `cleared the verify command for "${name}" — verify:run will report not-checked`);
       } else if (action === "remove" && name) {
         delete config.repos[name];
         delete config.folders[name];
@@ -599,7 +622,7 @@ if (import.meta.main) {
         console.log(`removed "${name}"`);
       } else if (action === "list" || action === undefined) {
         console.log(JSON.stringify({ repos: config.repos, folders: config.folders }, null, 2));
-      } else throw new Error("usage: howdah workspace add <name> <path> | add-github <owner/name> | remove <name> | list");
+      } else throw new Error('usage: howdah workspace add <name> <path> [--verify "<cmd>"] | verify <name> [<cmd>] | add-github <owner/name> | remove <name> | list');
     }
     else if (verb === "new-graph") {
       const { newGraph } = await import("./new-graph");
