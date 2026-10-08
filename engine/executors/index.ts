@@ -66,6 +66,8 @@ export interface LiveExecutorDeps {
   runsDir?: string;
   /** HOW-23: the workspace registry `runs:launch` resolves a slice's workspace through */
   workspaces?: WorkspaceLookup;
+  /** HOW-12: the workspace's verify command for a repo path — what `verify:run` runs */
+  verifyCommandFor?: (repoPath: string) => string | undefined;
   viewerBase?: string;
   notifiers?: Notifier[];
   claudeBinary?: string;
@@ -98,6 +100,7 @@ export function liveExecutors(deps: LiveExecutorDeps): EngineOpts["executors"] {
         runsDir: deps.runsDir ?? join(deps.attentionDir, "..", "runs"),
         ...(deps.workspaces ? { workspaces: deps.workspaces } : {}),
       },
+      ...(deps.verifyCommandFor ? { verify: { commandFor: deps.verifyCommandFor } } : {}),
     }),
     worktree: worktreeExecutor({
       reposDir: deps.reposDir ?? join(deps.attentionDir, "..", "repos"),

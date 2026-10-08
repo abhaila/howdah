@@ -14,6 +14,7 @@ import { COMMAND_BUILTINS, WORKTREE_FACTS, coerceOperand, isBlocking, keepPath, 
 // know. This file is node-side, so it imports the executors' own constants and pins the repetition.
 import { LAUNCH_BUILTIN, LAUNCH_PRODUCES, LAUNCH_READS } from "../engine/executors/launch";
 import { MAP_BUILTINS } from "../engine/executors/map";
+import { VERIFY_BUILTIN, VERIFY_PRODUCES } from "../engine/executors/verify";
 // the reducer is plain data over core/ — no React, no DOM — so the browser's verdict can be
 // driven from here and compared against this file's gate, which is the whole point below
 import { PRESETS, bySeverity, draftProblems, draftReducer, newStep, pickPrompts, type Draft, type DraftAction } from "../web/app/lib/spec-draft";
@@ -374,7 +375,21 @@ describe("what an executor can emit — the table checked against the executors 
    * returns undefined, which MEANS "anything the operator declares is legal".
    */
   test("every built-in the command executor dispatches is in the table", () => {
-    expect([...MAP_BUILTINS, LAUNCH_BUILTIN, "probe:pr"].sort()).toEqual(COMMAND_BUILTINS.map((b) => b.run).sort());
+    expect([...MAP_BUILTINS, LAUNCH_BUILTIN, VERIFY_BUILTIN, "probe:pr"].sort()).toEqual(COMMAND_BUILTINS.map((b) => b.run).sort());
+  });
+
+  // HOW-12. The row reads core/verify.ts rather than repeating it, so what is pinned here is
+  // that the EXECUTOR hands declaredWrites exactly that contract — and is dispatched at all.
+  test("verify:run publishes exactly what the table claims", () => {
+    const row = COMMAND_BUILTINS.find((b) => b.run === VERIFY_BUILTIN)!;
+    expect(row.produces).toEqual([...VERIFY_PRODUCES]);
+    expect(row.reads).toBeUndefined();
+    const src = executor("verify.ts");
+    const m = src.match(/declaredWrites\(\s*VERIFY_BUILTIN\s*,\s*def\s*,\s*\{\s*\[([A-Z_]+)\]\s*:/);
+    expect(m, "no declaredWrites(VERIFY_BUILTIN, def, { [KEY]: … }) call found").not.toBeNull();
+    expect(m![1]).toBe("VERIFY_RESULT_KEY");
+    expect([...VERIFY_PRODUCES]).toEqual(["verify.result"]);
+    expect(executor("worktree.ts")).toContain("if (isVerifyBuiltin(def.run)) return verifyBuiltin(args);");
   });
 });
 

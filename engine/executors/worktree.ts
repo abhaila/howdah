@@ -15,7 +15,9 @@
  * built-in `probe:pr` routes through the reconciler: gh is the source, forge-unreachable
  * THROWS (parks the run) rather than reading as "no PR". The map built-ins (map:extract,
  * map:reextract, map:drift — system-map 1c, engine/executors/map.ts) dispatch from here too,
- * as does `runs:launch` (HOW-23, engine/executors/launch.ts).
+ * as does `runs:launch` (HOW-23, engine/executors/launch.ts) and `verify:run` (HOW-12,
+ * engine/executors/verify.ts). The spawn/stream/timeout half lives in ./shell.ts, shared with
+ * verify:run.
  */
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { effectiveCwd, readWorktreeRecord, worktreeRecordPath, type WorktreeRecord } from "./worktree-record";
@@ -24,6 +26,8 @@ import type { Executor } from "../run";
 import { probeGit, ghForgeProbe, type ForgeProbe } from "../reconcile";
 import { isMapBuiltin, mapBuiltinExecutor, type MapBuiltinOpts } from "./map";
 import { isLaunchBuiltin, launchBuiltinExecutor, type LaunchBuiltinOpts } from "./launch";
+import { isVerifyBuiltin, verifyBuiltinExecutor, type VerifyBuiltinOpts } from "./verify";
+import { runShell } from "./shell";
 
 export { type WorktreeRecord, worktreeRecordPath, readWorktreeRecord, effectiveCwd } from "./worktree-record";
 
@@ -157,11 +161,14 @@ export interface CommandExecutorOpts {
   map?: MapBuiltinOpts;
   /** HOW-23: where `runs:launch` launches children from, and what it launches them through */
   launch?: LaunchBuiltinOpts;
+  /** HOW-12: which command `verify:run` runs for a repo, and its timeout */
+  verify?: VerifyBuiltinOpts;
 }
 
 export function commandExecutor(opts: CommandExecutorOpts = {}): Executor {
   const mapBuiltins = mapBuiltinExecutor(opts.map);
   const launchBuiltin = launchBuiltinExecutor(opts.launch);
+  const verifyBuiltin = verifyBuiltinExecutor({ defaultTimeoutMs: opts.defaultTimeoutMs, ...opts.verify });
   return async (args) => {
     const { nodeId, def, visit, cwd, log, reads } = args;
     if (def.kind !== "command") throw new Error("commandExecutor on non-command node");
@@ -170,6 +177,9 @@ export function commandExecutor(opts: CommandExecutorOpts = {}): Executor {
     // HOW-23: `runs:launch` spawns a child run per approved slice — exactly-once, so it needs
     // the engine's effects handle rather than a shell
     if (isLaunchBuiltin(def.run)) return launchBuiltin(args);
+    // HOW-12: `verify:run` runs the workspace's tests and publishes a verdict — a failing suite
+    // is evidence for the reviewer, not a failed attempt, so it cannot share the general path
+    if (isVerifyBuiltin(def.run)) return verifyBuiltin(args);
     const workDir = effectiveCwd(log.path, cwd);
     const declared = Object.keys(def.writes ?? {});
     let index = 0;
@@ -198,21 +208,14 @@ export function commandExecutor(opts: CommandExecutorOpts = {}): Executor {
 
     // general command: bash -c, stream stdout, facts from the FINAL JSON line
     chunk("tool_call", def.run);
-    const proc = Bun.spawn(["bash", "-c", def.run], { cwd: workDir, stdout: "pipe", stderr: "pipe", env: { ...process.env } });
-    const timeoutMs = def.timeoutMs ?? opts.defaultTimeoutMs ?? 600_000;
-    const killer = setTimeout(() => proc.kill(), timeoutMs);
-    let stdout = "";
-    for await (const bytes of proc.stdout) {
-      const text = new TextDecoder().decode(bytes);
-      stdout += text;
-      chunk("text", text);
-    }
-    const stderr = await new Response(proc.stderr).text();
-    await proc.exited;
-    clearTimeout(killer);
+    const { stdout, stderr, exitCode } = await runShell(def.run, {
+      cwd: workDir,
+      timeoutMs: def.timeoutMs ?? opts.defaultTimeoutMs ?? 600_000,
+      onStdout: (text) => chunk("text", text),
+    });
 
-    if (proc.exitCode !== 0) {
-      chunk("tool_result", `exit ${proc.exitCode}: ${stderr.slice(0, 300)}`);
+    if (exitCode !== 0) {
+      chunk("tool_result", `exit ${exitCode}: ${stderr.slice(0, 300)}`);
       return { status: "failed", writes: {} };
     }
     if (declared.length === 0) return { status: "succeeded", writes: {} };

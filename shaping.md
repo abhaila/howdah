@@ -905,6 +905,27 @@ run view gets built once inside a system that has been agreed, and T23 is UI-ind
     dialog kinds (`plan_approval`, `refusal_fallback_prompt`) — declaring a kind we cannot draw
     is worse than declaring none.
 
+- [x] **HOW-12 (P1) — engine + graphs — Behavioural evidence before review: `verify:run`** ✅ 2026-10-08
+  - The finding: implement-slice concluded on structural evidence only. Drift is tree-sitter
+    over source, so a `verified` ghost proves the code PARSES as designed — and the first
+    behavioural signal was CI on the PR, after `delivery.publish`. That is the map's own
+    "never present a guess as fact" rule, broken one layer up.
+  - Option A shipped: a `verify:run` command built-in runs the repo workspace's
+    `verifyCommand` in the worktree and publishes `verify.result` (`core/verify.ts`):
+    `pass` / `fail` / `not-checked`, with exit code, timing, a bounded output tail, the commit
+    (+ dirty) it ran against, and the final JSON line as `facts`. implement-slice runs it
+    between `map.drift` and `implementation.local_review`, whose prompt (v2) makes `fail`
+    blocking and forbids reading `not-checked` as a pass.
+  - `fail` SUCCEEDS the attempt — evidence goes to the reviewer, it does not park. And an
+    unconfigured workspace is `not-checked`, not a park, or every implement-slice run would
+    stop until HOW-15's environment contract (which may subsume `verifyCommand`) exists.
+  - Deliberately out, each its own follow-up: **Option B, the real target** — a runtime-evidence
+    tier joined to each ghost, so a ghost reaches `verified` only with structural AND
+    behavioural proof and drift reports the two independently (touches `log/events.ts`,
+    `map/drift.ts`, `map/ghosts.ts`, `web/derive.ts`; needs its own shaping pass). Also out:
+    re-verifying after delivery repairs, verify in implement-ticket, and any viewer change
+    (context writes already render generically).
+
 ## GSTACK REVIEW REPORT
 
 | Review | Trigger | Why | Runs | Status | Findings |

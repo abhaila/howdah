@@ -501,6 +501,28 @@ describe("specProblems refuses a declaration the executor could never publish", 
     expect(specProblems(spec(["plan.slices", "tickets", "goal"], ["launched"]))).toEqual([]);
   });
 
+  // HOW-12: the tests built-in publishes ONE verdict, and the builder says so before a save
+  test("the verify built-in is told it only reports `verify.result`, and a step declaring just that saves", () => {
+    const spec = (writes: string[]): GraphSpec => minimal({
+      fields: [
+        { key: "goal", kind: "text", scope: "sticky" },
+        { key: "summary", kind: "text", scope: "sticky" },
+        { key: "verify.result", kind: "json", scope: "per-visit" },
+      ],
+      nodes: [
+        { id: "draft", kind: "agent", title: "Draft the change", prompt: "my-review.draft", reads: ["goal"], writes: ["summary"] },
+        { id: "tests", kind: "command", title: "Run the tests", run: "verify:run", reads: [], writes },
+        { id: "done", kind: "terminal", outcome: "success" },
+      ],
+      edges: [{ from: "draft", to: "tests" }, { from: "tests", to: "done" }],
+    });
+    expect(emittableWrites({ id: "c", kind: "command", run: "verify:run", reads: [], writes: [] })).toEqual(["verify.result"]);
+    const problem = specProblems(spec(["verify.result", "summary"])).find((p) => p.node === "tests")!;
+    expect(problem.message).toContain("**Run the tests** says it produces `summary`");
+    expect(problem.message).toContain("`verify:run` only reports `verify.result`");
+    expect(specProblems(spec(["verify.result"])).filter((p) => p.node === "tests" && isBlocking(p))).toEqual([]);
+  });
+
   test("a shell script's produced facts are NOT second-guessed — only run time knows", () => {
     const spec = minimal({
       nodes: [

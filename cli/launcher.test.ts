@@ -7,7 +7,7 @@ import { graphCatalog } from "../graphs/index";
 import { parseDuration } from "../engine/executors";
 import { readLog } from "../log/write";
 import { createHowdahServer, launchArgs } from "../web/server";
-import { parseRunArgs } from "./main";
+import { parseRunArgs, splitVerifyFlag } from "./main";
 
 describe("config", () => {
   test("round-trips and resolves workspaces by kind", () => {
@@ -260,5 +260,55 @@ describe("launch API", () => {
   test("POST without a graph is a 400", async () => {
     const r = await fetch(url("/api/runs"), { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
     expect(r.status).toBe(400);
+  });
+});
+
+// HOW-12: the verify command is configurable without hand-editing config.json
+describe("workspace --verify", () => {
+  const main = join(import.meta.dir, "main.ts");
+  async function cli(base: string, ...args: string[]) {
+    const p = Bun.spawn(["bun", main, ...args], { env: { ...process.env, HOWDAH_HOME: base, HOWDAH_STUB: "1" }, stdout: "pipe", stderr: "pipe" });
+    const [stdout, stderr, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
+    return { code, stdout, stderr };
+  }
+  function gitRepo(): string {
+    const dir = mkdtempSync(join(tmpdir(), "howdah-verify-ws-"));
+    Bun.spawnSync(["git", "init", "-q", dir]);
+    return dir;
+  }
+
+  test("add --verify persists the command on the repo, and `workspace verify` sets and clears it", async () => {
+    const base = mkdtempSync(join(tmpdir(), "howdah-cfg-"));
+    const dir = gitRepo();
+    const added = await cli(base, "workspace", "add", "api", dir, "--verify", "bun test --bail");
+    expect(added.code).toBe(0);
+    expect(added.stdout).toContain("(verify: bun test --bail)");
+    expect(loadConfig(base).repos.api).toEqual({ path: dir, verifyCommand: "bun test --bail" });
+
+    expect((await cli(base, "workspace", "verify", "api", "./gradlew", "test")).code).toBe(0);
+    expect(loadConfig(base).repos.api?.verifyCommand).toBe("./gradlew test");
+
+    const cleared = await cli(base, "workspace", "verify", "api");
+    expect(cleared.stdout).toContain("not-checked");
+    expect(loadConfig(base).repos.api).toEqual({ path: dir });
+  });
+
+  test("--verify on a Plain folder, or with no command, is refused and nothing is saved", async () => {
+    const base = mkdtempSync(join(tmpdir(), "howdah-cfg-"));
+    const plain = mkdtempSync(join(tmpdir(), "howdah-plain-"));
+    const r = await cli(base, "workspace", "add", "notes", plain, "--verify", "true");
+    expect(r.code).not.toBe(0);
+    expect(r.stderr).toContain("--verify needs a git repo");
+    expect(loadConfig(base).folders.notes).toBeUndefined();
+
+    const empty = await cli(base, "workspace", "add", "api", gitRepo(), "--verify");
+    expect(empty.code).not.toBe(0);
+    expect(empty.stderr).toContain("--verify needs a command");
+    expect(loadConfig(base).repos.api).toBeUndefined();
+  });
+
+  test("splitVerifyFlag lifts the flag from anywhere", () => {
+    expect(splitVerifyFlag(["add", "--verify", "make test", "api", "/p"])).toEqual({ rest: ["add", "api", "/p"], verify: "make test" });
+    expect(splitVerifyFlag(["list"])).toEqual({ rest: ["list"] });
   });
 });

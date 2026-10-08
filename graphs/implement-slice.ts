@@ -5,7 +5,7 @@
  * create_worktree → map.extract → slice.propose (read-only) → slice.approve ─┬─ approved ──▶ [requires gate] implementation.implement ◀────┐
  *                       ▲                ▲                                   ├─ feedback ─┐                  │                              │
  *                       │                └───────────────────────────────────┼────────────┘                  ▼                              │
- *                       ├──────────────────── stale ─────────────────────────┘                   map.reextract → map.drift                  │
+ *                       ├──────────────────── stale ─────────────────────────┘          map.reextract → map.drift → verify.run              │
  *                       │                                                                                        │                          │
  *                       └── redesign <run> <msg> (any time)          delivery (shared) ◀── pass ── implementation.local_review ── reject ──┘
  *                                                                         │ repairs (fix_ci / address_reviews / resolve_conflicts)
@@ -23,7 +23,8 @@
  * | implementation.implement    | agent, maxVisits 3, requires approval | goal, work, slice.ghosts, slice.approval, slice.drift, review_findings | implementation_summary (sticky) |
  * | map.reextract               | command `map:reextract`               | map.base                                       | map.after (per-visit)                              |
  * | map.drift                   | command `map:drift`                   | slice.ghosts, map.base, map.after              | slice.drift (per-visit)                            |
- * | implementation.local_review | agent                                 | goal, work, slice.ghosts, implementation_summary, slice.drift | review_verdict, review_findings (cleared) |
+ * | verify.run                  | command `verify:run`                  | — (the command is the workspace's verifyCommand) | verify.result (per-visit)                        |
+ * | implementation.local_review | agent                                 | goal, work, slice.ghosts, implementation_summary, slice.drift, verify.result | review_verdict, review_findings (cleared) |
  *
  * Why the map nodes are ids with dots (`map.extract`) while their built-ins are `map:extract`:
  * the node id is the graph's name for the step (like `delivery.probe_pr` running `probe:pr`).
@@ -38,6 +39,12 @@
  *   expected_files git ignores (never extracted, so never verifiable). A refusal parks the run
  *   attempt-failed with the errors, and the proposer's retry is TOLD them: the engine logs the
  *   refusal on node-finished and renders it into the next attempt (core/template.ts suffix v3).
+ * - verify.run (HOW-12) is the behavioural half of the check drift cannot be: it RUNS the
+ *   workspace's tests in the worktree, so local_review judges code that was executed, not only
+ *   code that parses. A failing suite still succeeds the node (`verify.result.outcome == "fail"`
+ *   is evidence the reviewer rejects on); an unconfigured workspace is `not-checked`, which the
+ *   reviewer must say out loud rather than read as a pass. Delivery repairs are not re-verified
+ *   yet — CI on the PR remains their behavioural gate.
  * - Delivery is the shared deliveryGraph({ verifyAfterRepair: true }) (graphs/delivery.ts).
  */
 import { defineGraph, type ProposalRun } from "../core/graph";
@@ -46,12 +53,14 @@ import type { ApprovalDecision, FeedbackItem } from "../engine/slice-decision";
 import { readBase } from "../engine/slice-decision";
 import { ignoredExpectedFiles, loadSnapshot } from "../engine/slice-map";
 import { validateGhostSet } from "../map/ghosts";
+import type { VerifyResult } from "../core/verify";
 
 export interface ImplementSliceCtx extends VerifiedDeliveryCtx {
   "map.neighbourhood": string;
   "slice.feedback": FeedbackItem[];
   "slice.approval": ApprovalDecision;
   implementation_summary: string;
+  "verify.result": VerifyResult;
 }
 
 const sticky = { scope: "sticky" } as const;
@@ -142,10 +151,11 @@ export const implementSlice = defineGraph<ImplementSliceCtx>({
       writes: { "slice.drift": perVisit },
       class: "map",
     },
+    "verify.run": { kind: "command", run: "verify:run", writes: { "verify.result": perVisit }, class: "implementation" },
     "implementation.local_review": {
       kind: "agent",
       prompt: "slice.local_review",
-      reads: ["goal", "work", "slice.ghosts", "implementation_summary", "slice.drift"],
+      reads: ["goal", "work", "slice.ghosts", "implementation_summary", "slice.drift", "verify.result"],
       writes: { review_verdict: cleared, review_findings: cleared },
       class: "implementation",
     },
@@ -176,7 +186,8 @@ export const implementSlice = defineGraph<ImplementSliceCtx>({
     },
     { from: "implementation.implement", to: "map.reextract" },
     { from: "map.reextract", to: "map.drift" },
-    { from: "map.drift", to: "implementation.local_review" },
+    { from: "map.drift", to: "verify.run" },
+    { from: "verify.run", to: "implementation.local_review" },
     {
       from: "implementation.local_review",
       to: "implementation.implement",
