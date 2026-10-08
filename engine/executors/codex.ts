@@ -14,6 +14,12 @@
  * hashing (system-map 0.1), and codex gets no skill hint (core/template.ts skillsForHarness).
  * The one in-session repair turn (buildRepairInstruction) is a follow-up turn on the same
  * thread, outside rendered_hash by design — the hash covers the first turn only.
+ *
+ * HOW-14: `turn/completed` with `turn.status: "failed"` is a FAILED turn. It used to set
+ * the same flag a successful one did, so every failed codex turn fell through to the outputs
+ * check and was reported as an output contract violation — blaming the model. It is now a
+ * `turn error` carrying codex's own message, gets no repair turn, and when codex says the
+ * context window filled (`contextWindowExceeded`) it fails `context-exhausted` instead.
  */
 import { writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -21,7 +27,7 @@ import type { Executor } from "../run";
 import { JsonlChunkParser } from "../../adapter/parse";
 import { mapCodexEvent, buildCodexApprovalResponse } from "../../adapter/codex";
 import { buildRepairInstruction, parseOutputs } from "./outputs";
-import { classifyHarnessExit } from "./harness-failure";
+import { classifyHarnessExit, compactionNote, contextExhaustedFailure } from "./harness-failure";
 import { AttentionCenter, osNotifier, type Notifier } from "../attention";
 import { readLog } from "../../log/write";
 import { isAllowReply } from "./reply";
@@ -93,6 +99,10 @@ export function codexExecutor(opts: CodexExecutorOpts): Executor {
     let rpcFault: string | undefined;
     let notice: string | undefined;
     let turnCompleted = false;
+    /** HOW-14: codex's own message for a turn that completed with status "failed" */
+    let turnFailed: string | undefined;
+    /** HOW-14: codex said the context window filled (on the failed turn, or an error notice) */
+    let contextExceeded = false;
     /**
      * The exit code the app-server reached ON ITS OWN. Read before the `finally` kills it,
      * because a kill would overwrite it and make "we shut it down" look like "it crashed".
@@ -145,7 +155,7 @@ export function codexExecutor(opts: CodexExecutorOpts): Executor {
             const t = raw.params?.tokenUsage?.total;
             if (t) usage = { input_tokens: t.inputTokens ?? t.input_tokens, output_tokens: t.outputTokens ?? t.output_tokens };
           }
-          if (raw.method === "turn/completed") { turnCompleted = true; turnDone(); }
+          // turn/completed is handled after mapping, where turn_end says whether it FAILED
 
           for (const ev of mapCodexEvent(raw)) {
             switch (ev.type) {
@@ -165,7 +175,17 @@ export function codexExecutor(opts: CodexExecutorOpts): Executor {
               case "rate_limit":
                 log.append({ type: "allowance", harness: "codex", state: ev.state, remaining: ev.remaining, resets_at: ev.resets_at, raw: ev.raw });
                 break;
+              case "turn_end":
+                turnCompleted = true;
+                if (ev.error !== undefined) turnFailed = ev.error;
+                if (ev.context_exceeded) contextExceeded = true;
+                turnDone();
+                break;
+              case "context_compacted":
+                chunk("text", compactionNote(ev.trigger, ev.pre_tokens));
+                break;
               case "error":
+                if (ev.context_exceeded) contextExceeded = true;
                 // NOT fatal: codex emits error notifications for startup noise (expired
                 // MCP server auth, observed live) and keeps working. Record it; the turn
                 // fails only if it never completes.
@@ -208,7 +228,7 @@ export function codexExecutor(opts: CodexExecutorOpts): Executor {
       // !turnError, because for claude any turn error fails the attempt) and the app-server
       // did not fault on us. A mere notice must not skip the repair, or benign startup noise
       // would park a run whose work is already done.
-      if (turnCompleted && !rpcFault && writeKeys.length && !parseOutputs(finalMessage ?? accumulated, writeKeys).ok) {
+      if (turnCompleted && turnFailed === undefined && !rpcFault && writeKeys.length && !parseOutputs(finalMessage ?? accumulated, writeKeys).ok) {
         chunk("text", "\n[outputs object missing — asking for it]");
         finalMessage = undefined;
         accumulated = "";
@@ -236,6 +256,17 @@ export function codexExecutor(opts: CodexExecutorOpts): Executor {
     if (startup) {
       chunk("text", startup.note);
       return { status: "failed", writes: {}, reason: startup.reason, code: startup.code };
+    }
+    // HOW-14: a context window that filled — on a failed turn, or a stream that ended without
+    // one after codex said so — is its own park, never an outputs complaint or an allowance hop
+    if (contextExceeded && (turnFailed !== undefined || !turnCompleted)) {
+      const failure = contextExhaustedFailure("codex");
+      chunk("text", failure.note);
+      return { status: "failed", writes: {}, reason: failure.reason, code: failure.code };
+    }
+    if (turnFailed !== undefined) {
+      chunk("text", `\n[turn error: ${turnFailed}]`);
+      return { status: "failed", writes: {}, reason: `turn error: ${turnFailed}` };
     }
     if (!turnCompleted) {
       const why = rpcFault ?? notice ?? "app-server stream ended before turn/completed";

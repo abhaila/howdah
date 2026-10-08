@@ -118,6 +118,6 @@ describe("howdah reply (CLI, system-map 0.2)", () => {
       );
     }
     expect(retried).toBeDefined(); // the reply MOVED the run, and the retry rendered under v2
-    expect(retried.suffix_version).toBe(3);
+    expect(retried.suffix_version).toBe(4);
   }, 15000);
 });

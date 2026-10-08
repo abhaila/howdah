@@ -29,6 +29,12 @@
  * reply may do. A reply to a failed agent attempt reaches the retried prompt through the
  * replay-derived replyNote, assembled after the jump suffix (core/template.ts).
  *
+ * Context exhaustion (HOW-14): an agent attempt that died because its context window filled
+ * parks `context-exhausted` and NEVER takes the allowance hop — another harness does not make
+ * a context window bigger, and its own fresh visit would start from nothing. The next attempt
+ * of that node is rendered with a re-entry briefing (suffix v4) derived from the log
+ * (reentryAfterVisit), so it holds across a resume in a fresh process.
+ *
  * Approval (system-map 1a):
  *   - Proposal rounds (D15): when a node's successful write lands on an approval node's
  *     `proposal` key, the graph's validateProposal hook checks it (a refusal fails the
@@ -70,6 +76,7 @@ import { describeFingerprintChange, fingerprint, type Fingerprint } from "./reco
 import { effectiveCwd } from "./executors/worktree-record";
 import { currentProposal, findDecision, isApproved, nextSeq, pendingRedesigns, readBase } from "./slice-decision";
 import { claimRunner, releaseRunner, type RunnerHolder } from "./control";
+import { RATE_LIMIT_TEXT } from "./executors/harness-failure";
 
 /** thread chunks the engine writes itself sort after an attempt's own output */
 const ENGINE_NOTE_INDEX = 9998;
@@ -498,7 +505,10 @@ export class Engine {
       });
 
       if (result.status === "failed") {
-        const hop = def.kind === "agent" ? this.nextFallbackHarness(current, visit) : undefined;
+        // HOW-14: a full context window is not an allowance problem, whatever the attempt's
+        // text happens to say — hopping would start a fresh harness from nothing and still
+        // overflow. Park instead; the retry gets the re-entry briefing.
+        const hop = def.kind === "agent" && result.code !== "context-exhausted" ? this.nextFallbackHarness(current, visit) : undefined;
         if (hop) {
           this.hoppedAwayFrom.add(hop.from);
           this.pendingFallbackNodes.add(current);
@@ -837,7 +847,33 @@ export class Engine {
       .filter((e) => e.type === "chunk" && e.node === node && e.visit === visit)
       .map((e) => e.type === "chunk" ? e.content : "")
       .join("\n");
-    return /\b(rate.?limit|usage limit|session limit|quota|allowance|exhausted)\b/i.test(text);
+    return RATE_LIMIT_TEXT.test(text);
+  }
+
+  /**
+   * HOW-14: the `node\0visit` of every attempt that parked `context-exhausted`. Such an
+   * attempt is never evidence of a spent harness, whatever its transcript says — the agent's
+   * own text may well mention a "rate limit" it was writing code about.
+   */
+  private contextExhaustedAttempts(events: readonly LoggedEvent[]): Set<string> {
+    return new Set(events
+      .filter((e) => e.type === "attention-raised" && e.code === "context-exhausted")
+      .map((e) => e.type === "attention-raised" ? `${e.node}\0${e.visit}` : ""));
+  }
+
+  /**
+   * HOW-14: the visit whose context window filled, when THIS render of the node is its
+   * re-entry — i.e. the node's most recent FINISHED visit before this one failed and parked
+   * `context-exhausted`. Read from the log rather than remembered, so a resume in a fresh
+   * process briefs the retry exactly as this one would have; a visit that succeeded since
+   * (or failed for any other reason) ends the briefing.
+   */
+  private reentryAfterVisit(events: readonly LoggedEvent[], node: string, visit: number): number | undefined {
+    const last = events
+      .filter((e): e is Extract<LoggedEvent, { type: "node-finished" }> => e.type === "node-finished" && e.node === node && e.visit < visit)
+      .at(-1);
+    if (!last || last.status !== "failed") return undefined;
+    return this.contextExhaustedAttempts(events).has(`${node}\0${last.visit}`) ? last.visit : undefined;
   }
 
   /**
@@ -850,6 +886,7 @@ export class Engine {
     const failed = new Set(events
       .filter((e) => e.type === "node-finished" && e.status === "failed")
       .map((e) => e.type === "node-finished" ? `${e.node}\0${e.visit}` : ""));
+    for (const k of this.contextExhaustedAttempts(events)) failed.delete(k);
     const out = new Set<Harness>();
     for (const e of events) {
       if (e.type !== "prompt-rendered") continue;
@@ -887,6 +924,7 @@ export class Engine {
       refusalMessage = this.refusalNote.message;
       this.refusalNote = null; // consumed by this attempt (replay: at node-started)
     }
+    const reentryAfterVisit = this.reentryAfterVisit(this.log.read(), nodeId, visit);
     const { text: rendered, read: contextRead } = renderTemplate(body, (key) =>
       key in reads ? reads[key] : this.ctx.get(key, { node: nodeId, visit }),
     );
@@ -897,6 +935,7 @@ export class Engine {
       jumpMessage,
       replyMessage,
       refusalMessage,
+      reentryAfterVisit,
       skills,
       outputKeys,
       suffixVersion: SUFFIX_VERSION,
@@ -918,6 +957,7 @@ export class Engine {
       output_keys: outputKeys,
       suffix_version: SUFFIX_VERSION,
       ...(this.pinnedIncludes[prompt] ? { includes: this.pinnedIncludes[prompt] } : {}),
+      ...(reentryAfterVisit !== undefined ? { reentry_after_visit: reentryAfterVisit } : {}),
     });
     return finalRendered;
   }

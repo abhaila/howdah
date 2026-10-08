@@ -10,6 +10,11 @@
  * of the first turn (system-map 0.1); an in-session repair turn lands on a later line.
  * FAKE_CLAUDE_DROP_OUTPUTS=1 ends the first turn in prose with no contract.
  * FAKE_CLAUDE_QUESTION asks the OPERATOR a question (HOW-25) — see the block below.
+ * FAKE_CLAUDE_CONTEXT (HOW-14), shapes from claude 2.1.283's SDK types, not a captured turn:
+ *   compact  emit a `compact_boundary` mid-turn, then finish normally
+ *   exceed   end the first turn with `result { is_error: true, result: "Prompt is too long" }`
+ *   exceed-once  as `exceed` for the first spawn only; FAKE_CLAUDE_CONTEXT_STATE=<file> remembers
+ *                it across the one-process-per-attempt spawns
  *
  * FAKE_CLAUDE_SCRIPT=<file.json> scripts whole turns (system-map 1c E2E): a list of turns,
  * each `{ match, outputs?, edits?, commit? }`. A turn applies when `match` is one of the output
@@ -56,6 +61,17 @@ if (process.env.FAKE_CAPTURE) appendFileSync(process.env.FAKE_CAPTURE, JSON.stri
 out({ type: "system", subtype: "init", session_id: "fake-session-0001" });
 out({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: "Working on it — " } } });
 out({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: "doing the thing. 🐘" } } });
+
+const contextMode = process.env.FAKE_CLAUDE_CONTEXT;
+if (contextMode === "compact")
+  out({ type: "system", subtype: "compact_boundary", session_id: "fake-session-0001", compact_metadata: { trigger: "auto", pre_tokens: 167000 } });
+const contextState = process.env.FAKE_CLAUDE_CONTEXT_STATE;
+const exceedOnce = contextMode === "exceed-once" && contextState !== undefined && !existsSync(contextState);
+if (exceedOnce) writeFileSync(contextState!, "exceeded");
+if (contextMode === "exceed" || exceedOnce) {
+  out({ type: "result", subtype: "success", is_error: true, usage: { input_tokens: 200000, output_tokens: 0 }, total_cost_usd: 0, result: "Prompt is too long" });
+  process.exit(0);
+}
 
 if (process.env.FAKE_CLAUDE_ASK === "1") {
   out({

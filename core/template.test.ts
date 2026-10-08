@@ -5,6 +5,7 @@
  * every recorded v1 render UNVERIFIED.
  *
  * system-map 0.2 added v2 = v1 + the operator reply suffix; its wording is pinned the same way.
+ * HOW-14 added v4 = v3 + the context re-entry briefing, pinned the same way.
  */
 import { describe, expect, test } from "bun:test";
 import {
@@ -15,6 +16,7 @@ import {
   skillsForHarness,
   suffixBuilders,
 } from "./template";
+import { RATE_LIMIT_TEXT } from "../engine/executors/harness-failure";
 
 const V1_SKILL_HINT = "\n\nRelevant installed skills for this task: /review, /qa — invoke them where they apply.";
 const V1_CONTRACT =
@@ -26,6 +28,15 @@ const V1_SUMMARY_ONLY = "\n\n## Output\nWhen your work is complete, end your rep
 const V2_REPLY =
   "\n\n## Operator reply\nThe previous attempt at this step failed and the run parked. The operator replied — take it into account on this attempt:\nuse the v2 API";
 
+const V4_REENTRY_AFTER_2 =
+  "\n\n## Re-entering this step\n" +
+  "Visit 2 of this step ran out of context window space before it finished. " +
+  "Its work may already be partly done in the working directory, and you do not have its conversation. " +
+  "Get your bearings before changing anything:\n" +
+  "1. Run `git status`, `git diff --stat` and `git log --oneline -20` to see what is already done.\n" +
+  "2. Re-read the task above.\n" +
+  "3. Continue from where the work stands rather than starting over, and commit as you go so progress survives if this happens again.";
+
 describe("versioned suffix builders (system-map 0.1)", () => {
   test("v1 reproduces the pre-0.1 executor wording byte-for-byte", () => {
     const v1 = suffixBuilders(1)!;
@@ -35,8 +46,8 @@ describe("versioned suffix builders (system-map 0.1)", () => {
     expect(v1.outputContract([])).toBe(V1_SUMMARY_ONLY);
   });
 
-  test("the current version is 3 and buildOutputInstruction is its contract builder", () => {
-    expect(SUFFIX_VERSION).toBe(3);
+  test("the current version is 4 and buildOutputInstruction is its contract builder", () => {
+    expect(SUFFIX_VERSION).toBe(4);
     expect(buildOutputInstruction(["a", "b"])).toBe(V1_CONTRACT);
   });
 
@@ -55,6 +66,27 @@ describe("versioned suffix builders (system-map 0.1)", () => {
     const text = assemblePrompt({ body: "B", replyMessage: "R", refusalMessage: "F", skills: ["s"], outputKeys: ["k"], suffixVersion: 3 });
     expect(text.indexOf("R")).toBeLessThan(text.indexOf("refused"));
     expect(text.indexOf("refused")).toBeLessThan(text.indexOf("/s"));
+  });
+
+  test("v4 is v3 plus the context re-entry builder (HOW-14): everything else byte-identical, briefing pinned literally", () => {
+    const v3 = suffixBuilders(3)!;
+    const v4 = suffixBuilders(4)!;
+    expect(v4.skillHint(["review"])).toBe(v3.skillHint(["review"]));
+    expect(v4.outputContract(["a"])).toBe(v3.outputContract(["a"]));
+    expect(v4.replyInstruction!("x")).toBe(v3.replyInstruction!("x"));
+    expect(v4.refusalInstruction!("x")).toBe(v3.refusalInstruction!("x"));
+    expect(v4.reentryInstruction!(2)).toBe(V4_REENTRY_AFTER_2);
+    for (const v of [1, 2, 3]) {
+      expect(suffixBuilders(v)!.reentryInstruction).toBeUndefined();
+      expect(() => assemblePrompt({ body: "x", reentryAfterVisit: 1, skills: [], outputKeys: [], suffixVersion: v }))
+        .toThrow(new RegExp(`suffix version ${v} has no re-entry builder`));
+    }
+  });
+
+  test("the re-entry briefing never reads as an allowance failure to the harness fallback", () => {
+    // engine/run.ts hops harnesses when a failed attempt's text matches RATE_LIMIT_TEXT; the
+    // briefing is never in a chunk today, but it names the failure, so pin it anyway
+    expect(RATE_LIMIT_TEXT.test(suffixBuilders(4)!.reentryInstruction!(1))).toBe(false);
   });
 
   test("v1 has no reply builder — a v1 render cannot have carried a reply (system-map 0.2)", () => {
@@ -96,6 +128,31 @@ describe("assemblePrompt — one fixed order", () => {
   test("absent jump, reply and skills contribute nothing — under v1 and v2 alike", () => {
     expect(assemblePrompt({ body: "BODY", skills: [], outputKeys: [], suffixVersion: 1 })).toBe("BODY" + V1_SUMMARY_ONLY);
     expect(assemblePrompt({ body: "BODY", skills: [], outputKeys: [], suffixVersion: 2 })).toBe("BODY" + V1_SUMMARY_ONLY);
+  });
+});
+
+describe("assemblePrompt — re-entry (HOW-14)", () => {
+  test("body → jump → reply → refusal → re-entry → skill hint → outputs contract", () => {
+    const v4 = suffixBuilders(4)!;
+    const text = assemblePrompt({
+      body: "BODY",
+      jumpMessage: "JUMP",
+      replyMessage: "use the v2 API",
+      refusalMessage: "REFUSED",
+      reentryAfterVisit: 2,
+      skills: ["review", "qa"],
+      outputKeys: ["a", "b"],
+      suffixVersion: 4,
+    });
+    expect(text).toBe(
+      "BODY" + operatorInstructionSuffix("JUMP") + V2_REPLY + v4.refusalInstruction!("REFUSED") +
+      V4_REENTRY_AFTER_2 + V1_SKILL_HINT + V1_CONTRACT,
+    );
+  });
+
+  test("no re-entry visit, no briefing — v4 without it is byte-identical to v3", () => {
+    const parts = { body: "BODY", replyMessage: "r", skills: ["s"], outputKeys: ["k"] };
+    expect(assemblePrompt({ ...parts, suffixVersion: 4 })).toBe(assemblePrompt({ ...parts, suffixVersion: 3 }));
   });
 });
 

@@ -9,8 +9,25 @@
  *    out of the UI.
  *  - pin the codex version; regenerate the schema on upgrade (0.137.0 choked on its own
  *    models cache after an enum grew).
+ *
+ * HOW-14 — a FAILED turn and a full context. Read from the schema 0.154.0 generates
+ * (`codex app-server generate-json-schema`), not from a captured turn (unverified-live):
+ *   - `turn/completed { turn: { status: "failed", error: TurnError } }` is a failed turn, and
+ *     turn_end now says so. Before this every turn/completed read as success, so a failed
+ *     codex turn fell through to the outputs check and blamed the model.
+ *   - `TurnError.codexErrorInfo === "contextWindowExceeded"` (on that turn error, or on an
+ *     `error` notification) is the context window filling → `context_exceeded`.
+ *   - an `item/started` of type `contextCompaction` (and the deprecated `thread/compacted`)
+ *     is codex summarising the thread → `context_compacted`.
  */
 import type { AgentEvent } from "./events";
+
+/** HOW-14: codex's structured verdict that a turn error was the context window filling */
+function isContextWindowExceeded(err: unknown): boolean {
+  const info = (err as Record<string, unknown> | null | undefined)?.codexErrorInfo;
+  // the enum is a bare string; a variant that grows a payload serialises as { variant: {...} }
+  return info === "contextWindowExceeded" || (typeof info === "object" && info !== null && "contextWindowExceeded" in info);
+}
 
 export function mapCodexEvent(raw: unknown): AgentEvent[] {
   const e = raw as Record<string, any>;
@@ -39,8 +56,12 @@ export function mapCodexEvent(raw: unknown): AgentEvent[] {
       const item = e.params?.item;
       if (item?.type === "commandExecution" || item?.type === "fileChange")
         return [{ type: "tool_call", id: String(item.id), name: String(item.type), input: item }];
+      if (item?.type === "contextCompaction") return [{ type: "context_compacted" }];
       return [];
     }
+
+    case "thread/compacted": // deprecated twin of the contextCompaction item; codex sends one or the other
+      return [{ type: "context_compacted" }];
 
     case "item/completed": {
       const item = e.params?.item;
@@ -56,11 +77,15 @@ export function mapCodexEvent(raw: unknown): AgentEvent[] {
 
     case "turn/completed": {
       const usage = e.params?.usage;
+      const turn = e.params?.turn;
+      const failed = turn?.status === "failed";
       return [{
         type: "turn_end",
         usage: usage
           ? { input_tokens: usage.input_tokens ?? usage.inputTokens, output_tokens: usage.output_tokens ?? usage.outputTokens }
           : undefined,
+        ...(failed ? { error: String(turn?.error?.message ?? "codex turn failed") } : {}),
+        ...(failed && isContextWindowExceeded(turn?.error) ? { context_exceeded: true as const } : {}),
       }];
     }
 
@@ -81,7 +106,11 @@ export function mapCodexEvent(raw: unknown): AgentEvent[] {
       // ErrorNotification carries { error: TurnError, willRetry } — surface the real message
       const err = e.params?.error ?? e.params;
       const message = String(err?.message ?? "codex error");
-      return [{ type: "error", message: e.params?.willRetry ? `${message} (retrying)` : message }];
+      return [{
+        type: "error",
+        message: e.params?.willRetry ? `${message} (retrying)` : message,
+        ...(isContextWindowExceeded(err) ? { context_exceeded: true as const } : {}),
+      }];
     }
 
     default:

@@ -17,6 +17,12 @@
  * noise, which must not stop the repair.
  * FAKE_CODEX_RPC_FAULT=1 also answers turn/start with an error RESPONSE while still
  * completing the turn — the app-server refused us, so no repair should be asked for.
+ * FAKE_CODEX_CONTEXT (HOW-14), shapes from the 0.154.0 generated schema, not a captured turn:
+ *   compact  a `contextCompaction` item before the message; the turn completes normally
+ *   exceed   an `error` notification + `turn/completed { status: "failed" }`, both carrying
+ *            codexErrorInfo "contextWindowExceeded"
+ * FAKE_CODEX_FAIL=1 completes the turn with status "failed" and an ordinary error — the case
+ * that used to be reported as an output contract violation.
  */
 import { appendFileSync, writeFileSync } from "node:fs";
 
@@ -52,6 +58,16 @@ for await (const chunk of Bun.stdin.stream()) {
         else out({ jsonrpc: "2.0", id: msg.id, result: { turn: { id: turnId } } });
         if (process.env.FAKE_CODEX_NOTICE === "1")
           out({ jsonrpc: "2.0", method: "error", params: { message: "MCP server auth expired" } });
+        if (process.env.FAKE_CODEX_CONTEXT === "exceed" || process.env.FAKE_CODEX_FAIL === "1") {
+          const error = process.env.FAKE_CODEX_FAIL === "1"
+            ? { message: "stream disconnected before completion", codexErrorInfo: "responseStreamDisconnected" }
+            : { message: "Codex ran out of room in the model's context window.", codexErrorInfo: "contextWindowExceeded" };
+          if (process.env.FAKE_CODEX_CONTEXT === "exceed") out({ jsonrpc: "2.0", method: "error", params: { error, willRetry: false, threadId: "fake-thread-1", turnId } });
+          out({ jsonrpc: "2.0", method: "turn/completed", params: { threadId: "fake-thread-1", turn: { id: turnId, status: "failed", error } } });
+          break;
+        }
+        if (process.env.FAKE_CODEX_CONTEXT === "compact")
+          out({ jsonrpc: "2.0", method: "item/started", params: { item: { type: "contextCompaction", id: "compact-1" } } });
         const keys = [...promptText.matchAll(/"([\w.]+)": <value>/g)].map((m) => m[1]!);
         const outputs = Object.fromEntries(keys.map((k) => [k, k === "review_verdict" ? (process.env.FAKE_CLAUDE_VERDICT ?? "pass") : `fake ${k}`]));
         const isRepair = /did not end with the required outputs object/.test(promptText);

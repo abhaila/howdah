@@ -54,8 +54,10 @@ import { decisionAnswers } from "./slice-decision";
  * Park codes whose reply is carried into the retried prompt. Whether the node can carry it
  * (only agent nodes render a prompt) is resolveReply's check — it refuses the reply on any
  * other kind, so no renderable-code reply ever lands on a command or worktree node.
+ * HOW-14: `context-exhausted` is one — a reply ("skip the docs, just land the migration")
+ * is exactly what helps a retry that is re-entering half-done work.
  */
-export const RENDERABLE_REPLY_CODES: ReadonlySet<ParkCode> = new Set<ParkCode>(["attempt-failed", "executor-threw"]);
+export const RENDERABLE_REPLY_CODES: ReadonlySet<ParkCode> = new Set<ParkCode>(["attempt-failed", "executor-threw", "context-exhausted"]);
 
 type Ask = Extract<LoggedEvent, { type: "attention-raised" }>;
 type Resolution = Pick<Extract<RunEvent, { type: "attention-resolved" }>, "node" | "reply" | "source">;

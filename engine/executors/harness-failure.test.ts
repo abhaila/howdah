@@ -20,7 +20,7 @@ import { Engine } from "../run";
 import { claudeExecutor } from "./claude";
 import { defineGraph } from "../../core/graph";
 import { REPLY_RULES } from "../control";
-import { classifyHarnessExit, looksUnauthenticated, probeAuth, stderrTail, type ProbeRun } from "./harness-failure";
+import { RATE_LIMIT_TEXT, classifyHarnessExit, compactionNote, contextExhaustedFailure, looksUnauthenticated, probeAuth, stderrTail, type ProbeRun } from "./harness-failure";
 import { harnessNames, harnessSpec } from "../../core/harnesses";
 
 const exit = (over: Partial<Parameters<typeof classifyHarnessExit>[0]> = {}) =>
@@ -197,4 +197,34 @@ describe("end to end, against a CLI that is not logged in", () => {
     const text = events.filter((e: any) => e.type === "chunk").map((e: any) => e.content).join("");
     expect(text).toContain("Please run /login");
   }, 20_000);
+});
+
+// HOW-14: the engine's allowance fallback reads a failed attempt's text with RATE_LIMIT_TEXT.
+// Every word written for a full context window is checked against THAT regex, not a copy.
+describe("context exhaustion wording (HOW-14)", () => {
+  test("the regex still recognises an allowance failure (the test below is not vacuous)", () => {
+    for (const t of ["You've hit your session limit", "rate limit reached", "quota", "allowance exhausted"])
+      expect(RATE_LIMIT_TEXT.test(t)).toBe(true);
+  });
+
+  test("reason and note never read as an allowance failure, for every harness name", () => {
+    for (const harness of [...harnessNames(), "/tmp/fake-claude.ts"]) {
+      const f = contextExhaustedFailure(harness);
+      expect(f.code).toBe("context-exhausted");
+      expect(RATE_LIMIT_TEXT.test(f.reason)).toBe(false);
+      expect(RATE_LIMIT_TEXT.test(f.note)).toBe(false);
+      expect(f.reason).toContain("context window");
+      expect(f.reason).not.toContain("output contract");
+    }
+  });
+
+  test("the compaction note says what happened, with or without a size, and is not an allowance failure", () => {
+    expect(compactionNote("auto", 167000)).toBe("\n[context compacted (auto): ~167000 tokens summarised — earlier turns are now a summary]");
+    expect(compactionNote()).toBe("\n[context compacted: earlier turns summarised — earlier turns are now a summary]");
+    expect(RATE_LIMIT_TEXT.test(compactionNote("auto", 1))).toBe(false);
+  });
+
+  test("a context-exhausted park accepts a reply and carries it into the retry", () => {
+    expect(REPLY_RULES["context-exhausted"]({ run: "r", node: "n", kind: "agent" } as any)).toMatchObject({ accept: true });
+  });
 });

@@ -34,6 +34,11 @@
  * buildRepairInstruction, same key list) is sent on the same session. It is a follow-up
  * user turn, not part of the first-turn prompt, so it sits outside rendered_hash by design.
  * stderr goes to a file in the run dir, never the UI.
+ *
+ * HOW-14: a turn that died because the context window filled fails with its own code,
+ * `context-exhausted`, rather than `turn error: Prompt is too long` — the engine parks it
+ * without hopping harnesses and briefs the retry to re-enter. A mid-turn compaction is only
+ * a transcript note: the turn carries on and its outcome is decided as usual.
  */
 import { randomUUID } from "node:crypto";
 import { writeFileSync } from "node:fs";
@@ -42,7 +47,7 @@ import type { Executor } from "../run";
 import { JsonlChunkParser } from "../../adapter/parse";
 import { mapClaudeEvent, buildClaudePermissionResponse, buildClaudeUserTurn, claudeArgs } from "../../adapter/claude";
 import { buildRepairInstruction, parseOutputs } from "./outputs";
-import { classifyHarnessExit } from "./harness-failure";
+import { classifyHarnessExit, compactionNote, contextExhaustedFailure } from "./harness-failure";
 import { AttentionCenter, osNotifier, type Notifier } from "../attention";
 import { readLog } from "../../log/write";
 import { effectiveCwd } from "./worktree";
@@ -99,6 +104,7 @@ export function claudeExecutor(opts: ClaudeExecutorOpts): Executor {
     let accumulated = "";
     let resultText: string | undefined;
     let turnError: string | undefined;
+    let contextExceeded = false; // HOW-14: the adapter's verdict, never re-read from text here
     const chunk = (kind: "text" | "thinking" | "tool_call" | "tool_result", content: string, tool?: { id?: string; name?: string }) =>
       log.append({ type: "chunk", node: nodeId, visit, turn: 1, index: index++, kind, content, tool_id: tool?.id, tool_name: tool?.name });
 
@@ -229,10 +235,15 @@ export function claudeExecutor(opts: ClaudeExecutorOpts): Executor {
               log.append({ type: "turn-finalized", node: nodeId, visit, turn: 1, usage: ev.usage });
               resultText = ev.result_text ?? accumulated;
               turnError = ev.error;
+              if (ev.context_exceeded) contextExceeded = true;
               turnEnded = true;
               break;
             case "error":
               turnError = ev.message;
+              if (ev.context_exceeded) contextExceeded = true;
+              break;
+            case "context_compacted":
+              chunk("text", compactionNote(ev.trigger, ev.pre_tokens));
               break;
           }
         }
@@ -285,6 +296,13 @@ export function claudeExecutor(opts: ClaudeExecutorOpts): Executor {
       return { status: "failed", writes: {}, reason: stopped };
     }
 
+    // HOW-14: before the generic turn error — "Prompt is too long" names a cause the engine
+    // treats differently (no harness hop, a re-entry briefing on the retry)
+    if (turnError && contextExceeded) {
+      const failure = contextExhaustedFailure("claude");
+      chunk("text", failure.note);
+      return { status: "failed", writes: {}, reason: failure.reason, code: failure.code };
+    }
     if (turnError) {
       chunk("text", `\n[turn error: ${turnError}]`);
       return { status: "failed", writes: {}, reason: `turn error: ${turnError}` };
@@ -297,3 +315,4 @@ export function claudeExecutor(opts: ClaudeExecutorOpts): Executor {
     return { status: "succeeded", writes: parsed.writes };
   };
 }
+
