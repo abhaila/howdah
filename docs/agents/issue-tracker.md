@@ -1,45 +1,55 @@
-# Issue tracker: Local Markdown
+# Issue tracker: Linear
 
-Issues and specs for this repo live as markdown files in `.scratch/`.
+Issues for this repo live in **Linear**, team **Howdah**, as `HOW-<n>`. Use the Linear MCP
+tools (`mcp__claude_ai_Linear__*`); there is no CLI.
+
+Corrected 2026-10-08. This file previously described local markdown under `.scratch/`, written
+after seeing zero GitHub issues and inferring that work lived in `shaping.md` / `TODOS.md`.
+That inference was wrong: `HOW-16`…`HOW-31` in `CLAUDE.md` and in every commit message are
+Linear ids. There is no `.scratch/` directory and nothing should create one.
 
 ## Conventions
 
-- One feature per directory: `.scratch/<feature-slug>/`
-- The spec is `.scratch/<feature-slug>/spec.md`
-- Implementation issues are one file per ticket at `.scratch/<feature-slug>/issues/<NN>-<slug>.md`, numbered from `01`, never a single combined tickets file
-- Triage state is recorded as a `Status:` line near the top of each issue file (see `triage-labels.md` for the role strings)
-- Comments and conversation history append to the bottom of the file under a `## Comments` heading
+- **Read an issue**: `get_issue` with `id: "HOW-31"`. Pass `includeRelations: true` when
+  blocking edges matter.
+- **List**: `list_issues` with `team: "Howdah"`. `fields` trims the payload; `query` searches
+  title and description.
+- **Create**: `save_issue` with `team: "Howdah"`. Most issues belong to the `-1 to 0` project.
+- **Comment**: `save_comment` with `issueId`.
+- **Close**: `save_issue` with the Done state. `list_issue_statuses` names them.
+- **Images in a description** arrive as `<linear-image>` with a **signed URL that expires in
+  about five minutes**. Download it immediately or it is gone, and the sentence around it is
+  often incomplete without the picture.
+- **Branch names** come from the issue: `gitBranchName`, e.g.
+  `areebbhaila/how-31-the-graphs-are-too-complicated-to-create-by-hand`. Note that this repo
+  commits straight to `main` unless a PR is asked for, so the branch name is usually unused.
 
 ## When a skill says "publish to the issue tracker"
 
-Create a new file under `.scratch/<feature-slug>/` (creating the directory if needed).
+Create a Linear issue on team Howdah.
 
 ## When a skill says "fetch the relevant ticket"
 
-Read the file at the referenced path. The user will normally pass the path or the issue number directly.
+`get_issue` with the `HOW-<n>` identifier.
+
+## How this relates to `shaping.md`, `TODOS.md` and `docs/designs/`
+
+`shaping.md` is the authoritative design document (`R*`, `A*`, `D*`/`OV-*`, `T1`–`T22`).
+`TODOS.md` holds standing backlog items not in flight. `docs/designs/` holds per-feature
+design and CEO-review docs. None of these is the tracker: Linear is.
+
+A Linear issue may cite a shaping id, and a design doc should name the issue it serves.
+`shaping.md` is never edited to record ticket state.
 
 ## Wayfinding operations
 
-Used by `/wayfinder`. The **map** is a file with one **child** file per ticket.
+Used by `/wayfinder`. The **map** is a Linear issue; **child tickets** are sub-issues of it.
 
-- **Map**: `.scratch/<effort>/map.md` (the Notes / Decisions-so-far / Fog body).
-- **Child ticket**: `.scratch/<effort>/issues/NN-<slug>.md`, numbered from `01`, with the question in the body. A `Type:` line records the ticket type (`research`/`prototype`/`grilling`/`task`); a `Status:` line records `claimed`/`resolved`.
-- **Blocking**: a `Blocked by: NN, NN` line near the top. A ticket is unblocked when every file it lists is `resolved`.
-- **Frontier**: scan `.scratch/<effort>/issues/` for files that are open, unblocked, and unclaimed; first by number wins.
-- **Claim**: set `Status: claimed` and save before any work.
-- **Resolve**: append the answer under an `## Answer` heading, set `Status: resolved`, then append a context pointer (gist + link) to the map's Decisions-so-far in `map.md`.
-
-## How this relates to `shaping.md` and `TODOS.md`
-
-`shaping.md` is the authoritative design document (requirements `R*`, shape parts `A*`,
-decisions `D*`/`OV-*`, tasks `T1`–`T22`, and the `HOW-*` tickets). `TODOS.md` holds standing
-backlog items that are not in flight. Neither is an issue tracker.
-
-`.scratch/` is where ONE piece of work in flight gets specced and broken into tickets. A
-ticket may cite a shaping ID in its body (`HOW-24`, `T18`) and should, when one applies — but
-it never replaces one, and `shaping.md` is never edited to record ticket state. Do not migrate
-`TODOS.md` into `.scratch/`: an item moves there when it is picked up, and the `TODOS.md`
-entry is deleted in the same change that ships it.
-
-`.scratch/` is deliberately NOT gitignored. Issues are versioned with the code they describe,
-the same way `shaping.md` is.
+- **Map**: an issue holding the Notes / Decisions-so-far / Fog body.
+- **Child ticket**: an issue with `parentId` set to the map's id. `list_issues` with
+  `parentId` lists the frontier.
+- **Blocking**: Linear relations. `get_issue` with `includeRelations: true` returns
+  `blocks` / `blockedBy`.
+- **Claim**: assign to `me`.
+- **Resolve**: `save_comment` with the answer, move to Done, then append a pointer to the
+  map's Decisions-so-far.

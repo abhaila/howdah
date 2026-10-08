@@ -619,12 +619,13 @@ opportunities as an HTML report) answer different questions; neither replaces th
 
 ### Issue tracker
 
-Issues live as markdown under `.scratch/<feature>/`, one file per ticket. `shaping.md` and
-`TODOS.md` are design and backlog, not the tracker. See `docs/agents/issue-tracker.md`.
+Issues live in **Linear**, team Howdah, as `HOW-<n>`, reached through the Linear MCP tools.
+`shaping.md` and `TODOS.md` are design and backlog, not the tracker. See
+`docs/agents/issue-tracker.md`.
 
 ### Triage labels
 
-The five canonical roles, written as a `Status:` line in each issue file. See
+The five canonical roles, mapped to Linear issue states and labels. See
 `docs/agents/triage-labels.md`.
 
 ### Domain docs

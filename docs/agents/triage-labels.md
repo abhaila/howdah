@@ -8,11 +8,12 @@ The skills speak in terms of five canonical triage roles. This file maps those r
 | `needs-info`               | `needs-info`                   | Waiting on reporter for more information |
 | `ready-for-agent`          | `ready-for-agent`              | Fully specified, ready for an AFK agent  |
 | `ready-for-human`          | `ready-for-human`              | Requires human implementation            |
-| `wontfix`                  | `wontfix`                      | Will not be actioned                     |
+| `wontfix`                  | the **Canceled** state          | Will not be actioned                     |
 
-This repo tracks issues as local markdown (see `issue-tracker.md`), so a "label" is the value
-of the `Status:` line near the top of an issue file, not a tracker label. Applying a label
-means rewriting that line.
+This repo tracks issues in **Linear** (see `issue-tracker.md`). `needs-triage`,
+`ready-for-agent` and `ready-for-human` are Linear **labels**; `wontfix` maps to the
+**Canceled** state, which the Howdah team already uses heavily. Applying a label means
+`save_issue` with the label, or a state change for `wontfix`.
 
 When a skill mentions a role (e.g. "apply the AFK-ready triage label"), use the corresponding
 string from this table.
