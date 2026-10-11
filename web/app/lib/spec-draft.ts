@@ -27,8 +27,8 @@
  * round trip, and still cannot be the thing that decides a graph is legal.
  */
 import {
-  SPEC_NODE_ID, coerceOperand, emittableWrites, isBlocking, nameTakenProblem, promptIdFor, recoercePredicate,
-  specProblems,
+  SPEC_NODE_ID, coerceOperand, emittableWrites, isBlocking, nameTakenProblem, predicateLabel, promptIdFor,
+  recoercePredicate, specProblems,
   type EdgeSpec, type FieldKind, type FieldSpec, type GraphSpec, type NodeSpec, type Point, type Predicate,
   type ProblemPane, type SpecProblem,
 } from "../../../core/graph-spec";
@@ -467,6 +467,75 @@ export function draftReducer(draft: Draft, action: DraftAction): Draft {
  * the one problem that matters most — "this step is given `summary`, but nothing writes it on
  * every path that reaches it". That check reads `node.reads`.
  */
+/**
+ * What removing a field actually destroys (HOW-31 item 7).
+ *
+ * `remove-field` is one click on a trash icon and it cascades three ways, none of them
+ * visible beforehand: every branch TESTING the field is deleted outright, every step that
+ * DECLARED it as a write silently stops producing it, and every agent prompt that still NAMES
+ * it in its body turns the draft blocking — because an agent's `reads` is derived from the
+ * body (`withDerivedReads`), so dropping the key from `reads` is cosmetic and
+ * `core/graph-spec.ts` reports it rather than editing the operator's text behind their back.
+ *
+ * That is the shape of the HOW-31 report: "I was trying to build a new graph for my coding
+ * workflow and basically broke everything." The fields panel's own help text promised the
+ * removal "removes it from the steps that used it", which is FALSE for agent steps.
+ *
+ * So the control asks first and says exactly what goes, which is the pattern HOW-24 already
+ * set for destroying a step (`web/app/builder/properties.tsx`, `canvas.tsx:262`): a named
+ * control that names the damage, rather than an undo stack for one action. Pure and
+ * node-free, so the dialog and the tests share one answer.
+ */
+export interface FieldRemoval {
+  /** routes that will be deleted outright: nothing else can test a field that is gone */
+  branches: Array<{ from: string; to: string; label: string }>;
+  /** agent steps whose instructions still name it — these turn the draft blocking */
+  instructions: Array<{ node: string; prompt: string }>;
+  /** steps that declared it as something they produce */
+  producers: string[];
+  /** was it asked for at launch */
+  wasInput: boolean;
+  /** steps left with no route out once the branches go: the dead ends the removal creates */
+  strandedSteps: string[];
+}
+
+/** Empty when removing the field costs nothing; `anyCost` is the gate for asking first. */
+export function fieldRemoval(draft: Draft, key: string): FieldRemoval {
+  const { spec, prompts } = draft;
+  const branches = spec.edges
+    .filter((e) => e.when?.key === key)
+    .map((e) => ({ from: titleFor(spec, e.from), to: titleFor(spec, e.to), label: predicateLabel(e.when!) }));
+
+  const instructions: Array<{ node: string; prompt: string }> = [];
+  const producers: string[] = [];
+  for (const n of spec.nodes) {
+    if ("writes" in n && n.writes?.includes(key)) producers.push(titleFor(spec, n.id));
+    if (n.kind !== "agent") continue;
+    const body = prompts[n.prompt];
+    // Only a body the operator actually has can be checked. An unopened one is not claimed
+    // to be clean: specProblems still reports it at save, which is the authority.
+    if (body !== undefined && templateReads(body).includes(key)) instructions.push({ node: titleFor(spec, n.id), prompt: n.prompt });
+  }
+
+  // A step whose every outgoing route tested this field has nowhere to go once they are gone.
+  const survives = new Set(spec.edges.filter((e) => e.when?.key !== key).map((e) => e.from));
+  const strandedSteps = [...new Set(spec.edges.filter((e) => e.when?.key === key).map((e) => e.from))]
+    .filter((from) => !survives.has(from))
+    .map((from) => titleFor(spec, from));
+
+  return { branches, instructions, producers, wasInput: spec.inputs.includes(key), strandedSteps };
+}
+
+/** Does removing this field destroy anything the operator should see first? */
+export function removalHasCost(r: FieldRemoval): boolean {
+  return r.branches.length > 0 || r.instructions.length > 0 || r.producers.length > 0 || r.strandedSteps.length > 0;
+}
+
+/** A step's editable title, falling back to its id — the name the operator gave it. */
+function titleFor(spec: GraphSpec, id: string): string {
+  return spec.nodes.find((n) => n.id === id)?.title?.trim() || id;
+}
+
 function withDerivedReads(n: NodeSpec, body: string | undefined): NodeSpec {
   return n.kind === "agent" && body !== undefined ? { ...n, reads: templateReads(body) } : n;
 }
