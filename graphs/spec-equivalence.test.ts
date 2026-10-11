@@ -87,6 +87,32 @@ describe("B1: converting a built-in to a GraphSpec changes nothing (HOW-31)", ()
     }
   });
 
+  test("implement-ticket routes every PR state where it always did", () => {
+    // The most-used graph here (10 of 14 runs on disk), and the one whose delivery half was
+    // inlined out of graphs/delivery.ts rather than transcribed from a sibling. MERGED goes to
+    // complete_ticket, NOT to cleanup as it does in improve-codebase — the two halves differ and
+    // a copy-paste between them would land here.
+    const edges = GRAPHS["implement-ticket"]!.def.edges.filter((e) => e.from === "delivery.probe_pr" && e.condition);
+    const routeFor = (state: string) => {
+      const hits = edges.filter((e) => e.condition!.test({ "pr.state": state } as any));
+      expect([state, hits.length]).toEqual([state, 1]);
+      return hits[0]!.to;
+    };
+    expect(routeFor("MERGED")).toBe("complete_ticket");
+    expect(routeFor("CLOSED")).toBe("cleanup_closed");
+    expect(routeFor("CONFLICTS")).toBe("delivery.resolve_conflicts");
+    expect(routeFor("CHANGES_REQUIRED")).toBe("delivery.address_reviews");
+    expect(routeFor("CI_FAILED")).toBe("delivery.fix_ci");
+    expect(edges.filter((e) => e.condition!.test({ "pr.state": "OPEN" } as any))).toEqual([]);
+
+    // Both cleanup paths are strict on worktree.clean, as improve-codebase is.
+    for (const from of ["cleanup_merged", "cleanup_closed"]) {
+      const c = GRAPHS["implement-ticket"]!.def.edges.find((e) => e.from === from && e.condition)!.condition!;
+      expect([from, c.test({ "worktree.clean": true } as any)]).toEqual([from, true]);
+      expect([from, c.test({ "worktree.clean": "yes" } as any)]).toEqual([from, false]);
+    }
+  });
+
   test("probe_pr's five PR states keep their routing order after the weight offset", () => {
     // compileEdges derives weight as `count - i`, so probe_pr's hand-written 6..2 became
     // 5..1. Only the ORDER is observable (engine/run.ts:708 takes the max), so this pins the

@@ -16,6 +16,7 @@ import { createHash } from "node:crypto";
 import { implementTicket } from "./implement-ticket";
 import { implementSlice, validateSliceProposal } from "./implement-slice";
 import { CODE_CHANGING_REPAIRS, deliveryGraph, type PrState } from "./delivery";
+import { shapeOf } from "./spec-shape";
 import { GRAPHS } from "./index";
 import { Engine, resolveAgentConfig, type AttemptResult, type Executor } from "../engine/run";
 import { approvalExecutor } from "../engine/executors/approval";
@@ -68,18 +69,35 @@ describe("graphs validate", () => {
 
 describe("deliveryGraph extraction keeps implement-ticket identical", () => {
   test("implement-ticket's definition hashes exactly as it did before the extraction", () => {
-    const d = implementTicket.def;
-    const s = JSON.stringify({ name: d.name, description: d.description, defaults: d.defaults, entry: d.entry, inputs: d.inputs, nodes: d.nodes, edges: edgeList(d.edges) });
-    // Captured from the pre-extraction graphs/implement-ticket.ts: the rebased T5 commit
-    // "fix(engine): Bound review loops and let a jump restart visit budgets" (7c590df on
-    // rebase/sprint-0) — upstream implement-ticket as of origin/main 6a31486 (f8c8d96's
-    // probe_pr/repair reads, CHANGES_REQUIRED before CI_FAILED, revise_repairs → publish)
-    // plus our maxVisits, and untouched by the commits between it and this extraction.
-    // Computed by running exactly this serialisation over `git show 7c590df:graphs/
-    // implement-ticket.ts` (the same method reproduces the pre-rebase pin e1ae0a30… from
-    // the original c506e2b).
-    expect(createHash("sha256").update(s).digest("hex")).toBe("896c8c4258519541ffce4cf4e5590d7e04d22ff7121d7484ef50bdba258eb3ce");
+    // Hashed over `shapeOf` with keys sorted, rather than over `def` directly.
+    //
+    // The original pin (896c8c42…) serialised `def` as written, so it also pinned two things
+    // that are not the graph: the ORDER of keys inside a node object, and the ABSOLUTE edge
+    // weights. HOW-31's B1 conversion changed both without changing behaviour — `compileNode`
+    // emits `class` after `maxVisits`, gives `create_worktree` an explicit `writes: {}` where
+    // the hand-written form omitted it (identical per core/graph.ts:213), and `compileEdges`
+    // derives weights as `count - i`, so probe_pr's 6..2 became 5..1 with the order intact
+    // (engine/run.ts:708 takes the max, so only rank is observable).
+    //
+    // `shapeOf` (graphs/spec-shape.ts) already normalises exactly those two facts, for exactly
+    // those reasons, and is this repo's one definition of an observable graph. Sorting keys
+    // removes the third.
+    //
+    // THE PROVENANCE CHAIN IS INTACT. This value was computed by hashing the PRE-conversion
+    // implement-ticket (`git show a2ef46b:graphs/implement-ticket.ts`) and the converted one
+    // and confirming they agree, so it still pins the graph the old hash pinned: upstream
+    // implement-ticket as of origin/main 6a31486 via the rebased T5 commit 7c590df, plus our
+    // maxVisits. Reproduce by hashing either revision the same way.
+    const sortDeep = (v: unknown): unknown =>
+      Array.isArray(v)
+        ? v.map(sortDeep)
+        : v && typeof v === "object"
+          ? Object.fromEntries(Object.keys(v as object).sort().map((k) => [k, sortDeep((v as Record<string, unknown>)[k])]))
+          : v;
+    const s = JSON.stringify(sortDeep(shapeOf(implementTicket)));
+    expect(createHash("sha256").update(s).digest("hex")).toBe("f5b93becfb56508909894d0c3a4c9c75f513698c61bc0814890778e4e9223b74");
   });
+;
 
   test("verifyAfterRepair: false is the plain half; true only reroutes repairs and swaps in design-aware prompts", () => {
     const plain = deliveryGraph({ verifyAfterRepair: false });
