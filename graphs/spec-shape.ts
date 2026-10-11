@@ -27,19 +27,47 @@ export function shapeOf(g: Graph<any>) {
           id,
           // NodeDef is a union and an approval node has no `writes`, so reach for it only
           // where it exists rather than widening the node type.
-          "writes" in n && n.writes
-            ? { ...n, writes: Object.fromEntries(Object.entries(n.writes).sort(([a], [b]) => a.localeCompare(b))) }
-            : { ...n },
+          //
+          // ABSENT AND EMPTY ARE THE SAME NODE. `defineGraph` lets a node omit `writes`
+          // entirely (a worktree step that publishes nothing); `compileNode` always emits one,
+          // possibly `{}`. `core/graph.ts:213` Graph.writesOf returns `{}` for both and
+          // `engine/run.ts:549` reads `def.writes ?? {}`, so the engine cannot tell them
+          // apart. Normalising here keeps a conversion from failing on a difference that does
+          // not exist; it widens what counts as equal and nothing else.
+          { ...n, writes: Object.fromEntries(Object.entries(("writes" in n && n.writes) || {}).sort(([a], [b]) => a.localeCompare(b))) },
         ]),
     ),
-    edges: d.edges.map((e) => ({
-      from: e.from,
-      to: e.to,
-      weight: e.weight,
-      label: e.condition?.label,
-      reads: e.condition ? [...e.condition.reads].sort() : undefined,
-    })),
+    // WEIGHT IS NOT OBSERVABLE; ORDER IS. `engine/run.ts:708` picks the passing condition
+    // with the highest weight (`(e.weight ?? 0) > bestWeight`), so only the ranking among a
+    // node's conditional edges matters, not the numbers. `compileEdges` derives weights as
+    // `count - i`, which can offset a hand-written set (improve-codebase's probe_pr is 6..2
+    // by hand and 5..1 compiled) while routing identically. Comparing RANK keeps the test
+    // sensitive to reordering, which does change routing, without failing on an offset that
+    // cannot. `beatsFallback` is kept separately because rank alone would not notice a
+    // conditional dropping to weight 0, where the unconditional fallback would tie it.
+    edges: rankEdges(d.edges),
   };
+}
+
+function rankEdges(edges: Graph<any>["def"]["edges"]) {
+  const order = new Map<string, number[]>();
+  edges.forEach((e, i) => {
+    if (!e.condition) return;
+    const list = order.get(e.from) ?? [];
+    list.push(i);
+    order.set(e.from, list);
+  });
+  // highest weight first; ties keep declaration order, exactly as the `>` in run.ts does
+  for (const [from, idxs] of order)
+    order.set(from, [...idxs].sort((a, b) => (edges[b]?.weight ?? 0) - (edges[a]?.weight ?? 0) || a - b));
+  return edges.map((e, i) => ({
+    from: e.from,
+    to: e.to,
+    label: e.condition?.label,
+    reads: e.condition ? [...e.condition.reads].sort() : undefined,
+    rank: e.condition ? (order.get(e.from)?.indexOf(i) ?? -1) : undefined,
+    beatsFallback: e.condition ? (e.weight ?? 0) > 0 : undefined,
+  }));
 }
 
 /**

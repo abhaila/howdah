@@ -9,8 +9,23 @@
  *
  * No terminal nodes: this graph runs until stopped. `work` is not an input here — discover
  * writes it each cycle.
+ *
+ * B1 (HOW-31, docs/designs/graph-drafting.md): written as a `GraphSpec` literal compiled by
+ * `buildGraph`, so the graph carries its own spec. Two differences from the hand-written
+ * form, both checked and both behaviour-preserving:
+ *
+ * WEIGHTS ARE OFFSET, ORDER IS NOT. probe_pr's five conditions were 6..2 by hand and compile
+ * to 5..1. `engine/run.ts:708` picks the highest-weight PASSING condition, so only the
+ * ranking matters; `graphs/spec-shape.ts` compares rank for exactly this reason.
+ *
+ * `worktree.clean == true` IS NOW STRICT. The hand-written test was `(v) => v["worktree.clean"]`,
+ * truthy; the `is-true` predicate is `=== true`. Every write site in
+ * `engine/executors/worktree.ts` (:75, :81, :87, :93) publishes a literal boolean, so the two
+ * cannot disagree on any value the engine produces. Where they would differ — a malformed
+ * non-boolean — strict is the better answer: the run parks rather than routing on a value
+ * nothing declared. Pinned in `graphs/spec-equivalence.test.ts`.
  */
-import { defineGraph } from "../core/graph";
+import { buildGraph, type GraphSpec } from "../core/graph-spec";
 import type { PrState } from "./implement-ticket";
 
 export interface ImproveCodebaseCtx {
@@ -28,208 +43,94 @@ export interface ImproveCodebaseCtx {
   outcome: "removed" | "failed";
 }
 
-const sticky = { scope: "sticky" } as const;
-const cleared = { scope: "cleared" } as const;
-const perVisit = { scope: "per-visit" } as const;
+const impl = "implementation";
+const deliv = "delivery";
 
-export const improveCodebase = defineGraph<ImproveCodebaseCtx>({
+export const spec: GraphSpec = {
+  version: 1,
   name: "improve-codebase",
+  description: "Continuously discover and deliver one worthwhile codebase improvement at a time",
   // Claude runs in auto mode by default; Codex uses full-access sandboxing in its executor.
   defaults: { permissionMode: "auto" },
-  description: "Continuously discover and deliver one worthwhile codebase improvement at a time",
   entry: "discover",
   inputs: ["goal"],
-  nodes: {
-    discover: {
-      kind: "agent",
-      prompt: "discover",
-      reads: ["goal"],
-      writes: { discovery: perVisit, work: sticky },
+  fields: [
+    { key: "goal", kind: "text", scope: "sticky" },
+    { key: "discovery", kind: "choice", scope: "per-visit", choices: ["candidate", "idle"] },
+    { key: "work", kind: "text", scope: "sticky" },
+    { key: "implementation_plan", kind: "text", scope: "sticky" },
+    { key: "implementation_summary", kind: "text", scope: "sticky" },
+    { key: "review_verdict", kind: "choice", scope: "cleared", choices: ["pass", "reject"] },
+    { key: "review_findings", kind: "json", scope: "cleared" },
+    { key: "publication_summary", kind: "text", scope: "sticky" },
+    { key: "repair_summary", kind: "text", scope: "sticky" },
+    {
+      key: "pr.state",
+      kind: "choice",
+      scope: "per-visit",
+      choices: ["OPEN", "MERGED", "CLOSED", "CONFLICTS", "CI_FAILED", "CHANGES_REQUIRED"],
     },
-    idle_wait: { kind: "wait", duration: "30m" },
-    create_worktree: { kind: "worktree", action: "create" },
+    { key: "worktree.clean", kind: "boolean", scope: "per-visit" },
+    { key: "outcome", kind: "choice", scope: "per-visit", choices: ["removed", "failed"] },
+  ],
+  nodes: [
+    { id: "discover", kind: "agent", prompt: "discover", reads: ["goal"], writes: ["discovery", "work"] },
+    { id: "idle_wait", kind: "wait", duration: "30m" },
+    { id: "create_worktree", kind: "worktree", action: "create", writes: [] },
 
-    "implementation.plan": {
-      kind: "agent",
-      prompt: "implementation.plan",
-      reads: ["goal", "work"],
-      writes: { implementation_plan: sticky },
-      class: "implementation",
-    },
-    "implementation.implement": {
-      kind: "agent",
-      prompt: "implementation.implement",
-      reads: ["goal", "work", "implementation_plan"],
-      writes: { implementation_summary: sticky },
-      class: "implementation",
-    },
-    "implementation.local_review": {
-      kind: "agent",
-      prompt: "implementation.local_review",
-      reads: ["goal", "work", "implementation_plan", "implementation_summary"],
-      writes: { review_verdict: cleared, review_findings: cleared },
-      class: "implementation",
-    },
-    "implementation.plan_review": {
-      kind: "agent",
-      prompt: "implementation.plan_review",
-      reads: ["goal", "work", "implementation_plan", "implementation_summary", "review_verdict", "review_findings"],
-      writes: { implementation_plan: sticky },
-      class: "implementation",
-    },
-    "implementation.implement_review": {
-      kind: "agent",
-      prompt: "implementation.implement_review",
-      reads: ["goal", "work", "implementation_plan", "implementation_summary", "review_verdict", "review_findings"],
-      writes: { implementation_summary: sticky },
-      class: "implementation",
-    },
+    { id: "implementation.plan", kind: "agent", prompt: "implementation.plan", reads: ["goal", "work"], writes: ["implementation_plan"], class: impl },
+    { id: "implementation.implement", kind: "agent", prompt: "implementation.implement", reads: ["goal", "work", "implementation_plan"], writes: ["implementation_summary"], class: impl },
+    { id: "implementation.local_review", kind: "agent", prompt: "implementation.local_review", reads: ["goal", "work", "implementation_plan", "implementation_summary"], writes: ["review_verdict", "review_findings"], class: impl },
+    { id: "implementation.plan_review", kind: "agent", prompt: "implementation.plan_review", reads: ["goal", "work", "implementation_plan", "implementation_summary", "review_verdict", "review_findings"], writes: ["implementation_plan"], class: impl },
+    { id: "implementation.implement_review", kind: "agent", prompt: "implementation.implement_review", reads: ["goal", "work", "implementation_plan", "implementation_summary", "review_verdict", "review_findings"], writes: ["implementation_summary"], class: impl },
 
-    "delivery.publish": {
-      kind: "agent",
-      prompt: "delivery.publish", // v2, shared with implement-ticket
-      reads: ["goal", "work"],
-      writes: { publication_summary: sticky },
-      class: "delivery",
-    },
-    "delivery.probe_pr": { kind: "command", run: "probe:pr", reads: ["publication_summary"], writes: { "pr.state": perVisit }, class: "delivery" },
-    "delivery.address_reviews": {
-      kind: "agent",
-      prompt: "delivery.address_reviews",
-      reads: ["goal", "work", "publication_summary", "review_verdict", "review_findings"],
-      writes: { repair_summary: sticky },
-      class: "delivery",
-    },
-    "delivery.fix_ci": {
-      kind: "agent",
-      prompt: "delivery.fix_ci",
-      reads: ["goal", "work", "publication_summary", "review_verdict", "review_findings"],
-      writes: { repair_summary: sticky },
-      class: "delivery",
-    },
-    "delivery.resolve_conflicts": {
-      kind: "agent",
-      prompt: "delivery.resolve_conflicts",
-      reads: ["goal", "work", "publication_summary"],
-      writes: { repair_summary: sticky },
-      class: "delivery",
-    },
-    "delivery.review_repairs": {
-      kind: "agent",
-      prompt: "delivery.review_repairs",
-      reads: ["goal", "work", "publication_summary", "repair_summary"],
-      writes: { review_verdict: cleared, review_findings: cleared },
-      class: "delivery",
-    },
-    "delivery.revise_repairs": {
-      kind: "agent",
-      prompt: "delivery.revise_repairs",
-      reads: ["goal", "work", "publication_summary", "repair_summary", "review_verdict", "review_findings"],
-      writes: { repair_summary: sticky },
-      class: "delivery",
-    },
-    "delivery.wait": { kind: "wait", duration: "5m", class: "delivery" },
+    // v2, shared with implement-ticket
+    { id: "delivery.publish", kind: "agent", prompt: "delivery.publish", reads: ["goal", "work"], writes: ["publication_summary"], class: deliv },
+    { id: "delivery.probe_pr", kind: "command", run: "probe:pr", reads: ["publication_summary"], writes: ["pr.state"], class: deliv },
+    { id: "delivery.address_reviews", kind: "agent", prompt: "delivery.address_reviews", reads: ["goal", "work", "publication_summary", "review_verdict", "review_findings"], writes: ["repair_summary"], class: deliv },
+    { id: "delivery.fix_ci", kind: "agent", prompt: "delivery.fix_ci", reads: ["goal", "work", "publication_summary", "review_verdict", "review_findings"], writes: ["repair_summary"], class: deliv },
+    { id: "delivery.resolve_conflicts", kind: "agent", prompt: "delivery.resolve_conflicts", reads: ["goal", "work", "publication_summary"], writes: ["repair_summary"], class: deliv },
+    { id: "delivery.review_repairs", kind: "agent", prompt: "delivery.review_repairs", reads: ["goal", "work", "publication_summary", "repair_summary"], writes: ["review_verdict", "review_findings"], class: deliv },
+    { id: "delivery.revise_repairs", kind: "agent", prompt: "delivery.revise_repairs", reads: ["goal", "work", "publication_summary", "repair_summary", "review_verdict", "review_findings"], writes: ["repair_summary"], class: deliv },
+    { id: "delivery.wait", kind: "wait", duration: "5m", class: deliv },
 
-    cleanup: { kind: "worktree", action: "remove", writes: { "worktree.clean": perVisit, outcome: perVisit } },
-    cleanup_wait: { kind: "wait", duration: "5m" },
-  },
+    { id: "cleanup", kind: "worktree", action: "remove", writes: ["worktree.clean", "outcome"] },
+    { id: "cleanup_wait", kind: "wait", duration: "5m" },
+  ],
   edges: [
-    {
-      from: "discover",
-      to: "create_worktree",
-      condition: { reads: ["discovery"], test: (v) => v.discovery === "candidate", label: "discovery == 'candidate'" },
-      weight: 2,
-    },
-    {
-      from: "discover",
-      to: "idle_wait",
-      condition: { reads: ["discovery"], test: (v) => v.discovery === "idle", label: "discovery == 'idle'" },
-      weight: 1,
-    },
+    { from: "discover", to: "create_worktree", when: { op: "equals", key: "discovery", value: "candidate" } },
+    { from: "discover", to: "idle_wait", when: { op: "equals", key: "discovery", value: "idle" } },
     { from: "idle_wait", to: "discover" },
 
     { from: "create_worktree", to: "implementation.plan" },
     { from: "implementation.plan", to: "implementation.implement" },
     { from: "implementation.implement", to: "implementation.local_review" },
-    {
-      from: "implementation.local_review",
-      to: "implementation.plan_review",
-      condition: { reads: ["review_verdict"], test: (v) => v.review_verdict === "reject", label: "review_verdict == 'reject'" },
-      weight: 2,
-    },
-    {
-      from: "implementation.local_review",
-      to: "delivery.publish",
-      condition: { reads: ["review_verdict"], test: (v) => v.review_verdict === "pass", label: "review_verdict == 'pass'" },
-      weight: 1,
-    },
+    { from: "implementation.local_review", to: "implementation.plan_review", when: { op: "equals", key: "review_verdict", value: "reject" } },
+    { from: "implementation.local_review", to: "delivery.publish", when: { op: "equals", key: "review_verdict", value: "pass" } },
     { from: "implementation.plan_review", to: "implementation.implement_review" },
     { from: "implementation.implement_review", to: "implementation.local_review" },
 
     { from: "delivery.publish", to: "delivery.probe_pr" },
-    {
-      from: "delivery.probe_pr",
-      to: "cleanup",
-      condition: { reads: ["pr.state"], test: (v) => v["pr.state"] === "MERGED", label: "pr.state == 'MERGED'" },
-      weight: 6,
-    },
-    {
-      from: "delivery.probe_pr",
-      to: "cleanup",
-      condition: { reads: ["pr.state"], test: (v) => v["pr.state"] === "CLOSED", label: "pr.state == 'CLOSED'" },
-      weight: 5,
-    },
-    {
-      from: "delivery.probe_pr",
-      to: "delivery.resolve_conflicts",
-      condition: { reads: ["pr.state"], test: (v) => v["pr.state"] === "CONFLICTS", label: "pr.state == 'CONFLICTS'" },
-      weight: 4,
-    },
-    {
-      from: "delivery.probe_pr",
-      to: "delivery.address_reviews",
-      condition: { reads: ["pr.state"], test: (v) => v["pr.state"] === "CHANGES_REQUIRED", label: "pr.state == 'CHANGES_REQUIRED'" },
-      weight: 3,
-    },
-    {
-      from: "delivery.probe_pr",
-      to: "delivery.fix_ci",
-      condition: { reads: ["pr.state"], test: (v) => v["pr.state"] === "CI_FAILED", label: "pr.state == 'CI_FAILED'" },
-      weight: 2,
-    },
+    { from: "delivery.probe_pr", to: "cleanup", when: { op: "equals", key: "pr.state", value: "MERGED" } },
+    { from: "delivery.probe_pr", to: "cleanup", when: { op: "equals", key: "pr.state", value: "CLOSED" } },
+    { from: "delivery.probe_pr", to: "delivery.resolve_conflicts", when: { op: "equals", key: "pr.state", value: "CONFLICTS" } },
+    { from: "delivery.probe_pr", to: "delivery.address_reviews", when: { op: "equals", key: "pr.state", value: "CHANGES_REQUIRED" } },
+    { from: "delivery.probe_pr", to: "delivery.fix_ci", when: { op: "equals", key: "pr.state", value: "CI_FAILED" } },
     { from: "delivery.probe_pr", to: "delivery.wait" },
 
     { from: "delivery.address_reviews", to: "delivery.review_repairs" },
     { from: "delivery.fix_ci", to: "delivery.review_repairs" },
     { from: "delivery.resolve_conflicts", to: "delivery.review_repairs" },
-    {
-      from: "delivery.review_repairs",
-      to: "delivery.revise_repairs",
-      condition: { reads: ["review_verdict"], test: (v) => v.review_verdict === "reject", label: "review_verdict == 'reject'" },
-      weight: 2,
-    },
-    {
-      from: "delivery.review_repairs",
-      to: "delivery.publish",
-      condition: { reads: ["review_verdict"], test: (v) => v.review_verdict === "pass", label: "review_verdict == 'pass'" },
-      weight: 1,
-    },
+    { from: "delivery.review_repairs", to: "delivery.revise_repairs", when: { op: "equals", key: "review_verdict", value: "reject" } },
+    { from: "delivery.review_repairs", to: "delivery.publish", when: { op: "equals", key: "review_verdict", value: "pass" } },
     { from: "delivery.revise_repairs", to: "delivery.publish" },
     { from: "delivery.wait", to: "delivery.probe_pr" },
 
-    {
-      from: "cleanup",
-      to: "cleanup_wait",
-      condition: { reads: ["outcome"], test: (v) => v.outcome === "failed", label: "outcome == 'failed'" },
-      weight: 2,
-    },
-    {
-      from: "cleanup",
-      to: "discover",
-      condition: { reads: ["worktree.clean"], test: (v) => v["worktree.clean"], label: "worktree.clean == true" },
-      weight: 1,
-    },
+    { from: "cleanup", to: "cleanup_wait", when: { op: "equals", key: "outcome", value: "failed" } },
+    { from: "cleanup", to: "discover", when: { op: "is-true", key: "worktree.clean" } },
     { from: "cleanup", to: "cleanup_wait" },
     { from: "cleanup_wait", to: "cleanup" },
   ],
-});
+};
+
+export const improveCodebase = buildGraph(spec);

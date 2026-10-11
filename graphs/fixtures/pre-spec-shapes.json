@@ -32,15 +32,18 @@
       "cleanup_pending": {
         "kind": "terminal",
         "outcome": "failed",
-        "label": "Worktree retained to preserve local work"
+        "label": "Worktree retained to preserve local work",
+        "writes": {}
       },
       "closed": {
         "kind": "terminal",
-        "outcome": "aborted"
+        "outcome": "aborted",
+        "writes": {}
       },
       "complete": {
         "kind": "terminal",
-        "outcome": "success"
+        "outcome": "success",
+        "writes": {}
       },
       "complete_ticket": {
         "kind": "agent",
@@ -58,7 +61,8 @@
       },
       "create_worktree": {
         "kind": "worktree",
-        "action": "create"
+        "action": "create",
+        "writes": {}
       },
       "delivery.address_reviews": {
         "kind": "agent",
@@ -244,7 +248,8 @@
       "delivery.wait": {
         "kind": "wait",
         "duration": "5m",
-        "class": "delivery"
+        "class": "delivery",
+        "writes": {}
       },
       "implementation.implement": {
         "kind": "agent",
@@ -348,7 +353,8 @@
         "decision": "slice.approval",
         "feedback": "slice.feedback",
         "redesignTo": "map.extract",
-        "class": "slice"
+        "class": "slice",
+        "writes": {}
       },
       "slice.propose": {
         "kind": "agent",
@@ -395,29 +401,32 @@
       {
         "from": "slice.approve",
         "to": "implementation.implement",
-        "weight": 3,
         "label": "slice.approval == 'approved'",
         "reads": [
           "slice.approval"
-        ]
+        ],
+        "rank": 0,
+        "beatsFallback": true
       },
       {
         "from": "slice.approve",
         "to": "slice.propose",
-        "weight": 2,
         "label": "slice.approval == 'feedback'",
         "reads": [
           "slice.approval"
-        ]
+        ],
+        "rank": 1,
+        "beatsFallback": true
       },
       {
         "from": "slice.approve",
         "to": "map.extract",
-        "weight": 1,
         "label": "slice.approval == 'stale'",
         "reads": [
           "slice.approval"
-        ]
+        ],
+        "rank": 2,
+        "beatsFallback": true
       },
       {
         "from": "implementation.implement",
@@ -438,20 +447,22 @@
       {
         "from": "implementation.local_review",
         "to": "implementation.implement",
-        "weight": 2,
         "label": "review_verdict == 'reject'",
         "reads": [
           "review_verdict"
-        ]
+        ],
+        "rank": 0,
+        "beatsFallback": true
       },
       {
         "from": "implementation.local_review",
         "to": "delivery.publish",
-        "weight": 1,
         "label": "review_verdict == 'pass'",
         "reads": [
           "review_verdict"
-        ]
+        ],
+        "rank": 1,
+        "beatsFallback": true
       },
       {
         "from": "delivery.publish",
@@ -460,47 +471,52 @@
       {
         "from": "delivery.probe_pr",
         "to": "complete_ticket",
-        "weight": 6,
         "label": "pr.state == 'MERGED'",
         "reads": [
           "pr.state"
-        ]
+        ],
+        "rank": 0,
+        "beatsFallback": true
       },
       {
         "from": "delivery.probe_pr",
         "to": "cleanup_closed",
-        "weight": 5,
         "label": "pr.state == 'CLOSED'",
         "reads": [
           "pr.state"
-        ]
+        ],
+        "rank": 1,
+        "beatsFallback": true
       },
       {
         "from": "delivery.probe_pr",
         "to": "delivery.resolve_conflicts",
-        "weight": 4,
         "label": "pr.state == 'CONFLICTS'",
         "reads": [
           "pr.state"
-        ]
+        ],
+        "rank": 2,
+        "beatsFallback": true
       },
       {
         "from": "delivery.probe_pr",
         "to": "delivery.address_reviews",
-        "weight": 3,
         "label": "pr.state == 'CHANGES_REQUIRED'",
         "reads": [
           "pr.state"
-        ]
+        ],
+        "rank": 3,
+        "beatsFallback": true
       },
       {
         "from": "delivery.probe_pr",
         "to": "delivery.fix_ci",
-        "weight": 2,
         "label": "pr.state == 'CI_FAILED'",
         "reads": [
           "pr.state"
-        ]
+        ],
+        "rank": 4,
+        "beatsFallback": true
       },
       {
         "from": "delivery.probe_pr",
@@ -509,20 +525,22 @@
       {
         "from": "delivery.review_repairs",
         "to": "delivery.revise_repairs",
-        "weight": 2,
         "label": "review_verdict == 'reject'",
         "reads": [
           "review_verdict"
-        ]
+        ],
+        "rank": 0,
+        "beatsFallback": true
       },
       {
         "from": "delivery.review_repairs",
         "to": "delivery.publish",
-        "weight": 1,
         "label": "review_verdict == 'pass'",
         "reads": [
           "review_verdict"
-        ]
+        ],
+        "rank": 1,
+        "beatsFallback": true
       },
       {
         "from": "delivery.wait",
@@ -535,11 +553,12 @@
       {
         "from": "cleanup_merged",
         "to": "complete",
-        "weight": 1,
         "label": "worktree.clean == true",
         "reads": [
           "worktree.clean"
-        ]
+        ],
+        "rank": 0,
+        "beatsFallback": true
       },
       {
         "from": "cleanup_merged",
@@ -548,11 +567,12 @@
       {
         "from": "cleanup_closed",
         "to": "closed",
-        "weight": 1,
         "label": "worktree.clean == true",
         "reads": [
           "worktree.clean"
-        ]
+        ],
+        "rank": 0,
+        "beatsFallback": true
       },
       {
         "from": "cleanup_closed",
@@ -577,11 +597,12 @@
       {
         "from": "delivery.drift",
         "to": "delivery.revise_repairs",
-        "weight": 1,
         "label": "slice.drift has new problems (missing / changed-unexpectedly / still-present / unchanged)",
         "reads": [
           "slice.drift"
-        ]
+        ],
+        "rank": 0,
+        "beatsFallback": true
       },
       {
         "from": "delivery.drift",
@@ -598,11 +619,12 @@
       {
         "from": "delivery.drift_revision",
         "to": "delivery.revise_repairs",
-        "weight": 1,
         "label": "slice.drift has new problems (missing / changed-unexpectedly / still-present / unchanged)",
         "reads": [
           "slice.drift"
-        ]
+        ],
+        "rank": 0,
+        "beatsFallback": true
       },
       {
         "from": "delivery.drift_revision",
@@ -643,15 +665,18 @@
       "cleanup_pending": {
         "kind": "terminal",
         "outcome": "failed",
-        "label": "Worktree retained to preserve local work"
+        "label": "Worktree retained to preserve local work",
+        "writes": {}
       },
       "closed": {
         "kind": "terminal",
-        "outcome": "aborted"
+        "outcome": "aborted",
+        "writes": {}
       },
       "complete": {
         "kind": "terminal",
-        "outcome": "success"
+        "outcome": "success",
+        "writes": {}
       },
       "complete_ticket": {
         "kind": "agent",
@@ -669,7 +694,8 @@
       },
       "create_worktree": {
         "kind": "worktree",
-        "action": "create"
+        "action": "create",
+        "writes": {}
       },
       "delivery.address_reviews": {
         "kind": "agent",
@@ -789,7 +815,8 @@
       "delivery.wait": {
         "kind": "wait",
         "duration": "5m",
-        "class": "delivery"
+        "class": "delivery",
+        "writes": {}
       },
       "implementation.implement": {
         "kind": "agent",
@@ -893,20 +920,22 @@
       {
         "from": "implementation.local_review",
         "to": "implementation.plan_review",
-        "weight": 2,
         "label": "review_verdict == 'reject'",
         "reads": [
           "review_verdict"
-        ]
+        ],
+        "rank": 0,
+        "beatsFallback": true
       },
       {
         "from": "implementation.local_review",
         "to": "delivery.publish",
-        "weight": 1,
         "label": "review_verdict == 'pass'",
         "reads": [
           "review_verdict"
-        ]
+        ],
+        "rank": 1,
+        "beatsFallback": true
       },
       {
         "from": "implementation.plan_review",
@@ -923,47 +952,52 @@
       {
         "from": "delivery.probe_pr",
         "to": "complete_ticket",
-        "weight": 6,
         "label": "pr.state == 'MERGED'",
         "reads": [
           "pr.state"
-        ]
+        ],
+        "rank": 0,
+        "beatsFallback": true
       },
       {
         "from": "delivery.probe_pr",
         "to": "cleanup_closed",
-        "weight": 5,
         "label": "pr.state == 'CLOSED'",
         "reads": [
           "pr.state"
-        ]
+        ],
+        "rank": 1,
+        "beatsFallback": true
       },
       {
         "from": "delivery.probe_pr",
         "to": "delivery.resolve_conflicts",
-        "weight": 4,
         "label": "pr.state == 'CONFLICTS'",
         "reads": [
           "pr.state"
-        ]
+        ],
+        "rank": 2,
+        "beatsFallback": true
       },
       {
         "from": "delivery.probe_pr",
         "to": "delivery.address_reviews",
-        "weight": 3,
         "label": "pr.state == 'CHANGES_REQUIRED'",
         "reads": [
           "pr.state"
-        ]
+        ],
+        "rank": 3,
+        "beatsFallback": true
       },
       {
         "from": "delivery.probe_pr",
         "to": "delivery.fix_ci",
-        "weight": 2,
         "label": "pr.state == 'CI_FAILED'",
         "reads": [
           "pr.state"
-        ]
+        ],
+        "rank": 4,
+        "beatsFallback": true
       },
       {
         "from": "delivery.probe_pr",
@@ -984,20 +1018,22 @@
       {
         "from": "delivery.review_repairs",
         "to": "delivery.revise_repairs",
-        "weight": 2,
         "label": "review_verdict == 'reject'",
         "reads": [
           "review_verdict"
-        ]
+        ],
+        "rank": 0,
+        "beatsFallback": true
       },
       {
         "from": "delivery.review_repairs",
         "to": "delivery.publish",
-        "weight": 1,
         "label": "review_verdict == 'pass'",
         "reads": [
           "review_verdict"
-        ]
+        ],
+        "rank": 1,
+        "beatsFallback": true
       },
       {
         "from": "delivery.revise_repairs",
@@ -1014,11 +1050,12 @@
       {
         "from": "cleanup_merged",
         "to": "complete",
-        "weight": 1,
         "label": "worktree.clean == true",
         "reads": [
           "worktree.clean"
-        ]
+        ],
+        "rank": 0,
+        "beatsFallback": true
       },
       {
         "from": "cleanup_merged",
@@ -1027,11 +1064,12 @@
       {
         "from": "cleanup_closed",
         "to": "closed",
-        "weight": 1,
         "label": "worktree.clean == true",
         "reads": [
           "worktree.clean"
-        ]
+        ],
+        "rank": 0,
+        "beatsFallback": true
       },
       {
         "from": "cleanup_closed",
@@ -1064,11 +1102,13 @@
       },
       "cleanup_wait": {
         "kind": "wait",
-        "duration": "5m"
+        "duration": "5m",
+        "writes": {}
       },
       "create_worktree": {
         "kind": "worktree",
-        "action": "create"
+        "action": "create",
+        "writes": {}
       },
       "delivery.address_reviews": {
         "kind": "agent",
@@ -1186,7 +1226,8 @@
       "delivery.wait": {
         "kind": "wait",
         "duration": "5m",
-        "class": "delivery"
+        "class": "delivery",
+        "writes": {}
       },
       "discover": {
         "kind": "agent",
@@ -1205,7 +1246,8 @@
       },
       "idle_wait": {
         "kind": "wait",
-        "duration": "30m"
+        "duration": "30m",
+        "writes": {}
       },
       "implementation.implement": {
         "kind": "agent",
@@ -1296,20 +1338,22 @@
       {
         "from": "discover",
         "to": "create_worktree",
-        "weight": 2,
         "label": "discovery == 'candidate'",
         "reads": [
           "discovery"
-        ]
+        ],
+        "rank": 0,
+        "beatsFallback": true
       },
       {
         "from": "discover",
         "to": "idle_wait",
-        "weight": 1,
         "label": "discovery == 'idle'",
         "reads": [
           "discovery"
-        ]
+        ],
+        "rank": 1,
+        "beatsFallback": true
       },
       {
         "from": "idle_wait",
@@ -1330,20 +1374,22 @@
       {
         "from": "implementation.local_review",
         "to": "implementation.plan_review",
-        "weight": 2,
         "label": "review_verdict == 'reject'",
         "reads": [
           "review_verdict"
-        ]
+        ],
+        "rank": 0,
+        "beatsFallback": true
       },
       {
         "from": "implementation.local_review",
         "to": "delivery.publish",
-        "weight": 1,
         "label": "review_verdict == 'pass'",
         "reads": [
           "review_verdict"
-        ]
+        ],
+        "rank": 1,
+        "beatsFallback": true
       },
       {
         "from": "implementation.plan_review",
@@ -1360,47 +1406,52 @@
       {
         "from": "delivery.probe_pr",
         "to": "cleanup",
-        "weight": 6,
         "label": "pr.state == 'MERGED'",
         "reads": [
           "pr.state"
-        ]
+        ],
+        "rank": 0,
+        "beatsFallback": true
       },
       {
         "from": "delivery.probe_pr",
         "to": "cleanup",
-        "weight": 5,
         "label": "pr.state == 'CLOSED'",
         "reads": [
           "pr.state"
-        ]
+        ],
+        "rank": 1,
+        "beatsFallback": true
       },
       {
         "from": "delivery.probe_pr",
         "to": "delivery.resolve_conflicts",
-        "weight": 4,
         "label": "pr.state == 'CONFLICTS'",
         "reads": [
           "pr.state"
-        ]
+        ],
+        "rank": 2,
+        "beatsFallback": true
       },
       {
         "from": "delivery.probe_pr",
         "to": "delivery.address_reviews",
-        "weight": 3,
         "label": "pr.state == 'CHANGES_REQUIRED'",
         "reads": [
           "pr.state"
-        ]
+        ],
+        "rank": 3,
+        "beatsFallback": true
       },
       {
         "from": "delivery.probe_pr",
         "to": "delivery.fix_ci",
-        "weight": 2,
         "label": "pr.state == 'CI_FAILED'",
         "reads": [
           "pr.state"
-        ]
+        ],
+        "rank": 4,
+        "beatsFallback": true
       },
       {
         "from": "delivery.probe_pr",
@@ -1421,20 +1472,22 @@
       {
         "from": "delivery.review_repairs",
         "to": "delivery.revise_repairs",
-        "weight": 2,
         "label": "review_verdict == 'reject'",
         "reads": [
           "review_verdict"
-        ]
+        ],
+        "rank": 0,
+        "beatsFallback": true
       },
       {
         "from": "delivery.review_repairs",
         "to": "delivery.publish",
-        "weight": 1,
         "label": "review_verdict == 'pass'",
         "reads": [
           "review_verdict"
-        ]
+        ],
+        "rank": 1,
+        "beatsFallback": true
       },
       {
         "from": "delivery.revise_repairs",
@@ -1447,20 +1500,22 @@
       {
         "from": "cleanup",
         "to": "cleanup_wait",
-        "weight": 2,
         "label": "outcome == 'failed'",
         "reads": [
           "outcome"
-        ]
+        ],
+        "rank": 0,
+        "beatsFallback": true
       },
       {
         "from": "cleanup",
         "to": "discover",
-        "weight": 1,
         "label": "worktree.clean == true",
         "reads": [
           "worktree.clean"
-        ]
+        ],
+        "rank": 1,
+        "beatsFallback": true
       },
       {
         "from": "cleanup",
@@ -1497,15 +1552,18 @@
       "cleanup_pending": {
         "kind": "terminal",
         "outcome": "failed",
-        "label": "Worktree retained to preserve local work"
+        "label": "Worktree retained to preserve local work",
+        "writes": {}
       },
       "create_worktree": {
         "kind": "worktree",
-        "action": "create"
+        "action": "create",
+        "writes": {}
       },
       "launched": {
         "kind": "terminal",
-        "outcome": "success"
+        "outcome": "success",
+        "writes": {}
       },
       "map.extract": {
         "kind": "command",
@@ -1532,7 +1590,8 @@
         "decision": "plan.approval",
         "feedback": "plan.feedback",
         "redesignTo": "map.extract",
-        "class": "plan"
+        "class": "plan",
+        "writes": {}
       },
       "plan.propose": {
         "kind": "agent",
@@ -1604,29 +1663,32 @@
       {
         "from": "plan.approve",
         "to": "tickets.create",
-        "weight": 3,
         "label": "plan.approval == 'approved'",
         "reads": [
           "plan.approval"
-        ]
+        ],
+        "rank": 0,
+        "beatsFallback": true
       },
       {
         "from": "plan.approve",
         "to": "plan.propose",
-        "weight": 2,
         "label": "plan.approval == 'feedback'",
         "reads": [
           "plan.approval"
-        ]
+        ],
+        "rank": 1,
+        "beatsFallback": true
       },
       {
         "from": "plan.approve",
         "to": "map.extract",
-        "weight": 1,
         "label": "plan.approval == 'stale'",
         "reads": [
           "plan.approval"
-        ]
+        ],
+        "rank": 2,
+        "beatsFallback": true
       },
       {
         "from": "tickets.create",
@@ -1639,11 +1701,12 @@
       {
         "from": "cleanup",
         "to": "launched",
-        "weight": 1,
         "label": "worktree.clean",
         "reads": [
           "worktree.clean"
-        ]
+        ],
+        "rank": 0,
+        "beatsFallback": true
       },
       {
         "from": "cleanup",
@@ -1664,7 +1727,8 @@
     "nodes": {
       "done": {
         "kind": "terminal",
-        "outcome": "success"
+        "outcome": "success",
+        "writes": {}
       },
       "quick-task.work": {
         "kind": "agent",
@@ -1700,7 +1764,8 @@
       "done": {
         "kind": "terminal",
         "outcome": "success",
-        "label": "report approved"
+        "label": "report approved",
+        "writes": {}
       },
       "research.investigate": {
         "kind": "agent",
@@ -1775,20 +1840,22 @@
       {
         "from": "research.review",
         "to": "research.synthesize",
-        "weight": 2,
         "label": "review_verdict == 'reject'",
         "reads": [
           "review_verdict"
-        ]
+        ],
+        "rank": 0,
+        "beatsFallback": true
       },
       {
         "from": "research.review",
         "to": "done",
-        "weight": 1,
         "label": "review_verdict == 'pass'",
         "reads": [
           "review_verdict"
-        ]
+        ],
+        "rank": 1,
+        "beatsFallback": true
       }
     ]
   },
@@ -1818,11 +1885,13 @@
       },
       "complete": {
         "kind": "terminal",
-        "outcome": "success"
+        "outcome": "success",
+        "writes": {}
       },
       "create_worktree": {
         "kind": "worktree",
-        "action": "create"
+        "action": "create",
+        "writes": {}
       },
       "report.compile": {
         "kind": "agent",
@@ -1983,7 +2052,8 @@
       "done": {
         "kind": "terminal",
         "outcome": "success",
-        "label": "document approved"
+        "label": "document approved",
+        "writes": {}
       }
     },
     "edges": [
@@ -1998,20 +2068,22 @@
       {
         "from": "doc.review",
         "to": "doc.revise",
-        "weight": 2,
         "label": "review_verdict == 'reject'",
         "reads": [
           "review_verdict"
-        ]
+        ],
+        "rank": 0,
+        "beatsFallback": true
       },
       {
         "from": "doc.review",
         "to": "done",
-        "weight": 1,
         "label": "review_verdict == 'pass'",
         "reads": [
           "review_verdict"
-        ]
+        ],
+        "rank": 1,
+        "beatsFallback": true
       },
       {
         "from": "doc.revise",
