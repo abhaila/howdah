@@ -1,8 +1,8 @@
 ---
 id: plan.propose
-version: 1
+version: 2
 tags: [plan-feature]
-provenance: HOW-23 — the read-only proposer that decomposes one large feature into vertical slices
+provenance: HOW-23 — the read-only proposer that decomposes one large feature into vertical slices; v2 names the base snapshot the map and the approval both bind to (HOW-31 B1)
 ---
 Discover and use relevant installed skills for shaping and decomposing work.
 
@@ -19,6 +19,10 @@ Work scope:
 ## The map around this feature
 
 Everything below was extracted from the code of THIS repository by tree-sitter adapters (tier in [brackets]). It is bounded, and it is one repository: absence from it is NOT evidence that something does not exist, and a slice that belongs in another repository is planned from the brief rather than from the map. Read the code when you need more.
+
+It was extracted from this exact snapshot, which your proposal binds to. If the worktree moves before the plan is approved, the approval is refused as stale and you are asked again — which is the whole reason this step touches nothing.
+
+{{ context.map.base }}
 
 {{ context.map.neighbourhood }}
 
