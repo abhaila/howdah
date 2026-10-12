@@ -270,6 +270,12 @@ export const COMMAND_BUILTINS: Array<{ run: string; label: string; produces: str
 /** A worktree CLEAN-UP step emits these two facts and no others (engine/executors/worktree.ts). */
 export const WORKTREE_FACTS = ["worktree.clean", "outcome"] as const;
 
+/**
+ * HOW-44: a worktree CREATE step may publish the workspace's verify command ("" when it has
+ * none), so a prompt can say "the harness runs <cmd> after you" only when it actually does.
+ */
+export const WORKTREE_CREATE_FACTS = ["worktree.verify_command"] as const;
+
 /** The built-in a command step runs, by its first word — `map:drift --since X` is still map:drift. */
 export function commandBuiltin(run: string): (typeof COMMAND_BUILTINS)[number] | undefined {
   const head = run.trim().split(/\s+/)[0];
@@ -287,8 +293,8 @@ export function commandBuiltin(run: string): (typeof COMMAND_BUILTINS)[number] |
  * one hand-written filter at ONE of the two call sites that needed it, and the one it missed
  * shipped a graph that raises a ContextError at run time (HOW-22 review, finding 3).
  *
- *   worktree "create"  → nothing: engine/executors/worktree.ts returns `writes: {}` on both
- *                        the fresh and the idempotent re-visit path.
+ *   worktree "create"  → WORKTREE_CREATE_FACTS (HOW-44), published on both the fresh and the
+ *                        idempotent re-visit path, and only when declared.
  *   worktree "remove"  → WORKTREE_FACTS.
  *   command, built-in  → that built-in's `produces`.
  *   command, a script  → undefined: its LAST line of JSON decides, at run time.
@@ -297,7 +303,7 @@ export function commandBuiltin(run: string): (typeof COMMAND_BUILTINS)[number] |
 export function emittableWrites(n: NodeSpec): readonly string[] | undefined {
   switch (n.kind) {
     case "worktree":
-      return n.action === "remove" ? WORKTREE_FACTS : [];
+      return n.action === "remove" ? WORKTREE_FACTS : WORKTREE_CREATE_FACTS;
     case "command":
       return commandBuiltin(n.run)?.produces;
     default:

@@ -41,6 +41,8 @@ export interface WorktreeExecutorOpts {
   reposDir: string;
   /** repo path → the folder name its worktrees live under (default: the directory name) */
   repoName?: (repoPath: string) => string;
+  /** HOW-44: the workspace's verify command for a repo path — published as worktree.verify_command */
+  verifyCommandFor?: (repoPath: string) => string | undefined;
 }
 
 export function worktreeExecutor(opts: WorktreeExecutorOpts): Executor {
@@ -49,8 +51,13 @@ export function worktreeExecutor(opts: WorktreeExecutorOpts): Executor {
     const runDir = dirname(log.path);
 
     if (def.action === "create") {
+      // HOW-44: the verify command, when the step declares it — "" (never absent) when the
+      // workspace has none, so a prompt's {{#if}} reads a defined value either way
+      const writes: Record<string, unknown> = {};
+      if (def.writes && "worktree.verify_command" in def.writes)
+        writes["worktree.verify_command"] = (cwd && opts.verifyCommandFor?.(cwd)) || "";
       const existing = readWorktreeRecord(runDir);
-      if (existing) return { status: "succeeded", writes: {} }; // idempotent re-visit
+      if (existing) return { status: "succeeded", writes }; // idempotent re-visit
       if (!cwd) throw new Error("worktree create needs a repo workspace (run has no cwd)");
       const branch = `howdah/${runId}`;
       // grouped by repo: one repo's runs sit together, and `git worktree list` in that repo
@@ -64,7 +71,7 @@ export function worktreeExecutor(opts: WorktreeExecutorOpts): Executor {
         effects.done("worktree-create", { path, branch });
       }
       writeFileSync(worktreeRecordPath(runDir), JSON.stringify({ path, branch, repo: cwd } satisfies WorktreeRecord, null, 2));
-      return { status: "succeeded", writes: {} };
+      return { status: "succeeded", writes };
     }
 
     // remove: refuse to destroy local work — dirty/unpushed keeps the worktree

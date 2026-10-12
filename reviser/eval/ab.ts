@@ -518,14 +518,15 @@ export function formatReport(r: ABReport): string {
 }
 
 /** the line a proposal is stamped with — what the accept/reject screen shows */
-export function stampLine(r: ABReport): { score: string; verdict: string } {
+export function stampLine(r: ABReport, opts: { dryRun?: boolean } = {}): { score: string; verdict: string } {
   const a = r.arms[0]!;
   const b = r.arms[1];
   const score = b
     ? `A ${a.pass}/${a.pass + a.fail} vs B ${b.pass}/${b.pass + b.fail} passed · cost A ${describeCost(a.usage)} vs B ${describeCost(b.usage)}`
     : `A ${a.pass}/${a.pass + a.fail} passed`;
   const verdict = r.comparisons?.[0]?.verdict ?? "repeated runs: see the per-case pass rates in the report";
-  return { score, verdict };
+  // a stamp made under HOWDAH_STUB proves the pipeline, not the prompt: it must say so
+  return opts.dryRun ? { score: `DRY RUN (HOWDAH_STUB, no agent ran) — ${score}`, verdict: `dry run only; run the real A/B before deciding — ${verdict}` } : { score, verdict };
 }
 
 // ---- CLI ---------------------------------------------------------------------------------------
@@ -575,7 +576,7 @@ if (import.meta.main) {
   if (args.stamp) {
     const reportPath = args.out ?? args.stamp.replace(/\.proposal\.md$/, "") + ".ab-report.json";
     if (!args.out) writeFileSync(reportPath, json + "\n");
-    const { score, verdict } = stampLine(report);
+    const { score, verdict } = stampLine(report, { dryRun: !!process.env.HOWDAH_STUB });
     stampEval(args.stamp, score, verdict, reportPath);
     console.error(`stamped ${args.stamp} (report: ${reportPath})`);
   }

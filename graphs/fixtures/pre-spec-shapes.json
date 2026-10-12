@@ -62,7 +62,11 @@
       "create_worktree": {
         "kind": "worktree",
         "action": "create",
-        "writes": {}
+        "writes": {
+          "worktree.verify_command": {
+            "scope": "sticky"
+          }
+        }
       },
       "delivery.address_reviews": {
         "kind": "agent",
@@ -263,7 +267,8 @@
           "slice.ghosts",
           "slice.approval",
           "slice.drift",
-          "review_findings"
+          "review_findings",
+          "worktree.verify_command"
         ],
         "writes": {
           "implementation_summary": {
@@ -695,7 +700,11 @@
       "create_worktree": {
         "kind": "worktree",
         "action": "create",
-        "writes": {}
+        "writes": {
+          "worktree.verify_command": {
+            "scope": "sticky"
+          }
+        }
       },
       "delivery.address_reviews": {
         "kind": "agent",
@@ -824,7 +833,8 @@
         "reads": [
           "goal",
           "work",
-          "implementation_plan"
+          "implementation_plan",
+          "worktree.verify_command"
         ],
         "writes": {
           "implementation_summary": {

@@ -34,7 +34,7 @@ function engineFor(dir: string, script: Script, prompts: Map<string, string>, ex
     promptsDir: PROMPTS,
     ...extra,
     executors: {
-      worktree: async ({ nodeId }) => ok(nodeId.startsWith("cleanup") ? { "worktree.clean": true } : {}),
+      worktree: async ({ nodeId }) => ok(nodeId.startsWith("cleanup") ? { "worktree.clean": true } : { "worktree.verify_command": "" }),
       command: async ({ nodeId }) =>
         nodeId === "verify.run"
           ? ok({ "verify.result": script.verify?.() ?? VERIFY_PASS })

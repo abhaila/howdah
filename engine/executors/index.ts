@@ -109,6 +109,7 @@ export function liveExecutors(deps: LiveExecutorDeps): EngineOpts["executors"] {
     worktree: worktreeExecutor({
       reposDir: deps.reposDir ?? join(deps.attentionDir, "..", "repos"),
       repoName: deps.repoName,
+      ...(deps.verifyCommandFor ? { verifyCommandFor: deps.verifyCommandFor } : {}),
     }),
   };
 }

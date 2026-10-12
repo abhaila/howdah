@@ -17,8 +17,10 @@
  * ONE ENTRY WAS UPDATED DELIBERATELY, 2026-10-12 (HOW-40): implement-ticket gained a
  * `verify.run` step before its local review. That is a behaviour change the ticket asked for,
  * not a conversion, so only the `implement-ticket` entry was rewritten from `shapeOf` — every
- * other graph's entry is byte-identical. The rule still stands for conversions: a diff here
- * that no ticket asked for is a conversion changing behaviour.
+ * other graph's entry is byte-identical. HOW-44 (same day) then updated implement-ticket and
+ * implement-slice together: create_worktree publishes `worktree.verify_command` and each graph's
+ * implement step reads it. The rule still stands for conversions: a diff here that no ticket
+ * asked for is a conversion changing behaviour.
  */
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";

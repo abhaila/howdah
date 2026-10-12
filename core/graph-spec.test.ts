@@ -12,7 +12,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import {
-  COMMAND_BUILTINS, WORKTREE_FACTS,
+  COMMAND_BUILTINS, WORKTREE_FACTS, WORKTREE_CREATE_FACTS,
   buildGraph, builtinReads, coerceOperand, compilePredicate, emittableWrites, missingBuiltinReads, parseGraphSpec, predicateLabel,
   isBlocking, keepPath, recoercePredicate, specAdvice, specProblems, unmatchableOperand,
   type GraphSpec, type NodeSpec, type Predicate,
@@ -379,11 +379,12 @@ describe("a condition row that can never fire is refused, not saved", () => {
 describe("emittableWrites is the executors' own answer, not the form's", () => {
   const worktree = (action: "create" | "remove"): NodeSpec => ({ id: "w", kind: "worktree", action, writes: [] });
 
-  test("making a worktree can publish NOTHING; cleaning one up publishes exactly two facts", () => {
-    // engine/executors/worktree.ts returns `writes: {}` on both create paths (the fresh one
-    // and the idempotent re-visit), and fills only the declared subset of WORKTREE_FACTS on
-    // remove. graphs/builder.test.ts checks this table still matches that file.
-    expect(emittableWrites(worktree("create"))).toEqual([]);
+  test("making a worktree publishes only the verify command; cleaning one up publishes exactly two facts", () => {
+    // engine/executors/worktree.ts publishes worktree.verify_command on both create paths (the
+    // fresh one and the idempotent re-visit) when declared (HOW-44), and fills only the
+    // declared subset of WORKTREE_FACTS on remove. graphs/builder.test.ts checks this table
+    // still matches that file.
+    expect(emittableWrites(worktree("create"))).toEqual(WORKTREE_CREATE_FACTS);
     expect(emittableWrites(worktree("remove"))).toEqual(WORKTREE_FACTS);
   });
 

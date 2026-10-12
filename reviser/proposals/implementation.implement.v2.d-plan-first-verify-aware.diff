@@ -1,0 +1,13 @@
+--- current
++++ proposed
+@@ -12,6 +12,10 @@
+ 
+ {{ context.implementation_plan }}
+ 
++{{> implementation._plan_first }}
++
++{{> implementation._verify_aware }}
++
+ Implement the planned change in the prepared worktree. Follow applicable repository instructions and preserve unrelated work.
+ 
+ Satisfy every requirement in the work scope and goal. If the code reveals an error in the plan, make the necessary adjustment within that scope and explain it.

@@ -92,6 +92,8 @@ describe("deliveryGraph extraction keeps implement-ticket identical", () => {
     // RE-PINNED ONCE, ON PURPOSE (HOW-40, 2026-10-12): implement-ticket gained `verify.run`
     // between implement/implement_review and local_review. That is a behaviour change, not an
     // extraction or a conversion, so the old value (f5b93bec…) no longer describes the graph.
+    // And once more (HOW-44): create_worktree publishes `worktree.verify_command` and
+    // implementation.implement reads it, so the build prompt can say the harness verifies.
     const sortDeep = (v: unknown): unknown =>
       Array.isArray(v)
         ? v.map(sortDeep)
@@ -99,7 +101,7 @@ describe("deliveryGraph extraction keeps implement-ticket identical", () => {
           ? Object.fromEntries(Object.keys(v as object).sort().map((k) => [k, sortDeep((v as Record<string, unknown>)[k])]))
           : v;
     const s = JSON.stringify(sortDeep(shapeOf(implementTicket)));
-    expect(createHash("sha256").update(s).digest("hex")).toBe("20513cd5d24c071d6340d913f8a74ec9aa89f9bec1a9aa7cb9db91775448f22d");
+    expect(createHash("sha256").update(s).digest("hex")).toBe("1e60d47a0e86f7974eb8deb8a51451987349adf74a3223e3dfd710bbcf98295b");
   });
 ;
 
@@ -209,7 +211,7 @@ function sliceRun(script: Script) {
   });
   const worktree: Executor = async ({ nodeId }) => {
     if (nodeId === "create_worktree") script.onCreate?.(repo);
-    return ok(nodeId.startsWith("cleanup") ? { "worktree.clean": true } : {});
+    return ok(nodeId.startsWith("cleanup") ? { "worktree.clean": true } : { "worktree.verify_command": script.verifyCommand ?? "" });
   };
   const engine = () =>
     new Engine(implementSlice, { dir: runDir, cwd: repo, folderKind: "repo", promptsDir: PROMPTS, executors: { agent, command, worktree, approval: approvalExecutor, wait: async () => ok() } });

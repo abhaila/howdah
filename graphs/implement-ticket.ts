@@ -62,6 +62,8 @@ export interface ImplementTicketCtx {
   "pr.state": PrState;
   "worktree.clean": boolean;
   "verify.result": VerifyResult;
+  /** HOW-44: the workspace's verify command ("" when none), published by create_worktree */
+  "worktree.verify_command": string;
 }
 
 const impl = "implementation";
@@ -93,12 +95,14 @@ export const spec: GraphSpec = {
     },
     { key: "worktree.clean", kind: "boolean", scope: "per-visit" },
     { key: "verify.result", kind: "json", scope: "per-visit" },
+    { key: "worktree.verify_command", kind: "text", scope: "sticky" },
   ],
   nodes: [
-    { id: "create_worktree", kind: "worktree", action: "create", writes: [] },
+    // HOW-44: publishes the verify command so the build prompt can say the harness verifies after it
+    { id: "create_worktree", kind: "worktree", action: "create", writes: ["worktree.verify_command"] },
 
     { id: "implementation.plan", kind: "agent", prompt: "implementation.plan", reads: ["goal", "work"], writes: ["implementation_plan"], class: impl },
-    { id: "implementation.implement", kind: "agent", prompt: "implementation.implement", reads: ["goal", "work", "implementation_plan"], writes: ["implementation_summary"], class: impl },
+    { id: "implementation.implement", kind: "agent", prompt: "implementation.implement", reads: ["goal", "work", "implementation_plan", "worktree.verify_command"], writes: ["implementation_summary"], class: impl },
     // HOW-40: the workspace's verifyCommand, run in the worktree (`not-checked` with a reason when none)
     { id: "verify.run", kind: "command", run: "verify:run", reads: [], writes: ["verify.result"], class: impl },
     { id: "implementation.local_review", kind: "agent", prompt: "implementation.local_review", reads: ["goal", "work", "implementation_plan", "implementation_summary", "verify.result"], writes: ["review_verdict", "review_findings"], class: impl },

@@ -50,7 +50,7 @@
  */
 import { createHash } from "node:crypto";
 import { harnessSpec, isHarness } from "./harnesses";
-import { TEMPLATE_FILTERS, isEngineNamespace, templateRefPattern } from "./template-refs";
+import { TEMPLATE_FILTERS, ifBlockPattern, isEngineNamespace, templateRefPattern } from "./template-refs";
 import type { Harness } from "./graph";
 
 /**
@@ -59,7 +59,7 @@ import type { Harness } from "./graph";
  * Re-exported here because this file is still the one place a caller asks about templates —
  * the split moved the regex, it did not add a second one.
  */
-export { TEMPLATE_REF, TEMPLATE_FILTERS, templateRefPattern, isEngineNamespace, templateReads, templateFilterProblems } from "./template-refs";
+export { TEMPLATE_REF, TEMPLATE_FILTERS, IF_BLOCK, templateRefPattern, ifBlockPattern, isEngineNamespace, templateReads, templateFilterProblems } from "./template-refs";
 
 // ---- render rules (HOW-37) ---------------------------------------------------------
 
@@ -71,7 +71,9 @@ export { TEMPLATE_REF, TEMPLATE_FILTERS, templateRefPattern, isEngineNamespace, 
  *   v2  `| dump` is JSON always (strings included); a value whose rendered text is longer than
  *       the cap is clipped head and tail around a stub that says how big it was, that what
  *       surrounds the stub is no longer valid JSON (when it was JSON), and where the whole
- *       value is — so the agent can go and get it instead of guessing
+ *       value is — so the agent can go and get it instead of guessing; and (HOW-44) a
+ *       `{{#if context.key}}…{{/if}}` block renders its body only when the value is a
+ *       non-empty string or `true` (v1 never had a block, so no v1 prompt carries one)
  */
 export const RENDER_VERSION = 2;
 
@@ -146,6 +148,14 @@ export function renderTemplate(
 ): { text: string; read: Record<string, unknown>; elided: Record<string, string> } {
   const read: Record<string, unknown> = {};
   const elided: Record<string, string> = {};
+  // HOW-44 (v2): blocks first, so a reference inside a block that renders nothing is never read
+  if (rules.version >= 2)
+    body = body.replace(ifBlockPattern(), (whole: string, ns: string, key: string, inner: string) => {
+      if (isEngineNamespace(ns, key)) return whole;
+      const value = resolve(key);
+      read[key] = value;
+      return (typeof value === "string" && value !== "") || value === true ? inner : "";
+    });
   const text = body.replace(templateRefPattern(), (whole: string, ns: string, key: string, rawFilter: string | undefined) => {
     if (isEngineNamespace(ns, key)) return whole;
     const value = resolve(key);

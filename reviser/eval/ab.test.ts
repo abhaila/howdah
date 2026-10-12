@@ -78,6 +78,7 @@ describe("end to end under HOWDAH_STUB=1 (no tokens)", () => {
     expect(report.comparisons![0]!.verdict).toContain("not enough cases to tell");
     expect(formatReport(report)).toContain("parked: executor-threw ×3");
 
+    expect(stampLine(report, { dryRun: true }).score).toStartWith("DRY RUN (HOWDAH_STUB, no agent ran)");
     const { score, verdict } = stampLine(report);
     const { stampEval } = await import("../../prompts/proposals");
     stampEval(stamped, score, verdict, join(dir, "report.json"));

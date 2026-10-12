@@ -13,6 +13,7 @@ interface Ctx {
   implementation_plan: string;
   implementation_summary: string;
   "verify.result": unknown;
+  "worktree.verify_command": string;
 }
 
 export const evalImplement = defineGraph<Ctx>({
@@ -22,9 +23,9 @@ export const evalImplement = defineGraph<Ctx>({
   entry: "create_worktree",
   inputs: ["goal", "work"],
   nodes: {
-    create_worktree: { kind: "worktree", action: "create" },
+    create_worktree: { kind: "worktree", action: "create", writes: { "worktree.verify_command": { scope: "sticky" } } },
     "implementation.plan": { kind: "agent", prompt: "implementation.plan" as never, reads: ["goal", "work"], writes: { implementation_plan: { scope: "sticky" } } },
-    "implementation.implement": { kind: "agent", prompt: "implementation.implement" as never, reads: ["goal", "work", "implementation_plan"], writes: { implementation_summary: { scope: "sticky" } } },
+    "implementation.implement": { kind: "agent", prompt: "implementation.implement" as never, reads: ["goal", "work", "implementation_plan", "worktree.verify_command"], writes: { implementation_summary: { scope: "sticky" } } },
     "verify.run": { kind: "command", run: "verify:run", writes: { "verify.result": { scope: "per-visit" } } },
     done: { kind: "terminal", outcome: "success" },
   },

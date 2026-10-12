@@ -36,12 +36,32 @@ export const TEMPLATE_FILTERS = ["dump"] as const;
  */
 export function templateFilterProblems(body: string): string[] {
   const problems: string[] = [];
+  // HOW-44: an #if block may not contain another, and every #if needs its /if
+  for (const m of body.matchAll(ifBlockPattern()))
+    if (new RegExp(IF_OPEN).test(m[3] ?? "")) problems.push(`\`${m[0].slice(0, 60)}…\` nests one {{#if}} inside another, which the renderer does not support`);
+  const opens = [...body.matchAll(new RegExp(IF_OPEN, "g"))].length;
+  const closes = [...body.matchAll(/\{\{\/if\}\}/g)].length;
+  if (opens !== closes) problems.push(`${opens} {{#if …}} but ${closes} {{/if}} — every block needs exactly one close`);
   for (const m of body.matchAll(templateRefPattern())) {
     const filter = m[3]?.trim();
     if (filter === undefined || filter === "" || (TEMPLATE_FILTERS as readonly string[]).includes(filter)) continue;
     problems.push(`\`${m[0]}\` uses the filter "${filter}", which does nothing — the only filter is \`dump\` (the value as JSON)`);
   }
   return problems;
+}
+
+/**
+ * HOW-44: `{{#if context.key}}…{{/if}}` — the one block form (render v2). Its body renders
+ * only when the value is a non-empty string or `true`; anything else (absent, "", false, an
+ * object) renders nothing. No nesting and no `else`: a prompt that needs more logic than
+ * "say this only when it is true" belongs in the graph, not the template. The key is a READ
+ * like any reference (templateReads includes it), so the undeclared-read guards see it.
+ */
+export const IF_BLOCK = String.raw`\{\{#if\s+(context|inputs)\.([\w.]+)\s*\}\}([\s\S]*?)\{\{\/if\}\}`;
+const IF_OPEN = String.raw`\{\{#if\s+(context|inputs)\.([\w.]+)\s*\}\}`;
+
+export function ifBlockPattern(): RegExp {
+  return new RegExp(IF_BLOCK, "g");
 }
 
 /** A fresh global matcher per call — no shared lastIndex to get bitten by. */
@@ -58,6 +78,10 @@ export function isEngineNamespace(ns: string, key: string): boolean {
 export function templateReads(body: string): string[] {
   const reads = new Set<string>();
   for (const m of body.matchAll(templateRefPattern())) {
+    const [, ns, key] = m as unknown as [string, string, string];
+    if (!isEngineNamespace(ns, key)) reads.add(key);
+  }
+  for (const m of body.matchAll(new RegExp(IF_OPEN, "g"))) {
     const [, ns, key] = m as unknown as [string, string, string];
     if (!isEngineNamespace(ns, key)) reads.add(key);
   }
@@ -79,6 +103,9 @@ export function templateReads(body: string): string[] {
  * exactly as written.
  */
 export function renameTemplateRef(body: string, from: string, to: string): string {
+  // HOW-44: an #if names its key too
+  body = body.replace(new RegExp(IF_OPEN, "g"), (whole, ns: string, key: string) =>
+    key !== from || isEngineNamespace(ns, key) ? whole : whole.replace(`${ns}.${key}`, () => `${ns}.${to}`));
   return body.replace(templateRefPattern(), (whole, ns: string, key: string) => {
     if (key !== from || isEngineNamespace(ns, key)) return whole;
     // a replacer FUNCTION, never a replacement string: `to` is whatever the operator has

@@ -1,0 +1,375 @@
+{
+  "cases": [
+    "01-slugify",
+    "02-word-count",
+    "03-truncate"
+  ],
+  "repeat": 1,
+  "oracle_kinds": [],
+  "arms": [
+    {
+      "arm": "A",
+      "variant": "implementation.implement v1",
+      "runs": 3,
+      "pass": 0,
+      "fail": 0,
+      "unjudged": 0,
+      "error": 0,
+      "parked": {
+        "executor-threw": 3
+      },
+      "fell_back": 0,
+      "success_rate": null,
+      "usage": {
+        "turns": 0,
+        "priced_turns": 0,
+        "unpriced_turns": 0,
+        "unknown_turns": 0,
+        "input_tokens": {
+          "total": null,
+          "missing": 0
+        },
+        "cache_read_input_tokens": {
+          "total": null,
+          "missing": 0
+        },
+        "cache_creation_input_tokens": {
+          "total": null,
+          "missing": 0
+        },
+        "output_tokens": {
+          "total": null,
+          "missing": 0
+        },
+        "cost_usd": null,
+        "partial": false
+      },
+      "median_cost_usd": null,
+      "partial_cost_runs": 0,
+      "median_turns": 0,
+      "trajectory": {
+        "visits": 0,
+        "mean_calls": null,
+        "mean_edits": null,
+        "mean_verify_after_last_edit": null
+      }
+    },
+    {
+      "arm": "B",
+      "variant": "implementation.implement v2 (proposal)",
+      "runs": 3,
+      "pass": 0,
+      "fail": 0,
+      "unjudged": 0,
+      "error": 0,
+      "parked": {
+        "executor-threw": 3
+      },
+      "fell_back": 0,
+      "success_rate": null,
+      "usage": {
+        "turns": 0,
+        "priced_turns": 0,
+        "unpriced_turns": 0,
+        "unknown_turns": 0,
+        "input_tokens": {
+          "total": null,
+          "missing": 0
+        },
+        "cache_read_input_tokens": {
+          "total": null,
+          "missing": 0
+        },
+        "cache_creation_input_tokens": {
+          "total": null,
+          "missing": 0
+        },
+        "output_tokens": {
+          "total": null,
+          "missing": 0
+        },
+        "cost_usd": null,
+        "partial": false
+      },
+      "median_cost_usd": null,
+      "partial_cost_runs": 0,
+      "median_turns": 0,
+      "trajectory": {
+        "visits": 0,
+        "mean_calls": null,
+        "mean_edits": null,
+        "mean_verify_after_last_edit": null
+      }
+    }
+  ],
+  "comparisons": [
+    {
+      "b": "implementation.implement v2 (proposal)",
+      "table": {
+        "both": 0,
+        "a_only": 0,
+        "b_only": 0,
+        "neither": 0
+      },
+      "excluded": [
+        {
+          "case": "01-slugify",
+          "why": "not a judged pass/fail (A parked executor-threw, B parked executor-threw)"
+        },
+        {
+          "case": "02-word-count",
+          "why": "not a judged pass/fail (A parked executor-threw, B parked executor-threw)"
+        },
+        {
+          "case": "03-truncate",
+          "why": "not a judged pass/fail (A parked executor-threw, B parked executor-threw)"
+        }
+      ],
+      "p": 1,
+      "verdict": "not enough cases to tell — 0 discordant pairs; an exact test needs at least 6 before any split could reach p < 0.05",
+      "p_adjusted": 1,
+      "trajectory_delta": {
+        "mean_calls": null,
+        "mean_edits": null,
+        "mean_verify_after_last_edit": null
+      }
+    }
+  ],
+  "per_case_pass_rates": null,
+  "results": [
+    {
+      "case": "01-slugify",
+      "arm": "A",
+      "variant": "implementation.implement v1",
+      "repeat": 1,
+      "harnesses": [],
+      "fell_back": false,
+      "usage": {
+        "turns": 0,
+        "priced_turns": 0,
+        "unpriced_turns": 0,
+        "unknown_turns": 0,
+        "input_tokens": {
+          "total": null,
+          "missing": 0
+        },
+        "cache_read_input_tokens": {
+          "total": null,
+          "missing": 0
+        },
+        "cache_creation_input_tokens": {
+          "total": null,
+          "missing": 0
+        },
+        "output_tokens": {
+          "total": null,
+          "missing": 0
+        },
+        "cost_usd": null,
+        "partial": false
+      },
+      "turns": 0,
+      "profiles": [],
+      "run_dir": "/var/folders/vp/tf0tbqyj04jcz47xtr_1ljv80000gn/T/howdah-ab-01-slugify-fKbj38/runs/ab-01-slugify-1",
+      "outcome": "parked",
+      "park_code": "executor-threw",
+      "park_reason": "executor threw: worktree executor not built yet (T18)",
+      "oracle": null
+    },
+    {
+      "case": "01-slugify",
+      "arm": "B",
+      "variant": "implementation.implement v2 (proposal)",
+      "repeat": 1,
+      "harnesses": [],
+      "fell_back": false,
+      "usage": {
+        "turns": 0,
+        "priced_turns": 0,
+        "unpriced_turns": 0,
+        "unknown_turns": 0,
+        "input_tokens": {
+          "total": null,
+          "missing": 0
+        },
+        "cache_read_input_tokens": {
+          "total": null,
+          "missing": 0
+        },
+        "cache_creation_input_tokens": {
+          "total": null,
+          "missing": 0
+        },
+        "output_tokens": {
+          "total": null,
+          "missing": 0
+        },
+        "cost_usd": null,
+        "partial": false
+      },
+      "turns": 0,
+      "profiles": [],
+      "run_dir": "/var/folders/vp/tf0tbqyj04jcz47xtr_1ljv80000gn/T/howdah-ab-01-slugify-BKJW8s/runs/ab-01-slugify-1",
+      "outcome": "parked",
+      "park_code": "executor-threw",
+      "park_reason": "executor threw: worktree executor not built yet (T18)",
+      "oracle": null
+    },
+    {
+      "case": "02-word-count",
+      "arm": "A",
+      "variant": "implementation.implement v1",
+      "repeat": 1,
+      "harnesses": [],
+      "fell_back": false,
+      "usage": {
+        "turns": 0,
+        "priced_turns": 0,
+        "unpriced_turns": 0,
+        "unknown_turns": 0,
+        "input_tokens": {
+          "total": null,
+          "missing": 0
+        },
+        "cache_read_input_tokens": {
+          "total": null,
+          "missing": 0
+        },
+        "cache_creation_input_tokens": {
+          "total": null,
+          "missing": 0
+        },
+        "output_tokens": {
+          "total": null,
+          "missing": 0
+        },
+        "cost_usd": null,
+        "partial": false
+      },
+      "turns": 0,
+      "profiles": [],
+      "run_dir": "/var/folders/vp/tf0tbqyj04jcz47xtr_1ljv80000gn/T/howdah-ab-02-word-count-3RhPCK/runs/ab-02-word-count-1",
+      "outcome": "parked",
+      "park_code": "executor-threw",
+      "park_reason": "executor threw: worktree executor not built yet (T18)",
+      "oracle": null
+    },
+    {
+      "case": "02-word-count",
+      "arm": "B",
+      "variant": "implementation.implement v2 (proposal)",
+      "repeat": 1,
+      "harnesses": [],
+      "fell_back": false,
+      "usage": {
+        "turns": 0,
+        "priced_turns": 0,
+        "unpriced_turns": 0,
+        "unknown_turns": 0,
+        "input_tokens": {
+          "total": null,
+          "missing": 0
+        },
+        "cache_read_input_tokens": {
+          "total": null,
+          "missing": 0
+        },
+        "cache_creation_input_tokens": {
+          "total": null,
+          "missing": 0
+        },
+        "output_tokens": {
+          "total": null,
+          "missing": 0
+        },
+        "cost_usd": null,
+        "partial": false
+      },
+      "turns": 0,
+      "profiles": [],
+      "run_dir": "/var/folders/vp/tf0tbqyj04jcz47xtr_1ljv80000gn/T/howdah-ab-02-word-count-OS6TV3/runs/ab-02-word-count-1",
+      "outcome": "parked",
+      "park_code": "executor-threw",
+      "park_reason": "executor threw: worktree executor not built yet (T18)",
+      "oracle": null
+    },
+    {
+      "case": "03-truncate",
+      "arm": "A",
+      "variant": "implementation.implement v1",
+      "repeat": 1,
+      "harnesses": [],
+      "fell_back": false,
+      "usage": {
+        "turns": 0,
+        "priced_turns": 0,
+        "unpriced_turns": 0,
+        "unknown_turns": 0,
+        "input_tokens": {
+          "total": null,
+          "missing": 0
+        },
+        "cache_read_input_tokens": {
+          "total": null,
+          "missing": 0
+        },
+        "cache_creation_input_tokens": {
+          "total": null,
+          "missing": 0
+        },
+        "output_tokens": {
+          "total": null,
+          "missing": 0
+        },
+        "cost_usd": null,
+        "partial": false
+      },
+      "turns": 0,
+      "profiles": [],
+      "run_dir": "/var/folders/vp/tf0tbqyj04jcz47xtr_1ljv80000gn/T/howdah-ab-03-truncate-alpcfQ/runs/ab-03-truncate-1",
+      "outcome": "parked",
+      "park_code": "executor-threw",
+      "park_reason": "executor threw: worktree executor not built yet (T18)",
+      "oracle": null
+    },
+    {
+      "case": "03-truncate",
+      "arm": "B",
+      "variant": "implementation.implement v2 (proposal)",
+      "repeat": 1,
+      "harnesses": [],
+      "fell_back": false,
+      "usage": {
+        "turns": 0,
+        "priced_turns": 0,
+        "unpriced_turns": 0,
+        "unknown_turns": 0,
+        "input_tokens": {
+          "total": null,
+          "missing": 0
+        },
+        "cache_read_input_tokens": {
+          "total": null,
+          "missing": 0
+        },
+        "cache_creation_input_tokens": {
+          "total": null,
+          "missing": 0
+        },
+        "output_tokens": {
+          "total": null,
+          "missing": 0
+        },
+        "cost_usd": null,
+        "partial": false
+      },
+      "turns": 0,
+      "profiles": [],
+      "run_dir": "/var/folders/vp/tf0tbqyj04jcz47xtr_1ljv80000gn/T/howdah-ab-03-truncate-BZxZ1l/runs/ab-03-truncate-1",
+      "outcome": "parked",
+      "park_code": "executor-threw",
+      "park_reason": "executor threw: worktree executor not built yet (T18)",
+      "oracle": null
+    }
+  ]
+}
