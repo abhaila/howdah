@@ -158,6 +158,45 @@ export function RunControls({ runId, summary, onAction, softStoppable = false, s
   );
 }
 
+/**
+ * HOW-55: what the newest agent ran WITH, beyond the prompt its hash proves — which of the
+ * operator's settings loaded, the hooks that ran before it started (and how much text they
+ * injected), and how many skills, plugins and MCP servers it had. A run from before HOW-55 says
+ * "not recorded" rather than guessing.
+ */
+export function AgentEnvironment({ env }: { env: RunDetail["agent_env"] }) {
+  if (!env) return <div className="kv"><span className="k">agent environment</span><span>not recorded</span></div>;
+  const injected = (env.hooks ?? []).filter((h) => h.injected);
+  const files = env.files.filter((f) => f.sha256 !== null);
+  return (
+    <>
+      <div className="kv">
+        <span className="k">agent environment</span>
+        <Tooltip content={env.setting_sources ? `--setting-sources ${env.setting_sources}` : `${env.harness} has no switch for the operator's own config; what it read is hashed`}>
+          <span>{env.harness} · {env.setting_sources === null ? "its own config" : env.inherits_user ? "your user settings + project" : "project settings only"}</span>
+        </Tooltip>
+      </div>
+      {env.hooks && env.hooks.length > 0 && (
+        <div className="kv">
+          <span className="k">hooks ran</span>
+          <Tooltip content={injected.map((h) => `${h.name}: ${h.injected!.chars} chars, sha256 ${h.injected!.sha256.slice(0, 12)}`).join("\n") || "none injected context"}>
+            <span className={injected.length ? "allowance-unreachable" : ""}>{env.hooks.length}{injected.length ? ` · ${injected.length} injected context` : ""}</span>
+          </Tooltip>
+        </div>
+      )}
+      {env.skills && (
+        <div className="kv"><span className="k">loaded</span><span>{env.skills.length} skills · {env.plugins?.length ?? 0} plugins · {env.mcp_servers?.length ?? 0} MCP</span></div>
+      )}
+      <div className="kv">
+        <span className="k">settings files</span>
+        <Tooltip content={env.files.map((f) => `${f.scope} ${f.path}${f.sha256 ? ` ${f.sha256.slice(0, 12)}` : " (absent)"}`).join("\n")}>
+          <span>{files.length} hashed</span>
+        </Tooltip>
+      </div>
+    </>
+  );
+}
+
 export function RunGraph({ runId, graph, timeline, status, onJumped }: { runId: string; graph: string; timeline: RunDetail["timeline"]; status: string; onJumped: () => void }) {
   const shape = useGraphShape(graph);
   const [jumpTo, setJumpTo] = useState<string | null>(null);
@@ -546,6 +585,7 @@ export function RunView({ id, graceMs = OPEN_GRACE_MS }: { id: string; graceMs?:
           {/* HOW-23: a child of a fan-out says which run planned it. A link, not a status —
               the parent's own log is the only thing that knows how the parent is doing. */}
           {summary.parent && <div className="kv"><span className="k">planned by</span><a href={`/run/${summary.parent}`} className="pr-link">{summary.parent}</a></div>}
+          <AgentEnvironment env={detail.agent_env} />
         </section>
         {detail.persistence && (
           <section>

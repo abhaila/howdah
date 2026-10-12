@@ -27,6 +27,7 @@
  * read and classified (harness-failure.ts) so a logged-out CLI is reported as a login
  * problem rather than blamed on the model.
  */
+import { environmentFiles } from "./agent-env";
 import { writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { Executor } from "../run";
@@ -74,6 +75,10 @@ export function cursorExecutor(opts: CursorExecutorOpts = {}): Executor {
     if (def.kind !== "agent") throw new Error("cursorExecutor on non-agent node");
     const writeKeys = Object.keys(def.writes ?? {});
     const check = (w: Record<string, unknown>) => checkWrites(w, reads ?? {}); // HOW-51
+    // HOW-55: cursor has no switch for the operator's own config, so what it reads regardless is
+    // recorded — hashed — on every attempt; a run can say what it ran with even where it cannot choose
+    log.append({ type: "agent-environment", node: nodeId, visit, harness: "cursor", setting_sources: null, inherits_user: true,
+      files: environmentFiles("cursor", effectiveCwd(log.path, cwd), true) });
     const prompt = renderedPrompt ?? ""; // exactly what rendered_hash covers (system-map 0.1)
     const binary = opts.binary ?? harnessSpec("cursor").binary;
     const permissionMode = opts.readOnly ? "plan" : agentConfig?.permissionMode;

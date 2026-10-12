@@ -106,6 +106,21 @@ export interface HarnessSpec {
    * nothing will deliver.
    */
   steer: "stdin" | null;
+  /**
+   * HOW-55: which of the operator's settings a spawned agent loads, and how Howdah controls it.
+   * Spiked against claude 2.1.296: with no flag, a headless session ran five user-level
+   * SessionStart hooks that injected text into it, loaded 143 skills and the operator's own
+   * CLAUDE.md; with `--setting-sources project,local` it ran none of the hooks, loaded the 19
+   * built-in skills and no user CLAUDE.md, and auth still worked (it lives in the keychain).
+   * Null: the harness has no such switch, and `userConfig` is what it reads regardless.
+   */
+  settingSources: { flag: string; isolated: string; withUser: string } | null;
+  /**
+   * HOW-55: files under the operator's home this harness reads whatever Howdah passes — hashed
+   * onto `agent-environment` so a run can say what it ran with, even where it cannot choose.
+   * `~` is the operator's home.
+   */
+  userConfig: readonly string[];
   status: HarnessStatus;
 }
 
@@ -131,6 +146,9 @@ const SPECS: Record<HarnessName, HarnessSpec> = {
     knownTools: CLAUDE_TOOLS,
     editHooks: true,
     steer: "stdin",
+    settingSources: { flag: "--setting-sources", isolated: "project,local", withUser: "user,project,local" },
+    // controlled by the flag above; listed so an opt-in run hashes what it inherited
+    userConfig: ["~/.claude/settings.json", "~/.claude/CLAUDE.md"],
     status: "core",
   },
   codex: {
@@ -149,6 +167,8 @@ const SPECS: Record<HarnessName, HarnessSpec> = {
     knownTools: [],
     editHooks: false,
     steer: null, // app-server has turn/steer-shaped methods, unprobed — not until a fixture pins one
+    settingSources: null, // codex reads its own config and global instructions whatever we pass
+    userConfig: ["~/.codex/config.toml", "~/.codex/AGENTS.md"],
     status: "core",
   },
   cursor: {
@@ -169,6 +189,8 @@ const SPECS: Record<HarnessName, HarnessSpec> = {
     knownTools: [],
     editHooks: false,
     steer: null,
+    settingSources: null,
+    userConfig: ["~/.cursor/cli-config.json", "~/.cursor/mcp.json"],
     status: "optional",
   },
   opencode: {
@@ -186,6 +208,8 @@ const SPECS: Record<HarnessName, HarnessSpec> = {
     knownTools: CLAUDE_TOOLS,
     editHooks: true,
     steer: "stdin", // the claude executor and the claude binary: the same channel
+    settingSources: { flag: "--setting-sources", isolated: "project,local", withUser: "user,project,local" },
+    userConfig: ["~/.claude/settings.json", "~/.claude/CLAUDE.md"],
     status: "internal",
   },
 };

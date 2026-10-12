@@ -24,6 +24,7 @@
  *                                                    extract + assemble a snapshot (map/cli.ts)
  *   howdah metrics [--json]                          implement-slice runs vs the implement-ticket baseline (cli/metrics.ts)
  */
+import { userHookReport } from "../engine/executors/agent-env";
 import { softStop, steer } from "../engine/steer";
 import { waiveCriterion } from "../engine/acceptance-decision";
 import { existsSync, readdirSync } from "node:fs";
@@ -40,7 +41,7 @@ import { harnessNames, harnessSpec, isHarness } from "../core/harnesses";
 import { GRAPHS, graphCatalog } from "../graphs/index";
 import { loadRegistry, catalogOf } from "../graphs/registry";
 import { promptSearchPath } from "../graphs/local";
-import { howdahHome, loadConfig, saveConfig, resolveWorkspace, repoNameFor, workspaceNameFor, verifyCommandFor, setVerifyCommand, stuckThresholds, diagnosticsCommandFor, setDiagnosticsCommand, diagnosticsCommandProblem, previewFor, setPreview, ensureHowdahHome } from "../config/config";
+import { howdahHome, loadConfig, saveConfig, resolveWorkspace, repoNameFor, workspaceNameFor, verifyCommandFor, setVerifyCommand, stuckThresholds, diagnosticsCommandFor, setDiagnosticsCommand, diagnosticsCommandProblem, previewFor, setPreview, inheritsUserSettings, setInheritUserSettings, ensureHowdahHome } from "../config/config";
 import { loadTuning } from "../config/tuning";
 import { normalizeRunName } from "../core/run-name";
 import {
@@ -77,6 +78,8 @@ function executors() {
         stuck: stuckThresholds(loadConfig(base)),
         // HOW-52: likewise the preview `evidence:screenshot` starts
         previewFor: (repoPath) => previewFor(loadConfig(base), repoPath),
+        // HOW-55: read per attempt, so an opt-in applies to the next agent, not the next runner
+        inheritsUserSettings: (path) => inheritsUserSettings(loadConfig(base), path),
       });
 }
 
@@ -438,6 +441,11 @@ export async function doctorCommand(): Promise<boolean> {
   }
   for (const [name, f] of Object.entries(config.folders))
     checks.push([`folder ${name}`, existsSync(f.path), f.path]);
+  // HOW-55: which of YOUR hooks an agent would run — none unless a workspace opted in
+  for (const r of userHookReport([
+    ...Object.entries(config.repos).map(([name, w]) => ({ name, inherits: w.inheritUserSettings === true })),
+    ...Object.entries(config.folders).map(([name, w]) => ({ name, inherits: w.inheritUserSettings === true })),
+  ])) checks.push([r.name, true, r.detail]);
   const hb = existsSync(join(base, "heartbeat.json"));
   checks.push(["howdah up heartbeat", hb, hb ? join(base, "heartbeat.json") : "not running — start `howdah up`"]);
 
@@ -697,6 +705,16 @@ if (import.meta.main) {
         saveConfig(config, base);
         const now = config.repos[name]?.preview;
         console.log(now ? `preview for "${name}": ${now.command} → ${now.paths.join(", ")}` : `cleared the preview for "${name}" — evidence:screenshot will report not-checked`);
+      } else if (action === "user-settings" && name) {
+        // HOW-55: `workspace user-settings <name> on|off` — whether its agents load YOUR hooks,
+        // plugins and CLAUDE.md as well as the project's (recorded on every attempt either way)
+        const v = positional[2];
+        if (v !== "on" && v !== "off") throw new Error("usage: howdah workspace user-settings <name> on|off");
+        setInheritUserSettings(config, name, v === "on");
+        saveConfig(config, base);
+        console.log(v === "on"
+          ? `agents in "${name}" now load your user-level settings (hooks, plugins, CLAUDE.md) too`
+          : `agents in "${name}" load the project's settings only`);
       } else if (action === "remove" && name) {
         delete config.repos[name];
         delete config.folders[name];
@@ -704,7 +722,7 @@ if (import.meta.main) {
         console.log(`removed "${name}"`);
       } else if (action === "list" || action === undefined) {
         console.log(JSON.stringify({ repos: config.repos, folders: config.folders }, null, 2));
-      } else throw new Error('usage: howdah workspace add <name> <path> [--verify "<cmd>"] | verify <name> [<cmd>] | diagnostics <name> [<cmd>] | preview <name> [<cmd> --paths /,/x --ready-when "<js>"] | add-github <owner/name> | remove <name> | list');
+      } else throw new Error('usage: howdah workspace add <name> <path> [--verify "<cmd>"] | verify <name> [<cmd>] | diagnostics <name> [<cmd>] | preview <name> [<cmd> --paths /,/x --ready-when "<js>"] | user-settings <name> on|off | add-github <owner/name> | remove <name> | list');
     }
     else if (verb === "new-graph") {
       const { newGraph } = await import("./new-graph");

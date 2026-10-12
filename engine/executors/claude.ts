@@ -58,6 +58,9 @@ import { effectiveCwd } from "./worktree";
 import { killGroup } from "./shell";
 import { diagnosticsSettings } from "../hooks/diagnostics";
 import { ToolWatch, TurnCeiling, stuckReason, turnTimeoutReason, type StuckThresholds } from "./stuck";
+import { readWorktreeRecord } from "./worktree-record";
+import { environmentFiles, injectedRecord } from "./agent-env";
+import { harnessSpec, isHarness } from "../../core/harnesses";
 import { isAllowReply } from "./reply";
 import { READ_ONLY_REFUSAL, STOP_GRACE_TOOL_CALLS, STOP_MESSAGE, steerTurnText, stopTurnText } from "../../core/steer";
 import {
@@ -81,6 +84,12 @@ export interface ClaudeExecutorOpts {
   askTimeoutMs?: number;
   /** HOW-47: how often the log is read for operator steers (default: askPollMs, then 400ms) */
   steerPollMs?: number;
+  /**
+   * HOW-55: has this run's workspace opted in to the operator's USER-level settings (hooks,
+   * plugins, CLAUDE.md)? Keyed by the repo path (or the plain folder) the run works in. Default
+   * no: an agent is configured by the project alone, `--setting-sources project,local`.
+   */
+  inheritsUserSettings?: (repoPath: string) => boolean;
   notifiers?: Notifier[];
   viewerBase?: string;
   /** HOW-38: config.json `stuck` thresholds (default warn 5, stop 8) */
@@ -105,6 +114,14 @@ export function claudeExecutor(opts: ClaudeExecutorOpts): Executor {
     // HOW-53: resolveAgentConfig makes a readOnly node "plan", whatever any override says
     const permissionMode = agentConfig?.permissionMode ?? opts.permissionMode ?? "auto";
     const readOnly = permissionMode === "plan";
+    // HOW-55: which of the operator's settings this agent loads — the project's alone, unless
+    // the workspace opted in. Recorded on `agent-environment` with everything the CLI reports.
+    const harnessName = agentConfig?.harness ?? "claude";
+    const switchable = isHarness(harnessName) ? harnessSpec(harnessName).settingSources : harnessSpec("claude").settingSources;
+    const repoPath = readWorktreeRecord(dirname(log.path))?.repo ?? cwd;
+    const inheritsUser = repoPath !== undefined && (opts.inheritsUserSettings?.(repoPath) ?? false);
+    const settingSources = switchable ? (inheritsUser ? switchable.withUser : switchable.isolated) : undefined;
+    const workDir = effectiveCwd(log.path, cwd) ?? dirname(log.path);
     const prompt = renderedPrompt ?? ""; // exactly what rendered_hash covers (system-map 0.1)
     const sessionId = randomUUID();
 
@@ -122,11 +139,12 @@ export function claudeExecutor(opts: ClaudeExecutorOpts): Executor {
         disallowedTools: agentConfig?.tools?.deny,
         // HOW-39: resolved by the engine only when the node, the harness and the workspace all say yes
         ...(agentConfig?.diagnosticsCommand ? { settings: diagnosticsSettings(opts.diagnosticsTimeoutMs) } : {}),
+        settingSources,
       })],
       // HOW-38: its own process group, so a stuck or timed-out turn is ended with every
       // child it started (a test runner's workers) rather than leaving them orphaned
       {
-        cwd: effectiveCwd(log.path, cwd) ?? dirname(log.path),
+        cwd: workDir,
         // HOW-39: claude hands its environment to its hooks — this is how the hook learns its
         // command and where to record what it ran
         env: agentConfig?.diagnosticsCommand
@@ -324,6 +342,11 @@ export function claudeExecutor(opts: ClaudeExecutorOpts): Executor {
     };
     const steerTimer = setInterval(() => { pollSteers(); flushSteers(); }, opts.steerPollMs ?? opts.askPollMs ?? 400);
 
+    /** HOW-55: hooks that ran before the session's init — the text they injected is recorded */
+    const startupHooks: Array<{ name: string; exit_code?: number; injected?: ReturnType<typeof injectedRecord> }> = [];
+    let envRecorded = false;
+    let envRefusal: string | null = null;
+
     let turnEnded = false;
     let repairSent = false;
     /** HOW-51: why the first answer's outputs were refused — the reason if the repair never answers */
@@ -342,6 +365,31 @@ export function claudeExecutor(opts: ClaudeExecutorOpts): Executor {
             case "thinking_delta":
               chunk("thinking", ev.text);
               break;
+            case "hook":
+              if (!envRecorded && ev.phase === "response")
+                startupHooks.push({ name: ev.name, ...(ev.exit_code !== undefined ? { exit_code: ev.exit_code } : {}), ...(ev.injected ? { injected: injectedRecord(ev.injected) } : {}) });
+              break;
+            case "agent_env": {
+              if (envRecorded) break;
+              envRecorded = true;
+              const { type: _t, ...env } = ev;
+              log.append({
+                type: "agent-environment", node: nodeId, visit, harness: isHarness(harnessName) ? harnessName : "claude",
+                setting_sources: settingSources ?? null, inherits_user: inheritsUser, ...env,
+                hooks: startupHooks,
+                files: environmentFiles(harnessName, workDir, inheritsUser || !switchable),
+              });
+              // a skill the node names that this session did not load would be silently missing
+              // from the agent's toolbox — refuse instead, saying where it lives (HOW-55)
+              // only against a list the CLI REPORTED: an init without one says nothing either way
+              const loaded = env.skills;
+              const missing = loaded ? (agentConfig?.skills ?? []).filter((k) => !loaded.some((have) => have === k || have.endsWith(`:${k}`))) : [];
+              if (missing.length)
+                envRefusal = `skill${missing.length === 1 ? "" : "s"} ${missing.map((k) => `"${k}"`).join(", ")} ${missing.length === 1 ? "is" : "are"} not available with --setting-sources ${settingSources ?? "(default)"}` +
+                  (inheritsUser ? "" : " — a user-installed skill loads only when the workspace opts in to user settings (`howdah workspace user-settings <name> on`)") +
+                  "; remove it from the node or install it in the project";
+              break;
+            }
             case "user_echo": {
               // HOW-47: the harness consumed a stdin message. Match it to the steer we wrote —
               // the echo of the prompt itself, or of a repair turn, matches nothing here
@@ -440,6 +488,7 @@ export function claudeExecutor(opts: ClaudeExecutorOpts): Executor {
       }
       if (stopped !== null) break readLoop; // nothing will answer now — park instead of reading on
       if (watch.stopped) break readLoop; // HOW-38: the same failing call, again — end the turn
+      if (envRefusal !== null) break readLoop; // HOW-55: refused before it could act without its skill
       if (stop.forced) break readLoop; // HOW-48: it ignored the stop; the kill below ends it
       if (turnEnded) {
         // one repair turn before giving up: the session still holds the work, so asking for
@@ -474,7 +523,7 @@ export function claudeExecutor(opts: ClaudeExecutorOpts): Executor {
     // fresh turn after this one — work nobody is reading. Stop the process instead of letting it
     // drain stdin; the steer is undelivered, so the engine carries it into the next render.
     const steerInLimbo = [...steersPending.values()].some((p) => p.written) || (stop.written && !stop.delivered);
-    if (steerInLimbo || stop.forced) proc.kill();
+    if (steerInLimbo || stop.forced || envRefusal !== null) proc.kill();
     try { proc.stdin.end(); } catch {}
     // grace, then make sure it is gone
     const exited = await Promise.race([proc.exited, Bun.sleep(3000).then(() => null)]);
@@ -526,6 +575,11 @@ export function claudeExecutor(opts: ClaudeExecutorOpts): Executor {
     if (stop.requested && !stop.delivered && turnEnded) {
       // the step finished before another tool call: its work stands, the engine pauses at the boundary
       log.append({ type: "soft-stop-moot", node: nodeId, visit });
+    }
+
+    if (envRefusal !== null) {
+      chunk("text", `\n[${envRefusal}]`);
+      return { status: "failed", writes: {}, reason: envRefusal };
     }
 
     // a wait that ended without an answer is the failure — saying "output contract violation"

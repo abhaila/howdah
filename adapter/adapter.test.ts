@@ -110,7 +110,7 @@ describe("claude adapter mapping", () => {
 
   test("full fixture maps to the normalized sequence", () => {
     expect(events.map((e) => e.type)).toEqual([
-      "session_started", "thinking_delta", "text_delta", "text_delta",
+      "session_started", "agent_env", "thinking_delta", "text_delta", "text_delta",
       "tool_call", "permission_request", "tool_result", "rate_limit", "turn_end",
     ]);
   });
@@ -169,7 +169,7 @@ describe("claude steer wire (adapter/fixtures/claude-steer.jsonl)", () => {
   test("the steer is echoed AFTER the in-flight tool's result, as its own message, in the same turn", () => {
     // (the fixture keeps no stream_event deltas: the capture dropped them to stay small)
     expect(events.filter((e) => e.type !== "rate_limit").map((e) => e.type)).toEqual([
-      "session_started", "user_echo", "tool_call", "tool_result", "user_echo", "turn_end",
+      "session_started", "agent_env", "user_echo", "tool_call", "tool_result", "user_echo", "turn_end",
     ]);
     const call = events.findIndex((e) => e.type === "tool_call");
     const result = events.findIndex((e) => e.type === "tool_result");
@@ -506,5 +506,36 @@ describe("claude plan mode (adapter/fixtures/claude-plan-mode-*.jsonl)", () => {
     expect(asks).toHaveLength(1);
     expect(asks[0]).toMatchObject({ tool_name: "Edit" });
     expect((asks[0] as { requires_user_interaction?: boolean }).requires_user_interaction).toBeUndefined();
+  });
+});
+
+/** HOW-55 — the startup a session reports: hooks before init, then what init says it loaded */
+describe("claude startup (adapter/fixtures/claude-init-*.jsonl)", () => {
+  const load = (name: string) =>
+    replay(readFileSync(join(import.meta.dir, "fixtures", name)), 128).flatMap((r) => (r.ok ? mapClaudeEvent(r.value) : []));
+
+  test("with user settings: five SessionStart hooks ran BEFORE init, four injecting context", () => {
+    const events = load("claude-init-user-settings.jsonl");
+    const init = events.findIndex((e) => e.type === "agent_env");
+    const hooks = events.filter((e) => e.type === "hook");
+    expect(hooks.length).toBe(10); // 5 started + 5 responses
+    expect(events.findLastIndex((e) => e.type === "hook")).toBeLessThan(init);
+    expect(hooks.filter((h) => (h as { injected?: string }).injected)).toHaveLength(4);
+  });
+
+  test("init maps to session_started and agent_env, names only", () => {
+    const events = load("claude-init-project-local.jsonl");
+    expect(events.map((e) => e.type)).toEqual(["session_started", "agent_env"]);
+    const env = events[1] as Extract<(typeof events)[number], { type: "agent_env" }>;
+    expect(env).toMatchObject({ version: "2.1.296", permission_mode: "plan" });
+    expect(env.skills).toHaveLength(19);
+    expect(env.plugins.map((p) => p.source)).toEqual(["cc-plugin-agents-md@builtin", "cc-plugin-telemetry@builtin", "cc-plugin-plugin-authoring@builtin"]);
+  });
+
+  test("a malformed init degrades to empty lists rather than throwing", () => {
+    const [, env] = mapClaudeEvent({ type: "system", subtype: "init", session_id: "s", tools: "nope", plugins: [null], skills: [1] });
+    expect(env).toMatchObject({ type: "agent_env", tools: [], plugins: [], skills: [] }); // a number is not a skill name: dropped, not stringified
+    // and an init that reports no skills list at all is UNKNOWN, not "no skills"
+    expect(mapClaudeEvent({ type: "system", subtype: "init", session_id: "s" })[1]).not.toHaveProperty("skills");
   });
 });

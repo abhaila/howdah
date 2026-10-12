@@ -57,6 +57,8 @@ export function claudeArgs(opts: {
   disallowedTools?: readonly string[];
   /** HOW-39: a settings JSON (the post-edit diagnostics hook) */
   settings?: string;
+  /** HOW-55: which of the operator's settings load */
+  settingSources?: string;
 }): string[] {
   return [
     "-p",
@@ -68,6 +70,8 @@ export function claudeArgs(opts: {
     // HOW-47: echo every consumed stdin user message (isReplay) — the proof a steer was delivered
     "--replay-user-messages",
     "--permission-mode", opts.permissionMode ?? "auto",
+    // HOW-55: which of the operator's settings load — "project,local" unless the workspace opts in
+    ...(opts.settingSources ? ["--setting-sources", opts.settingSources] : []),
     ...(opts.model ? ["--model", opts.model] : []),
     ...(opts.maxTurns ? ["--max-turns", String(opts.maxTurns)] : []),
     ...(opts.effort ? ["--effort", opts.effort] : []),
@@ -95,7 +99,17 @@ export function mapClaudeEvent(raw: unknown): AgentEvent[] {
   switch (e.type) {
     case "system":
       if (e.subtype === "init" && typeof e.session_id === "string")
-        return [{ type: "session_started", session_id: e.session_id }];
+        return [{ type: "session_started", session_id: e.session_id }, { type: "agent_env", ...agentEnvOf(e) }];
+      // HOW-55: a hook ran — SessionStart ones before `init`, others around tool calls
+      if ((e.subtype === "hook_started" || e.subtype === "hook_response") && typeof e.hook_name === "string") {
+        const out = typeof e.output === "string" ? e.output : typeof e.stdout === "string" ? e.stdout : "";
+        const injected = e.subtype === "hook_response" ? injectedContext(out) : undefined;
+        return [{
+          type: "hook", phase: e.subtype === "hook_started" ? "started" : "response", name: e.hook_name,
+          ...(typeof e.exit_code === "number" ? { exit_code: e.exit_code } : {}),
+          ...(injected !== undefined ? { injected } : {}),
+        }];
+      }
       if (e.subtype === "compact_boundary") {
         const meta = e.compact_metadata ?? {};
         return [{
@@ -210,4 +224,34 @@ export function buildClaudeUserTurn(text: string): string {
     type: "user",
     message: { role: "user", content: [{ type: "text", text }] },
   }) + "\n";
+}
+
+/**
+ * HOW-55: what the CLI's `system/init` says this session loaded — the agent's ENVIRONMENT, which
+ * the rendered prompt and its hash do not cover. Names only; nothing here is trusted to have a
+ * shape, so every field degrades to empty rather than throwing.
+ */
+function agentEnvOf(e: Record<string, any>): Omit<Extract<AgentEvent, { type: "agent_env" }>, "type"> {
+  const names = (v: unknown): string[] => (Array.isArray(v) ? v.map((x) => (typeof x === "string" ? x : String((x as { name?: unknown })?.name ?? ""))).filter(Boolean) : []);
+  return {
+    version: typeof e.claude_code_version === "string" ? e.claude_code_version : undefined,
+    model: typeof e.model === "string" ? e.model : undefined,
+    permission_mode: typeof e.permissionMode === "string" ? e.permissionMode : undefined,
+    tools: names(e.tools),
+    ...(Array.isArray(e.skills) ? { skills: names(e.skills) } : {}),
+    plugins: Array.isArray(e.plugins) ? e.plugins.map((p: any) => ({ name: String(p?.name ?? ""), source: String(p?.source ?? "") })).filter((p: { name: string }) => p.name) : [],
+    mcp_servers: Array.isArray(e.mcp_servers) ? e.mcp_servers.map((m: any) => ({ name: String(m?.name ?? ""), source: String(m?.source ?? "") })).filter((m: { name: string }) => m.name) : [],
+    memory_paths: e.memory_paths && typeof e.memory_paths === "object" ? Object.values(e.memory_paths).filter((v): v is string => typeof v === "string") : [],
+  };
+}
+
+/** the `additionalContext` a hook's JSON output injected into the session, if it injected any */
+function injectedContext(output: string): string | undefined {
+  try {
+    const v = JSON.parse(output) as { hookSpecificOutput?: { additionalContext?: unknown } };
+    const ctx = v?.hookSpecificOutput?.additionalContext;
+    return typeof ctx === "string" && ctx ? ctx : undefined;
+  } catch {
+    return undefined;
+  }
 }

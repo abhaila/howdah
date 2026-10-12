@@ -79,9 +79,14 @@ bun cli/main.ts reply <run-id> <text>        # answers the current ask, resumes 
 bun cli/main.ts resolve-effect <run-id> <effect> happened|not-happened [--node <n>]
                                              # HOW-3: attest to an ambiguous side effect, then resume
 bun cli/main.ts resume|pause|abort <run-id>  # pause/abort also interrupt a PROVEN live runner mid-turn
+bun cli/main.ts steer <run-id> <text>        # HOW-47: say something to a live agent; lands at its next tool call
+bun cli/main.ts stop <run-id>                # HOW-48: soft pause — the agent stops at its next tool call
+bun cli/main.ts waive <run-id> <criterion> <reason>   # HOW-51: accept an unmet acceptance criterion, on the record
 bun cli/main.ts jump <run-id> <node> [msg]   # move a dead run to a node, injecting an instruction
 bun cli/main.ts up                           # supervisor: heartbeat + resume dead runs
-bun cli/main.ts workspace add|add-github|remove|list
+bun cli/main.ts workspace add|add-github|remove|list|verify|preview|user-settings
+                                             # preview <name> "<cmd>" --paths /,/x [--ready-when "<js>"] (HOW-52)
+                                             # user-settings <name> on|off: agents load YOUR hooks/plugins/CLAUDE.md (HOW-55)
 bun cli/main.ts new-graph <name> --kind doc|research|code|custom   # writes to $HOWDAH_HOME/graphs
 bun cli/main.ts resume <run-id> --force      # break a runner lock whose holder is NOT this run's runner
 bun cli/main.ts approve|send-feedback <run-id> [--proposal <id>]      # decide the current slice round
@@ -441,6 +446,35 @@ Break one of these and the design stops working, so check them before changing t
   reconstructs VERIFIED. The chain is an ORDER, not a successor map: it skips a harness this
   run has already spent, so "claude is out and so is codex" lands on cursor instead of
   parking.
+
+- **An agent's environment is chosen and recorded (HOW-55).** `rendered_hash` proves the
+  prompt; the rest of an agent's input is its settings. Claude agents run with
+  `--setting-sources project,local` unless their workspace opts in (`workspace user-settings`),
+  so the operator's user-level hooks, plugins and CLAUDE.md stay out by default. Every agent
+  attempt appends `agent-environment`: the sources, the hooks that ran before `init` and the
+  context they injected (hashed), skills, plugins, MCP servers, and hashes of the settings and
+  CLAUDE.md files it could read (engine/executors/agent-env.ts). codex and cursor have no switch,
+  so their `userConfig` is hashed instead. A node naming a skill the session did not load is
+  refused with a reason.
+- **A running turn is reachable without killing it (HOW-47, HOW-48).** A steer or a soft stop is
+  a log event (engine/steer.ts, one precheck for route and CLI). The claude executor writes it
+  to stdin only while a tool call is in flight, proves delivery by the CLI's
+  `--replay-user-messages` echo, and carries an undelivered steer into the next render (suffix
+  v5). A turn that ends after a delivered stop is `paused-by-operator`, never a contract
+  violation; its last words brief the next visit (suffix v6). docs/designs/steer.md has the spike.
+- **"Done" is a contract, not prose (HOW-51).** `acceptance` rows start failing; only a READ-ONLY
+  node may write them (validate), a flip must cite evidence real in this run (outputs check,
+  core/acceptance.ts), and `requiresAcceptance` holds delivery until every live row passes or an
+  operator waives it with a decision event (`acceptance-waived`).
+- **Reviewers are read-only, and the harness enforces it (HOW-53).** Plan mode does NOT refuse an
+  Edit — it asks the permission-prompt tool. On a plan-mode node the claude executor refuses every
+  permission request itself and never asks the operator (adapter/fixtures/claude-plan-mode-*.jsonl).
+- **The harness gathers its own evidence (HOW-40, HOW-52).** `verify:run` runs the tests and
+  `evidence:screenshot` captures the workspace preview into the run dir (never the worktree) over
+  CDP; neither passes silently — no contract or no browser is `not-checked` with a reason.
+- **A loop that changes nothing parks (HOW-54).** Progress-checked steps (on a cycle, not
+  readOnly, not `changesFiles: false`) record `node-finished.tree`, the worktree's content tree
+  id; a visit whose tree equals its previous visit's parks `no-progress`.
 
 ### Module map
 

@@ -34,10 +34,14 @@ export interface RepoWorkspace {
    * Part of HOW-15's environment contract, like verifyCommand. Unset: `not-checked`.
    */
   preview?: PreviewContract;
+  /** HOW-55: agents in this workspace load the operator's USER-level settings too (default: project only) */
+  inheritUserSettings?: true;
 }
 
 export interface PlainWorkspace {
   path: string;
+  /** HOW-55: as on a repo workspace */
+  inheritUserSettings?: true;
 }
 
 export interface HowdahConfig {
@@ -144,6 +148,23 @@ export function repoNameFor(config: HowdahConfig, repoPath: string): string {
 export function verifyCommandFor(config: HowdahConfig, repoPath: string): string | undefined {
   const cmd = Object.values(config.repos).find((r) => r.path === repoPath)?.verifyCommand?.trim();
   return cmd ? cmd : undefined;
+}
+
+/**
+ * HOW-55: does the workspace at this path load the operator's user-level settings? Matched by
+ * path like verifyCommandFor, over repos AND plain folders. Default no: an agent is configured by
+ * the project alone, so its hooks, plugins and CLAUDE.md are the repository's, not the operator's.
+ */
+export function inheritsUserSettings(config: HowdahConfig, path: string): boolean {
+  return [...Object.values(config.repos), ...Object.values(config.folders)].some((w) => w.path === path && w.inheritUserSettings === true);
+}
+
+/** HOW-55: opt a workspace in to (or out of) the operator's user-level settings */
+export function setInheritUserSettings(config: HowdahConfig, name: string, on: boolean): void {
+  const w = config.repos[name] ?? config.folders[name];
+  if (!w) throw new Error(`unknown workspace "${name}"`);
+  if (on) w.inheritUserSettings = true;
+  else delete w.inheritUserSettings;
 }
 
 /** HOW-52: the preview contract registered for a repo path, or undefined (matched like verifyCommandFor) */

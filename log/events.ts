@@ -648,6 +648,34 @@ export type RunEvent =
       reason: string;
       by: "operator";
     }
+  | {
+      /**
+       * HOW-55: what an agent's ENVIRONMENT was, beyond the prompt `rendered_hash` proves — so
+       * two runs of the same pinned prompt that behaved differently can be told apart, and an
+       * A/B comparison (HOW-42) can see what the operator's setup was that day. Recorded once
+       * per agent attempt, from the harness's own init where it reports one.
+       */
+      type: "agent-environment";
+      node: string;
+      visit: number;
+      harness: Harness;
+      /** the `--setting-sources` passed (claude), or null when the harness has no such switch */
+      setting_sources: string | null;
+      /** the workspace opted in to the operator's user-level settings */
+      inherits_user: boolean;
+      version?: string;
+      model?: string;
+      permission_mode?: string;
+      tools?: string[];
+      skills?: string[];
+      plugins?: Array<{ name: string; source: string }>;
+      mcp_servers?: Array<{ name: string; source: string }>;
+      memory_paths?: string[];
+      /** hooks that ran before the session started, and the context each one injected (hashed, and its text bounded) */
+      hooks?: Array<{ name: string; exit_code?: number; injected?: { sha256: string; chars: number; text: string } }>;
+      /** settings and instruction files the harness reads, hashed; `sha256: null` = absent */
+      files: Array<{ path: string; scope: "project" | "user"; sha256: string | null }>;
+    }
   | { type: "run-finished"; outcome: RunOutcome };
 
 export type LoggedEvent = RunEvent & Stamped;

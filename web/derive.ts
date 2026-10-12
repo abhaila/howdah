@@ -163,6 +163,12 @@ export interface RunDetail {
   /** HOW-48: the soft stop on the newest step, and how far it got — null when none was asked for */
   soft_stop: SoftStopState | null;
   /**
+   * HOW-55: what the NEWEST agent attempt ran with, beyond its prompt — setting sources, hooks
+   * and the context they injected, plugins, skills, MCP servers and the hashed settings and
+   * CLAUDE.md files. Null for a run recorded before HOW-55: "not recorded", never a guess.
+   */
+  agent_env: Extract<LoggedEvent, { type: "agent-environment" }> | null;
+  /**
    * HOW-52: every screenshot-evidence result a step published (`evidence.items`), oldest first.
    * Validated through core/evidence.ts asEvidenceResult — context is untrusted to the viewer, and
    * only files under the run's evidence/ folder survive it.
@@ -477,6 +483,10 @@ export function deriveDetail(
     plan: timeline.length ? derivePlan(events, timeline.at(-1)!.node, timeline.at(-1)!.visit) : null,
     steers: steerStates(events),
     soft_stop: timeline.length ? softStopState(events, timeline.at(-1)!.node, timeline.at(-1)!.visit) : null,
+    agent_env: (() => {
+      const e = events.findLast((x) => x.type === "agent-environment");
+      return e?.type === "agent-environment" ? e : null;
+    })(),
     acceptance: (() => {
       const latest = latestAcceptance(events);
       if (!latest) return null;
@@ -688,6 +698,9 @@ export function deriveLogRows(events: LoggedEvent[]): LogRow[] {
         return { ...base, ...at(e.node, e.visit), kind: "operator", depth: 1, summary: "stop moot — the step finished first; pausing at the boundary" };
       case "acceptance-waived":
         return { ...base, node: null, visit: null, kind: "operator", depth: 0, summary: `waived criterion "${e.criterion_id}" · ${e.reason.slice(0, 160)}` };
+      case "agent-environment":
+        return { ...base, ...at(e.node, e.visit), kind: "engine", depth: 1,
+          summary: `${e.harness} environment · ${e.setting_sources ?? "no setting-sources switch"}${e.inherits_user ? " (user settings inherited)" : ""}${e.hooks?.length ? ` · ${e.hooks.length} hook${e.hooks.length === 1 ? "" : "s"} ran` : ""}${e.skills ? ` · ${e.skills.length} skills` : ""}${e.plugins ? ` · ${e.plugins.length} plugins` : ""}` };
       default: {
         const never: never = e;
         throw new Error(`unhandled event type in deriveLogRows: ${JSON.stringify(never)}`);

@@ -15,6 +15,7 @@
  * FAKE_CLAUDE_TODO=1 writes a TodoWrite plan twice, the second over 400 chars (HOW-49).
  * FAKE_CLAUDE_STEER=1 holds a tool call open and delivers a steer after it (HOW-47).
  * FAKE_CLAUDE_TRY_EDIT / FAKE_CLAUDE_TRY_EXIT_PLAN ask permission the way plan mode does (HOW-53).
+ * FAKE_CLAUDE_INIT=<jsonl> replays a captured startup (hooks + init) (HOW-55).
  * FAKE_CLAUDE_CONTEXT (HOW-14), shapes from claude 2.1.283's SDK types, not a captured turn:
  *   compact  emit a `compact_boundary` mid-turn, then finish normally
  *   exceed   end the first turn with `result { is_error: true, result: "Prompt is too long" }`
@@ -67,7 +68,12 @@ const userTurn = JSON.parse(await nextLine()) as { message: { content: Array<{ t
 const promptText = userTurn.message.content[0]?.text ?? "";
 if (process.env.FAKE_CAPTURE) appendFileSync(process.env.FAKE_CAPTURE, JSON.stringify(promptText) + "\n");
 
-out({ type: "system", subtype: "init", session_id: "fake-session-0001" });
+// HOW-55: FAKE_CLAUDE_INIT=<jsonl> replays a CAPTURED startup — hook events and the real `init`
+// (adapter/fixtures/claude-init-*.jsonl) — instead of the minimal init, so the environment the
+// executor records comes from what the CLI actually reports
+if (process.env.FAKE_CLAUDE_INIT)
+  for (const line of readFileSync(process.env.FAKE_CLAUDE_INIT, "utf8").split("\n")) { if (line.trim()) process.stdout.write(line + "\n"); }
+else out({ type: "system", subtype: "init", session_id: "fake-session-0001" });
 out({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: "Working on it — " } } });
 out({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: "doing the thing. 🐘" } } });
 

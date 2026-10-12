@@ -72,6 +72,8 @@ export interface LiveExecutorDeps {
   verifyCommandFor?: (repoPath: string) => string | undefined;
   /** HOW-52: the workspace's preview contract for a repo path — what `evidence:screenshot` starts */
   previewFor?: (repoPath: string) => PreviewContract | undefined;
+  /** HOW-55: does the workspace at this path load the operator's user-level settings? */
+  inheritsUserSettings?: (path: string) => boolean;
   viewerBase?: string;
   notifiers?: Notifier[];
   claudeBinary?: string;
@@ -84,7 +86,7 @@ export interface LiveExecutorDeps {
 /** the real registry: agent nodes dispatch on their declared harness (default claude) */
 export function liveExecutors(deps: LiveExecutorDeps): EngineOpts["executors"] {
   const stuck = deps.stuck;
-  const claude = claudeExecutor({ attentionDir: deps.attentionDir, viewerBase: deps.viewerBase, notifiers: deps.notifiers, binary: deps.claudeBinary, stuck });
+  const claude = claudeExecutor({ attentionDir: deps.attentionDir, viewerBase: deps.viewerBase, notifiers: deps.notifiers, binary: deps.claudeBinary, stuck, inheritsUserSettings: deps.inheritsUserSettings });
   const codexDeps = { attentionDir: deps.attentionDir, viewerBase: deps.viewerBase, notifiers: deps.notifiers, binary: deps.codexBinary, stuck };
   const codex = codexExecutor(codexDeps);
   const codexReadOnly = codexExecutor({ ...codexDeps, sandbox: "read-only" });
