@@ -485,6 +485,9 @@ export function deriveLogRows(events: LoggedEvent[]): LogRow[] {
           summary: `${e.harness} ${e.state}${e.remaining !== undefined ? ` · ${Math.round(e.remaining * 100)}% left` : ""}${e.resets_at ? ` · resets ${e.resets_at}` : ""}` };
       case "run-finished":
         return { ...base, node: null, visit: null, kind: "engine", depth: 0, summary: e.outcome };
+      case "context-continued":
+        return { ...base, ...at(e.node, e.visit), kind: "engine", depth: 0,
+          summary: `context window filled · continued automatically (${e.retry} of ${e.budget})${e.head ? ` at ${e.head.slice(0, 12)}` : ""}` };
       case "stuck-warning":
         return { ...base, ...at(e.node, e.visit), kind: "attention", depth: 1,
           summary: `stuck? ${e.tool_name} ×${e.count} with identical arguments${e.failing ? ` · failing ×${e.failing}` : ""}${e.reminded ? " · reminded" : ""} · ${e.input_summary.slice(0, 160)}` };

@@ -252,6 +252,21 @@ const INPUTS_NODE = "__inputs__";
  */
 const NO_HOP_CODES: ReadonlySet<string> = new Set(["context-exhausted", "stuck", "turn-timeout"]);
 
+/**
+ * HOW-43: automatic continuations of `node` in the current streak — the context-continued
+ * events since its last SUCCEEDED visit or the operator's last jump. Derived from the log, so
+ * a resume in a fresh process reaches the same budget state.
+ */
+export function contextRetriesUsed(events: readonly LoggedEvent[], node: string): number {
+  let used = 0;
+  for (const e of events) {
+    if (e.type === "context-continued" && e.node === node) used++;
+    else if (e.type === "node-finished" && e.node === node && e.status === "succeeded") used = 0;
+    else if (e.type === "operator-jump") used = 0;
+  }
+  return used;
+}
+
 /** A prompt file's front-matter version (1 when absent — the pre-versioning default). */
 function promptVersion(raw: string): number {
   const vm = raw.match(/^version:\s*(\d+)\s*$/m);
@@ -370,26 +385,9 @@ export class Engine {
       this.ctx.endAttempt(f.status);
     }
 
-    // OV-1: ambiguous executions are probed BEFORE any retry
-    for (const intent of replayed.pendingIntents) {
-      const verdict = this.opts.probe
-        ? await this.opts.probe(intent.node, intent.effect, intent.attempt_id)
-        : ("unknown" as const);
-      if (verdict === "happened") {
-        this.log.append({
-          type: "side-effect-done",
-          node: intent.node,
-          visit: intent.visit,
-          attempt_id: intent.attempt_id,
-          effect: intent.effect,
-          result: { probed: true },
-        });
-        this.completedEffects.add(effectKey(intent.node, intent.effect));
-      } else if (verdict === "unknown") {
-        return this.park(intent.node, intent.visit, "ambiguous-effect", `ambiguous side effect "${intent.effect}" — probe could not decide`);
-      }
-      // not-happened: nothing recorded; the retry will claim() it again
-    }
+    // OV-1: ambiguous executions are probed BEFORE any retry (not-happened: the retry claims it again)
+    const ambiguous = await this.probeIntents(replayed.pendingIntents);
+    if (ambiguous) return ambiguous;
 
     // resume() IS the operator action: a standing park is resolved by resuming. Parks whose
     // cause still holds (maxVisits, exhausted conditions) simply re-park deterministically.
@@ -528,6 +526,11 @@ export class Engine {
           });
           continue;
         }
+        if (def.kind === "agent" && result.code === "context-exhausted") {
+          const decision = await this.continueAfterExhaustion(current, def, visit, result.reason ?? "attempt failed");
+          if (decision.continue) continue;
+          return decision.state;
+        }
         return this.park(current, visit, result.code ?? "attempt-failed", result.reason ?? "attempt failed");
       }
 
@@ -574,6 +577,86 @@ export class Engine {
       log: this.log,
       reads, renderedPrompt, agentConfig, effects,
     });
+  }
+
+  // ---- context exhaustion: continue once before parking (HOW-43) ----------------
+
+  /**
+   * A visit filled its context window. Before HOW-43 that always parked, and the human's only
+   * move was to press resume — adding no information. Now the engine continues the node itself
+   * when every one of these holds, in this order, and parks (saying which one failed) otherwise:
+   *   (a) the operator has not asked to pause or abort — their control wins;
+   *   (b) no side effect of this attempt is ambiguous — it goes through resume()'s probe, the
+   *       same path, so an unknown verdict parks FOR THE EFFECT;
+   *   (c) the node's `contextRetries` budget (default 1) is not spent — counted from the log, so
+   *       a fresh process reaches the same answer;
+   *   (d) a continuation that exhausted again made progress — a new commit or an edited file;
+   *       looping on nothing is worse than asking.
+   * The continuation is a NORMAL visit (charged to maxVisits — the same harness re-attempting
+   * the same work, unlike a fallback hop) rendered with the HOW-36 handoff.
+   */
+  private async continueAfterExhaustion(
+    node: string,
+    def: Extract<NodeDef<any>, { kind: "agent" }>,
+    visit: number,
+    reason: string,
+  ): Promise<{ continue: true } | { continue: false; state: RunState }> {
+    const park = (why = reason) => ({ continue: false as const, state: this.park(node, visit, "context-exhausted", why) });
+    const command = this.opts.control?.() ?? null;
+    if (command === "pause" || command === "abort") return park();
+
+    // (b) the same probe resume() runs, over this node's still-ambiguous intents
+    const pending = replayState(this.log.read()).pendingIntents.filter((i) => i.node === node);
+    const ambiguous = await this.probeIntents(pending);
+    if (ambiguous) return { continue: false, state: ambiguous };
+
+    const events = this.log.read();
+    const budget = this.resolveAgentConfig(def, node).contextRetries ?? 1;
+    const used = contextRetriesUsed(events, node);
+    if (used >= budget)
+      return park(`${reason} — exhausted context ${used + 1} time${used === 0 ? "" : "s"} in a row; consider splitting this step`);
+
+    const head = (await fingerprint(this.workCwd()).catch(() => null))?.head ?? null;
+    const previous = events.findLast((e) => e.type === "context-continued" && e.node === node);
+    if (previous?.type === "context-continued" && previous.visit === visit - 1) {
+      const handoff = deriveHandoff(events, node, visit, []);
+      if (handoff.filesEdited.length === 0 && head === previous.head)
+        return park(`${reason} — the automatic continuation exhausted its context again with no new commit and no edited file, so it is not being continued again; consider splitting this step`);
+    }
+
+    this.log.append({ type: "context-continued", node, visit, retry: used + 1, budget, head });
+    this.log.append({
+      type: "chunk", node, visit, turn: 1, index: ENGINE_NOTE_INDEX + 2, kind: "text",
+      content: `\n[context window filled — continuing automatically (${used + 1} of ${budget}) on a fresh visit, briefed with what this one had done]`,
+    });
+    return { continue: true };
+  }
+
+  /**
+   * OV-1's probe over ambiguous intents — resume()'s and the automatic continuation's one path.
+   * Returns the park for the first intent the probe cannot decide, or null when every one was
+   * settled (a `happened` is recorded as done; a `not-happened` is left for the retry to claim).
+   */
+  private async probeIntents(intents: readonly Extract<LoggedEvent, { type: "side-effect-intent" }>[]): Promise<RunState | null> {
+    for (const intent of intents) {
+      const verdict = this.opts.probe
+        ? await this.opts.probe(intent.node, intent.effect, intent.attempt_id)
+        : ("unknown" as const);
+      if (verdict === "happened") {
+        this.log.append({
+          type: "side-effect-done",
+          node: intent.node,
+          visit: intent.visit,
+          attempt_id: intent.attempt_id,
+          effect: intent.effect,
+          result: { probed: true },
+        });
+        this.completedEffects.add(effectKey(intent.node, intent.effect));
+      } else if (verdict === "unknown") {
+        return this.park(intent.node, intent.visit, "ambiguous-effect", `ambiguous side effect "${intent.effect}" — probe could not decide`);
+      }
+    }
+    return null;
   }
 
   // ---- approval (system-map 1a) -------------------------------------------------
@@ -861,7 +944,10 @@ export class Engine {
    * own text may well mention a "rate limit" it was writing code about.
    */
   private contextExhaustedAttempts(events: readonly LoggedEvent[]): Set<string> {
-    return this.parkedAttempts(events, new Set(["context-exhausted"]));
+    // HOW-43: an exhaustion the engine continued itself raised no park, but it is one all the same
+    const out = this.parkedAttempts(events, new Set(["context-exhausted"]));
+    for (const e of events) if (e.type === "context-continued") out.add(`${e.node}\0${e.visit}`);
+    return out;
   }
 
   /** the `node\0visit` of every attempt that parked with one of `codes` */
@@ -898,6 +984,7 @@ export class Engine {
       .map((e) => e.type === "node-finished" ? `${e.node}\0${e.visit}` : ""));
     // HOW-14/HOW-38: an exhausted, stuck or timed-out attempt is never a rate-limit witness
     for (const k of this.parkedAttempts(events, NO_HOP_CODES)) failed.delete(k);
+    for (const k of this.contextExhaustedAttempts(events)) failed.delete(k);
     const out = new Set<Harness>();
     for (const e of events) {
       if (e.type !== "prompt-rendered") continue;

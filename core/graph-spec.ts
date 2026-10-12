@@ -972,6 +972,8 @@ export function parseAgentConfig(v: unknown): AgentConfig | undefined {
   if (typeof v.stuckDetection === "boolean") out.stuckDetection = v.stuckDetection;
   const cap = posInt(v.contextCap);
   if (cap !== undefined) out.contextCap = cap;
+  // 0 is meaningful here (never continue automatically), so not posInt
+  if (typeof v.contextRetries === "number" && Number.isInteger(v.contextRetries) && v.contextRetries >= 0) out.contextRetries = v.contextRetries;
   return Object.keys(out).length ? out : undefined;
 }
 

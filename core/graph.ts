@@ -72,6 +72,12 @@ export interface AgentConfig {
    * The stored value is never touched — edge conditions and the log keep the whole thing.
    */
   contextCap?: number;
+  /**
+   * HOW-43: how many times in a row a visit that filled its context window is continued
+   * AUTOMATICALLY — a fresh visit, same harness, briefed with the HOW-36 handoff — before the
+   * run parks for a human. Default 1. 0 restores HOW-14's park-every-time.
+   */
+  contextRetries?: number;
 }
 
 /**
@@ -80,7 +86,7 @@ export interface AgentConfig {
  * the other. `effortInert` is absent on purpose: it is a RESOLUTION result, never a setting.
  */
 export const AGENT_CONFIG_KEYS = [
-  "harness", "model", "effort", "permissionMode", "maxTurns", "skills", "turnTimeoutMs", "stuckDetection", "contextCap",
+  "harness", "model", "effort", "permissionMode", "maxTurns", "skills", "turnTimeoutMs", "stuckDetection", "contextCap", "contextRetries",
 ] as const satisfies ReadonlyArray<Exclude<keyof AgentConfig, "effortInert">>;
 
 /** the AgentConfig a node declares, copied key by key (undefined keys omitted) */
@@ -160,6 +166,7 @@ export function resolveAgentConfigLayers(
     turnTimeoutMs: pick("turnTimeoutMs"),
     stuckDetection: pick("stuckDetection"),
     contextCap: pick("contextCap"),
+    contextRetries: pick("contextRetries"),
   };
 }
 

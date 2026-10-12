@@ -33,7 +33,7 @@ const graph = (harness: "claude" | "codex" = "claude") => defineGraph<Ctx>({
   name: "handoff", entry: "implement", inputs: ["goal"],
   defaults: { harness },
   nodes: {
-    implement: { kind: "agent", prompt: "h.implement" as never, reads: ["goal"], writes: { summary: { scope: "sticky" } }, maxVisits: 5, contextRetries: 0 } as never,
+    implement: { kind: "agent", prompt: "h.implement" as never, reads: ["goal"], writes: { summary: { scope: "sticky" } }, maxVisits: 5, contextRetries: 0 },
     done: { kind: "terminal", outcome: "success" },
   },
   edges: [{ from: "implement", to: "done" }],

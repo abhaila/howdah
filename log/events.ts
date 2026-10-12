@@ -197,6 +197,22 @@ export type RunEvent =
     }
   | {
       /**
+       * HOW-43: a visit filled its context window and the ENGINE continued the node itself — a
+       * fresh visit on the same harness, briefed with the handoff (suffix v5) — instead of
+       * parking. The decision is a fact in the log so a human reading it sees that an automatic
+       * continuation happened and why; `retry` of `budget` is how much of the node's
+       * `contextRetries` this used, and `head` the worktree HEAD at that moment (the no-progress
+       * check compares the next exhaustion against it).
+       */
+      type: "context-continued";
+      node: string;
+      visit: number;
+      retry: number;
+      budget: number;
+      head: string | null;
+    }
+  | {
+      /**
        * HOW-38: the agent has called one tool with identical arguments `count` times in a row
        * (`failing` of them failed, consecutively) — logged once per streak at the warn
        * threshold. A fact, not a park: the turn carries on, and `reminded` says whether the

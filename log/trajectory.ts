@@ -92,6 +92,8 @@ export function visitTermination(events: readonly LoggedEvent[], node: string, v
   const finished = events.find((e) => e.type === "node-finished" && e.node === node && e.visit === visit);
   if (finished?.type === "node-finished") {
     if (finished.status === "succeeded") return "succeeded";
+    // HOW-43: an exhaustion the engine continued itself raised no park
+    if (events.some((e) => e.type === "context-continued" && e.node === node && e.visit === visit)) return "context-exhausted";
     const park = events.find((e) => e.type === "attention-raised" && e.node === node && e.visit === visit && e.seq > finished.seq);
     const code = park?.type === "attention-raised" ? park.code : undefined;
     if (code === "context-exhausted" || code === "stuck" || code === "turn-timeout") return code;
