@@ -1,0 +1,10 @@
+{
+  "graph": "eval-implement",
+  "inputs": {
+    "goal": "Add a slugify helper to src/text.ts",
+    "work": "Add and export `slugify(s: string): string` in src/text.ts: lower-case, every run of characters that are not a-z or 0-9 becomes a single hyphen, and no leading or trailing hyphen (\"Hello, World!\" → \"hello-world\"). Add tests for it next to the existing ones."
+  },
+  "repo": { "dir": "../_shared/repo", "verifyCommand": "bun test" },
+  "graphFile": "../_shared/graph.ts.tmpl",
+  "oracle": { "kind": "command", "run": "bun test", "files": { "src/slugify.oracle.test.ts": "oracle/slugify.oracle.ts" } }
+}

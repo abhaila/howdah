@@ -159,7 +159,11 @@ export function ProposalsScreen({ selected }: { selected: string | null }) {
         <section className="pd-section">
           <h2>Eval</h2>
           {current.eval.score
-            ? <div className="kv"><span className="k">score</span><span>{current.eval.score} — {current.eval.verdict}</span></div>
+            ? <>
+                <div className="kv"><span className="k">score</span><span>{current.eval.score} — {current.eval.verdict}</span></div>
+                {/* HOW-42: the full A/B report — paired table, cost, trajectory deltas */}
+                {current.eval.report && <div className="kv"><span className="k">report</span><span className="font-mono">{current.eval.report}</span></div>}
+              </>
             : current.eval.case
               ? <div className="pd-note">an eval case exists but has not been run: <code>bun {current.eval.case} --score-only --stamp</code></div>
               : <div className="pd-note">no eval case for this prompt yet — cases are authored at first feedback (D8), so judge the diff</div>}

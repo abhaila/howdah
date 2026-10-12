@@ -535,7 +535,7 @@ describe("proposal review (D7 staleness, evidence, eval)", () => {
     expect(v.diff).toContain("+new");
     expect(v.reflection).toContain("Why section");
     expect(v.feedback.map((f) => f.note)).toEqual(["needs a Why"]);
-    expect(v.eval).toEqual({ case: null, score: null, verdict: null });
+    expect(v.eval).toEqual({ case: null, score: null, verdict: null, report: null });
   });
 
   test("a base that no longer matches the prompt is stale (D7)", () => {
