@@ -139,7 +139,59 @@ export interface RunDetail {
    * reading.
    */
   children: Array<{ run_id: string; slice_id: string; ticket: string | null; graph: string; workspace: string | null; at: string }>;
+  /**
+   * HOW-46: what each step's agent turn is doing, keyed `node@visit` — decided HERE, once, so
+   * the Chat and Steps panes can never disagree about whether a process died. Only steps that
+   * have a turn are present. See `deriveTurnStates`.
+   */
+  turn_states: Record<string, TurnState>;
+  /**
+   * HOW-46/HOW-49: when the agent last produced anything (a chunk or a turn boundary) — the
+   * "last activity Ns ago" clock and the quiet-for-N-minutes signal. Null before any turn.
+   */
+  last_agent_event_at: string | null;
   events_seq: number;
+}
+
+/**
+ * HOW-46: one step's agent turn, as the operator should read it.
+ *   live     un-finalised, on the newest step of a running run whose runner is alive — it is
+ *            working right now, which is the ordinary case and never a warning
+ *   waiting  un-finalised because a mid-turn ask (HOW-25) is holding the session open
+ *   died     un-finalised, and nothing can finish it any more: the step finished without it,
+ *            a later step started, the run stopped running, or its runner is gone
+ *   done     every turn of the step was finalised
+ */
+export type TurnState = "live" | "waiting" | "died" | "done";
+
+/**
+ * HOW-46: the "died" rule used to be decided twice, in two panes, and neither excluded the
+ * turn streaming on a live runner — so "the process died inside this turn" sat under EVERY
+ * running step, at exactly the moment someone was watching, and taught them to ignore the one
+ * warning that matters. `runnerAlive` is the server's proven-runner check (`runnerAlive()`,
+ * the same one the rail shows); it is undefined where nobody probed (tests, digests), and an
+ * unknown runner is not evidence of a death — status alone decides there.
+ */
+export function deriveTurnStates(
+  turns: readonly CoalescedTurn[],
+  timeline: readonly TimelineRow[],
+  ask: RunDetail["ask"],
+  status: RunStatus,
+  runnerAlive?: boolean,
+): Record<string, TurnState> {
+  const out: Record<string, TurnState> = {};
+  const newest = timeline.at(-1);
+  for (const row of timeline) {
+    const key = `${row.node}@${row.visit}`;
+    const mine = turns.filter((t) => t.node === row.node && t.visit === row.visit);
+    if (mine.length === 0) continue;
+    if (mine.every((t) => t.finalized)) { out[key] = "done"; continue; }
+    if (row.status !== "running" || row !== newest) out[key] = "died"; // finished without it, or overtaken
+    else if (ask?.node === row.node && ask.visit === row.visit) out[key] = "waiting";
+    else if (status !== "running" || runnerAlive === false) out[key] = "died";
+    else out[key] = "live";
+  }
+  return out;
 }
 
 export function deriveStatus(events: LoggedEvent[]): { status: RunStatus; ask: RunDetail["ask"]; failure: RunSummary["failure"]; paused: boolean; outcome: RunSummary["outcome"] } {
@@ -306,7 +358,7 @@ export function deriveDetail(
   id: string,
   events: LoggedEvent[],
   declarations: Declarations = {},
-  opts: { snapshot?: SnapshotIndex | null } = {},
+  opts: { snapshot?: SnapshotIndex | null; runnerAlive?: boolean } = {},
 ): RunDetail {
   const summary = deriveSummary(id, events);
   const allowanceByHarness = new Map<string, Extract<LoggedEvent, { type: "allowance" }>>();
@@ -337,10 +389,15 @@ export function deriveDetail(
 
   const { ask } = deriveStatus(events);
   const { id: _id, ...summaryRest } = summary;
+  const turns = coalesce(events);
+  const timeline = deriveTimeline(events);
+  const lastAgent = events.findLast((e) => e.type === "chunk" || e.type === "turn-finalized");
   return {
     summary: summaryRest,
-    turns: coalesce(events),
-    timeline: deriveTimeline(events),
+    turns,
+    timeline,
+    turn_states: deriveTurnStates(turns, timeline, ask, summary.status, opts.runnerAlive),
+    last_agent_event_at: lastAgent?.ts ?? null,
     renders,
     outcomes: [...outcomesByHash(events).values()],
     usage: rollupRun(events),

@@ -910,17 +910,19 @@ export function createHowdahServer(opts: ServerOpts) {
       } catch {
         /* a graph with conflicting scopes throws; the rest of the run view still renders */
       }
-      const detail = deriveDetail(id, events, declarations, { snapshot: baseIndex(join(opts.runsDir, id), events) });
-      detail.summary = withRunnerLiveness(detail.summary, events, join(opts.runsDir, id));
-      const target = effectiveCwd(path, detail.identity.cwd ?? undefined);
       const runDir = join(opts.runsDir, id);
+      // probed ONCE: the rail's "runner alive" and the turn states (HOW-46) must read the same answer
+      const alive = runnerAlive(runDir);
+      const detail = deriveDetail(id, events, declarations, { snapshot: baseIndex(runDir, events), runnerAlive: alive });
+      detail.summary = withRunnerLiveness(detail.summary, events, runDir);
+      const target = effectiveCwd(path, detail.identity.cwd ?? undefined);
       const wt = readWorktreeRecord(runDir);
       detail.persistence = {
         home,
         run_dir: runDir,
         log_path: path,
         worktree_path: wt?.path ?? null,
-        runner_alive: runnerAlive(runDir),
+        runner_alive: alive,
       };
       return json({
         ...detail,

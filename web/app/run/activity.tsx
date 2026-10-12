@@ -27,9 +27,11 @@
  * the content check is what decides, not the kind.
  */
 import { createContext, useContext, useMemo, useState } from "react";
-import { ChevronRight, Wrench, TriangleAlert, FileOutput, Sparkles } from "lucide-react";
+import { ChevronRight, Wrench, TriangleAlert, FileOutput, Sparkles, Activity } from "lucide-react";
 import type { CoalescedTurn, TurnPart } from "../../../log/coalesce";
-import type { RunDetail } from "../../derive";
+import type { RunDetail, TurnState } from "../../derive";
+import { useNow } from "@/lib/hooks";
+import { fmtAgo, liveness } from "@/lib/liveness";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Badge } from "@/components/ui/badge";
 import { Row } from "@/components/ui/row";
@@ -245,16 +247,52 @@ export function AgentProse({ text }: { text: string }) {
   );
 }
 
-export function StepActivity({ turns, render, row, context }: {
+/**
+ * HOW-46: the line under a step's turn that says what the turn is doing. ONE renderer for the
+ * Chat and Steps panes, fed by the derived `turn_states` — neither pane decides "died" itself.
+ *
+ *   live  "working · last activity 12s ago", amber once the agent has been quiet for QUIET_MS
+ *   died  the warning, which now only appears when nothing can finish the turn any more
+ *
+ * `waiting` and `done` draw nothing: the standing ask's card and the turn itself say it.
+ * Only the live note ticks, so a finished transcript does not re-render once a second.
+ */
+export function TurnNote({ state, lastActivityAt, className }: { state: TurnState | undefined; lastActivityAt: string | null; className?: string }) {
+  if (state === "died")
+    return (
+      <div className={`act-note ${className ?? ""}`.trim()}>
+        <TriangleAlert size={12} aria-hidden />
+        the process died inside this turn — what you see is what it had said
+      </div>
+    );
+  if (state === "live") return <LiveNote lastActivityAt={lastActivityAt} className={className} />;
+  return null;
+}
+
+function LiveNote({ lastActivityAt, className }: { lastActivityAt: string | null; className?: string }) {
+  const now = useNow();
+  const { ageMs, quiet } = liveness(lastActivityAt, now);
+  return (
+    <div className={`act-live ${quiet ? "quiet" : ""} ${className ?? ""}`.trim()} role="status">
+      <Activity size={12} aria-hidden />
+      working{ageMs !== null && <> · last activity {fmtAgo(ageMs)} ago</>}
+      {quiet && <> — quiet for a while</>}
+    </div>
+  );
+}
+
+export function StepActivity({ turns, render, row, context, state, lastActivityAt = null }: {
   turns: CoalescedTurn[];
   render?: RunDetail["renders"][number];
   row: RunDetail["timeline"][number];
   /** the run's context keys; what THIS step published is read back off their write lists */
   context: RunDetail["context"];
+  /** HOW-46: this step's derived turn state (`RunDetail.turn_states`) — never re-decided here */
+  state: TurnState | undefined;
+  lastActivityAt?: string | null;
 }) {
   const mine = turns.filter((t) => t.node === row.node && t.visit === row.visit);
   const beats = mine.flatMap((t) => beatsOf(t.parts));
-  const unfinished = mine.some((t) => !t.finalized);
   // what this step handed the next one. Read off the context entries rather than widening
   // TimelineRow: `node-finished.writes` already lands there, and one source beats two.
   const wrote = context.filter((c) => c.writes.some((w) => w.node === row.node && w.visit === row.visit)).map((c) => c.key);
@@ -286,7 +324,7 @@ export function StepActivity({ turns, render, row, context }: {
         ),
       )}
 
-      {unfinished && <div className="act-note">the process died inside this turn — what you see is what it had said</div>}
+      <TurnNote state={state} lastActivityAt={lastActivityAt} />
 
       {wrote.length > 0 && (
         <div className="act-beat act-wrote">

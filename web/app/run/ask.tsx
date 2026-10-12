@@ -15,7 +15,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Send } from "lucide-react";
 import type { RunDetail } from "../../derive";
-import { askQuestions } from "../../../core/ask";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -49,9 +48,9 @@ export function attentionContext(detail: RunDetail, ask: NonNullable<RunDetail["
   // holds the session open on purpose while `awaitOperator` waits, so there is no
   // `turn-finalized` yet and nothing has stopped. Reporting it printed a red "The agent stopped
   // before finalizing its turn." at the top of the very card that was asking the question.
-  // `askQuestions` is core/ask.ts's own reader — the same one `ask_questions` is derived from,
-  // not a second guess at what a question park looks like.
-  if (!turn.finalized && askQuestions(ask) === null) return "The agent stopped before finalizing its turn.";
+  // HOW-46: and since then the read model decides it once, for every pane: only a turn derived
+  // `died` is one the agent stopped inside. A mid-turn ask of either kind derives `waiting`.
+  if (detail.turn_states[`${turn.node}@${turn.visit}`] === "died") return "The agent stopped before finalizing its turn.";
   return null;
 }
 

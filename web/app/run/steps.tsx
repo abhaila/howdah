@@ -317,7 +317,10 @@ export function StepDetail({ runId, row, detail, ask, now, onResolved }: {
               ? <StandingAsk key={`${ask!.node}@${ask!.visit}#${ask!.seq}`} runId={runId} ask={ask!} detail={detail} onResolved={onResolved} />
               : <div className="pd-note">this step is not waiting on you</div>)}
             {shown === "activity" && (
-              <StepActivity turns={detail.turns} render={render} row={row} context={detail.context} />
+              <StepActivity
+                turns={detail.turns} render={render} row={row} context={detail.context}
+                state={detail.turn_states[`${row.node}@${row.visit}`]} lastActivityAt={detail.last_agent_event_at}
+              />
             )}
             {shown === "prompt" && (render
               ? <PromptAndContext runId={runId} render={render} />

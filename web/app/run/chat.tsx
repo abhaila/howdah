@@ -54,11 +54,11 @@
  * rewrites and is unchanged.
  */
 import { useMemo, useState } from "react";
-import { FileOutput, UserRound, HelpCircle, ChevronsDownUp, ChevronsUpDown, ArrowUp, ArrowDown, ArrowUpRight, TriangleAlert, Hourglass, CircleX, GitCompare } from "lucide-react";
+import { FileOutput, UserRound, HelpCircle, ChevronsDownUp, ChevronsUpDown, ArrowUp, ArrowDown, ArrowUpRight, Hourglass, CircleX, GitCompare } from "lucide-react";
 import { submitOnEnter } from "@/lib/keys";
-import type { RunDetail } from "../../derive";
+import type { RunDetail, TurnState } from "../../derive";
 import { citeParts } from "../../cite";
-import { AgentProse, beatsOf, groupBeats, ToolBeat, ToolGroup, ToolDisclosureContext } from "./activity";
+import { AgentProse, beatsOf, groupBeats, ToolBeat, ToolGroup, ToolDisclosureContext, TurnNote } from "./activity";
 import { Button } from "@/components/ui/button";
 import { StandingAsk } from "./ask";
 import { Chip } from "@/components/ui/chip";
@@ -104,7 +104,7 @@ export function suggestionsFor(detail: RunDetail, ask: RunDetail["ask"]): Sugges
 /** one message in the transcript — the parts model, in the order the run produced them */
 export type ChatMessage =
   | { kind: "step"; key: string; node: string; visit: number; index: number; prompt: { id: string; version: number; read: string[] } | null }
-  | { kind: "beats"; key: string; beats: ReturnType<typeof beatsOf>; unfinished: boolean }
+  | { kind: "beats"; key: string; beats: ReturnType<typeof beatsOf>; state: TurnState | undefined }
   | { kind: "asked"; key: string; reason: string }
   | { kind: "answered"; key: string; text: string }
   | { kind: "wrote"; key: string; keys: string[] };
@@ -139,14 +139,11 @@ export function conversation(detail: RunDetail): ChatMessage[] {
 
     const mine = detail.turns.filter((t) => t.node === row.node && t.visit === row.visit);
     const beats = mine.flatMap((t) => beatsOf(t.parts));
-    // An un-finalized turn normally means the process died inside it. It does NOT mean that at
-    // the node the run is PARKED on: a mid-turn ask (HOW-25) holds the session open on purpose
-    // while `awaitOperator` waits, so there is no `turn-finalized` yet and nothing has died.
-    // Saying so put "the process died inside this turn" directly above the "Needs you" card
-    // that was waiting for an answer — the pane contradicting itself by two lines.
-    const waitingHere = detail.ask?.node === row.node && detail.ask?.visit === row.visit;
+    // HOW-46: whether this turn is live, waiting on an ask, or died is the READ MODEL's call
+    // (derive.ts deriveTurnStates), not this pane's. Deciding it here twice — once with the
+    // HOW-25 ask exception and once without — is how a live turn came to read as "died".
     if (beats.length)
-      out.push({ kind: "beats", key: `beats:${key}`, beats, unfinished: mine.some((t) => !t.finalized) && !waitingHere });
+      out.push({ kind: "beats", key: `beats:${key}`, beats, state: detail.turn_states[key] });
 
     for (const r of detail.log_rows) {
       if (r.node !== row.node || r.visit !== row.visit) continue;
@@ -163,7 +160,7 @@ export function conversation(detail: RunDetail): ChatMessage[] {
 }
 
 /** one transcript row. Split out so the scroller's item wrapper stays one line per message. */
-function Row({ m, onPickStep }: { m: ChatMessage; onPickStep: (key: string) => void }) {
+function Row({ m, onPickStep, lastActivityAt }: { m: ChatMessage; onPickStep: (key: string) => void; lastActivityAt: string | null }) {
   switch (m.kind) {
     case "step":
       return (
@@ -198,12 +195,7 @@ function Row({ m, onPickStep }: { m: ChatMessage; onPickStep: (key: string) => v
                   ? <p key={i} className="act-thinking">{b.part.content.trim()}</p>
                   : <AgentProse key={i} text={b.part.content} />,
           )}
-          {m.unfinished && (
-            <div className="act-note cv-unfinished">
-              <TriangleAlert size={12} aria-hidden />
-              the process died inside this turn — what you see is what it had said
-            </div>
-          )}
+          <TurnNote state={m.state} lastActivityAt={lastActivityAt} className="cv-unfinished" />
         </div>
       );
     case "asked":
@@ -335,7 +327,7 @@ export function RunChat({ runId, detail, ask, onPickStep, onResolved }: {
               )}
               {messages.map((m) => (
                 <MessageScrollerItem key={m.key} messageId={m.key} scrollAnchor={m.kind === "step"}>
-                  <Row m={m} onPickStep={onPickStep} />
+                  <Row m={m} onPickStep={onPickStep} lastActivityAt={detail.last_agent_event_at} />
                 </MessageScrollerItem>
               ))}
               {turns.map((t, i) => (

@@ -73,8 +73,8 @@ function askingLog(questions: unknown[] = QUESTIONS): FakeLog {
   return log;
 }
 
-function render(log: FakeLog): HTMLElement {
-  const detail = deriveDetail("r1", log.events);
+function render(log: FakeLog, runnerAlive?: boolean): HTMLElement {
+  const detail = deriveDetail("r1", log.events, {}, { runnerAlive });
   host = document.createElement("div");
   document.body.appendChild(host);
   root = createRoot(host);
@@ -299,20 +299,38 @@ describe("the run reads as one conversation", () => {
   test("a run parked on a question has not \"died inside this turn\"", () => {
     // the mid-turn ask holds the session open on purpose, so there is no turn-finalized yet.
     // Claiming a death here put the line two rows above the card asking for an answer.
-    const msgs = conversation(deriveDetail("r1", askingLog().events));
+    const msgs = conversation(deriveDetail("r1", askingLog().events, {}, { runnerAlive: true }));
     const beats = msgs.find((m) => m.kind === "beats") as Extract<typeof msgs[number], { kind: "beats" }>;
-    expect(beats.unfinished).toBe(false);
+    expect(beats.state).toBe("waiting");
   });
 
-  test("a turn that really was cut off still says so", () => {
-    // same un-finalized turn, but the run is NOT parked here — nothing is waiting on a human
+  /** an un-finalized turn on a run that is NOT parked — nothing is waiting on a human */
+  const streamingLog = () => {
     const log = new FakeLog();
     log.add({ type: "run-started", graph: "quick-task", inputs: { goal: "g" }, pinned_prompts: {} });
     log.add({ type: "node-started", node: "do", visit: 1, attempt_id: "do#1" });
     log.add({ type: "chunk", node: "do", visit: 1, turn: 1, index: 0, kind: "text", content: "half a thou" });
-    const msgs = conversation(deriveDetail("r1", log.events));
+    return log;
+  };
+
+  test("a turn that really was cut off still says so", () => {
+    const msgs = conversation(deriveDetail("r1", streamingLog().events, {}, { runnerAlive: false }));
     const beats = msgs.find((m) => m.kind === "beats") as Extract<typeof msgs[number], { kind: "beats" }>;
-    expect(beats.unfinished).toBe(true);
+    expect(beats.state).toBe("died");
+    const el = render(streamingLog(), false);
+    expect(el.querySelector(".cv-unfinished")!.textContent).toContain("the process died inside this turn");
+  });
+
+  test("HOW-46: the turn streaming on a live runner is working, not dead", () => {
+    const el = render(streamingLog(), true);
+    expect(el.textContent).not.toContain("died inside this turn");
+    expect(el.querySelector(".act-live")!.textContent).toContain("working · last activity");
+  });
+
+  test("HOW-46: a parked question shows the card and no turn note at all", () => {
+    const el = render(askingLog(), true);
+    expect(el.textContent).not.toContain("died inside this turn");
+    expect(el.querySelector(".act-live")).toBeNull();
   });
 
   test("what a step published closes it", () => {

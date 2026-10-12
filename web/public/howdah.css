@@ -899,6 +899,9 @@ main { flex: 1; min-width: 0; min-height: 0; overflow: hidden; display: flex; fl
 .act-prompt-id { color: var(--fg); }
 .act-prompt-read { color: var(--fg-faint); font-size: var(--type-xs); }
 .act-note { font-size: var(--type-xs); color: var(--status-failed-recoverable); }
+/* HOW-46: a turn streaming on a live runner — activity, not alarm; amber once it goes quiet */
+.act-live { display: flex; align-items: center; gap: 6px; font-size: var(--type-xs); color: var(--status-running); }
+.act-live.quiet { color: var(--attention); }
 .act-note-quiet { font-size: var(--type-xs); color: var(--fg-faint); font-style: italic; }
 
 /* one line, opening to the whole thing */
