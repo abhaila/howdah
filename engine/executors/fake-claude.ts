@@ -152,6 +152,43 @@ if (process.env.FAKE_CLAUDE_QUESTION) {
   }
 }
 
+/**
+ * HOW-38 — stuck detection and the turn ceiling.
+ * FAKE_CLAUDE_REPEAT=<n>       issue n Bash calls with byte-identical arguments, each answered
+ *                              by a tool_result (FAKE_CLAUDE_REPEAT_FAIL=1: every one is_error)
+ * FAKE_CLAUDE_REPEAT_DENY=1    gate every call behind a can_use_tool request and report the
+ *                              operator's deny as the result, the way the real CLI does
+ * FAKE_CLAUDE_HANG=1           start a grandchild (`sleep 300`) and never finish the turn;
+ *                              FAKE_CLAUDE_PIDFILE=<file> receives "<own pid> <child pid>"
+ */
+if (process.env.FAKE_CLAUDE_HANG === "1") {
+  const child = Bun.spawn(["sleep", "300"], { stdout: "ignore", stderr: "ignore" });
+  if (process.env.FAKE_CLAUDE_PIDFILE) writeFileSync(process.env.FAKE_CLAUDE_PIDFILE, `${process.pid} ${child.pid}`);
+  out({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: "toolu_hang", name: "Bash", input: { command: "sleep 300" } }] } });
+  await new Promise(() => {}); // a turn that never ends
+}
+const repeat = Number(process.env.FAKE_CLAUDE_REPEAT ?? 0);
+for (let i = 0; i < repeat; i++) {
+  const id = `toolu_rep_${i}`;
+  const input = { command: "bun test engine/flaky.test.ts", description: "run the failing test" };
+  out({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id, name: "Bash", input }] } });
+  if (process.env.FAKE_CLAUDE_REPEAT_DENY === "1") {
+    out({ type: "control_request", request_id: `req-rep-${i}`, request: { subtype: "can_use_tool", tool_name: "Bash", input, tool_use_id: id } });
+    for (;;) {
+      const line = JSON.parse(await nextLine()) as any;
+      if (line.type === "control_response" && line.response?.request_id === `req-rep-${i}`) {
+        const message = String(line.response?.response?.message ?? "denied");
+        out({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: message, is_error: true }] } });
+        break;
+      }
+    }
+    continue;
+  }
+  const fail = process.env.FAKE_CLAUDE_REPEAT_FAIL === "1";
+  out({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: fail ? "error: expected 2, got 3\n1 fail" : "12 pass", is_error: fail }] } });
+  await Bun.sleep(5);
+}
+
 if (process.env.FAKE_CLAUDE_RATELIMIT === "1")
   out({ type: "rate_limit_event", rate_limit: { status: "allowed", remaining: 0.31, resetsAt: "2026-09-13T18:00:00Z" } });
 

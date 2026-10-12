@@ -62,7 +62,7 @@
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { nodeReads, resolveAgentConfigLayers, type Graph, type NodeDef, type EdgeDef, type AgentConfig, type ApprovalNodeDef, type Harness } from "../core/graph";
+import { agentConfigOf, nodeReads, resolveAgentConfigLayers, type Graph, type NodeDef, type EdgeDef, type AgentConfig, type ApprovalNodeDef, type Harness } from "../core/graph";
 import { basename } from "node:path";
 import { ContextStore, type Scope } from "../core/context";
 import { SUFFIX_VERSION, assemblePrompt, expandIncludes, renderTemplate, renderedHash, skillsForHarness, splitFrontMatter } from "../core/template";
@@ -220,10 +220,7 @@ export function resolveAgentConfig(
   nodeId: string,
   layers: { overrides?: AgentConfig; tuning?: EngineOpts["tuning"]; fallbackHarness?: Harness; defaultHarness?: string } = {},
 ): AgentConfig {
-  const node: AgentConfig = {
-    harness: def.harness, model: def.model, effort: def.effort,
-    permissionMode: def.permissionMode, maxTurns: def.maxTurns, skills: def.skills,
-  };
+  const node: AgentConfig = agentConfigOf(def);
   const resolved = resolveAgentConfigLayers([
     layers.fallbackHarness ? { harness: layers.fallbackHarness } : undefined,
     layers.overrides,
@@ -247,6 +244,12 @@ function enteredByJump(events: readonly LoggedEvent[], node: string): boolean {
 }
 
 const INPUTS_NODE = "__inputs__";
+
+/**
+ * Failures that are never evidence of a spent allowance, whatever the transcript says, so
+ * they never hop harnesses and never mark a harness spent (HOW-14, HOW-38).
+ */
+const NO_HOP_CODES: ReadonlySet<string> = new Set(["context-exhausted", "stuck", "turn-timeout"]);
 
 /** A prompt file's front-matter version (1 when absent — the pre-versioning default). */
 function promptVersion(raw: string): number {
@@ -508,7 +511,8 @@ export class Engine {
         // HOW-14: a full context window is not an allowance problem, whatever the attempt's
         // text happens to say — hopping would start a fresh harness from nothing and still
         // overflow. Park instead; the retry gets the re-entry briefing.
-        const hop = def.kind === "agent" && result.code !== "context-exhausted" ? this.nextFallbackHarness(current, visit) : undefined;
+        // HOW-38: nor is a stuck call or a hung turn — another harness would not unstick it
+        const hop = def.kind === "agent" && !NO_HOP_CODES.has(result.code ?? "attempt-failed") ? this.nextFallbackHarness(current, visit) : undefined;
         if (hop) {
           this.hoppedAwayFrom.add(hop.from);
           this.pendingFallbackNodes.add(current);
@@ -856,8 +860,13 @@ export class Engine {
    * own text may well mention a "rate limit" it was writing code about.
    */
   private contextExhaustedAttempts(events: readonly LoggedEvent[]): Set<string> {
+    return this.parkedAttempts(events, new Set(["context-exhausted"]));
+  }
+
+  /** the `node\0visit` of every attempt that parked with one of `codes` */
+  private parkedAttempts(events: readonly LoggedEvent[], codes: ReadonlySet<string>): Set<string> {
     return new Set(events
-      .filter((e) => e.type === "attention-raised" && e.code === "context-exhausted")
+      .filter((e) => e.type === "attention-raised" && e.code !== undefined && codes.has(e.code))
       .map((e) => e.type === "attention-raised" ? `${e.node}\0${e.visit}` : ""));
   }
 
@@ -886,7 +895,8 @@ export class Engine {
     const failed = new Set(events
       .filter((e) => e.type === "node-finished" && e.status === "failed")
       .map((e) => e.type === "node-finished" ? `${e.node}\0${e.visit}` : ""));
-    for (const k of this.contextExhaustedAttempts(events)) failed.delete(k);
+    // HOW-14/HOW-38: an exhausted, stuck or timed-out attempt is never a rate-limit witness
+    for (const k of this.parkedAttempts(events, NO_HOP_CODES)) failed.delete(k);
     const out = new Set<Harness>();
     for (const e of events) {
       if (e.type !== "prompt-rendered") continue;

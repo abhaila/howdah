@@ -54,6 +54,34 @@ export interface AgentConfig {
   maxTurns?: number;
   /** skills the node expects available; surfaced to the agent and asserted by doctor */
   skills?: string[];
+  /**
+   * HOW-38: a wall-clock ceiling for one agent turn. When it passes, the harness's whole
+   * process group is killed and the run parks `turn-timeout`. Unset: no ceiling — a default
+   * maxTurns is deliberately NOT set either, because stuck detection plus this ceiling cover
+   * the burn case without truncating legitimately long builds.
+   */
+  turnTimeoutMs?: number;
+  /**
+   * HOW-38: `false` opts a node out of stuck detection (engine/executors/stuck.ts) — for a step
+   * whose whole job is polling the same command. Default on.
+   */
+  stuckDetection?: boolean;
+}
+
+/**
+ * Every AgentConfig key a node or layer may set, in one list — what the engine and the
+ * viewer's graph API copy off a node, so a new knob cannot be resolved in one and dropped by
+ * the other. `effortInert` is absent on purpose: it is a RESOLUTION result, never a setting.
+ */
+export const AGENT_CONFIG_KEYS = [
+  "harness", "model", "effort", "permissionMode", "maxTurns", "skills", "turnTimeoutMs", "stuckDetection",
+] as const satisfies ReadonlyArray<Exclude<keyof AgentConfig, "effortInert">>;
+
+/** the AgentConfig a node declares, copied key by key (undefined keys omitted) */
+export function agentConfigOf(def: AgentConfig): AgentConfig {
+  const out: Record<string, unknown> = {};
+  for (const k of AGENT_CONFIG_KEYS) if (def[k] !== undefined) out[k] = def[k];
+  return out as AgentConfig;
 }
 
 /**
@@ -123,6 +151,8 @@ export function resolveAgentConfigLayers(
     permissionMode: harnessSpec(harness).forcedPermissionMode ?? pick("permissionMode"),
     maxTurns: pick("maxTurns"),
     skills: pick("skills"),
+    turnTimeoutMs: pick("turnTimeoutMs"),
+    stuckDetection: pick("stuckDetection"),
   };
 }
 

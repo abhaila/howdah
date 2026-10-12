@@ -110,7 +110,8 @@ export function mapClaudeEvent(raw: unknown): AgentEvent[] {
           type: "tool_result",
           id: String(b.tool_use_id),
           content: typeof b.content === "string" ? b.content : JSON.stringify(b.content ?? ""),
-          is_error: b.is_error === true ? true : undefined,
+          // HOW-38: false is a fact too ("it succeeded"), distinct from not reported
+          is_error: typeof b.is_error === "boolean" ? b.is_error : undefined,
         }));
     }
 

@@ -378,6 +378,8 @@ export const REPLY_RULES: Readonly<Record<ParkCode, Rule>> = {
   "attempt-failed": retryWithReply,
   "harness-unauthenticated": loginThenRetry,
   "context-exhausted": retryWithReply, // HOW-14: the retry is briefed to re-enter; a reply steers it
+  "stuck": retryWithReply, // HOW-38: the reply and the stuck call reach the retry's prompt
+  "turn-timeout": retryWithReply, // HOW-38: the retry is a fresh turn; a reply can narrow it
   "executor-threw": retryWithReply,
   "max-visits": useJump,
   "no-edge": useJump,

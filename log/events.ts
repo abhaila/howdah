@@ -49,6 +49,14 @@ export type ParkCode =
    * into the retry, and the retry is rendered with a re-entry briefing (core/template.ts v4).
    */
   | "context-exhausted"
+  /**
+   * HOW-38: the agent reissued one call with identical arguments and it kept failing
+   * (engine/executors/stuck.ts). The turn was interrupted; the reason quotes the call and the
+   * error. Never hops harnesses — another harness would not unstick the same call.
+   */
+  | "stuck"
+  /** HOW-38: an agent turn ran past its `turnTimeoutMs` ceiling and its process group was killed */
+  | "turn-timeout"
   | "executor-threw"
   | "max-visits"
   | "no-edge"
@@ -167,6 +175,30 @@ export type RunEvent =
       /** tool_call/tool_result correlation */
       tool_id?: string;
       tool_name?: string;
+      /**
+       * HOW-38 — tool_call only: adapter/tools.ts argumentsHash over the FULL arguments, taken
+       * before `content` was clipped to 400 chars. Absent on older chunks.
+       */
+      input_hash?: string;
+      /** HOW-38 — tool_result only: the harness said the call failed. Absent: not reported. */
+      is_error?: boolean;
+    }
+  | {
+      /**
+       * HOW-38: the agent has called one tool with identical arguments `count` times in a row
+       * (`failing` of them failed, consecutively) — logged once per streak at the warn
+       * threshold. A fact, not a park: the turn carries on, and `reminded` says whether the
+       * harness was also sent a mid-turn reminder (claude only, see stuck.ts).
+       */
+      type: "stuck-warning";
+      node: string;
+      visit: number;
+      tool_name: string;
+      /** the call's arguments as logged, clipped */
+      input_summary: string;
+      count: number;
+      failing: number;
+      reminded: boolean;
     }
   | {
       type: "turn-finalized";

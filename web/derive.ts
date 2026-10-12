@@ -478,6 +478,9 @@ export function deriveLogRows(events: LoggedEvent[]): LogRow[] {
           summary: `${e.harness} ${e.state}${e.remaining !== undefined ? ` · ${Math.round(e.remaining * 100)}% left` : ""}${e.resets_at ? ` · resets ${e.resets_at}` : ""}` };
       case "run-finished":
         return { ...base, node: null, visit: null, kind: "engine", depth: 0, summary: e.outcome };
+      case "stuck-warning":
+        return { ...base, ...at(e.node, e.visit), kind: "attention", depth: 1,
+          summary: `stuck? ${e.tool_name} ×${e.count} with identical arguments${e.failing ? ` · failing ×${e.failing}` : ""}${e.reminded ? " · reminded" : ""} · ${e.input_summary.slice(0, 160)}` };
       case "ghost-proposed":
         return { ...base, node: e.node, visit: null, kind: "agent", depth: 0,
           summary: `proposal #${e.proposal_id} for ${e.approval} · ${e.proposal_hash}` };

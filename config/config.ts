@@ -52,6 +52,12 @@ export interface HowdahConfig {
    */
   typesafeApiKey?: string;
   viewerBase?: string;
+  /**
+   * HOW-38: stuck detection's streak lengths — warn (and remind claude) at `warn` identical
+   * calls, stop and park `stuck` at `stop` identical FAILING calls. Default 5 / 8, the
+   * harness-design study's values. Read through stuckThresholds(), which ignores nonsense.
+   */
+  stuck?: { warn?: number; stop?: number };
   theme?: "system" | "dark" | "light";
   chime?: boolean;
 }
@@ -70,6 +76,17 @@ export function loadConfig(base = howdahHome()): HowdahConfig {
   const p = configPath(base);
   if (!existsSync(p)) return structuredClone(DEFAULTS);
   return { ...structuredClone(DEFAULTS), ...(JSON.parse(readFileSync(p, "utf8")) as HowdahConfig) };
+}
+
+/**
+ * HOW-38: config.json `stuck`, cleaned — a missing, non-integer or non-positive value falls
+ * back to its default, and `stop` is never below `warn` (a stop before the warning would park
+ * a run nobody was told was spinning).
+ */
+export function stuckThresholds(config: HowdahConfig): { warn: number; stop: number } {
+  const ok = (v: unknown, d: number) => (typeof v === "number" && Number.isInteger(v) && v > 0 ? v : d);
+  const warn = ok(config.stuck?.warn, 5);
+  return { warn, stop: Math.max(warn, ok(config.stuck?.stop, 8)) };
 }
 
 export function saveConfig(config: HowdahConfig, base = howdahHome()): void {

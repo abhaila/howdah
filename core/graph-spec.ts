@@ -967,6 +967,9 @@ export function parseAgentConfig(v: unknown): AgentConfig | undefined {
   if (turns !== undefined) out.maxTurns = turns;
   const skills = strArray(v.skills);
   if (skills.length) out.skills = skills;
+  const timeout = posInt(v.turnTimeoutMs);
+  if (timeout !== undefined) out.turnTimeoutMs = timeout;
+  if (typeof v.stuckDetection === "boolean") out.stuckDetection = v.stuckDetection;
   return Object.keys(out).length ? out : undefined;
 }
 

@@ -38,7 +38,7 @@ import { harnessNames, harnessSpec, isHarness } from "../core/harnesses";
 import { GRAPHS, graphCatalog } from "../graphs/index";
 import { loadRegistry, catalogOf } from "../graphs/registry";
 import { promptSearchPath } from "../graphs/local";
-import { howdahHome, loadConfig, saveConfig, resolveWorkspace, repoNameFor, workspaceNameFor, verifyCommandFor, setVerifyCommand, ensureHowdahHome } from "../config/config";
+import { howdahHome, loadConfig, saveConfig, resolveWorkspace, repoNameFor, workspaceNameFor, verifyCommandFor, setVerifyCommand, stuckThresholds, ensureHowdahHome } from "../config/config";
 import { loadTuning } from "../config/tuning";
 import { normalizeRunName } from "../core/run-name";
 import {
@@ -71,6 +71,8 @@ function executors() {
         // HOW-12: read lazily for the same reason — an edited verify command applies to the
         // next verify:run, not the next runner
         verifyCommandFor: (repoPath) => verifyCommandFor(loadConfig(base), repoPath),
+        // HOW-38: read once per runner — thresholds are not something a run changes mid-flight
+        stuck: stuckThresholds(loadConfig(base)),
       });
 }
 
