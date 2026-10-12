@@ -83,6 +83,33 @@ describe("versioned suffix builders (system-map 0.1)", () => {
     }
   });
 
+  test("v5 is v4 plus the carried-steer builder (HOW-47): everything else byte-identical, steer pinned literally", () => {
+    const v4 = suffixBuilders(4)!;
+    const v5 = suffixBuilders(5)!;
+    expect(v5.skillHint(["review"])).toBe(v4.skillHint(["review"]));
+    expect(v5.outputContract(["a"])).toBe(v4.outputContract(["a"]));
+    expect(v5.replyInstruction!("x")).toBe(v4.replyInstruction!("x"));
+    expect(v5.refusalInstruction!("x")).toBe(v4.refusalInstruction!("x"));
+    expect(v5.reentryInstruction!(2)).toBe(v4.reentryInstruction!(2));
+    expect(v5.steerInstruction!(["use the helper in core/"])).toBe(
+      "\n\n## Operator steering\nWhile an earlier step was running, the operator sent this instruction. " +
+        "It did not reach that step before it finished, so take it into account here:\n- use the helper in core/",
+    );
+    expect(v5.steerInstruction!(["one", "two\nlines"])).toBe(
+      "\n\n## Operator steering\nWhile an earlier step was running, the operator sent these instructions. " +
+        "They did not reach that step before it finished, so take them into account here:\n- one\n- two\n  lines",
+    );
+    for (const v of [1, 2, 3, 4]) {
+      expect(suffixBuilders(v)!.steerInstruction).toBeUndefined();
+      expect(() => assemblePrompt({ body: "x", steerMessages: ["s"], skills: [], outputKeys: [], suffixVersion: v }))
+        .toThrow(new RegExp(`suffix version ${v} has no steer builder`));
+    }
+    // an empty list renders nothing, under any version — "no steers" is not a suffix
+    expect(assemblePrompt({ body: "x", steerMessages: [], skills: [], outputKeys: [], suffixVersion: 1 })).toBe(
+      assemblePrompt({ body: "x", skills: [], outputKeys: [], suffixVersion: 1 }),
+    );
+  });
+
   test("the re-entry briefing never reads as an allowance failure to the harness fallback", () => {
     // engine/run.ts hops harnesses when a failed attempt's text matches RATE_LIMIT_TEXT; the
     // briefing is never in a chunk today, but it names the failure, so pin it anyway

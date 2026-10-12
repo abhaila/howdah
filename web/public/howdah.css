@@ -1052,3 +1052,26 @@ main { flex: 1; min-width: 0; min-height: 0; overflow: hidden; display: flex; fl
   .board-vitals { grid-column: 2; flex-wrap: wrap; row-gap: 2px; }
   .bv-step { width: auto; max-width: 100%; }
 }
+
+/* HOW-47: steering. The composer's mode is EXPLICIT (HOW-27: a box never silently changes
+   target) — a two-option switch that exists only while a turn is live, and steer mode recolours
+   the box and its send control so which target it has is visible before Enter is pressed. */
+.chat-mode { display: inline-flex; gap: 2px; padding: 2px; border-radius: 999px; background: var(--bg-inset); }
+.chat-mode-option { border-radius: 999px; }
+.chat-mode-option[aria-pressed="true"] { background: var(--bg-raised); color: var(--fg); }
+.chat-input[data-mode="steer"] { border-color: var(--attention); }
+.chat-send[data-mode="steer"] { background: var(--attention); color: var(--bg); }
+.chat-steer-error { margin-top: 6px; }
+/* the operator's own words to the agent, where they landed */
+.cv-steer {
+  display: flex; align-items: flex-start; gap: 7px; margin: 8px 0 8px 48px;
+  padding: 7px 10px; border-radius: var(--radius-sm); font-size: var(--type-sm); line-height: 1.5;
+  background: var(--attention-bg); border: 1px solid var(--border);
+}
+.cv-steer svg { flex: none; margin-top: 4px; color: var(--attention); }
+.cv-steer-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.cv-steer-label { font-size: var(--type-xs); color: var(--fg-faint); text-transform: uppercase; letter-spacing: 0.08em; }
+.cv-steer-text { color: var(--fg); white-space: pre-wrap; overflow-wrap: anywhere; }
+.cv-steer-state { font-size: var(--type-xs); color: var(--fg-muted); }
+.cv-steer[data-state="pending"] .cv-steer-state { color: var(--attention); }
+.cv-steer[data-state="carried"] { background: var(--bg-inset); }

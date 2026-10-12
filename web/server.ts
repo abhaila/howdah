@@ -43,6 +43,7 @@ import { homedir, tmpdir } from "node:os";
 import { readLog } from "../log/write";
 import { deriveDetail, deriveSummary, deriveTimeline, runDigest, snapshotIndex, sortRuns, type RunSummary, type SnapshotIndex } from "./derive";
 import { LiveGitHub, liveTargetOf } from "./live-git";
+import { steer } from "../engine/steer";
 import { BoardCache, boardRow } from "./board";
 import { currentProposal } from "../engine/slice-decision";
 import { loadSnapshot } from "../engine/slice-map";
@@ -684,7 +685,7 @@ export function createHowdahServer(opts: ServerOpts) {
         return render ? json(render) : json({ error: "no such render, or its pinned prompt is gone" }, 404);
       }
 
-      const m = url.pathname.match(/^\/api\/runs(?:\/([^/]+)(?:\/(events|reply|open-ide|open-run-folder|harness-login|resume|pause|abort|jump|ask|comments|approval|redesign|effects))?)?$/);
+      const m = url.pathname.match(/^\/api\/runs(?:\/([^/]+)(?:\/(events|reply|open-ide|open-run-folder|harness-login|resume|pause|abort|jump|steer|ask|comments|approval|redesign|effects))?)?$/);
       if (!m) {
         // static: /public assets by name, everything else → the app shell.
         // no-cache: this is a local app whose bundle changes constantly — the browser must
@@ -895,6 +896,19 @@ export function createHowdahServer(opts: ServerOpts) {
         const args = ["bun", cli, "jump", id, body.node, ...(body.message ? [body.message] : [])];
         Bun.spawn(args, { stdout: "ignore", stderr: "ignore", env: { ...process.env } }).unref();
         return json({ ok: true }, 202);
+      }
+
+      /**
+       * HOW-47: steer a running agent. Not spawned — appending the steer IS the whole write, and
+       * the runner's executor delivers it — so the refusal (not running, parked, paused, dead
+       * runner, no steer channel on this harness) comes straight back from the one precheck the
+       * CLI shares. 409: the request is fine, the run is not in a state that can take it.
+       */
+      if (sub === "steer" && req.method === "POST") {
+        const body = (await req.json().catch(() => ({}))) as { text?: unknown };
+        const sent = steer(join(opts.runsDir, id), typeof body.text === "string" ? body.text : "");
+        if (!sent.ok) return json({ error: sent.message }, 409);
+        return json({ ok: true, seq: sent.seq, node: sent.node, visit: sent.visit }, 202);
       }
 
       if (sub === "ask" && req.method === "POST") {

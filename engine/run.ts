@@ -69,6 +69,7 @@ import { DEFAULT_CONTEXT_CAP, RENDER_VERSION, SUFFIX_VERSION, assemblePrompt, ex
 import { defaultHarness, fallbackChain, harnessNames, harnessSpec, isHarness } from "../core/harnesses";
 import { EventLog } from "../log/write";
 import type { LoggedEvent, ParkCode } from "../log/events";
+import { undeliveredSteers } from "./steer-state";
 import { replayState, effectKey } from "./replay";
 import type { PromptId } from "../core/prompt-ids";
 import { proposalHash } from "../core/proposal";
@@ -1053,13 +1054,18 @@ export class Engine {
       refusalMessage = this.refusalNote.message;
       this.refusalNote = null; // consumed by this attempt (replay: at node-started)
     }
-    const reentryAfterVisit = this.reentryAfterVisit(this.log.read(), nodeId, visit);
+    const logged = this.log.read();
+    const reentryAfterVisit = this.reentryAfterVisit(logged, nodeId, visit);
+    // HOW-47: a steer whose turn ended before another tool call never reached it. The executor
+    // that could have delivered it has returned by now, so it is carried into THIS render —
+    // the run's next agent prompt — and its seq is logged so reconstruction reads the same text
+    const carried = undeliveredSteers(logged);
     // HOW-36: what that visit had done, derived from the log — reconstruction re-derives it
-    const handoff = reentryAfterVisit === undefined ? undefined : deriveHandoff(this.log.read(), nodeId, reentryAfterVisit, outputKeys);
+    const handoff = reentryAfterVisit === undefined ? undefined : deriveHandoff(logged, nodeId, reentryAfterVisit, outputKeys);
     // HOW-37: render rules v2 — an oversized value is elided around a stub naming where the
     // whole of it lives; the run's own inputs (the operator's words) are never elided
     const contextCap = config?.contextCap ?? DEFAULT_CONTEXT_CAP;
-    const priorEvents = this.log.read();
+    const priorEvents = logged;
     const { text: rendered, read: contextRead, elided } = renderTemplate(
       body,
       (key) => (key in reads ? reads[key] : this.ctx.get(key, { node: nodeId, visit })),
@@ -1074,6 +1080,7 @@ export class Engine {
       refusalMessage,
       reentryAfterVisit,
       ...(handoff ? { handoff } : {}),
+      steerMessages: carried.map((c) => c.text),
       skills,
       outputKeys,
       suffixVersion: SUFFIX_VERSION,
@@ -1102,6 +1109,7 @@ export class Engine {
       render_version: RENDER_VERSION,
       context_cap: contextCap,
       ...(Object.keys(elided).length ? { context_sources: elided } : {}),
+      ...(carried.length ? { steers_carried: carried.map((c) => c.seq) } : {}),
     });
     return finalRendered;
   }

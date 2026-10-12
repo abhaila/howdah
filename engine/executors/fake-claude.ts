@@ -13,6 +13,7 @@
  * FAKE_CLAUDE_DROP_OUTPUTS=1 ends the first turn in prose with no contract.
  * FAKE_CLAUDE_QUESTION asks the OPERATOR a question (HOW-25) — see the block below.
  * FAKE_CLAUDE_TODO=1 writes a TodoWrite plan twice, the second over 400 chars (HOW-49).
+ * FAKE_CLAUDE_STEER=1 holds a tool call open and delivers a steer after it (HOW-47).
  * FAKE_CLAUDE_CONTEXT (HOW-14), shapes from claude 2.1.283's SDK types, not a captured turn:
  *   compact  emit a `compact_boundary` mid-turn, then finish normally
  *   exceed   end the first turn with `result { is_error: true, result: "Prompt is too long" }`
@@ -251,6 +252,34 @@ if (process.env.FAKE_CLAUDE_TODO === "1") {
     { content: `Write the panel ${long}`, status: "pending", activeForm: "Writing the panel" },
     { content: "Commit", status: "pending", activeForm: "Committing" },
   ]);
+}
+
+/**
+ * HOW-47: FAKE_CLAUDE_STEER=1 — a turn the operator can steer, in the shape the spike recorded
+ * against claude 2.1.296 (adapter/fixtures/claude-steer.jsonl): a Bash tool call is emitted,
+ * the "tool" runs for up to FAKE_CLAUDE_STEER_WAIT_MS, and a user message that arrives on stdin
+ * meanwhile is delivered AFTER the tool_result — echoed back as `user { isReplay: true }`, as
+ * `--replay-user-messages` does — and adopted in the same turn. FAKE_CAPTURE records it like any
+ * other user turn. The tool finishes early once a steer has arrived.
+ */
+if (process.env.FAKE_CLAUDE_STEER === "1") {
+  const toolId = "toolu_fake_steer_01";
+  out({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: toolId, name: "Bash", input: { command: "sleep 5 && echo built" } }] } });
+  const deadline = Date.now() + Number(process.env.FAKE_CLAUDE_STEER_WAIT_MS ?? 5000);
+  let steer: string | null = null;
+  while (Date.now() < deadline && steer === null) {
+    const line = lines.shift();
+    if (line !== undefined) {
+      const msg = JSON.parse(line) as any;
+      if (msg.type === "user") steer = String(msg.message?.content?.[0]?.text ?? "");
+    } else await Bun.sleep(20);
+  }
+  out({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: toolId, content: "built", is_error: false }] } });
+  if (steer !== null) {
+    if (process.env.FAKE_CAPTURE) appendFileSync(process.env.FAKE_CAPTURE, JSON.stringify(steer) + "\n");
+    out({ type: "user", message: { role: "user", content: [{ type: "text", text: steer }] }, isReplay: true });
+    out({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: ` Steered: ${steer.split("\n")[1] ?? steer}.` } } });
+  }
 }
 
 if (process.env.FAKE_CLAUDE_RATELIMIT === "1")

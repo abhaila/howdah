@@ -54,14 +54,15 @@
  * rewrites and is unchanged.
  */
 import { useMemo, useState } from "react";
-import { FileOutput, UserRound, HelpCircle, ChevronsDownUp, ChevronsUpDown, ArrowUp, ArrowDown, ArrowUpRight, Hourglass, CircleX, GitCompare } from "lucide-react";
+import { FileOutput, UserRound, HelpCircle, ChevronsDownUp, ChevronsUpDown, ArrowUp, ArrowDown, ArrowUpRight, Hourglass, CircleX, GitCompare, Navigation } from "lucide-react";
 import { submitOnEnter } from "@/lib/keys";
 import type { RunDetail, TurnState } from "../../derive";
 import { citeParts } from "../../cite";
 import { AgentProse, beatsOf, groupBeats, ToolBeat, ToolGroup, ToolDisclosureContext, TurnNote } from "./activity";
 import { Button } from "@/components/ui/button";
 import { StandingAsk } from "./ask";
-import { ProgressPanel } from "./progress";
+import { ProgressPanel, liveStep } from "./progress";
+import { harnessSpec, isHarness } from "../../../core/harnesses";
 import type { LiveGit } from "../../live-git";
 import { Chip } from "@/components/ui/chip";
 import { Badge } from "@/components/ui/badge";
@@ -107,6 +108,7 @@ export function suggestionsFor(detail: RunDetail, ask: RunDetail["ask"]): Sugges
 export type ChatMessage =
   | { kind: "step"; key: string; node: string; visit: number; index: number; prompt: { id: string; version: number; read: string[] } | null }
   | { kind: "beats"; key: string; beats: ReturnType<typeof beatsOf>; state: TurnState | undefined }
+  | { kind: "steer"; key: string; steer: RunDetail["steers"][number] }
   | { kind: "asked"; key: string; reason: string }
   | { kind: "answered"; key: string; text: string }
   | { kind: "wrote"; key: string; keys: string[] };
@@ -144,8 +146,26 @@ export function conversation(detail: RunDetail): ChatMessage[] {
     // HOW-46: whether this turn is live, waiting on an ask, or died is the READ MODEL's call
     // (derive.ts deriveTurnStates), not this pane's. Deciding it here twice — once with the
     // HOW-25 ask exception and once without — is how a live turn came to read as "died".
-    if (beats.length)
-      out.push({ kind: "beats", key: `beats:${key}`, beats, state: detail.turn_states[key] });
+    // HOW-47: a steer is drawn WHERE IT LANDED. A delivered one splits the step's beats right
+    // after the tool call whose result it rode in on — that is the point the agent read it —
+    // and one still pending (or carried on to a later step) closes the step's agent work.
+    const steers = detail.steers.filter((st) => st.node === row.node && st.visit === row.visit);
+    const placed = steers
+      .map((st) => ({ st, at: st.delivered?.after_tool_id ? beats.findIndex((b) => b.kind === "tool" && b.part.tool_id === st.delivered!.after_tool_id) : -1 }))
+      .sort((a, b) => (a.at < 0 ? Infinity : a.at) - (b.at < 0 ? Infinity : b.at) || a.st.seq - b.st.seq);
+    let from = 0;
+    const pushBeats = (upTo: number) => {
+      if (upTo <= from) return;
+      // the turn note belongs under the agent's LAST words in this step, not mid-way
+      const state = upTo === beats.length ? detail.turn_states[key] : "done";
+      out.push({ kind: "beats", key: from === 0 ? `beats:${key}` : `beats:${key}:${from}`, beats: beats.slice(from, upTo), state });
+      from = upTo;
+    };
+    for (const { st, at } of placed) {
+      pushBeats(at >= 0 ? at + 1 : beats.length);
+      out.push({ kind: "steer", key: `steer:${st.seq}`, steer: st });
+    }
+    pushBeats(beats.length);
 
     for (const r of detail.log_rows) {
       if (r.node !== row.node || r.visit !== row.visit) continue;
@@ -200,6 +220,8 @@ function Row({ m, onPickStep, lastActivityAt }: { m: ChatMessage; onPickStep: (k
           <TurnNote state={m.state} lastActivityAt={lastActivityAt} className="cv-unfinished" />
         </div>
       );
+    case "steer":
+      return <SteerBubble steer={m.steer} />;
     case "asked":
       return (
         <div className="cv-asked">
@@ -224,6 +246,39 @@ function Row({ m, onPickStep, lastActivityAt }: { m: ChatMessage; onPickStep: (k
   }
 }
 
+/**
+ * HOW-47: the operator's own words to a running agent, drawn where they landed, with the same
+ * sending → delivered progression the ask cards use. Every state is read off the LOG (derive.ts
+ * `steers`), never assumed from the POST succeeding: "delivered" means the harness echoed it.
+ */
+export function SteerBubble({ steer }: { steer: RunDetail["steers"][number] }) {
+  const state = steer.delivered ? "delivered" : steer.carried ? "carried" : "pending";
+  return (
+    <div className="cv-steer" data-state={state}>
+      <Navigation size={12} aria-hidden />
+      <div className="cv-steer-body">
+        <span className="cv-steer-label">You steered the agent</span>
+        <span className="cv-steer-text">{steer.text}</span>
+        <span className="cv-steer-state">
+          {state === "delivered"
+            ? "delivered — the agent read it after its tool call"
+            : state === "carried"
+              ? `the turn ended before another tool call — carried into ${steer.carried!.node}@${steer.carried!.visit}'s prompt`
+              : "sent — it reaches the agent at its next tool call"}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+/** HOW-47: can the box steer right now? Only a LIVE turn on a harness with a steer channel. */
+export function steerableTurn(detail: RunDetail): { node: string; visit: number } | null {
+  const step = liveStep(detail);
+  if (!step) return null;
+  const harness = detail.renders.findLast((r) => r.node === step.node && r.visit === step.visit)?.harness ?? "claude";
+  return isHarness(harness) && harnessSpec(harness).steer !== null ? step : null;
+}
+
 export function RunChat({ runId, detail, ask, onPickStep, onResolved, liveGit = null }: {
   runId: string;
   detail: RunDetail;
@@ -236,6 +291,13 @@ export function RunChat({ runId, detail, ask, onPickStep, onResolved, liveGit = 
   const [turns, setTurns] = useState<AskTurn[]>([]);
   const [q, setQ] = useState("");
   const [busy, setBusy] = useState(false);
+  // HOW-47: the composer's mode. Ask stays the default and the ONLY mode unless a turn is live
+  // on a harness that can be steered — so the box never silently changes target (HOW-27): the
+  // operator has to pick Steer, and the moment the turn ends the box is an Ask box again.
+  const [modeChoice, setModeChoice] = useState<"ask" | "steer">("ask");
+  const [steerError, setSteerError] = useState<string | null>(null);
+  const steerable = steerableTurn(detail);
+  const mode = steerable ? modeChoice : "ask";
   // HOW-27: the bulk tool disclosure. `epoch: 0` is "nobody has asked yet", which is what
   // leaves each beat on its own default — closed, or open if its result reads as a failure.
   const [disclosure, setDisclosure] = useState<{ epoch: number; open: boolean }>({ epoch: 0, open: false });
@@ -250,7 +312,26 @@ export function RunChat({ runId, detail, ask, onPickStep, onResolved, liveGit = 
   // render would re-run every ToolBeat's epoch check for nothing
   const disclosureValue = useMemo(() => disclosure, [disclosure]);
 
+  const sendSteer = async (text: string) => {
+    if (!text.trim() || busy) return;
+    setBusy(true);
+    setSteerError(null);
+    const res = await fetch(`/api/runs/${runId}/steer`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text }),
+    }).catch(() => null);
+    const body = (await res?.json().catch(() => null)) as { error?: string } | null;
+    if (res?.ok) {
+      setQ("");
+      onResolved(); // the steer is in the log now; the transcript draws it from there
+    } else {
+      // a refusal is shown VERBATIM (CLAUDE.md UI conventions) and the text is kept to retry
+      setSteerError(body?.error ?? "could not send the steer");
+    }
+    setBusy(false);
+  };
+
   const send = async (question: string) => {
+    if (mode === "steer") return sendSteer(question);
     if (!question.trim() || busy) return;
     setBusy(true);
     setQ("");
@@ -394,27 +475,48 @@ export function RunChat({ runId, detail, ask, onPickStep, onResolved, liveGit = 
           {/* HOW-30: the composer is a held object — a roomy box with the field on top and its
               controls along the bottom edge inside it, send last. What the box CANNOT do is said
               once, quietly, underneath, beside how to use it. */}
-          <div className="chat-input" data-busy={busy ? "true" : "false"}>
+          <div className="chat-input" data-busy={busy ? "true" : "false"} data-mode={mode}>
             <Textarea
               className="chat-input-field"
               rows={2}
-              aria-label="ask about this run"
-              placeholder="Ask about this run…"
+              aria-label={mode === "steer" ? "steer the agent" : "ask about this run"}
+              placeholder={mode === "steer" ? "Tell the agent something — it reads it at its next tool call…" : "Ask about this run…"}
               value={q}
               disabled={busy}
-              onChange={(e) => setQ(e.target.value)}
+              onChange={(e) => { setQ(e.target.value); setSteerError(null); }}
               onKeyDown={submitOnEnter(() => send(q), { enabled: !busy })}
             />
             <div className="chat-input-bar">
-              <Badge>read-only</Badge>
-              <Button size="icon" className="chat-send" aria-label="Ask" disabled={busy || !q.trim()} onClick={() => send(q)}>
-                <ArrowUp aria-hidden />
+              {steerable ? (
+                <div className="chat-mode" role="group" aria-label="what this box does">
+                  <Button variant="ghost" size="sm" className="chat-mode-option" aria-pressed={mode === "ask"} onClick={() => setModeChoice("ask")}>
+                    Ask (read-only)
+                  </Button>
+                  <Button variant="ghost" size="sm" className="chat-mode-option" aria-pressed={mode === "steer"} onClick={() => setModeChoice("steer")}>
+                    <Navigation aria-hidden />Steer the agent
+                  </Button>
+                </div>
+              ) : (
+                <Badge>read-only</Badge>
+              )}
+              <Button size="icon" className="chat-send" data-mode={mode} aria-label={mode === "steer" ? "Steer" : "Ask"} disabled={busy || !q.trim()} onClick={() => send(q)}>
+                {mode === "steer" ? <Navigation aria-hidden /> : <ArrowUp aria-hidden />}
               </Button>
             </div>
           </div>
+          {steerError && <div className="field-error chat-steer-error">{steerError}</div>}
           <div className="chat-hint">
-            <span>Enter to ask · Shift + Enter for a new line</span>
-            <span>Reads this run only. It can't reply to the agent — answer the run on the card above.</span>
+            {mode === "steer" ? (
+              <>
+                <span>Enter to steer · Shift + Enter for a new line</span>
+                <span>Delivered to the agent at its next tool call. It does not pause or restart the step.</span>
+              </>
+            ) : (
+              <>
+                <span>Enter to ask · Shift + Enter for a new line</span>
+                <span>Reads this run only. It can't reply to the agent — answer the run on the card above.</span>
+              </>
+            )}
           </div>
         </div>
       </div>

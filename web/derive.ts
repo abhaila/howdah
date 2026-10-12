@@ -22,6 +22,7 @@ import { askQuestions, type UserQuestion } from "../core/ask";
 import type { LoggedEvent, RunOutcome } from "../log/events";
 import { currentProposal, decisionAnswers, decisionKind, findDecision } from "../engine/slice-decision";
 import { replayState } from "../engine/replay";
+import { steerStates, type SteerState } from "../engine/steer-state";
 import type { Scope } from "../core/context";
 import { coalesce, outcomesByHash, type CoalescedTurn, type JoinedOutcome } from "../log/coalesce";
 import { rollupRun, usageByVisit, type UsageRollup, type VisitUsage } from "../log/usage";
@@ -151,6 +152,12 @@ export interface RunDetail {
    * never called TodoWrite). Never invented, never carried over from an earlier step.
    */
   plan: StepPlan | null;
+  /**
+   * HOW-47: every operator steer and what became of it — pending, delivered (with the tool call
+   * it landed after) or carried into a later render. engine/steer-state.ts decides; this only
+   * carries it to the transcript.
+   */
+  steers: SteerState[];
   /**
    * HOW-46/HOW-49: when the agent last produced anything (a chunk or a turn boundary) — the
    * "last activity Ns ago" clock and the quiet-for-N-minutes signal. Null before any turn.
@@ -447,6 +454,7 @@ export function deriveDetail(
     timeline,
     turn_states: deriveTurnStates(turns, timeline, ask, summary.status, opts.runnerAlive),
     plan: timeline.length ? derivePlan(events, timeline.at(-1)!.node, timeline.at(-1)!.visit) : null,
+    steers: steerStates(events),
     last_agent_event_at: lastAgent?.ts ?? null,
     renders,
     outcomes: [...outcomesByHash(events).values()],
@@ -627,6 +635,11 @@ export function deriveLogRows(events: LoggedEvent[]): LogRow[] {
         return { ...base, ...at(e.node, e.visit), kind: "engine", depth: 0,
           summary: `drift @ ${e.stamp ?? e.commit?.slice(0, 12) ?? "(no commit)"} · ${counts || "nothing to check"}${e.truncated ? ` · ${e.truncated} more not listed` : ""}${e.extractor_mismatch ? ` · extractor mismatch ${e.extractor_mismatch.base} vs ${e.extractor_mismatch.after}` : ""}` };
       }
+      case "operator-steered":
+        return { ...base, ...at(e.node, e.visit), kind: "operator", depth: 1, summary: `steer · ${e.text.slice(0, 200)}` };
+      case "steer-delivered":
+        return { ...base, ...at(e.node, e.visit), kind: "operator", depth: 1,
+          summary: `steer #${e.steer_seq} delivered${e.after_tool_id ? ` after ${e.after_tool_id}` : ""}` };
       default: {
         const never: never = e;
         throw new Error(`unhandled event type in deriveLogRows: ${JSON.stringify(never)}`);

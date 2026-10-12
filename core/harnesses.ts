@@ -96,6 +96,16 @@ export interface HarnessSpec {
    * The others cannot yet, and a prompt line pretending otherwise would be worse than nothing.
    */
   editHooks: boolean;
+  /**
+   * HOW-47: how an operator can say something to a RUNNING turn without pausing it, or null
+   * when this harness has no channel for it yet. `stdin` is claude's stream-json input: a
+   * user message written while a tool call is in flight is delivered at that tool's result
+   * boundary and echoed back (`--replay-user-messages`) as proof — spiked against claude
+   * 2.1.296 and pinned in adapter/fixtures/claude-steer.jsonl. Null reads "steer: not
+   * supported" everywhere it is asked, and the route refuses rather than queueing a message
+   * nothing will deliver.
+   */
+  steer: "stdin" | null;
   status: HarnessStatus;
 }
 
@@ -120,6 +130,7 @@ const SPECS: Record<HarnessName, HarnessSpec> = {
     toolFlags: { allow: "--allowedTools", deny: "--disallowedTools" },
     knownTools: CLAUDE_TOOLS,
     editHooks: true,
+    steer: "stdin",
     status: "core",
   },
   codex: {
@@ -137,6 +148,7 @@ const SPECS: Record<HarnessName, HarnessSpec> = {
     toolFlags: null,
     knownTools: [],
     editHooks: false,
+    steer: null, // app-server has turn/steer-shaped methods, unprobed — not until a fixture pins one
     status: "core",
   },
   cursor: {
@@ -156,6 +168,7 @@ const SPECS: Record<HarnessName, HarnessSpec> = {
     toolFlags: null,
     knownTools: [],
     editHooks: false,
+    steer: null,
     status: "optional",
   },
   opencode: {
@@ -172,6 +185,7 @@ const SPECS: Record<HarnessName, HarnessSpec> = {
     toolFlags: { allow: "--allowedTools", deny: "--disallowedTools" },
     knownTools: CLAUDE_TOOLS,
     editHooks: true,
+    steer: "stdin", // the claude executor and the claude binary: the same channel
     status: "internal",
   },
 };

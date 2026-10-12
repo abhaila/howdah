@@ -35,6 +35,10 @@
  * user turn, not part of the first-turn prompt, so it sits outside rendered_hash by design.
  * stderr goes to a file in the run dir, never the UI.
  *
+ * HOW-47: an operator STEER reaches a running turn without pausing it — written to stdin while
+ * a tool call is in flight, delivered by the CLI at that tool's result boundary, and proven by
+ * the CLI's echo. See the steer channel below and engine/steer.ts.
+ *
  * HOW-14: a turn that died because the context window filled fails with its own code,
  * `context-exhausted`, rather than `turn error: Prompt is too long` — the engine parks it
  * without hopping harnesses and briefs the retry to re-enter. A mid-turn compaction is only
@@ -55,6 +59,7 @@ import { killGroup } from "./shell";
 import { diagnosticsSettings } from "../hooks/diagnostics";
 import { ToolWatch, TurnCeiling, stuckReason, turnTimeoutReason, type StuckThresholds } from "./stuck";
 import { isAllowReply } from "./reply";
+import { steerTurnText } from "../../core/steer";
 import {
   answersToReplyText, askReason, askResultMessage, normalizeAskPayload, parseFreeTextAnswer,
   validateAnswers, type UserQuestion,
@@ -74,6 +79,8 @@ export interface ClaudeExecutorOpts {
    * with a stated reason instead of answering into a closed door.
    */
   askTimeoutMs?: number;
+  /** HOW-47: how often the log is read for operator steers (default: askPollMs, then 400ms) */
+  steerPollMs?: number;
   notifiers?: Notifier[];
   viewerBase?: string;
   /** HOW-38: config.json `stuck` thresholds (default warn 5, stop 8) */
@@ -260,6 +267,41 @@ export function claudeExecutor(opts: ClaudeExecutorOpts): Executor {
       chunk("tool_result", answersToReplyText(questions, answers) || "(no answer)", { id: toolUseId, name: toolName });
     };
 
+    /**
+     * HOW-47: the operator's steer channel. A poll reads this node@visit's `operator-steered`
+     * events from the log; a steer is WRITTEN to stdin only while a tool call is in flight, so
+     * the CLI delivers it at that tool's result boundary (adapter/fixtures/claude-steer.jsonl).
+     * Writing it while the model is only generating text would let it queue behind the turn's
+     * end, where the CLI would run it as a fresh turn nobody is reading. Delivery is proven by
+     * the harness's own echo (`user_echo`), never assumed from the write; a steer still unwritten
+     * when the turn ends was never seen, and the engine carries it into the next render.
+     */
+    const steersPending = new Map<number, { line: string; written: boolean }>();
+    const steersSeen = new Set<number>();
+    const toolsInFlight = new Set<string>();
+    let lastToolResultId: string | undefined;
+    const pollSteers = () => {
+      let events: ReturnType<typeof readLog>;
+      try { events = readLog(log.path); } catch { return; } // a torn tail mid-write: next tick
+      const delivered = new Set(events.flatMap((e) => (e.type === "steer-delivered" ? [e.steer_seq] : [])));
+      for (const e of events) {
+        if (e.type !== "operator-steered" || e.node !== nodeId || e.visit !== visit) continue;
+        if (steersSeen.has(e.seq) || delivered.has(e.seq)) continue;
+        steersSeen.add(e.seq);
+        steersPending.set(e.seq, { line: steerTurnText(e.text), written: false });
+      }
+    };
+    const flushSteers = () => {
+      if (toolsInFlight.size === 0) return;
+      for (const s of steersPending.values()) {
+        if (s.written) continue;
+        proc.stdin.write(buildClaudeUserTurn(s.line));
+        s.written = true;
+      }
+      proc.stdin.flush();
+    };
+    const steerTimer = setInterval(() => { pollSteers(); flushSteers(); }, opts.steerPollMs ?? opts.askPollMs ?? 400);
+
     let turnEnded = false;
     let repairSent = false;
     let sawEvent = false; // did the CLI ever speak stream-json? a logged-out CLI never does
@@ -276,6 +318,16 @@ export function claudeExecutor(opts: ClaudeExecutorOpts): Executor {
             case "thinking_delta":
               chunk("thinking", ev.text);
               break;
+            case "user_echo": {
+              // HOW-47: the harness consumed a stdin message. Match it to the steer we wrote —
+              // the echo of the prompt itself, or of a repair turn, matches nothing here
+              const hit = [...steersPending.entries()].find(([, p]) => p.written && p.line === ev.text);
+              if (hit) {
+                steersPending.delete(hit[0]);
+                log.append({ type: "steer-delivered", node: nodeId, visit, steer_seq: hit[0], ...(lastToolResultId !== undefined ? { after_tool_id: lastToolResultId } : {}) });
+              }
+              break;
+            }
             case "tool_call": {
               // Tool inputs are clipped to 400 chars: the transcript wants a one-line summary,
               // not a 40KB Write. The ONE exception is TodoWrite (HOW-49): its input IS the
@@ -283,10 +335,14 @@ export function claudeExecutor(opts: ClaudeExecutorOpts): Executor {
               // one (web/derive.ts derivePlan), and a plan cut mid-JSON cannot be parsed at all.
               const summary = ev.name === "TodoWrite" ? JSON.stringify(ev.input) : JSON.stringify(ev.input).slice(0, 400);
               chunk("tool_call", summary, { id: ev.id, name: ev.name, input_hash: watch.call(ev.id, ev.name, ev.input, summary) });
+              toolsInFlight.add(ev.id);
+              flushSteers(); // a steer waiting for a boundary has one now
               break;
             }
             case "tool_result": {
               chunk("tool_result", ev.content.slice(0, 400), { id: ev.id, ...(ev.is_error !== undefined ? { is_error: ev.is_error } : {}) });
+              toolsInFlight.delete(ev.id);
+              lastToolResultId = ev.id;
               watch.result(ev.id, ev.is_error === true, ev.content);
               // HOW-39: the hook ran before claude emitted this result and recorded itself in the
               // log; a PostToolUse hook has no stream event, so this is how the transcript sees it
@@ -335,7 +391,9 @@ export function claudeExecutor(opts: ClaudeExecutorOpts): Executor {
       if (turnEnded) {
         // one repair turn before giving up: the session still holds the work, so asking for
         // the missing contract costs a short turn instead of re-running the whole node
-        if (!repairSent && !turnError && writeKeys.length && !parseOutputs(resultText ?? accumulated, writeKeys).ok) {
+        // (never with a steer in limbo: the CLI would answer the queued steer before the repair)
+        const limbo = [...steersPending.values()].some((p) => p.written);
+        if (!repairSent && !limbo && !turnError && writeKeys.length && !parseOutputs(resultText ?? accumulated, writeKeys).ok) {
           repairSent = true;
           turnEnded = false;
           resultText = undefined;
@@ -354,6 +412,12 @@ export function claudeExecutor(opts: ClaudeExecutorOpts): Executor {
     ceiling.clear();
     // HOW-38: a stuck turn is still running — end it and everything it started
     if (watch.stopped) killGroup(proc.pid);
+    clearInterval(steerTimer);
+    // HOW-47: a steer written but never echoed is queued inside the CLI, which would run it as a
+    // fresh turn after this one — work nobody is reading. Stop the process instead of letting it
+    // drain stdin; the steer is undelivered, so the engine carries it into the next render.
+    const steerInLimbo = [...steersPending.values()].some((p) => p.written);
+    if (steerInLimbo) proc.kill();
     try { proc.stdin.end(); } catch {}
     // grace, then make sure it is gone
     const exited = await Promise.race([proc.exited, Bun.sleep(3000).then(() => null)]);

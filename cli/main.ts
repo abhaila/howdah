@@ -24,6 +24,7 @@
  *                                                    extract + assemble a snapshot (map/cli.ts)
  *   howdah metrics [--json]                          implement-slice runs vs the implement-ticket baseline (cli/metrics.ts)
  */
+import { steer } from "../engine/steer";
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { Engine } from "../engine/run";
@@ -289,6 +290,18 @@ export async function jumpCommand(runId: string, node: string, message?: string)
   clearControl(runDir);
   console.log(`jumped ${runId} to ${node}${message ? " with instruction" : ""}; resuming`);
   await resumeCommand(runId);
+}
+
+/**
+ * HOW-47: say something to a RUNNING agent without pausing it. The precheck and the append are
+ * engine/steer.ts `steer` — the same function the viewer's route calls — so the CLI and the
+ * composer refuse the same runs in the same words. Delivery is the runner's job: this only
+ * records the steer, and the claude executor writes it to the agent at its next tool call.
+ */
+export function steerCommand(runId: string, text: string): void {
+  const sent = steer(join(runsDir, runId), text);
+  if (!sent.ok) throw new Error(sent.message);
+  console.log(`steer #${sent.seq} sent to ${sent.node}@${sent.visit} — it reaches the agent at its next tool call`);
 }
 
 export async function upCommand(opts: { intervalMs?: number; once?: boolean } = {}): Promise<void> {
@@ -575,6 +588,7 @@ if (import.meta.main) {
     }
     else if (verb === "abort") { writeControl(join(runsDir, rest[0] ?? ""), "abort"); console.log("abort requested — lands at the next node boundary"); }
     else if (verb === "jump") await jumpCommand(rest[0] ?? "", rest[1] ?? "", rest.slice(2).join(" ") || undefined);
+    else if (verb === "steer") steerCommand(rest[0] ?? "", rest.slice(1).join(" "));
     else if (verb === "approve" || verb === "send-feedback" || verb === "comment") {
       const { proposalId, rest: args } = splitProposalFlag(rest, verb === "comment" ? 2 : Infinity);
       if (verb === "approve") await approveCommand(args[0] ?? "", proposalId);
@@ -647,7 +661,7 @@ if (import.meta.main) {
       console.log(`scaffolded ${path} — edit it, then: howdah run ${rest[0]}`);
     }
     else {
-      console.error("usage: howdah setup|run|resume|pause|abort|jump|reply|resolve-effect|approve|comment|send-feedback|redesign|map|metrics|runs|graphs|new-graph|workspace|up|doctor");
+      console.error("usage: howdah setup|run|resume|pause|abort|jump|steer|reply|resolve-effect|approve|comment|send-feedback|redesign|map|metrics|runs|graphs|new-graph|workspace|up|doctor");
       process.exit(1);
     }
   } catch (err) {

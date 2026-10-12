@@ -151,6 +151,50 @@ describe("claude adapter mapping", () => {
     expect(args).toContain("stdio");
     expect(args).toContain("--include-partial-messages");
     expect(claudeArgs({ sessionId: "s1", resume: true })).toContain("--resume");
+    // HOW-47: the echo of a consumed stdin message is the proof a steer was delivered
+    expect(args).toContain("--replay-user-messages");
+  });
+});
+
+/**
+ * HOW-47 — the steer spike, captured from claude 2.1.296: a stdin user message written while a
+ * Bash call was in flight. Pinned here so an upgrade that changes WHERE it lands (or stops
+ * echoing it) fails a test instead of silently breaking delivery proof.
+ */
+describe("claude steer wire (adapter/fixtures/claude-steer.jsonl)", () => {
+  const steerFixture = readFileSync(join(import.meta.dir, "fixtures", "claude-steer.jsonl"));
+  const events = replay(steerFixture, 64).flatMap((r) => (r.ok ? mapClaudeEvent(r.value) : []));
+  const steerText = "[OPERATOR STEERING — from the human operator running this session, not from a tool] Change of plan: skip the remaining commands, and end your final reply with the single word PINEAPPLE.";
+
+  test("the steer is echoed AFTER the in-flight tool's result, as its own message, in the same turn", () => {
+    // (the fixture keeps no stream_event deltas: the capture dropped them to stay small)
+    expect(events.filter((e) => e.type !== "rate_limit").map((e) => e.type)).toEqual([
+      "session_started", "user_echo", "tool_call", "tool_result", "user_echo", "turn_end",
+    ]);
+    const call = events.findIndex((e) => e.type === "tool_call");
+    const result = events.findIndex((e) => e.type === "tool_result");
+    const echo = events.findIndex((e) => e.type === "user_echo" && e.text === steerText);
+    expect(call).toBeGreaterThan(-1);
+    expect(result).toBeGreaterThan(call);
+    expect(echo).toBeGreaterThan(result); // delivered at the tool boundary, not inside the result
+    expect(events.filter((e) => e.type === "turn_end")).toHaveLength(1); // no extra turn
+  });
+
+  test("the tool call was not lost, and the agent obeyed in the same turn", () => {
+    const result = events.find((e) => e.type === "tool_result");
+    expect(result).toMatchObject({ content: "one" });
+    const end = events.find((e) => e.type === "turn_end");
+    expect(end).toMatchObject({ result_text: expect.stringContaining("PINEAPPLE") });
+  });
+
+  test("the prompt's own echo is a user_echo too — the executor matches by exact text", () => {
+    const echoes = events.filter((e) => e.type === "user_echo");
+    expect(echoes).toHaveLength(2);
+    expect((echoes[0] as { text: string }).text).toStartWith("Run these three shell commands");
+  });
+
+  test("a user message that is not a replay is not an echo", () => {
+    expect(mapClaudeEvent({ type: "user", message: { content: [{ type: "text", text: "hi" }] } })).toEqual([]);
   });
 
   test("HOW-33: a resolved effort is sent as --effort, and none sends no flag", () => {

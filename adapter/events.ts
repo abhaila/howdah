@@ -86,4 +86,10 @@ export type AgentEvent =
       resets_at?: string;
       raw: unknown;
     }
-  | { type: "error"; message: string; context_exceeded?: true };
+  | { type: "error"; message: string; context_exceeded?: true }
+  /**
+   * HOW-47: the harness echoing back a user message it has just CONSUMED (claude
+   * `--replay-user-messages`, `isReplay: true`). A message written mid-turn is echoed at the
+   * tool boundary it was delivered at, so the echo is the executor's proof of delivery.
+   */
+  | { type: "user_echo"; text: string };

@@ -185,6 +185,12 @@ export type RunEvent =
        * stub named. Only elided keys appear; `context_read` still holds every value in full.
        */
       context_sources?: Record<string, string>;
+      /**
+       * HOW-47: the `operator-steered` events (by seq) this render carries because they never
+       * reached the turn they were sent to (suffix v5+). A suffix INPUT, logged so
+       * reconstruction reads the same texts rather than guessing which steers were pending.
+       */
+      steers_carried?: number[];
     }
   | {
       type: "chunk";
@@ -530,6 +536,34 @@ export type RunEvent =
       /** the tracker identifier the slice was raised as, when there is one */
       ticket?: string;
       workspace?: string;
+    }
+  | {
+      /**
+       * HOW-47: the operator said something to a RUNNING agent turn, without pausing it.
+       * Appended by the server or CLI under the log lock, only while that node@visit is the
+       * live turn of a proven runner on a harness with a steer channel (engine/control.ts
+       * steerRefusal). The executor delivers it at the next tool boundary; until then it is
+       * pending. It is outside `rendered_hash`, which is why it must be in the log: a reader
+       * has to be able to see why the agent changed course.
+       */
+      type: "operator-steered";
+      node: string;
+      visit: number;
+      text: string;
+      by: "operator";
+    }
+  | {
+      /**
+       * HOW-47: the harness consumed the steer `steer_seq` — proven by its own echo of the
+       * message (`--replay-user-messages`), which arrives at the tool boundary it landed at.
+       * `after_tool_id` is the tool call whose result it rode in after, so the transcript can
+       * draw it exactly where the agent read it.
+       */
+      type: "steer-delivered";
+      node: string;
+      visit: number;
+      steer_seq: number;
+      after_tool_id?: string;
     }
   | { type: "run-finished"; outcome: RunOutcome };
 

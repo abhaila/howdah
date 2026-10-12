@@ -23,6 +23,15 @@
  * questions." Both halves were probed against the live CLI before this was written.
  * Re-verify on upgrade; the meaning of the payload lives in core/ask.ts.
  *
+ * HOW-47 — steering a running turn, spiked against claude 2.1.296 and pinned in
+ * adapter/fixtures/claude-steer.jsonl. A stream-json user message written to stdin while a tool
+ * call is in flight is delivered at that tool's result boundary — after the `tool_result`, as
+ * its own user message, NOT inside the result — and the agent adopted it in the same turn, which
+ * ended in one `result`. The tool call is not lost (unlike a PreToolUse-hook block). With
+ * `--replay-user-messages` the CLI echoes every consumed stdin message back as
+ * `user { isReplay: true }`, in stream order — so the echo of a steer arrives exactly where it
+ * landed, and is mapped to `user_echo` as the executor's proof of delivery.
+ *
  * HOW-14 — context exhaustion. Read from claude 2.1.283's own strings and SDK types, NOT from
  * a captured turn (unverified-live, like the cursor adapter; capture one into fixtures/ the
  * first time it happens for real):
@@ -56,6 +65,8 @@ export function claudeArgs(opts: {
     "--output-format", "stream-json",
     "--include-partial-messages",
     "--permission-prompt-tool", "stdio",
+    // HOW-47: echo every consumed stdin user message (isReplay) — the proof a steer was delivered
+    "--replay-user-messages",
     "--permission-mode", opts.permissionMode ?? "auto",
     ...(opts.model ? ["--model", opts.model] : []),
     ...(opts.maxTurns ? ["--max-turns", String(opts.maxTurns)] : []),
@@ -116,6 +127,11 @@ export function mapClaudeEvent(raw: unknown): AgentEvent[] {
     case "user": {
       const content = e.message?.content;
       if (!Array.isArray(content)) return [];
+      // HOW-47: a replayed stdin message — the echo that proves a mid-turn steer was consumed
+      if (e.isReplay === true) {
+        const text = content.filter((b: any) => b?.type === "text" && typeof b.text === "string").map((b: any) => b.text).join("");
+        return text ? [{ type: "user_echo", text }] : [];
+      }
       return content
         .filter((b: any) => b?.type === "tool_result")
         .map((b: any): AgentEvent => ({

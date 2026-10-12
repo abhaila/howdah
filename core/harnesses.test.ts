@@ -211,3 +211,12 @@ describe("effort per harness", () => {
     expect(resolveAgentConfigLayers([{ effort: "high" }]).effortInert).toBeUndefined();
   });
 });
+
+describe("HOW-47: the steer channel is a per-harness fact", () => {
+  test("claude (and opencode, which runs the claude binary) steer over stdin; codex and cursor say not supported", () => {
+    expect(harnessSpec("claude").steer).toBe("stdin");
+    expect(harnessSpec("opencode").steer).toBe("stdin");
+    expect(harnessSpec("codex").steer).toBeNull();
+    expect(harnessSpec("cursor").steer).toBeNull();
+  });
+});
