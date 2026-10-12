@@ -970,6 +970,8 @@ export function parseAgentConfig(v: unknown): AgentConfig | undefined {
   const timeout = posInt(v.turnTimeoutMs);
   if (timeout !== undefined) out.turnTimeoutMs = timeout;
   if (typeof v.stuckDetection === "boolean") out.stuckDetection = v.stuckDetection;
+  const cap = posInt(v.contextCap);
+  if (cap !== undefined) out.contextCap = cap;
   return Object.keys(out).length ? out : undefined;
 }
 

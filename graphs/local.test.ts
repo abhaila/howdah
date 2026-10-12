@@ -73,6 +73,14 @@ describe("loading a local graph", () => {
     await expect(loadLocalGraph(h, "noprompt", ROOT)).rejects.toThrow(/names prompt "nope.missing", which has no .md file/);
   });
 
+  test("HOW-37: a prompt using a filter that does nothing is refused at load, with the filter named", async () => {
+    const h = home();
+    ensureLocalDirs(h);
+    writeFileSync(join(localPromptsDir(h), "filt.work.md"), `---\nid: filt.work\nversion: 1\n---\nDo {{ context.goal | upper }}.\n`);
+    writeFileSync(localGraphPath(h, "filt"), graphSource("filt"));
+    await expect(loadLocalGraph(h, "filt", ROOT)).rejects.toThrow(/the filter "upper", which does nothing/);
+  });
+
   test("validate() still gates: a dead end is refused", async () => {
     const h = home();
     withPrompt(h, "deadend.work");

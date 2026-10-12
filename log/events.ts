@@ -160,6 +160,18 @@ export type RunEvent =
        * the briefing from the log rather than guessing. Absent: no briefing was rendered.
        */
       reentry_after_visit?: number;
+      /**
+       * HOW-37: which core/template.ts substitution rules rendered the body. Absent: v1 (every
+       * pre-HOW-37 render). Reconstruction picks the same rules, so old runs stay VERIFIED.
+       */
+      render_version?: number;
+      /** HOW-37 (v2): the cap in force — a render input like `skills` */
+      context_cap?: number;
+      /**
+       * HOW-37 (v2): the keys whose value was ELIDED in this render, each with the source its
+       * stub named. Only elided keys appear; `context_read` still holds every value in full.
+       */
+      context_sources?: Record<string, string>;
     }
   | {
       type: "chunk";

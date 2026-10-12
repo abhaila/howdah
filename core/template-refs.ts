@@ -13,8 +13,36 @@
  * Nothing node-specific may be added here.
  */
 
-/** `{{ context.key }}` / `{{ inputs.key }}`, optional `| filter` tail, captured as (ns, key). */
-export const TEMPLATE_REF = String.raw`\{\{\s*(context|inputs)\.([\w.]+)(?:\s*\|[^}]*)?\s*\}\}`;
+/**
+ * `{{ context.key }}` / `{{ inputs.key }}`, optional `| filter` tail, captured as
+ * (ns, key, filter). HOW-37: the filter is CAPTURED now (it used to be parsed and dropped), so
+ * a filter the renderer does not know can be refused instead of silently ignored — see
+ * templateFilterProblems. Every existing caller destructures (ns, key) and is unaffected.
+ */
+export const TEMPLATE_REF = String.raw`\{\{\s*(context|inputs)\.([\w.]+)(?:\s*\|\s*([^}]*?))?\s*\}\}`;
+
+/**
+ * HOW-37: the filters a reference may carry. `dump` = the value as compact JSON, ALWAYS — a
+ * string included, so `{{ context.x | dump }}` is unambiguous about where the value starts and
+ * ends. That is what every use in prompts/ already meant (all eight are on object values,
+ * where it renders byte-identically to no filter at all).
+ */
+export const TEMPLATE_FILTERS = ["dump"] as const;
+
+/**
+ * Every reference with a filter the renderer does not know, as a sentence naming it. A filter
+ * that parses and does nothing is a trap, so this is a VALIDATION ERROR wherever a prompt is
+ * checked (prompts/codegen.ts, the prompt store's accept guard, graphs/local.ts).
+ */
+export function templateFilterProblems(body: string): string[] {
+  const problems: string[] = [];
+  for (const m of body.matchAll(templateRefPattern())) {
+    const filter = m[3]?.trim();
+    if (filter === undefined || filter === "" || (TEMPLATE_FILTERS as readonly string[]).includes(filter)) continue;
+    problems.push(`\`${m[0]}\` uses the filter "${filter}", which does nothing — the only filter is \`dump\` (the value as JSON)`);
+  }
+  return problems;
+}
 
 /** A fresh global matcher per call — no shared lastIndex to get bitten by. */
 export function templateRefPattern(): RegExp {

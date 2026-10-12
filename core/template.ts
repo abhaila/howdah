@@ -43,7 +43,7 @@
  */
 import { createHash } from "node:crypto";
 import { harnessSpec, isHarness } from "./harnesses";
-import { isEngineNamespace, templateRefPattern } from "./template-refs";
+import { TEMPLATE_FILTERS, isEngineNamespace, templateRefPattern } from "./template-refs";
 import type { Harness } from "./graph";
 
 /**
@@ -52,25 +52,109 @@ import type { Harness } from "./graph";
  * Re-exported here because this file is still the one place a caller asks about templates —
  * the split moved the regex, it did not add a second one.
  */
-export { TEMPLATE_REF, templateRefPattern, isEngineNamespace, templateReads } from "./template-refs";
+export { TEMPLATE_REF, TEMPLATE_FILTERS, templateRefPattern, isEngineNamespace, templateReads, templateFilterProblems } from "./template-refs";
+
+// ---- render rules (HOW-37) ---------------------------------------------------------
 
 /**
- * Substitute every ref via `resolve`. Strings interpolate raw, everything else as JSON —
- * the engine's rule, kept here so reconstruction matches it. `resolve` may throw (the
- * engine's ContextStore does, on an unreadable key) and the throw propagates untouched.
+ * The substitution rules new renders use, logged as `render_version` on prompt-rendered.
+ * Absent on an event = v1. Like SUFFIX_VERSION, changing what a value renders as changes
+ * rendered_hash, so the rules are versioned and a past render is rebuilt by ITS rules:
+ *   v1  strings raw, everything else JSON; any `| filter` parsed and ignored
+ *   v2  `| dump` is JSON always (strings included); a value whose rendered text is longer than
+ *       the cap is clipped head and tail around a stub that says how big it was, that what
+ *       surrounds the stub is no longer valid JSON (when it was JSON), and where the whole
+ *       value is — so the agent can go and get it instead of guessing
+ */
+export const RENDER_VERSION = 2;
+
+/**
+ * HOW-37: the default cap, in UTF-16 code units of a value's RENDERED text. Chosen from real
+ * logs, not guessed: across 494 context reads in 15 runs under ~/.howdah/runs (2026-10-12) the
+ * p50 was 1.3k, p95 29.9k, p99 46.7k and the max 48.5k — and the biggest were legitimate
+ * (`implementation_plan`, `slice.drift`, the run's own `work` scope). 16k (map/neighbourhood's
+ * cap) would have elided real plans, so the default sits above everything observed, with
+ * headroom: it bounds the runaway case (a findings value growing across repair loops) without
+ * touching a normal value. Per graph / node / tuning via AgentConfig.contextCap.
+ */
+export const DEFAULT_CONTEXT_CAP = 64_000;
+
+export interface RenderRules {
+  /** 1 (absent on old events) or 2 */
+  version: number;
+  /** v2: the most characters one value's rendered text may take before it is elided */
+  cap?: number;
+  /** v2: keys never elided (the engine passes the run's inputs: the operator's own words) */
+  exempt?: ReadonlySet<string>;
+  /** v2: where the full value of `key` is, for the stub — "the output of review@3 in …" */
+  sourceOf?: (key: string) => string;
+  /**
+   * v2, reconstruction: elide EXACTLY these keys (the ones the engine logged as elided). The
+   * engine leaves it unset and decides by the cap.
+   */
+  elideOnly?: ReadonlySet<string>;
+}
+
+export class TemplateError extends Error {}
+
+/** the text a value renders as, before any cap */
+function valueText(value: unknown, filter: string | undefined, version: number): string {
+  if (version >= 2 && filter === "dump") return JSON.stringify(value) ?? "null";
+  return typeof value === "string" ? value : JSON.stringify(value);
+}
+
+/**
+ * HOW-37: `text` clipped to about `cap` characters, head and tail kept, the stub between. Cut
+ * at code-point boundaries — a surrogate pair is never split, so the result is always valid
+ * UTF-16 (and therefore valid UTF-8 when encoded).
+ */
+export function elide(key: string, text: string, cap: number, opts: { json: boolean; source?: string }): string {
+  const lines = text.split("\n").length;
+  let headEnd = Math.ceil(cap / 2);
+  let tailStart = text.length - Math.floor(cap / 2);
+  // never end the head on a high surrogate, never start the tail on a low one
+  if (headEnd > 0 && isHigh(text.charCodeAt(headEnd - 1))) headEnd--;
+  if (tailStart < text.length && isLow(text.charCodeAt(tailStart))) tailStart++;
+  const where = opts.source ?? "in this run's log";
+  const stub =
+    `\n[context.${key} elided: ${text.length} chars, ${lines} lines; the middle ${tailStart - headEnd} chars are omitted` +
+    (opts.json ? `, so the text around this note is NOT valid JSON` : "") +
+    `. The full value is ${where} — re-read or re-run its source to get it again.]\n`;
+  return text.slice(0, headEnd) + stub + text.slice(tailStart);
+}
+const isHigh = (c: number) => c >= 0xd800 && c <= 0xdbff;
+const isLow = (c: number) => c >= 0xdc00 && c <= 0xdfff;
+
+/**
+ * Substitute every ref via `resolve`, by the rules of `rules.version` (default v1 — what every
+ * pre-HOW-37 render used). `resolve` may throw (the engine's ContextStore does, on an unreadable
+ * key) and the throw propagates untouched. Returns the text, exactly the context read (FULL
+ * values — the cap is a rendering rule, never a storage one), and under v2 the keys it elided
+ * with the source each stub named.
  */
 export function renderTemplate(
   body: string,
   resolve: (key: string) => unknown,
-): { text: string; read: Record<string, unknown> } {
+  rules: RenderRules = { version: 1 },
+): { text: string; read: Record<string, unknown>; elided: Record<string, string> } {
   const read: Record<string, unknown> = {};
-  const text = body.replace(templateRefPattern(), (whole: string, ns: string, key: string) => {
+  const elided: Record<string, string> = {};
+  const text = body.replace(templateRefPattern(), (whole: string, ns: string, key: string, rawFilter: string | undefined) => {
     if (isEngineNamespace(ns, key)) return whole;
     const value = resolve(key);
     read[key] = value;
-    return typeof value === "string" ? value : JSON.stringify(value);
+    const filter = rawFilter?.trim() || undefined;
+    if (rules.version >= 2 && filter !== undefined && !(TEMPLATE_FILTERS as readonly string[]).includes(filter))
+      throw new TemplateError(`unknown template filter "${filter}" in ${whole}`);
+    const rendered = valueText(value, filter, rules.version);
+    if (rules.version < 2 || rules.cap === undefined) return rendered;
+    const shouldElide = rules.elideOnly ? rules.elideOnly.has(key) : rendered.length > rules.cap && !rules.exempt?.has(key);
+    if (!shouldElide) return rendered;
+    const source = rules.sourceOf?.(key) ?? "in this run's log";
+    elided[key] = source;
+    return elide(`${key}`, rendered, rules.cap, { json: typeof value !== "string" || filter === "dump", source });
   });
-  return { text, read };
+  return { text, read, elided };
 }
 
 /** The `rendered_hash` join key: first 16 hex of sha256 over the FINAL text as sent — template + every suffix (system-map 0.1). */

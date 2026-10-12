@@ -519,8 +519,16 @@ export function reconstructRender(runDir: string, renderedHashWanted: string): R
   if (!existsSync(pinned)) return null; // the pinned snapshot is the only honest source
   const { body } = splitFrontMatter(readFileSync(pinned, "utf8"));
 
-  // context_read holds exactly the keys the template consumed, so resolution cannot miss
-  const { text: plain } = renderTemplate(body, (key) => render.context_read[key]);
+  // context_read holds exactly the keys the template consumed, so resolution cannot miss.
+  // HOW-37: by the render's OWN rules — v1 (absent) for every pre-HOW-37 render, v2 with the
+  // logged cap, eliding exactly the keys the engine logged as elided, with the same stubs
+  const sources = render.context_sources ?? {};
+  const { text: plain } = renderTemplate(body, (key) => render.context_read[key], {
+    version: render.render_version ?? 1,
+    ...(render.context_cap !== undefined ? { cap: render.context_cap } : {}),
+    elideOnly: new Set(Object.keys(sources)),
+    sourceOf: (key) => sources[key] ?? "in this run's log",
+  });
 
   const jumpMessages = events
     .filter((e) => e.type === "operator-jump" && e.to === render.node && e.seq < render.seq && e.message)

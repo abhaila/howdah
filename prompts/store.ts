@@ -17,7 +17,7 @@
 import { readFileSync, writeFileSync, readdirSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import type { Graph } from "../core/graph";
-import { expandIncludes, includeRefs, templateReads } from "../core/template";
+import { expandIncludes, includeRefs, templateFilterProblems, templateReads } from "../core/template";
 
 export interface PromptFile {
   id: string;
@@ -71,7 +71,8 @@ export class PromptStore {
    * An include the revision breaks (unknown id, cycle) is itself a problem.
    */
   validateTemplateReads(promptId: string, body: string, graphs: Graph<never>[] | Graph<any>[]): string[] {
-    const problems: string[] = [];
+    // HOW-37: a filter the renderer does not know is refused, not silently ignored
+    const problems: string[] = templateFilterProblems(body).map((p) => `${promptId}: ${p}`);
     const bodyOf = (id: string) => (id === promptId ? body : this.load(id).body);
     for (const g of graphs) {
       for (const [nodeId, node] of Object.entries(g.def.nodes)) {

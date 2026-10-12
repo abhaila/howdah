@@ -65,7 +65,7 @@ import { join } from "node:path";
 import { agentConfigOf, nodeReads, resolveAgentConfigLayers, type Graph, type NodeDef, type EdgeDef, type AgentConfig, type ApprovalNodeDef, type Harness } from "../core/graph";
 import { basename } from "node:path";
 import { ContextStore, type Scope } from "../core/context";
-import { SUFFIX_VERSION, assemblePrompt, expandIncludes, renderTemplate, renderedHash, skillsForHarness, splitFrontMatter } from "../core/template";
+import { DEFAULT_CONTEXT_CAP, RENDER_VERSION, SUFFIX_VERSION, assemblePrompt, expandIncludes, renderTemplate, renderedHash, skillsForHarness, splitFrontMatter } from "../core/template";
 import { defaultHarness, fallbackChain, harnessNames } from "../core/harnesses";
 import { EventLog } from "../log/write";
 import type { LoggedEvent, ParkCode } from "../log/events";
@@ -935,8 +935,14 @@ export class Engine {
       this.refusalNote = null; // consumed by this attempt (replay: at node-started)
     }
     const reentryAfterVisit = this.reentryAfterVisit(this.log.read(), nodeId, visit);
-    const { text: rendered, read: contextRead } = renderTemplate(body, (key) =>
-      key in reads ? reads[key] : this.ctx.get(key, { node: nodeId, visit }),
+    // HOW-37: render rules v2 — an oversized value is elided around a stub naming where the
+    // whole of it lives; the run's own inputs (the operator's words) are never elided
+    const contextCap = config?.contextCap ?? DEFAULT_CONTEXT_CAP;
+    const priorEvents = this.log.read();
+    const { text: rendered, read: contextRead, elided } = renderTemplate(
+      body,
+      (key) => (key in reads ? reads[key] : this.ctx.get(key, { node: nodeId, visit })),
+      { version: RENDER_VERSION, cap: contextCap, exempt: new Set(this.graph.def.inputs), sourceOf: (key) => this.valueSource(priorEvents, key) },
     );
     // system-map 0.1: every suffix goes in BEFORE hashing, so the hash covers what is sent
     const skills = skillsForHarness(config?.harness, config?.skills);
@@ -969,8 +975,22 @@ export class Engine {
       suffix_version: SUFFIX_VERSION,
       ...(this.pinnedIncludes[prompt] ? { includes: this.pinnedIncludes[prompt] } : {}),
       ...(reentryAfterVisit !== undefined ? { reentry_after_visit: reentryAfterVisit } : {}),
+      render_version: RENDER_VERSION,
+      context_cap: contextCap,
+      ...(Object.keys(elided).length ? { context_sources: elided } : {}),
     });
     return finalRendered;
+  }
+
+  /**
+   * HOW-37: where the whole value of `key` is, for an elision stub — the latest SUCCEEDED
+   * attempt that published it, and the log it is recorded in. Derived from the log, so it is
+   * the same sentence however often the node is rendered, and it is logged with the render.
+   */
+  private valueSource(events: readonly LoggedEvent[], key: string): string {
+    const writer = events.findLast((e) => e.type === "node-finished" && e.status === "succeeded" && key in e.writes);
+    const where = writer?.type === "node-finished" ? `the output of ${writer.node}@${writer.visit}` : `the value of ${key}`;
+    return `${where}, recorded in full in ${this.log.path}`;
   }
 
   // ---- attribution (A5.3) ------------------------------------------------------

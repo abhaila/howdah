@@ -66,6 +66,12 @@ export interface AgentConfig {
    * whose whole job is polling the same command. Default on.
    */
   stuckDetection?: boolean;
+  /**
+   * HOW-37: the most characters one context value's RENDERED text may take in this node's
+   * prompt before it is elided around a stub (core/template.ts). Default DEFAULT_CONTEXT_CAP.
+   * The stored value is never touched — edge conditions and the log keep the whole thing.
+   */
+  contextCap?: number;
 }
 
 /**
@@ -74,7 +80,7 @@ export interface AgentConfig {
  * the other. `effortInert` is absent on purpose: it is a RESOLUTION result, never a setting.
  */
 export const AGENT_CONFIG_KEYS = [
-  "harness", "model", "effort", "permissionMode", "maxTurns", "skills", "turnTimeoutMs", "stuckDetection",
+  "harness", "model", "effort", "permissionMode", "maxTurns", "skills", "turnTimeoutMs", "stuckDetection", "contextCap",
 ] as const satisfies ReadonlyArray<Exclude<keyof AgentConfig, "effortInert">>;
 
 /** the AgentConfig a node declares, copied key by key (undefined keys omitted) */
@@ -153,6 +159,7 @@ export function resolveAgentConfigLayers(
     skills: pick("skills"),
     turnTimeoutMs: pick("turnTimeoutMs"),
     stuckDetection: pick("stuckDetection"),
+    contextCap: pick("contextCap"),
   };
 }
 
