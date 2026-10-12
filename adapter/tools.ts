@@ -185,7 +185,7 @@ export function classifyCall(harness: string, name: string, content: string, opt
     const cmd = field(content, shellField);
     if (!cmd) return { cls: "unclassified" };
     const shell = classifyShell(cmd.value, { truncated: cmd.truncated, ...(opts.verifyCommand ? { verifyCommand: opts.verifyCommand } : {}) });
-    return { ...shell, command: cmd.value };
+    return { ...shell, command: shell.command ?? cmd.value };
   }
   return { cls: "other" };
 }
@@ -234,7 +234,10 @@ function editTarget(segment: string): { edit: boolean; path?: string } {
 export function classifyShell(command: string, opts: { verifyCommand?: string; truncated?: boolean } = {}): CallClassification {
   // codex wraps commands as `bash -lc '<cmd>'`: classify what the wrapper runs
   const wrapped = /^(?:\/bin\/)?(?:ba|z)?sh\s+-l?c\s+(['"])([\s\S]*?)(\1)?$/.exec(command.trim());
-  if (wrapped) return classifyShell(wrapped[2]!, { ...opts, truncated: opts.truncated || wrapped[3] === undefined });
+  if (wrapped) {
+    const inner = classifyShell(wrapped[2]!, { ...opts, truncated: opts.truncated || wrapped[3] === undefined });
+    return { ...inner, command: inner.command ?? wrapped[2]! }; // what ran, without the wrapper
+  }
   const segments = command.split(SEGMENT_SPLIT).map((s) => s.trim()).filter(Boolean);
   // a bare `cd dir` steers, it does not inspect: drop it so `cd x && bun test` reads as verify
   const work = segments.filter((s) => !/^cd\s/.test(s));

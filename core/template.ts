@@ -35,6 +35,13 @@
  * log (engine/run.ts reentryAfterVisit), logged as `reentry_after_visit`, so reconstruction
  * rebuilds it exactly.
  *
+ * HOW-36: v5 = v4 whose re-entry briefing also carries a STRUCTURED HANDOFF — what the
+ * exhausted visit had done that git cannot show (files read, files edited, commands run and
+ * whether they failed, the agent's last stated intent, the outputs still owed), derived by rule
+ * from that visit's own log events (engine/handoff.ts). Bounded (HANDOFF_CHARS), with stubs
+ * that say how to get elided items back; no recall tool (HOW-32: the paper's clearest negative
+ * result). Reconstruction re-derives it from the same events, so the render stays VERIFIED.
+ *
  * Includes (system-map 1c review): `{{> prompt.id }}` pulls another prompt file's body in AT
  * PIN TIME — expandIncludes() runs when a run pins its prompts, and the pinned file holds the
  * expanded text. Rendering, rendered_hash and reconstruction therefore never see an include:
@@ -173,7 +180,30 @@ export function operatorInstructionSuffix(message: string): string {
 // ---- suffixes (system-map 0.1) ---------------------------------------------------
 
 /** The suffix wording new renders use. Bump it — and add a builder set — to reword. */
-export const SUFFIX_VERSION = 4;
+export const SUFFIX_VERSION = 5;
+
+/**
+ * HOW-36: what a context-exhausted visit had done, as data — derived by engine/handoff.ts from
+ * the log, worded by the v5 re-entry builder. Lists are whole here; the builder trims them to
+ * the budget so trimming is part of the versioned wording.
+ */
+export interface Handoff {
+  /** the exhausted visit */
+  visit: number;
+  filesRead: readonly string[];
+  filesEdited: readonly string[];
+  /** every shell command it ran, in order; ok: null when the log does not say */
+  commands: ReadonlyArray<{ command: string; ok: boolean | null }>;
+  /** the agent's last words before the window filled (the tail of its last text run), or null */
+  lastText: string | null;
+  /** the node's declared outputs — an exhausted attempt published none of them */
+  outputsOwed: readonly string[];
+  /** it filled its window before calling any tool at all */
+  noToolCalls: boolean;
+}
+
+/** HOW-36: the most characters the handoff block may take, whatever the visit did */
+export const HANDOFF_CHARS = 4000;
 
 /** The versioned builders: what a render's `suffix_version` pins. */
 export interface SuffixBuilders {
@@ -195,7 +225,7 @@ export interface SuffixBuilders {
    * HOW-14: the re-entry briefing after a visit that ran out of context window. Absent from
    * versions that predate it (v1–v3) — such a version cannot have rendered one.
    */
-  reentryInstruction?(previousVisit: number): string;
+  reentryInstruction?(previousVisit: number, handoff?: Handoff): string;
 }
 
 /**
@@ -244,9 +274,72 @@ const V4: SuffixBuilders = {
     `3. Continue from where the work stands rather than starting over, and commit as you go so progress survives if this happens again.`,
 };
 
-const SUFFIX_BUILDERS: Readonly<Record<number, SuffixBuilders>> = { 1: V1, 2: V2, 3: V3, 4: V4 };
+/** a line, clipped to `max` characters with an ellipsis */
+const clipLine = (text: string, max: number) => (text.length <= max ? text : `${text.slice(0, max - 1)}…`);
+
+/**
+ * HOW-36: the handoff block, bounded by HANDOFF_CHARS. It is built at a generous size and the
+ * lists are halved until it fits; every list that lost items says how many and how to get them
+ * back. Deterministic — the same handoff always words the same way, which reconstruction needs.
+ */
+export function handoffBlock(h: Handoff): string {
+  if (h.noToolCalls) {
+    const said = h.lastText ? `\nIts last words were:\n> ${clipLine(h.lastText, 1500).replace(/\n/g, "\n> ")}` : "";
+    return `\n\n## What the previous visit had done\nVisit ${h.visit} exhausted its context before calling any tool, so there is nothing from it to pick up beyond what the task itself says.${said}`;
+  }
+  const build = (limit: number, lineMax: number, textMax: number): string => {
+    const list = (items: readonly string[], more: (n: number) => string) => {
+      if (items.length === 0) return "- (none)";
+      const shown = items.slice(0, limit).map((i) => `- ${clipLine(i, lineMax)}`);
+      if (items.length > limit) shown.push(`- ${more(items.length - limit)}`);
+      return shown.join("\n");
+    };
+    const recent = h.commands.slice(-limit);
+    const earlier = h.commands.length - recent.length;
+    const commands = h.commands.length === 0
+      ? "- (none)"
+      : [
+          ...(earlier > 0 ? [`- +${earlier} earlier command${earlier === 1 ? "" : "s"}; re-run one to see its output again`] : []),
+          ...recent.map((c) => `- \`${clipLine(c.command.replace(/\s+/g, " "), lineMax)}\` — ${c.ok === null ? "status not logged" : c.ok ? "ok" : "FAILED"}`),
+        ].join("\n");
+    const intent = h.lastText ? `> ${clipLine(h.lastText, textMax).replace(/\n/g, "\n> ")}` : "(it said nothing after its last tool call)";
+    return (
+      `\n\n## What the previous visit had done\n` +
+      `Derived from visit ${h.visit}'s own tool calls (inputs were logged clipped, so a long command or path may be cut short). ` +
+      `It is a map of where to look, not a substitute for looking: re-read a file or re-run a command to see it as it is now.\n` +
+      `\n### Files examined\n${list(h.filesRead, (n) => `+${n} more files read; re-read a file to see it again`)}\n` +
+      `\n### Files modified\n${list(h.filesEdited, (n) => `+${n} more files modified; \`git status\` lists them all`)}\n` +
+      `\n### Commands run (most recent last)\n${commands}\n` +
+      `\n### Last stated intent\n${intent}\n` +
+      `\n### Outputs still owed\n${h.outputsOwed.length ? h.outputsOwed.map((k) => `- ${k}`).join("\n") : "- (none: this step publishes nothing)"}`
+    );
+  };
+  for (const [limit, lineMax, textMax] of [[20, 160, 1500], [10, 120, 1000], [5, 100, 600], [3, 80, 300], [1, 60, 160]] as const) {
+    const text = build(limit, lineMax, textMax);
+    if (text.length <= HANDOFF_CHARS) return text;
+  }
+  const last = build(1, 60, 160);
+  return `${last.slice(0, HANDOFF_CHARS - 60)}\n[handoff cut at ${HANDOFF_CHARS} characters]`;
+}
+
+/**
+ * v5 (HOW-36) = v4 + the structured handoff, placed after the "ran out" sentence and before the
+ * git steps, which stay — git is still the truth about the working tree. NEVER edit a
+ * published version.
+ */
+const V5: SuffixBuilders = {
+  ...V4,
+  reentryInstruction: (previousVisit, handoff) => {
+    const v4 = V4.reentryInstruction!(previousVisit);
+    if (!handoff) return v4;
+    const steps = v4.indexOf("Get your bearings");
+    return v4.slice(0, steps).trimEnd() + handoffBlock(handoff) + "\n\n" + v4.slice(steps);
+  },
+};
+
+const SUFFIX_BUILDERS: Readonly<Record<number, SuffixBuilders>> = { 1: V1, 2: V2, 3: V3, 4: V4, 5: V5 };
 /** the builders new renders use; bump together with SUFFIX_VERSION */
-const CURRENT: SuffixBuilders = V4;
+const CURRENT: SuffixBuilders = V5;
 
 /** The builders a logged `suffix_version` pins, or undefined for a version this code never had. */
 export function suffixBuilders(version: number): SuffixBuilders | undefined {
@@ -290,6 +383,8 @@ export interface PromptParts {
   refusalMessage?: string;
   /** HOW-14: the visit of this node whose context window filled — renders the re-entry briefing */
   reentryAfterVisit?: number;
+  /** HOW-36 (v5): what that visit had done — engine/handoff.ts, re-derived by reconstruction */
+  handoff?: Handoff;
   /** skills named in the hint — already filtered by skillsForHarness */
   skills: readonly string[];
   /** the node's declared write keys, in declaration order */
@@ -321,7 +416,7 @@ export function assemblePrompt(parts: PromptParts): string {
   let reentry = "";
   if (parts.reentryAfterVisit !== undefined) {
     if (!builders.reentryInstruction) throw new Error(`suffix version ${parts.suffixVersion} has no re-entry builder`);
-    reentry = builders.reentryInstruction(parts.reentryAfterVisit);
+    reentry = builders.reentryInstruction(parts.reentryAfterVisit, parts.handoff);
   }
   return (
     parts.body +

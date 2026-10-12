@@ -72,6 +72,18 @@ const contextState = process.env.FAKE_CLAUDE_CONTEXT_STATE;
 const exceedOnce = contextMode === "exceed-once" && contextState !== undefined && !existsSync(contextState);
 if (exceedOnce) writeFileSync(contextState!, "exceeded");
 if (contextMode === "exceed" || exceedOnce) {
+  // HOW-36: FAKE_CLAUDE_EXCEED_TOOLS=1 — do some real-looking work first (read, edit, run a
+  // failing test, say what comes next), so the retry's handoff has something to carry
+  if (process.env.FAKE_CLAUDE_EXCEED_TOOLS === "1") {
+    const tool = (id: string, name: string, input: unknown, result: string, isError = false) => {
+      out({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id, name, input }] } });
+      out({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: result, is_error: isError }] } });
+    };
+    tool("toolu_x1", "Read", { file_path: "src/parser.ts" }, "export function parse() {}");
+    tool("toolu_x2", "Edit", { file_path: "src/parser.ts", old_string: "{}", new_string: "{ return null; }" }, "edited");
+    tool("toolu_x3", "Bash", { command: "bun test src/parser.test.ts" }, "1 fail: expected null-safe parse", true);
+    out({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: "Next I will make parse() handle an empty token list." } } });
+  }
   out({ type: "result", subtype: "success", is_error: true, usage: { input_tokens: 200000, output_tokens: 0 }, total_cost_usd: 0, result: "Prompt is too long" });
   process.exit(0);
 }

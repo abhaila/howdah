@@ -46,8 +46,8 @@ describe("versioned suffix builders (system-map 0.1)", () => {
     expect(v1.outputContract([])).toBe(V1_SUMMARY_ONLY);
   });
 
-  test("the current version is 4 and buildOutputInstruction is its contract builder", () => {
-    expect(SUFFIX_VERSION).toBe(4);
+  test("the current version is 5 and buildOutputInstruction is its contract builder", () => {
+    expect(SUFFIX_VERSION).toBe(5);
     expect(buildOutputInstruction(["a", "b"])).toBe(V1_CONTRACT);
   });
 

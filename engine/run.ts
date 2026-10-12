@@ -77,6 +77,7 @@ import { effectiveCwd } from "./executors/worktree-record";
 import { currentProposal, findDecision, isApproved, nextSeq, pendingRedesigns, readBase } from "./slice-decision";
 import { claimRunner, releaseRunner, type RunnerHolder } from "./control";
 import { RATE_LIMIT_TEXT } from "./executors/harness-failure";
+import { deriveHandoff } from "./handoff";
 
 /** thread chunks the engine writes itself sort after an attempt's own output */
 const ENGINE_NOTE_INDEX = 9998;
@@ -935,6 +936,8 @@ export class Engine {
       this.refusalNote = null; // consumed by this attempt (replay: at node-started)
     }
     const reentryAfterVisit = this.reentryAfterVisit(this.log.read(), nodeId, visit);
+    // HOW-36: what that visit had done, derived from the log — reconstruction re-derives it
+    const handoff = reentryAfterVisit === undefined ? undefined : deriveHandoff(this.log.read(), nodeId, reentryAfterVisit, outputKeys);
     // HOW-37: render rules v2 — an oversized value is elided around a stub naming where the
     // whole of it lives; the run's own inputs (the operator's words) are never elided
     const contextCap = config?.contextCap ?? DEFAULT_CONTEXT_CAP;
@@ -952,6 +955,7 @@ export class Engine {
       replyMessage,
       refusalMessage,
       reentryAfterVisit,
+      ...(handoff ? { handoff } : {}),
       skills,
       outputKeys,
       suffixVersion: SUFFIX_VERSION,

@@ -24,7 +24,7 @@
  * FAKE_CODEX_FAIL=1 completes the turn with status "failed" and an ordinary error — the case
  * that used to be reported as an output contract violation.
  */
-import { appendFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, writeFileSync } from "node:fs";
 
 const out = (o: unknown) => process.stdout.write(JSON.stringify(o) + "\n");
 const threadCapture = process.env.FAKE_CODEX_CAPTURE;
@@ -58,11 +58,22 @@ for await (const chunk of Bun.stdin.stream()) {
         else out({ jsonrpc: "2.0", id: msg.id, result: { turn: { id: turnId } } });
         if (process.env.FAKE_CODEX_NOTICE === "1")
           out({ jsonrpc: "2.0", method: "error", params: { message: "MCP server auth expired" } });
-        if (process.env.FAKE_CODEX_CONTEXT === "exceed" || process.env.FAKE_CODEX_FAIL === "1") {
-          const error = process.env.FAKE_CODEX_FAIL === "1"
+        // HOW-36: exceed-once (FAKE_CODEX_CONTEXT_STATE remembers it across spawns), and
+        // FAKE_CODEX_EXCEED_TOOLS=1 runs a command and changes a file before the window fills
+        const state = process.env.FAKE_CODEX_CONTEXT_STATE;
+        const exceedOnce = process.env.FAKE_CODEX_CONTEXT === "exceed-once" && state !== undefined && !existsSync(state);
+        if (exceedOnce) writeFileSync(state!, "exceeded");
+        if ((process.env.FAKE_CODEX_CONTEXT === "exceed" || exceedOnce) && process.env.FAKE_CODEX_EXCEED_TOOLS === "1") {
+          out({ jsonrpc: "2.0", method: "item/started", params: { item: { type: "commandExecution", id: "cx1", command: "bash -lc 'cargo test parser'" } } });
+          out({ jsonrpc: "2.0", method: "item/completed", params: { item: { type: "commandExecution", id: "cx1", status: "failed", aggregatedOutput: "test parser ... FAILED" } } });
+          out({ jsonrpc: "2.0", method: "item/started", params: { item: { type: "fileChange", id: "fc1", changes: [{ path: "src/parser.rs", kind: "update" }] } } });
+          out({ jsonrpc: "2.0", method: "item/completed", params: { item: { type: "fileChange", id: "fc1", status: "completed" } } });
+        }
+        if (process.env.FAKE_CODEX_CONTEXT === "exceed" || exceedOnce || process.env.FAKE_CODEX_FAIL === "1") {
+          const error = process.env.FAKE_CODEX_FAIL === "1" && !exceedOnce
             ? { message: "stream disconnected before completion", codexErrorInfo: "responseStreamDisconnected" }
             : { message: "Codex ran out of room in the model's context window.", codexErrorInfo: "contextWindowExceeded" };
-          if (process.env.FAKE_CODEX_CONTEXT === "exceed") out({ jsonrpc: "2.0", method: "error", params: { error, willRetry: false, threadId: "fake-thread-1", turnId } });
+          if (process.env.FAKE_CODEX_CONTEXT === "exceed" || exceedOnce) out({ jsonrpc: "2.0", method: "error", params: { error, willRetry: false, threadId: "fake-thread-1", turnId } });
           out({ jsonrpc: "2.0", method: "turn/completed", params: { threadId: "fake-thread-1", turn: { id: turnId, status: "failed", error } } });
           break;
         }
