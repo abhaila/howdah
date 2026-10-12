@@ -146,11 +146,60 @@ export interface RunDetail {
    */
   turn_states: Record<string, TurnState>;
   /**
+   * HOW-49: the agent's own plan for the NEWEST step — its latest TodoWrite, as a checklist.
+   * Null when that step reported none (codex has no plan channel the adapter sees; a step that
+   * never called TodoWrite). Never invented, never carried over from an earlier step.
+   */
+  plan: StepPlan | null;
+  /**
    * HOW-46/HOW-49: when the agent last produced anything (a chunk or a turn boundary) — the
    * "last activity Ns ago" clock and the quiet-for-N-minutes signal. Null before any turn.
    */
   last_agent_event_at: string | null;
   events_seq: number;
+}
+
+export interface PlanItem {
+  content: string;
+  status: "pending" | "in_progress" | "completed";
+}
+
+export interface StepPlan {
+  node: string;
+  visit: number;
+  items: PlanItem[];
+  /** when the agent last rewrote it */
+  at: string;
+}
+
+/**
+ * HOW-49: the plan an agent keeps for itself. claude's TodoWrite carries the WHOLE list on
+ * every call, so the latest call is the plan — earlier ones are history, not state. The input
+ * is logged unclipped for this one tool (engine/executors/claude.ts); a run logged before that
+ * exemption has a clipped, unparseable input, and that reads as "no plan" rather than as a
+ * half-plan, because a checklist missing its tail would claim the work was shorter than it is.
+ */
+export function derivePlan(events: readonly LoggedEvent[], node: string, visit: number): StepPlan | null {
+  const last = events.findLast((e) => e.type === "chunk" && e.kind === "tool_call" && e.tool_name === "TodoWrite" && e.node === node && e.visit === visit);
+  if (!last || last.type !== "chunk") return null;
+  let input: unknown;
+  try {
+    input = JSON.parse(last.content);
+  } catch {
+    return null;
+  }
+  const todos = (input as { todos?: unknown })?.todos;
+  if (!Array.isArray(todos)) return null;
+  const items: PlanItem[] = [];
+  for (const t of todos) {
+    if (!t || typeof t !== "object") continue;
+    const o = t as Record<string, unknown>;
+    const content = typeof o.content === "string" ? o.content : typeof o.activeForm === "string" ? o.activeForm : null;
+    if (!content) continue;
+    const status = o.status === "completed" || o.status === "in_progress" ? o.status : "pending";
+    items.push({ content, status });
+  }
+  return { node, visit, items, at: last.ts };
 }
 
 /**
@@ -397,6 +446,7 @@ export function deriveDetail(
     turns,
     timeline,
     turn_states: deriveTurnStates(turns, timeline, ask, summary.status, opts.runnerAlive),
+    plan: timeline.length ? derivePlan(events, timeline.at(-1)!.node, timeline.at(-1)!.visit) : null,
     last_agent_event_at: lastAgent?.ts ?? null,
     renders,
     outcomes: [...outcomesByHash(events).values()],

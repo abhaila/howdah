@@ -277,7 +277,11 @@ export function claudeExecutor(opts: ClaudeExecutorOpts): Executor {
               chunk("thinking", ev.text);
               break;
             case "tool_call": {
-              const summary = JSON.stringify(ev.input).slice(0, 400);
+              // Tool inputs are clipped to 400 chars: the transcript wants a one-line summary,
+              // not a 40KB Write. The ONE exception is TodoWrite (HOW-49): its input IS the
+              // agent's own plan, the live progress panel derives the checklist from the latest
+              // one (web/derive.ts derivePlan), and a plan cut mid-JSON cannot be parsed at all.
+              const summary = ev.name === "TodoWrite" ? JSON.stringify(ev.input) : JSON.stringify(ev.input).slice(0, 400);
               chunk("tool_call", summary, { id: ev.id, name: ev.name, input_hash: watch.call(ev.id, ev.name, ev.input, summary) });
               break;
             }

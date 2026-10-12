@@ -995,3 +995,30 @@ main { flex: 1; min-width: 0; min-height: 0; overflow: hidden; display: flex; fl
   mask-image: linear-gradient(to bottom, black 70%, transparent);
 }
 .doc-reader { max-height: 72vh; overflow-y: auto; padding-right: 6px; font-size: var(--type-body); color: var(--fg); }
+
+/* HOW-49: the live progress panel — what is done, what is next, what landed on disk. Pinned
+   at the top of Chat and repeated as a rail section while the newest step's turn is live. */
+.progress-panel { display: flex; flex-direction: column; gap: 10px; font-size: var(--type-sm); }
+.progress-panel[data-variant="pinned"] {
+  margin: 0 0 12px; padding: 10px 12px; border: 1px solid var(--border);
+  border-radius: var(--radius-sm); background: var(--bg-inset);
+}
+.pp-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.pp-step { font-family: var(--font-mono); color: var(--fg); }
+.pp-live { font-size: var(--type-xs); color: var(--status-running); }
+.pp-live[data-quiet="true"] { color: var(--attention); }
+.pp-block { display: flex; flex-direction: column; gap: 5px; }
+.pp-label { display: flex; align-items: center; gap: 6px; font-size: var(--type-xs); color: var(--fg-faint); text-transform: uppercase; letter-spacing: 0.08em; }
+.pp-plan, .pp-commits { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
+.pp-item { display: flex; align-items: flex-start; gap: 7px; color: var(--fg-muted); line-height: 1.4; }
+.pp-item svg { flex: none; margin-top: 3px; }
+.pp-item span { min-width: 0; overflow-wrap: anywhere; }
+/* pinned above the transcript, a 20-item plan must not push the conversation off screen */
+.progress-panel[data-variant="pinned"] .pp-plan { max-height: 9.5em; overflow-y: auto; }
+.pp-item[data-status="completed"] { color: var(--fg-faint); text-decoration: line-through; }
+.pp-item[data-status="in_progress"] { color: var(--fg); font-weight: 600; }
+.pp-git { display: flex; flex-wrap: wrap; gap: 4px 14px; color: var(--fg-muted); }
+.pp-commit { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 8px; font-size: var(--type-xs); color: var(--fg-muted); }
+.pp-subject { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pp-age { color: var(--fg-faint); }
+.pp-empty { font-size: var(--type-xs); color: var(--fg-faint); font-style: italic; }

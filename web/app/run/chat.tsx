@@ -61,6 +61,8 @@ import { citeParts } from "../../cite";
 import { AgentProse, beatsOf, groupBeats, ToolBeat, ToolGroup, ToolDisclosureContext, TurnNote } from "./activity";
 import { Button } from "@/components/ui/button";
 import { StandingAsk } from "./ask";
+import { ProgressPanel } from "./progress";
+import type { LiveGit } from "../../live-git";
 import { Chip } from "@/components/ui/chip";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
@@ -222,12 +224,14 @@ function Row({ m, onPickStep, lastActivityAt }: { m: ChatMessage; onPickStep: (k
   }
 }
 
-export function RunChat({ runId, detail, ask, onPickStep, onResolved }: {
+export function RunChat({ runId, detail, ask, onPickStep, onResolved, liveGit = null }: {
   runId: string;
   detail: RunDetail;
   ask: RunDetail["ask"];
   onPickStep: (key: string) => void;
   onResolved: () => void;
+  /** HOW-49: the latest live worktree probe pushed over the run's SSE stream */
+  liveGit?: LiveGit | null;
 }) {
   const [turns, setTurns] = useState<AskTurn[]>([]);
   const [q, setQ] = useState("");
@@ -307,6 +311,11 @@ export function RunChat({ runId, detail, ask, onPickStep, onResolved }: {
                 {disclosure.open ? "Collapse" : "Expand"} {toolCount} tool {toolCount === 1 ? "call" : "calls"}
               </Button>
             )}
+          </div>
+          {/* HOW-49: pinned above the transcript while the newest step is live — "where is it
+              at?" answered without scrolling a hundred tool calls. Renders nothing otherwise. */}
+          <div className="chat-col">
+            <ProgressPanel detail={detail} liveGit={liveGit} />
           </div>
         </div>
 

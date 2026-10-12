@@ -120,6 +120,22 @@ describe("claude executor over the fake wire", () => {
     }
   });
 
+  test("HOW-49: a TodoWrite input is logged whole, even past the 400-char clip", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "howdah-exec-"));
+    const engine = engineWith({ FAKE_CLAUDE_ASK: "0", FAKE_CLAUDE_RATELIMIT: "0", FAKE_CLAUDE_VERDICT: "pass", FAKE_CLAUDE_TODO: "1" }, join(dir, "attn"), dir);
+    try {
+      expect(await engine.start({ goal: "keep a plan" })).toEqual({ state: "finished", outcome: "success" });
+    } finally {
+      delete process.env.FAKE_CLAUDE_TODO;
+    }
+    const events = engine.log.read();
+    const todos = events.filter((e: any) => e.type === "chunk" && e.tool_name === "TodoWrite" && e.node === "draft") as any[];
+    expect(todos).toHaveLength(2);
+    expect(todos[1].content.length).toBeGreaterThan(400);
+    const { derivePlan } = await import("../../web/derive");
+    expect(derivePlan(events, "draft", 1)!.items.map((i) => i.status)).toEqual(["completed", "in_progress", "pending", "pending"]);
+  });
+
   // every agent node asks under FAKE_CLAUDE_ASK=1, so the replier answers each new ask
   function autoReplier(dir: string, attentionDir: string, reply: string, stop: { done: boolean }) {
     return (async () => {

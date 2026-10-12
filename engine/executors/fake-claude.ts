@@ -12,6 +12,7 @@
  * that a resolved effort reaches the CLI as `--effort <level>`.
  * FAKE_CLAUDE_DROP_OUTPUTS=1 ends the first turn in prose with no contract.
  * FAKE_CLAUDE_QUESTION asks the OPERATOR a question (HOW-25) — see the block below.
+ * FAKE_CLAUDE_TODO=1 writes a TodoWrite plan twice, the second over 400 chars (HOW-49).
  * FAKE_CLAUDE_CONTEXT (HOW-14), shapes from claude 2.1.283's SDK types, not a captured turn:
  *   compact  emit a `compact_boundary` mid-turn, then finish normally
  *   exceed   end the first turn with `result { is_error: true, result: "Prompt is too long" }`
@@ -232,6 +233,26 @@ if (process.env.FAKE_CLAUDE_EDIT === "1") {
   if (hookContext) out({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: ` The hook told me: ${hookContext.replace(/\n/g, " ")}` } } });
 }
 
+/**
+ * HOW-49: FAKE_CLAUDE_TODO=1 keeps a plan the way the real CLI does — a TodoWrite tool call
+ * carrying the WHOLE list, called twice so "the latest one wins" is observable, the second
+ * long enough (>400 chars) that the executor's normal clipping would cut it mid-JSON.
+ */
+if (process.env.FAKE_CLAUDE_TODO === "1") {
+  const todo = (id: string, todos: Array<{ content: string; status: string; activeForm: string }>) => {
+    out({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id, name: "TodoWrite", input: { todos } }] } });
+    out({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: "Todos have been modified successfully." }] } });
+  };
+  todo("toolu_todo_1", [{ content: "Read the ticket", status: "in_progress", activeForm: "Reading the ticket" }]);
+  const long = "x".repeat(120);
+  todo("toolu_todo_2", [
+    { content: "Read the ticket", status: "completed", activeForm: "Reading the ticket" },
+    { content: `Write the derivation ${long}`, status: "in_progress", activeForm: "Writing the derivation" },
+    { content: `Write the panel ${long}`, status: "pending", activeForm: "Writing the panel" },
+    { content: "Commit", status: "pending", activeForm: "Committing" },
+  ]);
+}
+
 if (process.env.FAKE_CLAUDE_RATELIMIT === "1")
   out({ type: "rate_limit_event", rate_limit: { status: "allowed", remaining: 0.31, resetsAt: "2026-09-13T18:00:00Z" } });
 
@@ -273,6 +294,10 @@ if (scriptPath) {
     Object.assign(outputs, turn.outputs ?? {});
   }
 }
+
+// FAKE_CLAUDE_HOLD_MS=<ms> keeps the turn LIVE that long after its work and before its result
+// — a turn someone can watch (HOW-49's panel) or steer (HOW-47) while it is still running
+if (process.env.FAKE_CLAUDE_HOLD_MS) await Bun.sleep(Number(process.env.FAKE_CLAUDE_HOLD_MS));
 
 // total_cost_usd is SESSION-CUMULATIVE on the real CLI (adapter/fixtures/claude-turn-cache.jsonl),
 // so a repair turn's result reports the running total, exactly as claude does

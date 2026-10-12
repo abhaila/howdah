@@ -26,8 +26,13 @@ const realFetch = globalThis.fetch;
 
 /** happy-dom has no EventSource, and RunView opens one as soon as a detail lands. */
 class StubEventSource {
+  /** the open streams, so a test can push a named event into the page */
+  static open: StubEventSource[] = [];
   onmessage: ((e: unknown) => void) | null = null;
-  constructor(readonly url: string) {}
+  readonly listeners = new Map<string, (e: unknown) => void>();
+  constructor(readonly url: string) { StubEventSource.open.push(this); }
+  /** HOW-49: named events (`git-live`) are listened for, as on the real EventSource */
+  addEventListener(type: string, fn: (e: unknown) => void) { this.listeners.set(type, fn); }
   close() {}
 }
 
@@ -239,5 +244,33 @@ describe("aborting a run", () => {
     expect(el.querySelectorAll("dialog").length).toBe(0);
     expect(el.querySelectorAll(".field-error").length).toBe(0);
     expect(el.querySelector('[aria-live="polite"]')!.textContent).toContain("abort accepted");
+  });
+});
+
+describe("HOW-49: the live progress panel on the run page", () => {
+  test("a `git-live` push lands in the pinned panel and the rail while the step is live", async () => {
+    StubEventSource.open = [];
+    const log = new FakeLog();
+    log.add({ type: "run-started", graph: "write-doc", inputs: { goal: "g" }, pinned_prompts: {} });
+    log.add({ type: "node-started", node: "doc.draft", visit: 1, attempt_id: "doc.draft#1" });
+    log.add({ type: "chunk", node: "doc.draft", visit: 1, turn: 1, index: 0, kind: "text", content: "drafting" });
+    serve([{ status: 200, body: deriveDetail("r1", log.events, {}, { runnerAlive: true }) }]);
+    const el = render(OPEN_GRACE_MS);
+    await settle(50);
+    expect(el.querySelectorAll(".progress-panel")).toHaveLength(2); // pinned + rail
+    expect(el.textContent).toContain("worktree not probed yet");
+    const at = new Date().toISOString();
+    act(() => StubEventSource.open.at(-1)!.listeners.get("git-live")!({
+      data: JSON.stringify({ node: "doc.draft", visit: 1, commits: [{ sha: "abc1234", subject: "docs: first draft", at }], commit_count: 1, uncommitted: 2, last_commit_at: at, base: null, probed_at: at }),
+    }));
+    expect(el.textContent).toContain("1 commit this step");
+    expect(el.textContent).toContain("docs: first draft");
+  });
+
+  test("no panel once the run is not live", async () => {
+    serve([{ status: 200, body: runDetail() }]);
+    const el = render(OPEN_GRACE_MS);
+    await settle(50);
+    expect(el.querySelector(".progress-panel")).toBeNull();
   });
 });

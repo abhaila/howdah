@@ -42,6 +42,7 @@ import { dirname, join, resolve, sep } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { readLog } from "../log/write";
 import { deriveDetail, deriveSummary, deriveTimeline, runDigest, snapshotIndex, sortRuns, type RunSummary, type SnapshotIndex } from "./derive";
+import { LiveGitHub, liveTargetOf } from "./live-git";
 import { currentProposal } from "../engine/slice-decision";
 import { loadSnapshot } from "../engine/slice-map";
 import { MapStore, defaultStoreDir } from "../map/store";
@@ -120,6 +121,8 @@ export interface ServerOpts {
    * interactive `claude auth login`, which a test run must never do to the machine running it.
    */
   openTerminal?: (argv: string[]) => void;
+  /** HOW-49: how often a watched live step's worktree is probed; small in tests */
+  liveGitIntervalMs?: number;
 }
 
 /** A prompt id as the library names files (`prompts/<id>.md`) — no separators, no traversal. */
@@ -200,6 +203,21 @@ export function createHowdahServer(opts: ServerOpts) {
       Bun.spawn(["bun", join(import.meta.dir, "..", "cli", "main.ts"), "resume", id], {
         stdout: "ignore", stderr: "ignore", env: { ...process.env },
       }).unref());
+  /**
+   * HOW-49: the live worktree probe. Only a run with a step in flight AND a proven runner is a
+   * target — a dead run's worktree is not "live", and the rail's reconciler reading already
+   * covers it. Subscribers are the run's SSE streams, so nobody watching means no git spawns.
+   */
+  const liveGit = new LiveGitHub({
+    intervalMs: opts.liveGitIntervalMs,
+    target: (rid) => {
+      const p = logPath(opts.runsDir, rid);
+      if (!existsSync(p) || !runnerAlive(join(opts.runsDir, rid))) return null;
+      const events = readLog(p);
+      const started = events.find((e) => e.type === "run-started");
+      return liveTargetOf(events, effectiveCwd(p, started?.type === "run-started" ? started.cwd : undefined));
+    },
+  });
   const launchTerminal =
     opts.openTerminal ??
     ((argv: string[]) => Bun.spawn(argv, { stdout: "ignore", stderr: "ignore" }).unref());
@@ -874,9 +892,13 @@ export function createHowdahServer(opts: ServerOpts) {
       if (sub === "events") {
         let since = Number(url.searchParams.get("since") ?? 0);
         let timer: ReturnType<typeof setInterval>;
+        let unwatch: () => void = () => {};
         const stream = new ReadableStream({
           start(controller) {
             controller.enqueue(": connected\n\n"); // flush headers so clients resolve immediately
+            // HOW-49: a NAMED event, so the client's log-event handler never mistakes it for
+            // a run event — and it is never written anywhere, only sent to who is watching
+            unwatch = liveGit.subscribe(id, (g) => controller.enqueue(`event: git-live\ndata: ${JSON.stringify(g)}\n\n`));
             const push = () => {
               try {
                 for (const e of readLog(path).filter((e) => e.seq > since)) {
@@ -892,6 +914,7 @@ export function createHowdahServer(opts: ServerOpts) {
           },
           cancel() {
             clearInterval(timer);
+            unwatch();
           },
         });
         return new Response(stream, {

@@ -16,7 +16,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Rows3, Workflow, Play, Pause, OctagonX, RotateCcw, ExternalLink, GitBranch, GitPullRequest,
   Clock, Coins, Pin, Fingerprint, MessagesSquare, CornerDownRight, X, ScrollText, Loader2,
-  FolderOpen, Copy, GitFork,
+  FolderOpen, Copy, GitFork, Activity,
 } from "lucide-react";
 import type { RunDetail } from "../../derive";
 import type { CoalescedTurn } from "../../../log/coalesce";
@@ -44,6 +44,8 @@ import { RunLogs } from "./logs";
 import { RunContext } from "./context";
 import { RunChat } from "./chat";
 import { UsageRows } from "./usage";
+import { ProgressPanel, liveStep } from "./progress";
+import type { LiveGit } from "../../live-git";
 
 type RunTab = "steps" | "context" | "logs" | "chat" | "graph";
 type DetailDto = RunDetail & { cwd_exists?: boolean; editor_configured?: boolean };
@@ -251,6 +253,7 @@ export function RunView({ id, graceMs = OPEN_GRACE_MS }: { id: string; graceMs?:
   // in the conversation, and the ticket was filed because it had nowhere to be seen.
   const [tab, setTab] = useState<RunTab>("chat");
   const [picked, setPicked] = useState<string | null>(null);
+  const [liveGit, setLiveGit] = useState<LiveGit | null>(null);
   const [bannerAction, setBannerAction] = useState<"resume" | null>(null);
   const [bannerError, setBannerError] = useState<string | null>(null);
   const [missing, setMissing] = useState(false);
@@ -327,6 +330,10 @@ export function RunView({ id, graceMs = OPEN_GRACE_MS }: { id: string; graceMs?:
     if (!detail) return;
     const es = new EventSource(`/api/runs/${id}/events?since=${detail.events_seq}`);
     es.onmessage = () => reload();
+    // HOW-49: the live worktree probe arrives as its own named event — never a log event
+    es.addEventListener("git-live", (m) => {
+      try { setLiveGit(JSON.parse((m as MessageEvent).data) as LiveGit); } catch { /* a torn frame: the next probe replaces it */ }
+    });
     return () => es.close();
     // subscribe once per run; reload() refetches the derived view on any new event
   }, [id, detail === null]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -438,7 +445,7 @@ export function RunView({ id, graceMs = OPEN_GRACE_MS }: { id: string; graceMs?:
         {tab === "context" ? (
           <RunContext entries={detail.context} />
         ) : tab === "chat" ? (
-          <RunChat runId={id} detail={detail} ask={ask} onResolved={reload} onPickStep={(k) => { setPicked(k); setTab("steps"); }} />
+          <RunChat runId={id} detail={detail} ask={ask} liveGit={liveGit} onResolved={reload} onPickStep={(k) => { setPicked(k); setTab("steps"); }} />
         ) : tab === "logs" ? (
           <RunLogs rows={detail.log_rows} />
         ) : tab === "graph" ? (
@@ -458,6 +465,12 @@ export function RunView({ id, graceMs = OPEN_GRACE_MS }: { id: string; graceMs?:
       </PanelResizer>
 
       <div className="rail" aria-label="Run inspector">
+        {liveStep(detail) && (
+          <section>
+            <h2><Activity size={12} /> Progress</h2>
+            <ProgressPanel detail={detail} liveGit={liveGit} variant="rail" />
+          </section>
+        )}
         <section>
           <h2><Fingerprint size={12} /> Identity</h2>
           <div className="kv"><span className="k">run</span><span>{id}</span></div>
