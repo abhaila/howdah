@@ -72,10 +72,11 @@ import type { LoggedEvent, ParkCode } from "../log/events";
 import { ACCEPTANCE_KEY, asAcceptance, unmetCriteria, type AcceptanceRow } from "../core/acceptance";
 import { waivedCriteria } from "./acceptance-decision";
 import { softStopState, stopResumeFor, undeliveredSteers } from "./steer-state";
+import { previousTree } from "./no-progress";
 import { replayState, effectKey } from "./replay";
 import type { PromptId } from "../core/prompt-ids";
 import { proposalHash } from "../core/proposal";
-import { describeFingerprintChange, fingerprint, type Fingerprint } from "./reconcile";
+import { describeFingerprintChange, fingerprint, worktreeTree, type Fingerprint } from "./reconcile";
 import { effectiveCwd } from "./executors/worktree-record";
 import { currentProposal, findDecision, isApproved, nextSeq, pendingRedesigns, readBase } from "./slice-decision";
 import { claimRunner, releaseRunner, type RunnerHolder } from "./control";
@@ -428,6 +429,12 @@ export class Engine {
 
   // ---- the loop --------------------------------------------------------------
 
+  /** HOW-54: the steps whose visits must change the worktree (Graph.progressChecked), computed once */
+  private get progressChecked(): Set<string> {
+    return (this._progressChecked ??= this.graph.progressChecked());
+  }
+  private _progressChecked: Set<string> | undefined;
+
   /** HOW-48: a moot soft stop — pause at the next node boundary (set after the step, read at the loop top) */
   private pauseAtBoundary = false;
 
@@ -522,10 +529,17 @@ export class Engine {
       for (const [k, v] of Object.entries(result.writes)) this.ctx.set(k, v);
       this.ctx.endAttempt(result.status);
       for (const round of rounds) this.openRound(current, round);
+      // HOW-54: what the worktree holds now, for the steps whose visits must make progress
+      const tree = this.progressChecked.has(current) ? worktreeTree(this.workCwd()) ?? undefined : undefined;
       this.log.append({
         type: "node-finished", node: current, visit, status: result.status, writes: result.writes,
         ...(result.refused !== undefined ? { refused: result.refused } : {}),
+        ...(tree !== undefined ? { tree } : {}),
       });
+      if (result.status === "succeeded" && tree !== undefined) {
+        const stalled = this.noProgress(current, visit, tree);
+        if (stalled) return this.park(current, visit, "no-progress", stalled);
+      }
 
       if (result.status === "failed") {
         // HOW-14: a full context window is not an allowance problem, whatever the attempt's
@@ -758,6 +772,31 @@ export class Engine {
       if (moved) return stale(moved);
     }
     return null;
+  }
+
+  /**
+   * HOW-54: a step on a cycle that is expected to change files finished with the worktree exactly
+   * as its previous visit left it. The review → repair loop would go round again on the same code
+   * for the same verdict, spending a visit and an allowance on nothing, until maxVisits parked it
+   * with a generic reason — so it parks NOW, saying why and quoting the findings it was answering.
+   * Decided from the trees on the log's node-finished events, so a fresh process replaying the
+   * same log decides the same way. A first visit has nothing to compare with.
+   *
+   * Out of scope, by construction: changes outside this worktree (another repo, a tracker, a PR
+   * comment) are invisible to a tree id — a repair that only did those reads as no progress.
+   */
+  private noProgress(node: string, visit: number, tree: string): string | null {
+    const previous = previousTree(this.log.read(), node, visit);
+    if (!previous || previous.tree !== tree) return null;
+    let findings = "";
+    try {
+      if (this.ctx.has("review_findings")) {
+        const f = this.ctx.get("review_findings", { node: `${node}(no-progress)`, visit });
+        const text = typeof f === "string" ? f : JSON.stringify(f);
+        if (text && text !== "[]") findings = ` The findings it was answering: ${text.length > 600 ? `${text.slice(0, 597)}…` : text}`;
+      }
+    } catch { /* unreadable: the park still says what happened */ }
+    return `${node}@${visit} changed nothing in the worktree since visit ${previous.visit} — another review would judge the same code.${findings}`;
   }
 
   /**

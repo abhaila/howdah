@@ -213,6 +213,8 @@ export type NodeSpec =
       requires?: string;
       /** HOW-51: may not start while a live acceptance criterion is unmet and unwaived */
       requiresAcceptance?: true;
+      /** HOW-54: never changes the worktree (it plans or publishes) — not progress-checked on a cycle */
+      changesFiles?: false;
       config?: AgentConfig;
     })
   | (NodeBase & { kind: "command"; run: string; reads: string[]; writes: string[]; timeoutMs?: number; maxVisits?: number })
@@ -427,6 +429,7 @@ function compileNode(n: NodeSpec, scopes: Record<string, Scope>, fields: FieldSp
         ...(n.readOnly ? { readOnly: true as const } : {}),
         ...(n.requires ? { requires: { approvalOf: n.requires } } : {}),
         ...(n.requiresAcceptance ? { requiresAcceptance: true as const } : {}),
+        ...(n.changesFiles === false ? { changesFiles: false as const } : {}),
         ...(n.config ?? {}),
         ...cls,
       };
@@ -1050,6 +1053,7 @@ function parseNode(v: unknown): NodeSpec | undefined {
         ...(v.readOnly === true ? { readOnly: true as const } : {}),
         ...(requires ? { requires } : {}),
         ...(v.requiresAcceptance === true ? { requiresAcceptance: true as const } : {}),
+        ...(v.changesFiles === false ? { changesFiles: false as const } : {}),
         ...(config ? { config } : {}),
       };
     }

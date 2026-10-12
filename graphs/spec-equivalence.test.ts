@@ -32,6 +32,8 @@
  *           `requiresAcceptance`.
  *   HOW-53  implement-ticket, implement-slice, improve-codebase: every review node
  *           (implementation.local_review, delivery.review_repairs) is `readOnly`.
+ *   HOW-54  implement-ticket, implement-slice, improve-codebase: the steps that plan or publish
+ *           (implementation.plan_review, delivery.publish) declare `changesFiles: false`.
  */
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";

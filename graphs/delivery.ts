@@ -102,6 +102,8 @@ function plainDelivery(): DeliveryParts<DeliveryCtx> {
         writes: { publication_summary: sticky },
         class: "delivery",
         maxVisits: 5, // system-map 0.3: bounds repairs → review_repairs → publish → probe_pr
+        // HOW-54: it pushes, it does not edit — a publish that changes no file is not a stall
+        changesFiles: false,
       },
       // no maxVisits: probe_pr ⇄ wait polls on a human reviewer (system-map 0.3)
       "delivery.probe_pr": { kind: "command", run: "probe:pr", reads: ["publication_summary"], writes: { "pr.state": perVisit }, class: "delivery" },

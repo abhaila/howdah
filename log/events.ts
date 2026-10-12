@@ -81,7 +81,13 @@ export type ParkCode =
    * criterion that neither passes nor was waived. A reply cannot fix it: waive the criterion
    * (`howdah waive`, the Acceptance card) or jump back to the review once it is met.
    */
-  | "acceptance-unmet";
+  | "acceptance-unmet"
+  /**
+   * HOW-54: a step on a review → repair cycle finished with the worktree exactly as its previous
+   * visit left it — the loop would go round again on the same code for the same verdict. A reply
+   * is carried into the step's next attempt; jump or steer are the other ways on.
+   */
+  | "no-progress";
 
 export type ResolutionSource = "operator" | "resume";
 
@@ -315,6 +321,14 @@ export type RunEvent =
        * (core/template.ts refusalInstruction, suffix v3); reconstruction rebuilds it from here.
        */
       refused?: string;
+      /**
+       * HOW-54: the worktree's CONTENT identity (a git tree id, engine/reconcile.ts
+       * worktreeTree) when the attempt ended — recorded for agent nodes that are
+       * progress-checked (on a cycle, expected to change files). Compared with the same node's
+       * previous visit to tell a repair that changed nothing; replay reads it, so a fresh process
+       * reaches the same decision. Absent: not checked, or not a git work tree.
+       */
+      tree?: string;
     }
   | {
       /** written BEFORE a side-effecting step (OV-1) — intent without a matching done

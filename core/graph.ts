@@ -23,6 +23,7 @@
  * conditional sets over closed choice types are therefore legal and common.
  */
 import { ACCEPTANCE_KEY } from "./acceptance";
+import { cycleNodes } from "./validate";
 import { validateGraph, formatViolations, type GraphShape, type Violation } from "./validate";
 import { defaultHarness, effortFor, harnessNames, harnessSpec, isHarness, type HarnessName } from "./harnesses";
 import type { Scope } from "./context";
@@ -272,6 +273,13 @@ export type NodeDef<C extends object> =
        * must read `acceptance` (validate() checks), which is also what proves a writer exists.
        */
       requiresAcceptance?: true;
+      /**
+       * HOW-54: `false` declares that this agent step never changes the worktree — it plans, or
+       * it publishes — so a visit of it that changes nothing is not a stalled loop. Absent: an
+       * agent that is not readOnly is expected to change files, and on a cycle a visit that
+       * changes none parks `no-progress` (engine/run.ts).
+       */
+      changesFiles?: false;
     } & AgentConfig)
   | {
       kind: "command";
@@ -514,6 +522,21 @@ export class Graph<C extends object> {
         problems.push(`node "${id}" requires acceptance but does not read "${ACCEPTANCE_KEY}"`);
     }
     return problems;
+  }
+
+  /**
+   * HOW-54: the agent nodes whose visits are checked for progress — on a cycle, expected to
+   * change files (not readOnly, not `changesFiles: false`). A reviewer changes nothing by design
+   * and a straight-line node is never revisited, so neither is ever a stalled loop.
+   */
+  progressChecked(): Set<string> {
+    const onCycle = cycleNodes(this.toShape());
+    return new Set(
+      [...onCycle].filter((id) => {
+        const n = this.def.nodes[id];
+        return n?.kind === "agent" && !n.readOnly && n.changesFiles !== false;
+      }),
+    );
   }
 
   /** The approval nodes of this graph, by id. */

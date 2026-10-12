@@ -162,7 +162,8 @@
           }
         },
         "class": "delivery",
-        "maxVisits": 5
+        "maxVisits": 5,
+        "changesFiles": false
       },
       "delivery.reextract": {
         "kind": "command",
@@ -770,6 +771,7 @@
         },
         "maxVisits": 5,
         "requiresAcceptance": true,
+        "changesFiles": false,
         "class": "delivery"
       },
       "delivery.resolve_conflicts": {
@@ -804,8 +806,8 @@
             "scope": "cleared"
           }
         },
-        "class": "delivery",
-        "readOnly": true
+        "readOnly": true,
+        "class": "delivery"
       },
       "delivery.revise_repairs": {
         "kind": "agent",
@@ -950,6 +952,7 @@
           }
         },
         "maxVisits": 3,
+        "changesFiles": false,
         "class": "implementation"
       },
       "verify.run": {
@@ -1241,7 +1244,8 @@
             "scope": "sticky"
           }
         },
-        "class": "delivery"
+        "class": "delivery",
+        "changesFiles": false
       },
       "delivery.resolve_conflicts": {
         "kind": "agent",
@@ -1405,7 +1409,8 @@
             "scope": "sticky"
           }
         },
-        "class": "implementation"
+        "class": "implementation",
+        "changesFiles": false
       }
     },
     "edges": [

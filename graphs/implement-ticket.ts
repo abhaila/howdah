@@ -55,6 +55,12 @@
  * its prompt is shared with improve-codebase, and the list it would re-judge was already settled
  * before the first publish, which is where the gate stands.
  *
+ * HOW-54: on the two cycles, a step expected to change files (implement_review and the delivery
+ * repairs) that finishes with the worktree exactly as its previous visit left it parks
+ * `no-progress` instead of sending the same code back round the loop. plan_review and publish
+ * declare `changesFiles: false` — they plan and push, they do not edit — and the reviewers are
+ * read-only, so none of those is ever mistaken for a stall.
+ *
  * `worktree.clean` IS NOW STRICT, as in improve-codebase: the hand-written edges tested
  * truthiness, `is-true` tests `=== true`. Every write site in `engine/executors/worktree.ts`
  * publishes a literal boolean, so they cannot disagree on a value the engine produces.
@@ -136,12 +142,12 @@ export const spec: GraphSpec = {
     // HOW-51: the evaluator flips criteria on evidence — and so must be read-only (HOW-53)
     { id: "implementation.local_review", kind: "agent", prompt: "ticket.local_review", reads: ["goal", "work", "implementation_plan", "implementation_summary", "verify.result", "evidence.items", "acceptance"], writes: ["review_verdict", "review_findings", "acceptance"], readOnly: true, class: impl },
     // bounds local_review → plan_review → implement_review
-    { id: "implementation.plan_review", kind: "agent", prompt: "implementation.plan_review", reads: ["goal", "work", "implementation_plan", "implementation_summary", "review_verdict", "review_findings"], writes: ["implementation_plan"], maxVisits: 3, class: impl },
+    { id: "implementation.plan_review", kind: "agent", prompt: "implementation.plan_review", reads: ["goal", "work", "implementation_plan", "implementation_summary", "review_verdict", "review_findings"], writes: ["implementation_plan"], maxVisits: 3, changesFiles: false, class: impl },
     { id: "implementation.implement_review", kind: "agent", prompt: "implementation.implement_review", reads: ["goal", "work", "implementation_plan", "implementation_summary", "review_verdict", "review_findings"], writes: ["implementation_summary"], class: impl },
 
     // ---- the delivery half, inlined from deliveryGraph({ verifyAfterRepair: false }) ----
     // HOW-51: nothing is published while a live criterion is unmet and unwaived
-    { id: "delivery.publish", kind: "agent", prompt: "delivery.publish", reads: ["goal", "work", "acceptance"], writes: ["publication_summary"], maxVisits: 5, requiresAcceptance: true, class: deliv },
+    { id: "delivery.publish", kind: "agent", prompt: "delivery.publish", reads: ["goal", "work", "acceptance"], writes: ["publication_summary"], maxVisits: 5, requiresAcceptance: true, changesFiles: false, class: deliv },
     { id: "delivery.probe_pr", kind: "command", run: "probe:pr", reads: ["publication_summary"], writes: ["pr.state"], class: deliv },
     { id: "delivery.address_reviews", kind: "agent", prompt: "delivery.address_reviews", reads: ["goal", "work", "publication_summary", "review_verdict", "review_findings"], writes: ["repair_summary"], class: deliv },
     { id: "delivery.fix_ci", kind: "agent", prompt: "delivery.fix_ci", reads: ["goal", "work", "publication_summary", "review_verdict", "review_findings"], writes: ["repair_summary"], class: deliv },

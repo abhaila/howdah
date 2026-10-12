@@ -110,8 +110,9 @@ describe("deliveryGraph extraction keeps implement-ticket identical", () => {
     //           `verify.run` runs before the evidence step; local_review is read-only
     //           and writes `acceptance`; delivery.publish reads it and `requiresAcceptance`
     //   HOW-53  delivery.review_repairs is read-only (plan mode, no override can raise it)
+    //   HOW-54  plan_review and delivery.publish declare `changesFiles: false` (no-progress check)
     const s = JSON.stringify(sortDeep(shapeOf(implementTicket)));
-    expect(createHash("sha256").update(s).digest("hex")).toBe("cde274e429d84525680ae12a4001b4777522c68a390f2ffede77580afd70e7b6");
+    expect(createHash("sha256").update(s).digest("hex")).toBe("d0ba89ed85027b388f019ba5e9fe26acea90964ca686a3d35b72ed3d9bafa4b0");
   });
 ;
 
@@ -294,7 +295,10 @@ describe("verifyAfterRepair: a CI fix that breaks a ghost surfaces drift before 
     expect(revise).toContain(`missing ${DELETE_USER_TS}`);
   });
 
-  test("a repair that keeps breaking the design parks on revise_repairs' maxVisits instead of publishing", async () => {
+  // HOW-54: this used to spin revise_repairs up to its maxVisits. Its repair changes nothing, so
+  // the second visit already finishes with the worktree the first left — it parks `no-progress`
+  // there, earlier and saying why, and still never republishes the broken design.
+  test("a repair that keeps breaking the design parks (no-progress) instead of publishing", async () => {
     const run = sliceRun({
       pr: ["CI_FAILED"],
       agents: {
@@ -311,7 +315,8 @@ describe("verifyAfterRepair: a CI fix that breaks a ghost surfaces drift before 
     await run.engine().start({ goal: SLICE_GOAL, work: SLICE_WORK });
     approve(run.runDir);
     const result = await run.engine().resume();
-    expect(result).toMatchObject({ state: "parked", node: "delivery.revise_repairs", code: "max-visits" });
+    expect(result).toMatchObject({ state: "parked", node: "delivery.revise_repairs", code: "no-progress" });
+    expect((result as { reason: string }).reason).toContain("delivery.revise_repairs@2 changed nothing in the worktree since visit 1");
     const publishes = run.events().filter((e) => e.type === "node-started" && e.node === "delivery.publish");
     expect(publishes.length).toBe(1); // never republished with the design broken
   });
