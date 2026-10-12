@@ -61,8 +61,7 @@ import { citeParts } from "../../cite";
 import { AgentProse, beatsOf, groupBeats, ToolBeat, ToolGroup, ToolDisclosureContext, TurnNote } from "./activity";
 import { Button } from "@/components/ui/button";
 import { StandingAsk } from "./ask";
-import { ProgressPanel, liveStep } from "./progress";
-import { harnessSpec, isHarness } from "../../../core/harnesses";
+import { ProgressPanel, steerableTurn } from "./progress";
 import type { LiveGit } from "../../live-git";
 import { Chip } from "@/components/ui/chip";
 import { Badge } from "@/components/ui/badge";
@@ -93,7 +92,10 @@ const SUGGESTION_ICON = { waiting: Hourglass, failed: CircleX, changed: GitCompa
 export function suggestionsFor(detail: RunDetail, ask: RunDetail["ask"]): Suggestion[] {
   const out: Suggestion[] = [];
   if (ask) out.push({ kind: "waiting", title: "What is it waiting for?", detail: `${ask.node}@${ask.visit}`, question: "What is it waiting for?" });
-  const failed = detail.timeline.find((t) => t.status === "failed");
+  // HOW-48: a step the operator soft-stopped did what it was asked — it did not "fail"
+  const stoppedByYou = (t: { node: string; visit: number }) =>
+    detail.ask?.code === "paused-by-operator" && detail.ask.node === t.node && detail.ask.visit === t.visit;
+  const failed = detail.timeline.find((t) => t.status === "failed" && !stoppedByYou(t));
   if (failed) {
     const key = `${failed.node}@${failed.visit}`;
     out.push({ kind: "failed", title: "Why did it fail?", detail: key, question: `Why did ${key} fail?` });
@@ -269,14 +271,6 @@ export function SteerBubble({ steer }: { steer: RunDetail["steers"][number] }) {
       </div>
     </div>
   );
-}
-
-/** HOW-47: can the box steer right now? Only a LIVE turn on a harness with a steer channel. */
-export function steerableTurn(detail: RunDetail): { node: string; visit: number } | null {
-  const step = liveStep(detail);
-  if (!step) return null;
-  const harness = detail.renders.findLast((r) => r.node === step.node && r.visit === step.visit)?.harness ?? "claude";
-  return isHarness(harness) && harnessSpec(harness).steer !== null ? step : null;
 }
 
 export function RunChat({ runId, detail, ask, onPickStep, onResolved, liveGit = null }: {

@@ -22,7 +22,7 @@ import { askQuestions, type UserQuestion } from "../core/ask";
 import type { LoggedEvent, RunOutcome } from "../log/events";
 import { currentProposal, decisionAnswers, decisionKind, findDecision } from "../engine/slice-decision";
 import { replayState } from "../engine/replay";
-import { steerStates, type SteerState } from "../engine/steer-state";
+import { softStopState, steerStates, type SoftStopState, type SteerState } from "../engine/steer-state";
 import type { Scope } from "../core/context";
 import { coalesce, outcomesByHash, type CoalescedTurn, type JoinedOutcome } from "../log/coalesce";
 import { rollupRun, usageByVisit, type UsageRollup, type VisitUsage } from "../log/usage";
@@ -158,6 +158,8 @@ export interface RunDetail {
    * carries it to the transcript.
    */
   steers: SteerState[];
+  /** HOW-48: the soft stop on the newest step, and how far it got — null when none was asked for */
+  soft_stop: SoftStopState | null;
   /**
    * HOW-46/HOW-49: when the agent last produced anything (a chunk or a turn boundary) — the
    * "last activity Ns ago" clock and the quiet-for-N-minutes signal. Null before any turn.
@@ -455,6 +457,7 @@ export function deriveDetail(
     turn_states: deriveTurnStates(turns, timeline, ask, summary.status, opts.runnerAlive),
     plan: timeline.length ? derivePlan(events, timeline.at(-1)!.node, timeline.at(-1)!.visit) : null,
     steers: steerStates(events),
+    soft_stop: timeline.length ? softStopState(events, timeline.at(-1)!.node, timeline.at(-1)!.visit) : null,
     last_agent_event_at: lastAgent?.ts ?? null,
     renders,
     outcomes: [...outcomesByHash(events).values()],
@@ -640,6 +643,15 @@ export function deriveLogRows(events: LoggedEvent[]): LogRow[] {
       case "steer-delivered":
         return { ...base, ...at(e.node, e.visit), kind: "operator", depth: 1,
           summary: `steer #${e.steer_seq} delivered${e.after_tool_id ? ` after ${e.after_tool_id}` : ""}` };
+      case "soft-stop-requested":
+        return { ...base, ...at(e.node, e.visit), kind: "operator", depth: 1, summary: "stop at the next tool call" };
+      case "soft-stop-delivered":
+        return { ...base, ...at(e.node, e.visit), kind: "operator", depth: 1, summary: `stop delivered${e.after_tool_id ? ` after ${e.after_tool_id}` : ""}` };
+      case "soft-stop-honored":
+        return { ...base, ...at(e.node, e.visit), kind: "operator", depth: 0,
+          summary: `${e.forced ? "stopped hard (kept calling tools)" : "stopped"} · ${e.last_message.slice(0, 200)}` };
+      case "soft-stop-moot":
+        return { ...base, ...at(e.node, e.visit), kind: "operator", depth: 1, summary: "stop moot — the step finished first; pausing at the boundary" };
       default: {
         const never: never = e;
         throw new Error(`unhandled event type in deriveLogRows: ${JSON.stringify(never)}`);

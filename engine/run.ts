@@ -69,7 +69,7 @@ import { DEFAULT_CONTEXT_CAP, RENDER_VERSION, SUFFIX_VERSION, assemblePrompt, ex
 import { defaultHarness, fallbackChain, harnessNames, harnessSpec, isHarness } from "../core/harnesses";
 import { EventLog } from "../log/write";
 import type { LoggedEvent, ParkCode } from "../log/events";
-import { undeliveredSteers } from "./steer-state";
+import { softStopState, stopResumeFor, undeliveredSteers } from "./steer-state";
 import { replayState, effectKey } from "./replay";
 import type { PromptId } from "../core/prompt-ids";
 import { proposalHash } from "../core/proposal";
@@ -258,7 +258,7 @@ const INPUTS_NODE = "__inputs__";
  * Failures that are never evidence of a spent allowance, whatever the transcript says, so
  * they never hop harnesses and never mark a harness spent (HOW-14, HOW-38).
  */
-const NO_HOP_CODES: ReadonlySet<string> = new Set(["context-exhausted", "stuck", "turn-timeout"]);
+const NO_HOP_CODES: ReadonlySet<string> = new Set(["context-exhausted", "stuck", "turn-timeout", "paused-by-operator"]);
 
 /**
  * HOW-43: automatic continuations of `node` in the current streak — the context-continued
@@ -426,6 +426,9 @@ export class Engine {
 
   // ---- the loop --------------------------------------------------------------
 
+  /** HOW-48: a moot soft stop — pause at the next node boundary (set after the step, read at the loop top) */
+  private pauseAtBoundary = false;
+
   private async loop(startAt: string): Promise<RunState> {
     let current = startAt;
     const maxSteps = this.opts.maxSteps ?? 1000;
@@ -439,7 +442,11 @@ export class Engine {
         this.attributeTerminal("aborted");
         return { state: "finished", outcome: "aborted" };
       }
-      if (command === "pause") {
+      // HOW-48: a soft stop the step finished before reaching is not dropped — the run holds at
+      // this boundary exactly as a pause would, so "stop" still means stop. Not before a terminal:
+      // the run is done, and holding it one step short of finishing would only cost a resume.
+      if (command === "pause" || (this.pauseAtBoundary && def.kind !== "terminal")) {
+        this.pauseAtBoundary = false;
         this.log.append({ type: "run-paused", by: "operator" });
         return { state: "paused", node: current };
       }
@@ -546,6 +553,7 @@ export class Engine {
         return this.park(current, visit, result.code ?? "attempt-failed", result.reason ?? "attempt failed");
       }
 
+      if (def.kind === "agent" && softStopState(this.log.read(), current, visit)) this.pauseAtBoundary = true;
       const next = this.route(current, visit);
       if (!next) return this.park(current, visit, "no-edge", "no edge matched (conditions exhausted)");
       this.log.append({ type: "edge-taken", from: current, to: next.to, label: next.condition?.label });
@@ -1060,6 +1068,8 @@ export class Engine {
     // that could have delivered it has returned by now, so it is carried into THIS render —
     // the run's next agent prompt — and its seq is logged so reconstruction reads the same text
     const carried = undeliveredSteers(logged);
+    // HOW-48: the previous visit stopped where the operator asked — brief this one from its words
+    const stopResume = stopResumeFor(logged, nodeId, visit);
     // HOW-36: what that visit had done, derived from the log — reconstruction re-derives it
     const handoff = reentryAfterVisit === undefined ? undefined : deriveHandoff(logged, nodeId, reentryAfterVisit, outputKeys);
     // HOW-37: render rules v2 — an oversized value is elided around a stub naming where the
@@ -1081,6 +1091,7 @@ export class Engine {
       reentryAfterVisit,
       ...(handoff ? { handoff } : {}),
       steerMessages: carried.map((c) => c.text),
+      stopResumeMessage: stopResume?.last_message,
       skills,
       outputKeys,
       suffixVersion: SUFFIX_VERSION,
@@ -1110,6 +1121,7 @@ export class Engine {
       context_cap: contextCap,
       ...(Object.keys(elided).length ? { context_sources: elided } : {}),
       ...(carried.length ? { steers_carried: carried.map((c) => c.seq) } : {}),
+      ...(stopResume ? { resumed_after_stop: stopResume.seq } : {}),
     });
     return finalRendered;
   }

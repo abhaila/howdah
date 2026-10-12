@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { EventLog, readLog } from "../log/write";
 import type { RunEvent } from "../log/events";
 import { claimRunner, releaseRunner } from "../engine/control";
-import { steer, steerRefusal } from "../engine/steer";
+import { softStop, softStopRefusal, steer, steerRefusal } from "../engine/steer";
 import { MAX_STEER_CHARS } from "../core/steer";
 import { createHowdahServer } from "./server";
 
@@ -114,5 +114,60 @@ describe("POST /api/runs/:id/steer", () => {
       expect(res.status).toBe(403);
     });
     expect(readLog(r.path)).toHaveLength(before);
+  });
+});
+
+describe("HOW-48: the soft-stop precheck", () => {
+  test("accepted on a live turn, and idempotent", () => {
+    const { runDir, path } = run();
+    expect(softStop(runDir)).toMatchObject({ ok: true, node: "build", visit: 1, already: false });
+    expect(softStop(runDir)).toMatchObject({ ok: true, already: true });
+    expect(readLog(path).filter((e) => e.type === "soft-stop-requested")).toHaveLength(1);
+  });
+
+  test("accepted while a MID-TURN ask holds the turn open (it applies after the answer)", () => {
+    const { runDir } = run([{ type: "attention-raised", node: "build", visit: 1, reason: "Which?", ask: { kind: "user-question" } }]);
+    expect(softStopRefusal(runDir)).toBeNull();
+    // ...whereas a steer to the same run is a reply's job
+    expect(steerRefusal(runDir, "x")).toMatch(/waiting on you/);
+  });
+
+  test("refused on an engine park — the step has already stopped", () => {
+    const { runDir } = run([
+      { type: "node-finished", node: "build", visit: 1, status: "failed", writes: {} },
+      { type: "attention-raised", node: "build", visit: 1, reason: "failed", code: "attempt-failed" },
+    ]);
+    expect(softStopRefusal(runDir)).toMatch(/waiting on you/);
+  });
+
+  test("edge: never during an effect claim — a command step is refused, and its ambiguous intent is untouched", async () => {
+    const home = mkdtempSync(join(tmpdir(), "howdah-softstop-effect-"));
+    const runDir = join(home, "runs", "r");
+    const log = new EventLog(join(runDir, "run.jsonl"));
+    log.append({ type: "run-started", graph: "g", inputs: {}, pinned_prompts: {} });
+    log.append({ type: "node-started", node: "delivery.publish", visit: 1, attempt_id: "delivery.publish#1" });
+    log.append({ type: "side-effect-intent", node: "delivery.publish", visit: 1, attempt_id: "delivery.publish#1", effect: "pr:open" });
+    claimRunner(runDir); claimed.push(runDir);
+    expect(softStop(runDir)).toMatchObject({ ok: false, message: expect.stringContaining("not an agent turn") });
+    const { replayState } = await import("../engine/replay");
+    // the intent is still the ambiguous one replay will make resume probe — nothing papered over it
+    expect(replayState(readLog(join(runDir, "run.jsonl"))).pendingIntents.map((i) => i.effect)).toEqual(["pr:open"]);
+  });
+
+  test("POST /api/runs/:id/soft-stop: 202 on a live turn, 409 with the reason otherwise", async () => {
+    const live = run();
+    const server = createHowdahServer({ runsDir: join(live.home, "runs"), attentionDir: join(live.home, "attention"), port: 0, graphs: {} });
+    try {
+      const ok = await fetch(`http://localhost:${server.port}/api/runs/r1/soft-stop`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+      expect(ok.status).toBe(202);
+      expect(await ok.json()).toMatchObject({ ok: true, node: "build", already: false });
+    } finally { server.stop(true); }
+    const done = run([{ type: "run-finished", outcome: "success" }]);
+    const server2 = createHowdahServer({ runsDir: join(done.home, "runs"), attentionDir: join(done.home, "attention"), port: 0, graphs: {} });
+    try {
+      const no = await fetch(`http://localhost:${server2.port}/api/runs/r1/soft-stop`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+      expect(no.status).toBe(409);
+      expect(((await no.json()) as { error: string }).error).toMatch(/already finished/);
+    } finally { server2.stop(true); }
   });
 });

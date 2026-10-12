@@ -50,3 +50,13 @@ describe("howdah steer", () => {
     expect(readLog(path)).toHaveLength(before);
   });
 });
+
+describe("howdah stop (HOW-48)", () => {
+  test("sends the soft stop and says how to stop hard instead", async () => {
+    const { home, path } = liveRun();
+    const proc = Bun.spawn(["bun", MAIN, "stop", "r1"], { env: { ...process.env, HOWDAH_HOME: home, HOWDAH_STUB: "1" }, stdout: "pipe", stderr: "pipe" });
+    expect(await proc.exited).toBe(0);
+    expect(await new Response(proc.stdout).text()).toContain("stop sent to build@1 — the agent stops at its next tool call; `pause r1` stops it now");
+    expect(readLog(path).at(-1)).toMatchObject({ type: "soft-stop-requested", node: "build", visit: 1 });
+  });
+});

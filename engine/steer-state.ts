@@ -48,7 +48,10 @@ export function undeliveredSteers(events: readonly LoggedEvent[]): SteerState[] 
 }
 
 /** the live agent turn a steer would go to, or why there is none */
-export function steerTarget(events: readonly LoggedEvent[]): { ok: true; node: string; visit: number } | { ok: false; message: string } {
+export function steerTarget(
+  events: readonly LoggedEvent[],
+  opts: { allowMidTurnAsk?: boolean } = {},
+): { ok: true; node: string; visit: number } | { ok: false; message: string } {
   if (!events.some((e) => e.type === "run-started")) return { ok: false, message: "the run has not started" };
   const finished = events.findLast((e) => e.type === "run-finished");
   if (finished?.type === "run-finished") return { ok: false, message: `the run already finished (${finished.outcome}) — there is no agent to steer` };
@@ -63,9 +66,13 @@ export function steerTarget(events: readonly LoggedEvent[]): { ok: true; node: s
     else if (e.type === "attention-resolved" || e.type === "operator-jump") ask = null;
   }
   if (paused) return { ok: false, message: "the run is paused — resume it first; a steer only reaches a running turn" };
-  if (ask) return { ok: false, message: "the run is waiting on you — answer it with a reply, which reaches the agent directly" };
   if (!started) return { ok: false, message: "no step has started yet" };
   const s = started;
+  // HOW-48: a MID-TURN ask (no park code, on this very turn) holds the turn open; a soft stop
+  // may be queued behind it and applies after the answer. An engine park never may.
+  const midTurnAsk = ask !== null && ask.code === undefined && ask.node === s.node && ask.visit === s.visit;
+  if (ask && !(opts.allowMidTurnAsk && midTurnAsk))
+    return { ok: false, message: "the run is waiting on you — answer it with a reply, which reaches the agent directly" };
   if (events.some((e) => e.type === "node-finished" && e.node === s.node && e.visit === s.visit))
     return { ok: false, message: `${s.node}@${s.visit} has finished — there is no live turn to steer` };
   const render = events.findLast((e) => e.type === "prompt-rendered" && e.node === s.node && e.visit === s.visit);
@@ -74,4 +81,36 @@ export function steerTarget(events: readonly LoggedEvent[]): { ok: true; node: s
   if (!isHarness(harness) || harnessSpec(harness).steer === null)
     return { ok: false, message: `steer: not supported on ${harness} — it has no channel into a running turn yet` };
   return { ok: true, node: s.node, visit: s.visit };
+}
+
+/** HOW-48: the soft stop on one node@visit, and how far it got — null when none was asked for */
+export interface SoftStopState {
+  node: string;
+  visit: number;
+  requested_at: string;
+  state: "requested" | "delivered" | "honored" | "moot";
+}
+
+export function softStopState(events: readonly LoggedEvent[], node: string, visit: number): SoftStopState | null {
+  let out: SoftStopState | null = null;
+  for (const e of events) {
+    if (!("node" in e) || e.node !== node || !("visit" in e) || e.visit !== visit) continue;
+    if (e.type === "soft-stop-requested" && !out) out = { node, visit, requested_at: e.ts, state: "requested" };
+    else if (out && e.type === "soft-stop-delivered" && out.state === "requested") out.state = "delivered";
+    else if (out && e.type === "soft-stop-honored") out.state = "honored";
+    else if (out && e.type === "soft-stop-moot") out.state = "moot";
+  }
+  return out;
+}
+
+/**
+ * HOW-48: the last message a soft-stopped visit of `node` left, for its NEXT visit's render —
+ * once. The newest `soft-stop-honored` of this node from an earlier visit, unless a render of
+ * this node has already carried it (`resumed_after_stop`).
+ */
+export function stopResumeFor(events: readonly LoggedEvent[], node: string, visit: number): { seq: number; last_message: string } | null {
+  const honored = events.findLast((e) => e.type === "soft-stop-honored" && e.node === node && e.visit < visit);
+  if (!honored || honored.type !== "soft-stop-honored") return null;
+  const used = events.some((e) => e.type === "prompt-rendered" && e.node === node && e.resumed_after_stop === honored.seq);
+  return used ? null : { seq: honored.seq, last_message: honored.last_message };
 }

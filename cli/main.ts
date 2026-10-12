@@ -24,7 +24,7 @@
  *                                                    extract + assemble a snapshot (map/cli.ts)
  *   howdah metrics [--json]                          implement-slice runs vs the implement-ticket baseline (cli/metrics.ts)
  */
-import { steer } from "../engine/steer";
+import { softStop, steer } from "../engine/steer";
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { Engine } from "../engine/run";
@@ -302,6 +302,18 @@ export function steerCommand(runId: string, text: string): void {
   const sent = steer(join(runsDir, runId), text);
   if (!sent.ok) throw new Error(sent.message);
   console.log(`steer #${sent.seq} sent to ${sent.node}@${sent.visit} — it reaches the agent at its next tool call`);
+}
+
+/**
+ * HOW-48: `howdah stop <run>` — ask the running agent to stop at its next tool call, leave the
+ * work consistent and say where it is. The soft pause; `pause` is still the hard one.
+ */
+export function softStopCommand(runId: string): void {
+  const sent = softStop(join(runsDir, runId));
+  if (!sent.ok) throw new Error(sent.message);
+  console.log(sent.already
+    ? `a stop is already on its way to ${sent.node}@${sent.visit}`
+    : `stop sent to ${sent.node}@${sent.visit} — the agent stops at its next tool call; \`pause ${runId}\` stops it now`);
 }
 
 export async function upCommand(opts: { intervalMs?: number; once?: boolean } = {}): Promise<void> {
@@ -589,6 +601,7 @@ if (import.meta.main) {
     else if (verb === "abort") { writeControl(join(runsDir, rest[0] ?? ""), "abort"); console.log("abort requested — lands at the next node boundary"); }
     else if (verb === "jump") await jumpCommand(rest[0] ?? "", rest[1] ?? "", rest.slice(2).join(" ") || undefined);
     else if (verb === "steer") steerCommand(rest[0] ?? "", rest.slice(1).join(" "));
+    else if (verb === "stop") softStopCommand(rest[0] ?? "");
     else if (verb === "approve" || verb === "send-feedback" || verb === "comment") {
       const { proposalId, rest: args } = splitProposalFlag(rest, verb === "comment" ? 2 : Infinity);
       if (verb === "approve") await approveCommand(args[0] ?? "", proposalId);
@@ -661,7 +674,7 @@ if (import.meta.main) {
       console.log(`scaffolded ${path} — edit it, then: howdah run ${rest[0]}`);
     }
     else {
-      console.error("usage: howdah setup|run|resume|pause|abort|jump|steer|reply|resolve-effect|approve|comment|send-feedback|redesign|map|metrics|runs|graphs|new-graph|workspace|up|doctor");
+      console.error("usage: howdah setup|run|resume|pause|stop|abort|jump|steer|reply|resolve-effect|approve|comment|send-feedback|redesign|map|metrics|runs|graphs|new-graph|workspace|up|doctor");
       process.exit(1);
     }
   } catch (err) {

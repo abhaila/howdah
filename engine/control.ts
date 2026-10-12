@@ -385,6 +385,9 @@ export const REPLY_RULES: Readonly<Record<ParkCode, Rule>> = {
     accept: false,
     message: `this harness cannot restrict tools; change the node's harness or its tools in tuning, then \`resume ${run}\``,
   }),
+  // HOW-48: the agent stopped where the operator asked; a reply (or resume) retries the step,
+  // briefed with the agent's own last words about where it stood
+  "paused-by-operator": retryWithReply,
   "executor-threw": retryWithReply,
   "max-visits": useJump,
   "no-edge": useJump,

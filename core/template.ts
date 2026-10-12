@@ -47,6 +47,10 @@
  * `operator-steered` events themselves, named by seq on `prompt-rendered.steers_carried`, so
  * reconstruction reads the same texts.
  *
+ * HOW-48: v7 = v6 + stopResumeInstruction — the step's previous visit was soft-stopped by the
+ * operator; the retry is told where the agent said it was. Its source is that visit's
+ * `soft-stop-honored.last_message`, named by seq on `prompt-rendered.resumed_after_stop`.
+ *
  * Includes (system-map 1c review): `{{> prompt.id }}` pulls another prompt file's body in AT
  * PIN TIME — expandIncludes() runs when a run pins its prompts, and the pinned file holds the
  * expanded text. Rendering, rendered_hash and reconstruction therefore never see an include:
@@ -195,7 +199,7 @@ export function operatorInstructionSuffix(message: string): string {
 // ---- suffixes (system-map 0.1) ---------------------------------------------------
 
 /** The suffix wording new renders use. Bump it — and add a builder set — to reword. */
-export const SUFFIX_VERSION = 6;
+export const SUFFIX_VERSION = 7;
 
 /**
  * HOW-36: what a context-exhausted visit had done, as data — derived by engine/handoff.ts from
@@ -246,6 +250,11 @@ export interface SuffixBuilders {
    * before another tool call). Absent from versions that predate it (v1–v5).
    */
   steerInstruction?(messages: readonly string[]): string;
+  /**
+   * HOW-48: the step's previous visit was stopped by the operator at a tool boundary — the
+   * agent's own last message says where it was. Absent from versions that predate it (v1–v6).
+   */
+  stopResumeInstruction?(lastMessage: string): string;
 }
 
 /**
@@ -367,9 +376,20 @@ const V6: SuffixBuilders = {
     messages.map((m) => `- ${m.trim().replace(/\n/g, "\n  ")}`).join("\n"),
 };
 
-const SUFFIX_BUILDERS: Readonly<Record<number, SuffixBuilders>> = { 1: V1, 2: V2, 3: V3, 4: V4, 5: V5, 6: V6 };
+/** v7 (HOW-48) = v6 + the resume-after-operator-stop briefing. NEVER edit a published version. */
+const V7: SuffixBuilders = {
+  ...V6,
+  stopResumeInstruction: (lastMessage) =>
+    `\n\n## Resuming after an operator stop\n` +
+    `The operator stopped the previous visit of this step at a tool boundary, and it ended its turn there. ` +
+    `Its last message said where the work stood:\n` +
+    lastMessage.trim().split("\n").map((l) => `> ${l}`).join("\n") +
+    `\nPick up from there: check \`git status\` and \`git log --oneline -10\` against that account, then continue rather than starting over.`,
+};
+
+const SUFFIX_BUILDERS: Readonly<Record<number, SuffixBuilders>> = { 1: V1, 2: V2, 3: V3, 4: V4, 5: V5, 6: V6, 7: V7 };
 /** the builders new renders use; bump together with SUFFIX_VERSION */
-const CURRENT: SuffixBuilders = V6;
+const CURRENT: SuffixBuilders = V7;
 
 /** The builders a logged `suffix_version` pins, or undefined for a version this code never had. */
 export function suffixBuilders(version: number): SuffixBuilders | undefined {
@@ -417,6 +437,8 @@ export interface PromptParts {
   handoff?: Handoff;
   /** HOW-47: steers that never reached the turn they were sent to — raw texts, oldest first */
   steerMessages?: readonly string[];
+  /** HOW-48: the agent's last message from a visit the operator soft-stopped */
+  stopResumeMessage?: string;
   /** skills named in the hint — already filtered by skillsForHarness */
   skills: readonly string[];
   /** the node's declared write keys, in declaration order */
@@ -427,7 +449,8 @@ export interface PromptParts {
 /**
  * The ONE assembly of a prompt as sent. Fixed order:
  *   template body → operator jump → operator reply (0.2) → proposal refusal (1c)
- *   → context re-entry (HOW-14) → carried operator steers (HOW-47) → skill hint → outputs contract.
+ *   → context re-entry (HOW-14) → resume after operator stop (HOW-48) → carried operator steers
+ *   (HOW-47) → skill hint → outputs contract.
  * Throws on a suffix version with no builders — the engine only ever passes SUFFIX_VERSION,
  * and reconstruction checks suffixBuilders() first — and on a reply, refusal or re-entry
  * under a version with no builder for it, which no engine ever produced.
@@ -455,12 +478,18 @@ export function assemblePrompt(parts: PromptParts): string {
     if (!builders.steerInstruction) throw new Error(`suffix version ${parts.suffixVersion} has no steer builder`);
     steer = builders.steerInstruction(parts.steerMessages);
   }
+  let stopResume = "";
+  if (parts.stopResumeMessage !== undefined) {
+    if (!builders.stopResumeInstruction) throw new Error(`suffix version ${parts.suffixVersion} has no stop-resume builder`);
+    stopResume = builders.stopResumeInstruction(parts.stopResumeMessage);
+  }
   return (
     parts.body +
     (parts.jumpMessage !== undefined ? operatorInstructionSuffix(parts.jumpMessage) : "") +
     reply +
     refusal +
     reentry +
+    stopResume +
     steer +
     builders.skillHint(parts.skills) +
     builders.outputContract(parts.outputKeys)

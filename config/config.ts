@@ -38,6 +38,8 @@ export interface HowdahConfig {
   folders: Record<string, PlainWorkspace>;
   /** e.g. "idea" | "code" — the Open-in-IDE command (T19) */
   editorCommand?: string;
+  /** HOW-48: ms before the run header offers to escalate an unanswered soft stop (default 2 min) */
+  softStopEscalateMs?: number;
   /** where GitHub-picked repos are cloned; default ~/code */
   cloneRoot?: string;
   /**

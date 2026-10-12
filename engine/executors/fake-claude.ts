@@ -91,6 +91,8 @@ if (contextMode === "exceed" || exceedOnce) {
 }
 
 if (process.env.FAKE_CLAUDE_ASK === "1") {
+  // FAKE_CLAUDE_ASK_DELAY_MS: think a while first, so a test can act before the ask arrives
+  if (process.env.FAKE_CLAUDE_ASK_DELAY_MS) await Bun.sleep(Number(process.env.FAKE_CLAUDE_ASK_DELAY_MS));
   out({
     type: "control_request",
     request_id: "req-42",
@@ -278,7 +280,26 @@ if (process.env.FAKE_CLAUDE_STEER === "1") {
   if (steer !== null) {
     if (process.env.FAKE_CAPTURE) appendFileSync(process.env.FAKE_CAPTURE, JSON.stringify(steer) + "\n");
     out({ type: "user", message: { role: "user", content: [{ type: "text", text: steer }] }, isReplay: true });
-    out({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: ` Steered: ${steer.split("\n")[1] ?? steer}.` } } });
+    if (steer.startsWith("[OPERATOR STOP")) {
+      /**
+       * HOW-48: a soft stop. The obedient agent (cwc's observed behaviour) says where it is and
+       * ends its turn with NO outputs object. FAKE_CLAUDE_IGNORE_STOP=1 plays the agent that
+       * keeps calling tools anyway, so the executor's hard-stop guard can be exercised.
+       */
+      if (process.env.FAKE_CLAUDE_IGNORE_STOP === "1") {
+        for (let i = 2; i < 8; i++) {
+          out({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: `toolu_fake_more_${i}`, name: "Bash", input: { command: `echo ${i}` } }] } });
+          out({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: `toolu_fake_more_${i}`, content: String(i) }] } });
+          out({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: ` still going ${i}.` } } });
+          await Bun.sleep(30);
+        }
+      } else {
+        const where = " Stopping here as asked. The derivation is written and committed; the panel is not started yet.";
+        out({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: where } } });
+        out({ type: "result", subtype: "success", is_error: false, usage: { input_tokens: 100, output_tokens: 20 }, total_cost_usd: 0.001, result: where.trim() });
+        process.exit(0);
+      }
+    } else out({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: ` Steered: ${steer.split("\n")[1] ?? steer}.` } } });
   }
 }
 

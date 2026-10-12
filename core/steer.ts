@@ -33,3 +33,29 @@ export function steerTextProblem(text: unknown): string | null {
   if (text.length > MAX_STEER_CHARS) return `a steer is at most ${MAX_STEER_CHARS} characters (this one is ${text.length})`;
   return null;
 }
+
+/**
+ * HOW-48: the soft stop's wording — what cwc's kill switch told the agent on every refused
+ * tool call, said once over the steer channel. The agent is asked to END ITS TURN, so the turn
+ * that follows is classified `paused-by-operator`, never a contract violation for obeying.
+ */
+export const STOP_MESSAGE =
+  "The operator asked you to stop at this point. Leave the work in a consistent state, say where you are, and end your turn.";
+
+export function stopTurnText(): string {
+  return `[OPERATOR STOP — from the human operator supervising this run, not from a tool]\n${STOP_MESSAGE}`;
+}
+
+/**
+ * HOW-48: tool calls an agent may still make after reading the stop before it is stopped hard.
+ * A soft stop cannot refuse an auto-approved tool, so an agent that ignores it is killed rather
+ * than left running against the operator's instruction.
+ */
+export const STOP_GRACE_TOOL_CALLS = 2;
+
+/**
+ * HOW-48: how long a soft stop may go without taking effect before the run header offers to
+ * escalate to "Stop now" — the agent may be inside one long tool call. config.json
+ * `softStopEscalateMs` overrides it.
+ */
+export const SOFT_STOP_ESCALATE_MS = 2 * 60_000;

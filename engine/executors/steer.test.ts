@@ -15,7 +15,7 @@ import { steer } from "../steer";
 import { steerStates } from "../steer-state";
 import { steerTurnText } from "../../core/steer";
 import { reconstructRender } from "../../prompts/library";
-import { renderedHash } from "../../core/template";
+import { renderedHash, SUFFIX_VERSION } from "../../core/template";
 
 const FAKE = join(import.meta.dir, "fake-claude.ts");
 const ENV = ["FAKE_CLAUDE_STEER", "FAKE_CLAUDE_STEER_WAIT_MS", "FAKE_CLAUDE_HOLD_MS", "FAKE_CAPTURE", "FAKE_CLAUDE_ASK", "FAKE_CLAUDE_RATELIMIT"];
@@ -103,7 +103,7 @@ describe("a steer sent mid-turn", () => {
     const events = readLog(path);
     expect(events.some((e) => e.type === "steer-delivered")).toBe(false);
     const review = events.find((e) => e.type === "prompt-rendered" && e.node === "review")!;
-    expect(review).toMatchObject({ steers_carried: [(sent as { seq: number }).seq], suffix_version: 5 });
+    expect(review).toMatchObject({ steers_carried: [(sent as { seq: number }).seq], suffix_version: SUFFIX_VERSION });
     // the next agent's first turn carried it, and that is inside rendered_hash
     const turns = readFileSync(capture, "utf8").trim().split("\n").map((l) => JSON.parse(l) as string);
     const reviewPrompt = turns.find((t) => t.startsWith("Review "))!;

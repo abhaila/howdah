@@ -43,7 +43,8 @@ import { homedir, tmpdir } from "node:os";
 import { readLog } from "../log/write";
 import { deriveDetail, deriveSummary, deriveTimeline, runDigest, snapshotIndex, sortRuns, type RunSummary, type SnapshotIndex } from "./derive";
 import { LiveGitHub, liveTargetOf } from "./live-git";
-import { steer } from "../engine/steer";
+import { softStop, steer } from "../engine/steer";
+import { SOFT_STOP_ESCALATE_MS } from "../core/steer";
 import { BoardCache, boardRow } from "./board";
 import { currentProposal } from "../engine/slice-decision";
 import { loadSnapshot } from "../engine/slice-map";
@@ -685,7 +686,7 @@ export function createHowdahServer(opts: ServerOpts) {
         return render ? json(render) : json({ error: "no such render, or its pinned prompt is gone" }, 404);
       }
 
-      const m = url.pathname.match(/^\/api\/runs(?:\/([^/]+)(?:\/(events|reply|open-ide|open-run-folder|harness-login|resume|pause|abort|jump|steer|ask|comments|approval|redesign|effects))?)?$/);
+      const m = url.pathname.match(/^\/api\/runs(?:\/([^/]+)(?:\/(events|reply|open-ide|open-run-folder|harness-login|resume|pause|abort|jump|steer|soft-stop|ask|comments|approval|redesign|effects))?)?$/);
       if (!m) {
         // static: /public assets by name, everything else → the app shell.
         // no-cache: this is a local app whose bundle changes constantly — the browser must
@@ -911,6 +912,17 @@ export function createHowdahServer(opts: ServerOpts) {
         return json({ ok: true, seq: sent.seq, node: sent.node, visit: sent.visit }, 202);
       }
 
+      /**
+       * HOW-48: "stop at the next tool call" — the soft pause. Like a steer it is only a log
+       * append (the runner's executor delivers it), so it is answered in-process with the shared
+       * precheck's words. Asking twice for one turn is idempotent.
+       */
+      if (sub === "soft-stop" && req.method === "POST") {
+        const sent = softStop(join(opts.runsDir, id));
+        if (!sent.ok) return json({ error: sent.message }, 409);
+        return json({ ok: true, node: sent.node, visit: sent.visit, already: sent.already }, 202);
+      }
+
       if (sub === "ask" && req.method === "POST") {
         const body = (await req.json().catch(() => ({}))) as { question?: string };
         const question = (body.question ?? "").trim();
@@ -1015,6 +1027,8 @@ export function createHowdahServer(opts: ServerOpts) {
         ...detail,
         cwd_exists: target ? existsSync(target) : false,
         editor_configured: Boolean(loadConfig().editorCommand),
+        // HOW-48: when the header offers to escalate a soft stop that has not taken effect
+        soft_stop_escalate_ms: loadConfig().softStopEscalateMs ?? SOFT_STOP_ESCALATE_MS,
       });
     },
   });

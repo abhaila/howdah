@@ -69,7 +69,13 @@ export type ParkCode =
   | "ambiguous-effect"
   | "awaiting-approval"
   | "approval-missing"
-  | "stale-base";
+  | "stale-base"
+  /**
+   * HOW-48: the operator asked the agent to stop at its next tool call, and it did — it ended
+   * its turn where it was. Not a failure and never a contract violation: the agent obeyed. A
+   * reply or resume retries the step, briefed with the agent's own last words (suffix v6).
+   */
+  | "paused-by-operator";
 
 export type ResolutionSource = "operator" | "resume";
 
@@ -191,6 +197,11 @@ export type RunEvent =
        * reconstruction reads the same texts rather than guessing which steers were pending.
        */
       steers_carried?: number[];
+      /**
+       * HOW-48: the seq of the `soft-stop-honored` this render briefs the step to resume from
+       * (suffix v6+) — logged so reconstruction reads the same last message.
+       */
+      resumed_after_stop?: number;
     }
   | {
       type: "chunk";
@@ -564,6 +575,47 @@ export type RunEvent =
       visit: number;
       steer_seq: number;
       after_tool_id?: string;
+    }
+  | {
+      /**
+       * HOW-48: "stop at the next tool call" — a soft pause. Appended by the server or CLI
+       * under the log lock for the live agent turn (engine/steer.ts softStop). The executor
+       * delivers the stop over the steer channel; it does not interrupt anything itself.
+       */
+      type: "soft-stop-requested";
+      node: string;
+      visit: number;
+      by: "operator";
+    }
+  | {
+      /** HOW-48: the harness echoed the stop message — the agent has read it (cf. steer-delivered) */
+      type: "soft-stop-delivered";
+      node: string;
+      visit: number;
+      after_tool_id?: string;
+    }
+  | {
+      /**
+       * HOW-48: the turn ENDED after the stop reached it. `last_message` is the agent's own final
+       * words about where it is — the park quotes them, and the step's next visit is rendered
+       * with them (suffix v6 stopResumeInstruction), which is why they are logged here rather
+       * than re-read from chunks: reconstruction needs one exact source.
+       */
+      type: "soft-stop-honored";
+      node: string;
+      visit: number;
+      last_message: string;
+      /** the agent kept calling tools after the stop and was stopped hard (killed) instead */
+      forced?: boolean;
+    }
+  | {
+      /**
+       * HOW-48: the turn finished on its own before the stop could be delivered (no tool call
+       * came). The step's work stands; the run pauses at the next node boundary instead.
+       */
+      type: "soft-stop-moot";
+      node: string;
+      visit: number;
     }
   | { type: "run-finished"; outcome: RunOutcome };
 

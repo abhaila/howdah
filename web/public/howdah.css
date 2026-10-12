@@ -1075,3 +1075,17 @@ main { flex: 1; min-width: 0; min-height: 0; overflow: hidden; display: flex; fl
 .cv-steer-state { font-size: var(--type-xs); color: var(--fg-muted); }
 .cv-steer[data-state="pending"] .cv-steer-state { color: var(--attention); }
 .cv-steer[data-state="carried"] { background: var(--bg-inset); }
+
+/* HOW-48: the soft stop is the primary action on a live turn; the hard one sits in a menu with
+   a line saying how they differ, and an overdue soft stop offers it inline */
+.run-soft-stop { font-weight: 600; }
+.run-menu-wrap { position: relative; display: inline-flex; }
+.run-menu {
+  position: absolute; top: calc(100% + 4px); left: 0; z-index: 20; width: 300px;
+  display: flex; flex-direction: column; gap: 6px; padding: 8px;
+  background: var(--bg-raised); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  border-color: var(--border-strong);
+}
+.run-menu-item { justify-content: flex-start; }
+.run-menu-note { margin: 0; font-size: var(--type-xs); line-height: 1.5; color: var(--fg-muted); }
+.run-escalate { display: inline-flex; align-items: center; gap: 8px; font-size: var(--type-xs); color: var(--attention); }

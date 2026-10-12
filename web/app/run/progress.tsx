@@ -22,12 +22,24 @@ import type { RunDetail } from "../../derive";
 import type { LiveGit } from "../../live-git";
 import { useNow } from "@/lib/hooks";
 import { fmtAgo, liveness } from "@/lib/liveness";
+import { harnessSpec, isHarness } from "../../../core/harnesses";
 
 /** the newest step, when its turn is live — the only time the panel has anything to say */
 export function liveStep(detail: Pick<RunDetail, "timeline" | "turn_states">): { node: string; visit: number } | null {
   const row = detail.timeline.at(-1);
   if (!row) return null;
   return detail.turn_states[`${row.node}@${row.visit}`] === "live" ? { node: row.node, visit: row.visit } : null;
+}
+
+/**
+ * HOW-47/48: can the operator reach this turn without pausing it — steer it, or ask it to stop
+ * at its next tool call? Only a LIVE turn on a harness with a steer channel (core/harnesses.ts).
+ */
+export function steerableTurn(detail: Pick<RunDetail, "timeline" | "turn_states" | "renders">): { node: string; visit: number } | null {
+  const step = liveStep(detail);
+  if (!step) return null;
+  const harness = detail.renders.findLast((r) => r.node === step.node && r.visit === step.visit)?.harness ?? "claude";
+  return isHarness(harness) && harnessSpec(harness).steer !== null ? step : null;
 }
 
 const STATUS_ICON = { completed: CheckCircle2, in_progress: CircleDot, pending: Circle } as const;

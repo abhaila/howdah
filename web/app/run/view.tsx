@@ -16,7 +16,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Rows3, Workflow, Play, Pause, OctagonX, RotateCcw, ExternalLink, GitBranch, GitPullRequest,
   Clock, Coins, Pin, Fingerprint, MessagesSquare, CornerDownRight, X, ScrollText, Loader2,
-  FolderOpen, Copy, GitFork, Activity,
+  FolderOpen, Copy, GitFork, Activity, Hand, ChevronDown,
 } from "lucide-react";
 import type { RunDetail } from "../../derive";
 import type { CoalescedTurn } from "../../../log/coalesce";
@@ -44,28 +44,46 @@ import { RunLogs } from "./logs";
 import { RunContext } from "./context";
 import { RunChat } from "./chat";
 import { UsageRows } from "./usage";
-import { ProgressPanel, liveStep } from "./progress";
+import { ProgressPanel, liveStep, steerableTurn } from "./progress";
+import { SOFT_STOP_ESCALATE_MS } from "../../../core/steer";
 import type { LiveGit } from "../../live-git";
 
 type RunTab = "steps" | "context" | "logs" | "chat" | "graph";
-type DetailDto = RunDetail & { cwd_exists?: boolean; editor_configured?: boolean };
+type DetailDto = RunDetail & { cwd_exists?: boolean; editor_configured?: boolean; soft_stop_escalate_ms?: number };
 
 /**
  * Pause / resume / abort. Abort is the one irreversible verb in this app, so it is the one
  * that asks — through an AlertDialog rather than by relabelling itself in place.
+ *
+ * HOW-48: while an agent turn is live on a steerable harness, the PRIMARY action is "Stop at
+ * next tool call" — the soft pause, which lets the agent finish its thought, leave the work
+ * consistent and say where it is. The old Pause (SIGTERM, wherever the agent happens to be)
+ * becomes "Stop now" in a menu, with a line saying how the two differ. A soft stop that has not
+ * taken effect after `escalateMs` (the agent may be inside one long tool call) offers Stop now.
  */
-export function RunControls({ runId, summary, onAction }: { runId: string; summary: RunDetail["summary"]; onAction: () => void }) {
+export function RunControls({ runId, summary, onAction, softStoppable = false, softStop = null, escalateMs = SOFT_STOP_ESCALATE_MS, now = Date.now() }: {
+  runId: string;
+  summary: RunDetail["summary"];
+  onAction: () => void;
+  /** a live turn on a harness with a steer channel (progress.tsx steerableTurn) */
+  softStoppable?: boolean;
+  softStop?: RunDetail["soft_stop"];
+  escalateMs?: number;
+  now?: number;
+}) {
   const [confirmAbort, setConfirmAbort] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
   const [pending, setPending] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const { toast } = useToast();
   const act = async (verb: string) => {
     setPending(verb);
     setError(null);
+    setMenuOpen(false);
     try {
       const r = await fetch(`/api/runs/${runId}/${verb}`, { method: "POST" });
       if (!r.ok) throw new Error(((await r.json().catch(() => null)) as any)?.error ?? `${verb} failed`);
-      toast(`${verb} accepted — the runner is acting on it`);
+      toast(verb === "soft-stop" ? "stop sent — the agent stops at its next tool call" : `${verb} accepted — the runner is acting on it`);
       setTimeout(onAction, 300);
     } catch (e) {
       const why = e instanceof Error ? e.message : String(e);
@@ -80,12 +98,47 @@ export function RunControls({ runId, summary, onAction }: { runId: string; summa
   const active = ["running", "needs-input", "waiting", "failed-recoverable", "queued", "harness-dead"].includes(summary.status);
   if (!active) return null;
   const busy = pending !== null;
+  const soft = summary.status === "running" && softStoppable;
+  const stopping = softStop && (softStop.state === "requested" || softStop.state === "delivered");
+  const overdue = stopping && now - new Date(softStop.requested_at).getTime() >= escalateMs;
   return (
     <span className="run-controls">
-      {resumable
-        ? <Button variant="outline" size="sm" disabled={busy} onClick={() => act("resume")}>{pending === "resume" ? <Loader2 className="animate-spin" /> : <Play />}{pending === "resume" ? "Resuming…" : "Resume"}</Button>
-        : summary.status === "running" && <Button variant="outline" size="sm" disabled={busy} onClick={() => act("pause")}>{pending === "pause" ? <Loader2 className="animate-spin" /> : <Pause />}{pending === "pause" ? "Pausing…" : "Pause"}</Button>}
+      {resumable ? (
+        <Button variant="outline" size="sm" disabled={busy} onClick={() => act("resume")}>{pending === "resume" ? <Loader2 className="animate-spin" /> : <Play />}{pending === "resume" ? "Resuming…" : "Resume"}</Button>
+      ) : soft ? (
+        <>
+          <Button variant="outline" size="sm" className="run-soft-stop" disabled={busy || !!stopping} onClick={() => act("soft-stop")}>
+            {pending === "soft-stop" || stopping ? <Loader2 className="animate-spin" /> : <Hand />}
+            {stopping ? (softStop!.state === "delivered" ? "Agent is stopping…" : "Stopping at next tool call…") : "Stop at next tool call"}
+          </Button>
+          <span className="run-menu-wrap" onKeyDown={(e) => { if (e.key === "Escape") setMenuOpen(false); }}>
+            <Button variant="outline" size="sm" aria-label="more ways to stop" aria-expanded={menuOpen} aria-haspopup="menu" disabled={busy} onClick={() => setMenuOpen((o) => !o)}>
+              <ChevronDown />
+            </Button>
+            {menuOpen && (
+              <div className="run-menu" role="menu" aria-label="stop options">
+                <Button variant="ghost" size="sm" role="menuitem" className="run-menu-item" onClick={() => act("pause")}>
+                  <Pause />Stop now
+                </Button>
+                <p className="run-menu-note">
+                  Stop now interrupts the agent wherever it is — mid-edit or mid-sentence — and the
+                  step starts again from scratch on resume. Stop at next tool call lets it finish its
+                  thought, leave the work consistent and say where it is.
+                </p>
+              </div>
+            )}
+          </span>
+        </>
+      ) : (
+        summary.status === "running" && <Button variant="outline" size="sm" disabled={busy} onClick={() => act("pause")}>{pending === "pause" ? <Loader2 className="animate-spin" /> : <Pause />}{pending === "pause" ? "Pausing…" : "Pause"}</Button>
+      )}
       <Button variant="outline" size="sm" disabled={busy} onClick={() => setConfirmAbort(true)}>{pending === "abort" ? <Loader2 className="animate-spin" /> : <OctagonX />}{pending === "abort" ? "Aborting…" : "Abort"}</Button>
+      {overdue && (
+        <span className="run-escalate" role="status">
+          not stopped after {fmtDur(now - new Date(softStop!.requested_at).getTime())} — it may be in one long tool call.
+          <Button variant="destructive-outline" size="sm" disabled={busy} onClick={() => act("pause")}><Pause />Stop now</Button>
+        </span>
+      )}
       {/* The dialog closes BEFORE the verb is sent, the way every other confirmation in this
           app does (slice.tsx, settings.tsx). A modal dialog makes the rest of the document
           inert and covers it with its ::backdrop, and both explanations of a refusal — the
@@ -390,7 +443,11 @@ export function RunView({ id, graceMs = OPEN_GRACE_MS }: { id: string; graceMs?:
               { value: "graph", label: "Graph", icon: <Workflow /> },
             ]}
           />
-          <RunControls runId={id} summary={summary} onAction={reload} />
+          <RunControls
+            runId={id} summary={summary} onAction={reload} now={now}
+            softStoppable={steerableTurn(detail) !== null} softStop={detail.soft_stop}
+            escalateMs={detail.soft_stop_escalate_ms ?? SOFT_STOP_ESCALATE_MS}
+          />
           <OpenIdeButton runId={id} detail={detail} />
           <RunFolderButton runId={id} />
         </div>
