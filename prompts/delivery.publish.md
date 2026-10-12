@@ -1,6 +1,6 @@
 ---
 id: delivery.publish
-version: 2
+version: 3
 tags: [delivery, pr]
 accepted: 2026-09-13T06:55:56Z
 provenance: reviser proposal v2 (GEPA-method, feedback 2026-09-11-dwn832 delivery.publish@1)
@@ -33,8 +33,12 @@ Enable auto-merge if possible. Respect required checks, approvals and merge-queu
 
 If the associated PR is already merged and the branch contains follow up changes, open a new PR.
 
+If the change is already published as a stack of PRs, each targeting the one below it, push every branch in the stack whose local commits differ from its remote, not only the branch checked out, and keep each PR targeting the branch below it.
+
 Confirm the PR URL from the remote. If publication or enabling auto-merge fails, inspect the current remote state before retrying. Preserve local work and avoid creating duplicate PRs.
 
 This step owns publication and the merge request. Leave implementation files and tracker records unchanged. Later steps handle PR feedback, CI and conflicts. The caller owns any tracker updates.
 
 Return `publication_summary` with the PR URL, confirmed remote state, published commits and merge-request status.
+
+If the change is published as more than one PR, as a stack of PRs each targeting the one below it, `publication_summary` must be an object that lists every PR's URL in `pr_urls`, ordered from the base of the stack to its tip, and names the tip as `primary_pr_url`. Later steps monitor and repair every PR in that list, so a PR missing from it is never watched.

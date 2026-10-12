@@ -1,6 +1,6 @@
 ---
 id: delivery.address_reviews
-version: 1
+version: 2
 tags: [implement-ticket]
 provenance: ported from Orbital implement-ticket
 ---
@@ -27,6 +27,8 @@ Previous delivery review findings:
 {{ context.review_findings | dump }}
 
 Inspect the current PR, its published head, review decisions and unresolved threads. Read the affected code and applicable repository instructions.
+
+If the publication summary lists more than one PR, the change was published as a stack: inspect the review decisions and unresolved threads on every PR in it, and address each one that has feedback. Work through the stack from its base upward, since a correction in a lower branch must be carried up through every branch built on it using the repository’s conventions. Wherever this step says “the PR”, apply it to each PR in the stack.
 
 Address feedback within the work scope and goal. Make the required local changes, verify them and create or update local commits using the repository’s conventions. Preserve unrelated work.
 

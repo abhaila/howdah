@@ -1,6 +1,6 @@
 ---
 id: delivery.resolve_conflicts
-version: 1
+version: 2
 tags: [implement-ticket]
 provenance: ported from Orbital implement-ticket
 ---
@@ -19,6 +19,8 @@ Publication summary:
 {{ context.publication_summary }}
 
 Inspect the current PR, its target branch, published head and prepared worktree. Read applicable repository instructions.
+
+If the publication summary lists more than one PR, the change was published as a stack: inspect every PR in it against its own target branch, and resolve each one that conflicts. Work through the stack from its base upward, since a correction in a lower branch must be carried up through every branch built on it using the repository’s conventions. Wherever this step says “the PR”, apply it to each PR in the stack.
 
 If the PR has merged or closed, report that state without modifying it.
 

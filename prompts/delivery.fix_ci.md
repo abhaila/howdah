@@ -1,6 +1,6 @@
 ---
 id: delivery.fix_ci
-version: 1
+version: 2
 tags: [implement-ticket]
 provenance: ported from Orbital implement-ticket
 ---
@@ -27,6 +27,8 @@ Previous delivery review findings:
 {{ context.review_findings | dump }}
 
 Inspect the current PR, published head and failing checks. Read their logs, affected code and applicable repository instructions. Confirm the failures belong to the current published change.
+
+If the publication summary lists more than one PR, the change was published as a stack: inspect the checks on every PR in it, not only the last, and repair each one that is failing. Work through the stack from its base upward, since a correction in a lower branch must be carried up through every branch built on it using the repository’s conventions. Wherever this step says “the PR”, apply it to each PR in the stack.
 
 Identify the cause of each failure. Use focused local checks where possible and compare against the target branch when needed to distinguish defects in this change from existing failures or external problems.
 
