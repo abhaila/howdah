@@ -30,6 +30,8 @@
  *   HOW-51  implement-ticket: `implementation.criteria` opens the acceptance contract,
  *           local_review is read-only and writes `acceptance`, and delivery.publish
  *           `requiresAcceptance`.
+ *   HOW-53  implement-ticket, implement-slice, improve-codebase: every review node
+ *           (implementation.local_review, delivery.review_repairs) is `readOnly`.
  */
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";

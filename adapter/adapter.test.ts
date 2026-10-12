@@ -477,3 +477,34 @@ describe("cursor adapter (shapes documented, not captured)", () => {
     expect(mapCursorEvent("not an object")).toEqual([]);
   });
 });
+
+/**
+ * HOW-53 — plan mode, captured from claude 2.1.296. It is NOT a sandbox: `git diff` and Read run,
+ * but an Edit (and the ExitPlanMode a plan-mode agent reaches for) arrive as ordinary
+ * `can_use_tool` permission requests — to Howdah. So the executor's refusal of every permission
+ * request on a read-only node is what makes `readOnly` real (engine/executors/claude.ts).
+ */
+describe("claude plan mode (adapter/fixtures/claude-plan-mode-*.jsonl)", () => {
+  const load = (name: string) =>
+    replay(readFileSync(join(import.meta.dir, "fixtures", name)), 64).flatMap((r) => (r.ok ? mapClaudeEvent(r.value) : []));
+
+  test("a reviewer can still run git diff and read files", () => {
+    const events = load("claude-plan-mode-review.jsonl");
+    const calls = events.filter((e) => e.type === "tool_call").map((e) => (e as { name: string }).name);
+    expect(calls.slice(0, 2)).toEqual(["Bash", "Read"]);
+    const diff = events.find((e) => e.type === "tool_result");
+    expect(diff).toMatchObject({ content: expect.stringContaining("1 file changed") });
+  });
+
+  test("ExitPlanMode is a permission request, not a no-op", () => {
+    const asks = load("claude-plan-mode-review.jsonl").filter((e) => e.type === "permission_request");
+    expect(asks.map((e) => (e as { tool_name: string }).tool_name)).toEqual(["ExitPlanMode"]);
+  });
+
+  test("an Edit is a permission request — the CLI does not refuse it itself", () => {
+    const asks = load("claude-plan-mode-edit.jsonl").filter((e) => e.type === "permission_request");
+    expect(asks).toHaveLength(1);
+    expect(asks[0]).toMatchObject({ tool_name: "Edit" });
+    expect((asks[0] as { requires_user_interaction?: boolean }).requires_user_interaction).toBeUndefined();
+  });
+});

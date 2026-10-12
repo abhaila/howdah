@@ -59,7 +59,7 @@ import { killGroup } from "./shell";
 import { diagnosticsSettings } from "../hooks/diagnostics";
 import { ToolWatch, TurnCeiling, stuckReason, turnTimeoutReason, type StuckThresholds } from "./stuck";
 import { isAllowReply } from "./reply";
-import { STOP_GRACE_TOOL_CALLS, STOP_MESSAGE, steerTurnText, stopTurnText } from "../../core/steer";
+import { READ_ONLY_REFUSAL, STOP_GRACE_TOOL_CALLS, STOP_MESSAGE, steerTurnText, stopTurnText } from "../../core/steer";
 import {
   answersToReplyText, askReason, askResultMessage, normalizeAskPayload, parseFreeTextAnswer,
   validateAnswers, type UserQuestion,
@@ -102,13 +102,16 @@ export function claudeExecutor(opts: ClaudeExecutorOpts): Executor {
     if (def.kind !== "agent") throw new Error("claudeExecutor on non-agent node");
     const writeKeys = Object.keys(def.writes ?? {});
     const check = (w: Record<string, unknown>) => checkWrites(w, reads ?? {}); // HOW-51
+    // HOW-53: resolveAgentConfig makes a readOnly node "plan", whatever any override says
+    const permissionMode = agentConfig?.permissionMode ?? opts.permissionMode ?? "auto";
+    const readOnly = permissionMode === "plan";
     const prompt = renderedPrompt ?? ""; // exactly what rendered_hash covers (system-map 0.1)
     const sessionId = randomUUID();
 
     const proc = Bun.spawn(
       [opts.binary ?? "claude", ...claudeArgs({
         sessionId,
-        permissionMode: agentConfig?.permissionMode ?? opts.permissionMode ?? "auto",
+        permissionMode,
         model: agentConfig?.model ?? opts.model,
         maxTurns: agentConfig?.maxTurns,
         // HOW-33: resolved for THIS harness (effortFor) — undefined when inert, never dropped
@@ -383,6 +386,17 @@ export function claudeExecutor(opts: ClaudeExecutorOpts): Executor {
               break;
             }
             case "permission_request": {
+              // HOW-53: a READ-ONLY step never gets to ask. Plan mode routes an Edit (and
+              // ExitPlanMode, which a plan-mode agent reaches for at the end) to this permission
+              // channel rather than refusing it, so refusing here is what makes readOnly real —
+              // an operator's "allow" would let a reviewer change the code it judges. A question
+              // FOR the operator is not a permission and still reaches them.
+              if (readOnly && ev.requires_user_interaction !== true) {
+                proc.stdin.write(buildClaudePermissionResponse(ev.id, { behavior: "deny", message: READ_ONLY_REFUSAL }));
+                proc.stdin.flush();
+                chunk("tool_result", `refused: ${ev.tool_name} — this step is read-only`, { id: ev.tool_use_id, name: ev.tool_name });
+                break;
+              }
               // HOW-48: once the operator has asked for a stop, nothing new is asked of them —
               // the request is refused with the stop itself, as cwc's kill switch does
               if (stop.requested) {

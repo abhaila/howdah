@@ -59,3 +59,15 @@ export const STOP_GRACE_TOOL_CALLS = 2;
  * `softStopEscalateMs` overrides it.
  */
 export const SOFT_STOP_ESCALATE_MS = 2 * 60_000;
+
+/**
+ * HOW-53: what a READ-ONLY step (claude plan mode) is told when it asks to do something plan mode
+ * did not already allow — an Edit, a Write outside the plan file, a mutating command, or
+ * ExitPlanMode. Spiked against claude 2.1.296 (adapter/fixtures/claude-plan-mode-*.jsonl): plan
+ * mode does NOT refuse an Edit itself, it asks the permission-prompt tool — Howdah — so this
+ * refusal IS the read-only guarantee. It is never put to the operator, whose "allow" would let a
+ * reviewer change the code it is judging.
+ */
+export const READ_ONLY_REFUSAL =
+  "This step is read-only: it judges the work and must not change anything, and it stays in plan mode. " +
+  "Do not retry. Record what should change as a finding, and end your turn with your verdict and the outputs object.";

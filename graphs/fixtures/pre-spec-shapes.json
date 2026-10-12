@@ -226,7 +226,8 @@
             "scope": "cleared"
           }
         },
-        "class": "delivery"
+        "class": "delivery",
+        "readOnly": true
       },
       "delivery.revise_repairs": {
         "kind": "agent",
@@ -297,7 +298,8 @@
             "scope": "cleared"
           }
         },
-        "class": "implementation"
+        "class": "implementation",
+        "readOnly": true
       },
       "map.drift": {
         "kind": "command",
@@ -802,7 +804,8 @@
             "scope": "cleared"
           }
         },
-        "class": "delivery"
+        "class": "delivery",
+        "readOnly": true
       },
       "delivery.revise_repairs": {
         "kind": "agent",
@@ -1272,7 +1275,8 @@
             "scope": "cleared"
           }
         },
-        "class": "delivery"
+        "class": "delivery",
+        "readOnly": true
       },
       "delivery.revise_repairs": {
         "kind": "agent",
@@ -1368,7 +1372,8 @@
             "scope": "cleared"
           }
         },
-        "class": "implementation"
+        "class": "implementation",
+        "readOnly": true
       },
       "implementation.plan": {
         "kind": "agent",

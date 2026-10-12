@@ -14,6 +14,7 @@
  * FAKE_CLAUDE_QUESTION asks the OPERATOR a question (HOW-25) — see the block below.
  * FAKE_CLAUDE_TODO=1 writes a TodoWrite plan twice, the second over 400 chars (HOW-49).
  * FAKE_CLAUDE_STEER=1 holds a tool call open and delivers a steer after it (HOW-47).
+ * FAKE_CLAUDE_TRY_EDIT / FAKE_CLAUDE_TRY_EXIT_PLAN ask permission the way plan mode does (HOW-53).
  * FAKE_CLAUDE_CONTEXT (HOW-14), shapes from claude 2.1.283's SDK types, not a captured turn:
  *   compact  emit a `compact_boundary` mid-turn, then finish normally
  *   exceed   end the first turn with `result { is_error: true, result: "Prompt is too long" }`
@@ -58,6 +59,9 @@ async function nextLine(): Promise<string> {
     await new Promise<void>((r) => (wake = r));
   }
 }
+
+// FAKE_CAPTURE_ARGV=<file>: the argv this binary was spawned with, one JSON array per spawn
+if (process.env.FAKE_CAPTURE_ARGV) appendFileSync(process.env.FAKE_CAPTURE_ARGV, JSON.stringify(process.argv.slice(2)) + "\n");
 
 const userTurn = JSON.parse(await nextLine()) as { message: { content: Array<{ text: string }> } };
 const promptText = userTurn.message.content[0]?.text ?? "";
@@ -302,6 +306,31 @@ if (process.env.FAKE_CLAUDE_STEER === "1") {
     } else out({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: ` Steered: ${steer.split("\n")[1] ?? steer}.` } } });
   }
 }
+
+/**
+ * HOW-53: FAKE_CLAUDE_TRY_EDIT=1 — the agent tries to change a file, the way plan mode lets it:
+ * NOT refused by the CLI, but routed to the permission-prompt tool as a `can_use_tool` for Edit
+ * (adapter/fixtures/claude-plan-mode-edit.jsonl). Only an `allow` writes `edited.txt` in the cwd,
+ * so a test can prove the change never happened. FAKE_CLAUDE_TRY_EXIT_PLAN=1 then asks for
+ * ExitPlanMode, as a plan-mode agent does at the end (claude-plan-mode-review.jsonl).
+ */
+async function askPermission(id: string, toolName: string, input: Record<string, unknown>, onAllow: () => void) {
+  const toolUseId = `toolu_fake_${id}`;
+  out({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: toolUseId, name: toolName, input }] } });
+  out({ type: "control_request", request_id: id, request: { subtype: "can_use_tool", tool_name: toolName, display_name: toolName, input, tool_use_id: toolUseId } });
+  for (;;) {
+    const line = JSON.parse(await nextLine()) as any;
+    if (line.type !== "control_response" || line.response?.request_id !== id) continue;
+    const decision = line.response?.response;
+    if (decision?.behavior === "allow") onAllow();
+    out({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: toolUseId, content: decision?.behavior === "allow" ? "done" : String(decision?.message ?? "denied"), is_error: decision?.behavior !== "allow" }] } });
+    return;
+  }
+}
+if (process.env.FAKE_CLAUDE_TRY_EDIT === "1")
+  await askPermission("req-edit", "Edit", { file_path: join(process.cwd(), "edited.txt"), old_string: "a", new_string: "b" }, () => writeFileSync(join(process.cwd(), "edited.txt"), "edited"));
+if (process.env.FAKE_CLAUDE_TRY_EXIT_PLAN === "1")
+  await askPermission("req-exit", "ExitPlanMode", { plan: "# Done\nreviewed" }, () => {});
 
 if (process.env.FAKE_CLAUDE_RATELIMIT === "1")
   out({ type: "rate_limit_event", rate_limit: { status: "allowed", remaining: 0.31, resetsAt: "2026-09-13T18:00:00Z" } });

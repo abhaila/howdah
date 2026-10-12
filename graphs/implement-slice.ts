@@ -160,6 +160,8 @@ export const implementSlice = defineGraph<ImplementSliceCtx>({
       prompt: "slice.local_review",
       reads: ["goal", "work", "slice.ghosts", "implementation_summary", "slice.drift", "verify.result"],
       writes: { review_verdict: cleared, review_findings: cleared },
+      // HOW-53: the evaluator judges; it cannot edit, so it cannot pass its own fix
+      readOnly: true,
       class: "implementation",
     },
 

@@ -131,6 +131,8 @@ function plainDelivery(): DeliveryParts<DeliveryCtx> {
         prompt: "delivery.review_repairs",
         reads: ["goal", "work", "publication_summary", "repair_summary"],
         writes: { review_verdict: cleared, review_findings: cleared },
+        // HOW-53: a reviewer that can edit can "fix" what it was meant to judge and pass its own work
+        readOnly: true,
         class: "delivery",
       },
       "delivery.revise_repairs": {
@@ -253,6 +255,7 @@ function verifiedDelivery(): DeliveryParts<VerifiedDeliveryCtx> {
       prompt: "slice.review_repairs",
       reads: ["goal", "work", "publication_summary", "repair_summary", ...design],
       writes: { review_verdict: cleared, review_findings: cleared },
+      readOnly: true, // HOW-53
       class: "delivery",
     },
     "delivery.revise_repairs": {
