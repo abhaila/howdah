@@ -3,7 +3,7 @@ import { chmodSync, mkdtempSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { execSync } from "node:child_process";
-import { worktreeExecutor, commandExecutor, effectiveCwd, readWorktreeRecord, derivePrState, ghPrProbe } from "./worktree";
+import { worktreeExecutor, commandExecutor, effectiveCwd, readWorktreeRecord, derivePrState, ghPrProbe, stackPrState, publicationPrRefs, type PrState } from "./worktree";
 import { EventLog } from "../../log/write";
 import type { ExecArgs } from "../run";
 
@@ -149,6 +149,74 @@ describe("probe:pr", () => {
       reads: { publication_summary: { pr_url: "https://github.com/areeb/x/pull/7" } },
     }));
     expect(observedRef).toBe("https://github.com/areeb/x/pull/7");
+  });
+
+  test("a stacked publish probes every PR and routes on the most urgent, lowest first", async () => {
+    const repoDir = repo();
+    const runDir = mkdtempSync(join(tmpdir(), "howdah-pr-"));
+    const log = new EventLog(join(runDir, "run.jsonl"));
+    const states: Record<string, PrState> = {
+      "https://github.com/areeb/x/pull/1": "OPEN",
+      "https://github.com/areeb/x/pull/2": "CI_FAILED",
+      "https://github.com/areeb/x/pull/3": "CI_FAILED",
+    };
+    const probed: string[] = [];
+    const exec = commandExecutor({
+      prProbe: (_cwd, ref) => {
+        probed.push(ref);
+        const state = states[ref];
+        return state ? { state, url: ref } : null;
+      },
+    });
+    const r = await exec(args({
+      def: { ...prDef, reads: ["publication_summary"] },
+      log,
+      cwd: repoDir,
+      reads: {
+        publication_summary: {
+          pr_urls: Object.keys(states),
+          primary_pr_url: "https://github.com/areeb/x/pull/3",
+        },
+      },
+    }));
+    expect(probed).toEqual(Object.keys(states));
+    expect(r).toEqual({ status: "succeeded", writes: { "pr.state": "CI_FAILED" } });
+    const rec: any = log.read().find((e) => e.type === "reconciled");
+    expect(rec.forge).toEqual({ kind: "pr", state: "CI_FAILED", url: "https://github.com/areeb/x/pull/2" });
+  });
+
+  test("a stack PR that does not exist parks naming it", async () => {
+    const repoDir = repo();
+    const runDir = mkdtempSync(join(tmpdir(), "howdah-pr-"));
+    const log = new EventLog(join(runDir, "run.jsonl"));
+    const exec = commandExecutor({
+      prProbe: (_cwd, ref) => (ref.endsWith("/1") ? { state: "OPEN", url: ref } : null),
+    });
+    await expect(exec(args({
+      def: { ...prDef, reads: ["publication_summary"] },
+      log,
+      cwd: repoDir,
+      reads: { publication_summary: { pr_urls: ["https://github.com/areeb/x/pull/1", "https://github.com/areeb/x/pull/2"] } },
+    }))).rejects.toThrow('no PR exists for "https://github.com/areeb/x/pull/2"');
+  });
+
+  test("stackPrState: MERGED only when all land; a closed PR beside an open one keeps polling", () => {
+    expect(stackPrState(["MERGED", "MERGED"])).toEqual({ state: "MERGED", decidedBy: 1 });
+    expect(stackPrState(["MERGED", "OPEN"])).toEqual({ state: "OPEN", decidedBy: 1 });
+    expect(stackPrState(["CLOSED", "OPEN"])).toEqual({ state: "OPEN", decidedBy: 1 });
+    expect(stackPrState(["MERGED", "CLOSED"])).toEqual({ state: "CLOSED", decidedBy: 1 });
+    expect(stackPrState(["CI_FAILED", "CHANGES_REQUIRED", "CONFLICTS"])).toEqual({ state: "CONFLICTS", decidedBy: 2 });
+    expect(stackPrState(["OPEN", "CHANGES_REQUIRED", "CI_FAILED"])).toEqual({ state: "CHANGES_REQUIRED", decidedBy: 1 });
+  });
+
+  test("publicationPrRefs: list first, primary deduped, prose keeps only its first link", () => {
+    expect(publicationPrRefs({
+      pr_urls: ["https://github.com/a/b/pull/1", "https://github.com/a/b/pull/2"],
+      primary_pr_url: "https://github.com/a/b/pull/2",
+    })).toEqual(["https://github.com/a/b/pull/1", "https://github.com/a/b/pull/2"]);
+    expect(publicationPrRefs({ pr_url: "https://github.com/a/b/pull/7" })).toEqual(["https://github.com/a/b/pull/7"]);
+    expect(publicationPrRefs("opened https://github.com/a/b/pull/3 after https://github.com/c/d/pull/9")).toEqual(["https://github.com/a/b/pull/3"]);
+    expect(publicationPrRefs({ note: "nothing" })).toEqual([]);
   });
 
   test("required checks decide CI_FAILED, not optional failures in the rollup", () => {

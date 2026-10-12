@@ -115,19 +115,55 @@ function isFailedCheck(check: { conclusion?: string | null; state?: string | nul
   return ["FAILURE", "FAILED", "ERROR", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED"].includes(status);
 }
 
-function publicationPrRef(publicationSummary: unknown): string | null {
-  if (!publicationSummary) return null;
+/**
+ * Every PR a publish reported, base of the stack first. A stacked publish lists them all
+ * (`pr_urls`) and names the tip as its primary; probe:pr watches EVERY one, because a ticket
+ * shipped as a stack is only as healthy as its worst PR and only done when all of them land.
+ * Empty means the summary names no PR and the run's branch is the fallback.
+ */
+export function publicationPrRefs(publicationSummary: unknown): string[] {
+  if (!publicationSummary) return [];
   if (typeof publicationSummary === "string") {
+    // prose may cite someone else's PR, so only its first link is taken to be the publish's own
     const match = publicationSummary.match(/https:\/\/github\.com\/[^\s)]+\/pull\/\d+/);
-    return match?.[0] ?? null;
+    return match ? [match[0]] : [];
   }
-  if (typeof publicationSummary !== "object") return null;
+  if (typeof publicationSummary !== "object") return [];
   const obj = publicationSummary as Record<string, unknown>;
-  for (const key of ["pr_url", "prUrl", "url", "pull_request", "pullRequest"]) {
+  const isPr = (v: unknown): v is string => typeof v === "string" && v.includes("/pull/");
+  const refs: string[] = [];
+  for (const key of ["pr_urls", "prUrls"]) {
     const value = obj[key];
-    if (typeof value === "string" && value.includes("/pull/")) return value;
+    if (Array.isArray(value)) refs.push(...value.filter(isPr));
   }
-  return null;
+  for (const key of ["primary_pr_url", "primaryPrUrl", "pr_url", "prUrl", "url", "pull_request", "pullRequest"]) {
+    const value = obj[key];
+    if (isPr(value)) refs.push(value);
+  }
+  return [...new Set(refs)];
+}
+
+/** most urgent first — the same precedence derivePrState gives one PR */
+const REPAIR_ORDER: PrState[] = ["CONFLICTS", "CHANGES_REQUIRED", "CI_FAILED"];
+
+/**
+ * Fold a stack's PR states into the one `pr.state` delivery routes on. MERGED only when every
+ * PR has landed. Otherwise the most urgent repair any PR needs wins, the LOWEST such PR in
+ * the stack first, since a fix there carries up through every branch built on it. A PR that
+ * closed while others are still open does not abandon the ticket (a stack PR is closed and
+ * reopened, or superseded, mid-flight): the run keeps polling, and CLOSED is reported only
+ * once nothing is open and not everything merged. Returns the index of the PR that decided.
+ */
+export function stackPrState(states: readonly PrState[]): { state: PrState; decidedBy: number } {
+  if (states.length === 0) throw new Error("stackPrState: no PRs");
+  if (states.every((s) => s === "MERGED")) return { state: "MERGED", decidedBy: states.length - 1 };
+  for (const want of REPAIR_ORDER) {
+    const i = states.indexOf(want);
+    if (i !== -1) return { state: want, decidedBy: i };
+  }
+  const open = states.indexOf("OPEN");
+  if (open !== -1) return { state: "OPEN", decidedBy: open };
+  return { state: "CLOSED", decidedBy: states.indexOf("CLOSED") };
 }
 
 function requiredChecksFailed(cwd: string, prRef: string): boolean | null {
@@ -192,18 +228,27 @@ export function commandExecutor(opts: CommandExecutorOpts = {}): Executor {
       const record = readWorktreeRecord(dirname(log.path));
       const branch = record?.branch ?? probeGit(workDir).branch;
       if (!branch) throw new Error("probe:pr: no branch to probe");
-      const prRef = publicationPrRef(reads.publication_summary) ?? branch;
-      chunk("tool_call", `gh pr view ${prRef}`);
-      const pr = (opts.prProbe ?? ghPrProbe)(record?.repo ?? workDir, prRef);
-      if (pr === null) throw new Error(`no PR exists for "${prRef}" — was publish skipped?`);
-      chunk("tool_result", `${pr.state} ${pr.url}`);
+      const refs = publicationPrRefs(reads.publication_summary);
+      const prRefs = refs.length > 0 ? refs : [branch];
+      const probe = opts.prProbe ?? ghPrProbe;
+      const prs = prRefs.map((prRef) => {
+        chunk("tool_call", `gh pr view ${prRef}`);
+        const pr = probe(record?.repo ?? workDir, prRef);
+        if (pr === null) throw new Error(`no PR exists for "${prRef}" — was publish skipped?`);
+        chunk("tool_result", `${pr.state} ${pr.url}`);
+        return pr;
+      });
+      const { state, decidedBy } = stackPrState(prs.map((p) => p.state));
+      const decider = prs[decidedBy];
+      if (decider === undefined) throw new Error(`probe:pr: no PR at stack index ${decidedBy}`);
+      if (prs.length > 1) chunk("text", `stack of ${prs.length} PRs → ${state} (decided by ${decider.url})`);
       log.append({
         type: "reconciled", node: nodeId,
         git: probeGit(workDir),
-        forge: { kind: "pr", state: pr.state, url: pr.url },
+        forge: { kind: "pr", state, url: decider.url },
         disagreements: [],
       });
-      return { status: "succeeded", writes: declared.includes("pr.state") ? { "pr.state": pr.state } : {} };
+      return { status: "succeeded", writes: declared.includes("pr.state") ? { "pr.state": state } : {} };
     }
 
     // general command: bash -c, stream stdout, facts from the FINAL JSON line
