@@ -6,6 +6,27 @@
  * Mappers are pure: wire object in, zero-or-more AgentEvents out. Process spawning,
  * stdio plumbing, and reply writing live with the engine; adapters only translate.
  */
+/**
+ * HOW-34: one turn's usage, as comparable as the harness lets it be. Every field is optional
+ * and ABSENT MEANS UNKNOWN, never zero (log/usage.ts sums accordingly).
+ *
+ *   input_tokens                 input NOT served from or written to the prompt cache
+ *   cache_read_input_tokens      input read from the cache (claude; codex's cachedInputTokens)
+ *   cache_creation_input_tokens  input written to the cache (claude only)
+ *   cost_usd                     this turn's price, or null when the harness reports none
+ *   cost_source                  "reported" by the harness, or "unpriced" — no price table is
+ *                                kept, so nothing here is ever "estimated" today; the value is
+ *                                reserved so an estimate can never be mistaken for a report
+ */
+export interface TurnUsage {
+  input_tokens?: number;
+  cache_read_input_tokens?: number;
+  cache_creation_input_tokens?: number;
+  output_tokens?: number;
+  cost_usd?: number | null;
+  cost_source?: "reported" | "unpriced" | "estimated";
+}
+
 export type AgentEvent =
   | { type: "session_started"; session_id: string }
   | { type: "text_delta"; text: string }
@@ -32,7 +53,12 @@ export type AgentEvent =
     }
   | {
       type: "turn_end";
-      usage?: { input_tokens?: number; output_tokens?: number; cost_usd?: number };
+      /**
+       * claude: `cost_usd` is the CLI's `total_cost_usd`, which is SESSION-CUMULATIVE (pinned by
+       * adapter/fixtures/claude-turn-cache.jsonl: 0.0041 then 0.0087 over two turns) while the
+       * token figures are per turn. The executor turns it into this turn's share.
+       */
+      usage?: TurnUsage;
       /** harness-reported error for the turn, if any */
       error?: string;
       /** the final assistant text — where the outputs contract is parsed from */

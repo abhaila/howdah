@@ -75,6 +75,14 @@ export interface ClaudeExecutorOpts {
   viewerBase?: string;
 }
 
+/**
+ * HOW-34: this turn's share of a session-cumulative cost. If a CLI ever reports a total
+ * SMALLER than the last one, it is not cumulative after all, and the report is the turn's own.
+ */
+export function turnShare(cumulative: number, before: number): number {
+  return cumulative >= before ? Math.round((cumulative - before) * 1e9) / 1e9 : cumulative;
+}
+
 export function claudeExecutor(opts: ClaudeExecutorOpts): Executor {
   return async ({ nodeId, def, visit, runId, cwd, log, renderedPrompt, agentConfig }) => {
     if (def.kind !== "agent") throw new Error("claudeExecutor on non-agent node");
@@ -108,8 +116,12 @@ export function claudeExecutor(opts: ClaudeExecutorOpts): Executor {
     let resultText: string | undefined;
     let turnError: string | undefined;
     let contextExceeded = false; // HOW-14: the adapter's verdict, never re-read from text here
+    // HOW-34: the outputs-repair follow-up is turn 2, so its chunks and usage are its own
+    let turn = 1;
+    // HOW-34: claude's total_cost_usd is session-cumulative; each turn records its own share
+    let costSoFar = 0;
     const chunk = (kind: "text" | "thinking" | "tool_call" | "tool_result", content: string, tool?: { id?: string; name?: string }) =>
-      log.append({ type: "chunk", node: nodeId, visit, turn: 1, index: index++, kind, content, tool_id: tool?.id, tool_name: tool?.name });
+      log.append({ type: "chunk", node: nodeId, visit, turn, index: index++, kind, content, tool_id: tool?.id, tool_name: tool?.name });
 
     // HOW-25: the harness process can die while a human is mid-thought. The poll loop below
     // used to watch only the log, so a dead CLI left it spinning for ever and the run showed
@@ -234,13 +246,18 @@ export function claudeExecutor(opts: ClaudeExecutorOpts): Executor {
             case "rate_limit":
               log.append({ type: "allowance", harness: "claude", state: ev.state, remaining: ev.remaining, resets_at: ev.resets_at, raw: ev.raw });
               break;
-            case "turn_end":
-              log.append({ type: "turn-finalized", node: nodeId, visit, turn: 1, usage: ev.usage });
+            case "turn_end": {
+              const usage = ev.usage && typeof ev.usage.cost_usd === "number"
+                ? { ...ev.usage, cost_usd: turnShare(ev.usage.cost_usd, costSoFar) }
+                : ev.usage;
+              if (typeof ev.usage?.cost_usd === "number") costSoFar = ev.usage.cost_usd;
+              log.append({ type: "turn-finalized", node: nodeId, visit, turn, usage });
               resultText = ev.result_text ?? accumulated;
               turnError = ev.error;
               if (ev.context_exceeded) contextExceeded = true;
               turnEnded = true;
               break;
+            }
             case "error":
               turnError = ev.message;
               if (ev.context_exceeded) contextExceeded = true;
@@ -261,6 +278,7 @@ export function claudeExecutor(opts: ClaudeExecutorOpts): Executor {
           resultText = undefined;
           accumulated = "";
           chunk("text", "\n[outputs object missing — asking for it]");
+          turn = 2;
           proc.stdin.write(buildClaudeUserTurn(buildRepairInstruction(writeKeys)));
           proc.stdin.flush();
           continue;

@@ -20,7 +20,7 @@
  *   - an `item/started` of type `contextCompaction` (and the deprecated `thread/compacted`)
  *     is codex summarising the thread → `context_compacted`.
  */
-import type { AgentEvent } from "./events";
+import type { AgentEvent, TurnUsage } from "./events";
 
 /** HOW-14: codex's structured verdict that a turn error was the context window filling */
 function isContextWindowExceeded(err: unknown): boolean {
@@ -28,6 +28,26 @@ function isContextWindowExceeded(err: unknown): boolean {
   // the enum is a bare string; a variant that grows a payload serialises as { variant: {...} }
   return info === "contextWindowExceeded" || (typeof info === "object" && info !== null && "contextWindowExceeded" in info);
 }
+
+/**
+ * HOW-34: codex's token figures in the shared TurnUsage shape. Its `inputTokens` INCLUDES the
+ * cached part (`cachedInputTokens`), where claude's `input_tokens` excludes it, so the cached
+ * share is moved across to make the two comparable. Codex reports no price: `cost_usd` is null
+ * and says so, never 0.
+ */
+export function codexUsage(u: Record<string, any>): TurnUsage {
+  const input = num(u.inputTokens ?? u.input_tokens);
+  const cached = num(u.cachedInputTokens ?? u.cached_input_tokens);
+  return {
+    input_tokens: input !== undefined && cached !== undefined ? Math.max(0, input - cached) : input,
+    ...(cached !== undefined ? { cache_read_input_tokens: cached } : {}),
+    output_tokens: num(u.outputTokens ?? u.output_tokens),
+    cost_usd: null,
+    cost_source: "unpriced",
+  };
+}
+
+const num = (v: unknown): number | undefined => (typeof v === "number" ? v : undefined);
 
 export function mapCodexEvent(raw: unknown): AgentEvent[] {
   const e = raw as Record<string, any>;
@@ -81,9 +101,7 @@ export function mapCodexEvent(raw: unknown): AgentEvent[] {
       const failed = turn?.status === "failed";
       return [{
         type: "turn_end",
-        usage: usage
-          ? { input_tokens: usage.input_tokens ?? usage.inputTokens, output_tokens: usage.output_tokens ?? usage.outputTokens }
-          : undefined,
+        usage: usage ? codexUsage(usage) : undefined,
         ...(failed ? { error: String(turn?.error?.message ?? "codex turn failed") } : {}),
         ...(failed && isContextWindowExceeded(turn?.error) ? { context_exceeded: true as const } : {}),
       }];

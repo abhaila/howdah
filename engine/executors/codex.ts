@@ -25,7 +25,8 @@ import { writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { Executor } from "../run";
 import { JsonlChunkParser } from "../../adapter/parse";
-import { mapCodexEvent, buildCodexApprovalResponse } from "../../adapter/codex";
+import { mapCodexEvent, buildCodexApprovalResponse, codexUsage } from "../../adapter/codex";
+import type { TurnUsage } from "../../adapter/events";
 import { buildRepairInstruction, parseOutputs } from "./outputs";
 import { classifyHarnessExit, compactionNote, contextExhaustedFailure } from "./harness-failure";
 import { AttentionCenter, osNotifier, type Notifier } from "../attention";
@@ -53,6 +54,23 @@ export interface CodexExecutorOpts {
 export function codexSandbox(permissionMode: string | undefined, configured?: string): string {
   if (permissionMode === "plan") return "read-only";
   return configured ?? "danger-full-access";
+}
+
+/**
+ * HOW-34: one turn's usage from two thread-total snapshots. A figure either snapshot lacks
+ * stays unknown; the price is always null (codex reports none).
+ */
+export function usageDelta(now: TurnUsage | undefined, before: TurnUsage | undefined): TurnUsage | undefined {
+  if (!now) return undefined;
+  if (!before) return now;
+  const minus = (a?: number, b?: number) => (a === undefined ? undefined : b === undefined ? a : Math.max(0, a - b));
+  return {
+    input_tokens: minus(now.input_tokens, before.input_tokens),
+    ...(now.cache_read_input_tokens !== undefined ? { cache_read_input_tokens: minus(now.cache_read_input_tokens, before.cache_read_input_tokens) } : {}),
+    output_tokens: minus(now.output_tokens, before.output_tokens),
+    cost_usd: null,
+    cost_source: "unpriced",
+  };
 }
 
 export function codexExecutor(opts: CodexExecutorOpts): Executor {
@@ -86,7 +104,11 @@ export function codexExecutor(opts: CodexExecutorOpts): Executor {
     let accumulated = "";
     let finalMessage: string | undefined;
     let turnDone: () => void = () => {}; // reassigned when the turn begins
-    let usage: { input_tokens?: number; output_tokens?: number } | undefined;
+    /** HOW-34: codex reports THREAD totals; each turn records the delta from the last one */
+    let totals: TurnUsage | undefined;
+    let totalsBefore: TurnUsage | undefined;
+    const turnUsages: Array<TurnUsage | undefined> = [];
+    let turn = 0; // HOW-34: 1 for the attempt's turn, 2 for the outputs repair
     /**
      * Two different things, deliberately NOT one variable (they were, and it made the repair
      * guard below read as a missing check):
@@ -110,7 +132,7 @@ export function codexExecutor(opts: CodexExecutorOpts): Executor {
      */
     let selfExit: number | null = null;
     const chunk = (kind: "text" | "thinking" | "tool_call" | "tool_result", content: string, tool?: { id?: string; name?: string }) =>
-      log.append({ type: "chunk", node: nodeId, visit, turn: 1, index: index++, kind, content, tool_id: tool?.id, tool_name: tool?.name });
+      log.append({ type: "chunk", node: nodeId, visit, turn: Math.max(turn, 1), index: index++, kind, content, tool_id: tool?.id, tool_name: tool?.name });
 
     const answerApproval = async (rpcRequestId: string | number, toolName: string, input: unknown) => {
       const center = new AttentionCenter(opts.attentionDir, opts.notifiers ?? [osNotifier], { viewerBase: opts.viewerBase });
@@ -153,7 +175,7 @@ export function codexExecutor(opts: CodexExecutorOpts): Executor {
             finalMessage = String(raw.params.item.text ?? "");
           if (raw.method === "thread/tokenUsage/updated") {
             const t = raw.params?.tokenUsage?.total;
-            if (t) usage = { input_tokens: t.inputTokens ?? t.input_tokens, output_tokens: t.outputTokens ?? t.output_tokens };
+            if (t) totals = codexUsage(t);
           }
           // turn/completed is handled after mapping, where turn_end says whether it FAILED
 
@@ -211,6 +233,7 @@ export function codexExecutor(opts: CodexExecutorOpts): Executor {
       if (!threadId) throw new Error(`thread/start gave no threadId: ${JSON.stringify(thread).slice(0, 200)}`);
 
       const runTurn = async (text: string): Promise<void> => {
+        turn++;
         const done = new Promise<void>((r) => (turnDone = r));
         await request("turn/start", {
           threadId,
@@ -218,6 +241,8 @@ export function codexExecutor(opts: CodexExecutorOpts): Executor {
           ...((agentConfig?.effort ?? opts.effort) ? { effort: agentConfig?.effort ?? opts.effort } : {}),
         });
         await done;
+        turnUsages[turn - 1] = usageDelta(totals, totalsBefore);
+        totalsBefore = totals;
       };
 
       await runTurn(prompt);
@@ -244,7 +269,10 @@ export function codexExecutor(opts: CodexExecutorOpts): Executor {
         writeFileSync(join(dirname(log.path), `codex-${nodeId.replace(/[^\w.-]/g, "_")}-v${visit}.stderr.log`), stderrChunks.join(""));
     }
 
-    log.append({ type: "turn-finalized", node: nodeId, visit, turn: 1, usage });
+    // one turn-finalized per turn started (at least one: a thread that died before its first
+    // turn still finalizes, with whatever codex had reported — or nothing, which reads unknown)
+    for (let t = 1; t <= Math.max(turn, 1); t++)
+      log.append({ type: "turn-finalized", node: nodeId, visit, turn: t, usage: turnUsages[t - 1] ?? (t === Math.max(turn, 1) ? usageDelta(totals, totalsBefore) : undefined) });
     // an app-server that died without ever answering us did not start: name the cause
     // (usually "not logged in") rather than reporting a stream that ended
     const startup = classifyHarnessExit({

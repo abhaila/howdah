@@ -19,6 +19,7 @@
 import type { AskAnswer } from "../core/ask";
 import type { PromptId } from "../core/prompt-ids";
 import type { Harness } from "../core/graph";
+import type { TurnUsage } from "../adapter/events";
 import type { DriftItem, DriftOutcome } from "../map/drift";
 
 /** fields the writer stamps on every event */
@@ -171,8 +172,10 @@ export type RunEvent =
       type: "turn-finalized";
       node: string;
       visit: number;
+      /** HOW-34: 1 for the attempt's turn, 2 for the outputs-repair follow-up on the same session */
       turn: number;
-      usage?: { input_tokens?: number; output_tokens?: number; cost_usd?: number };
+      /** HOW-34: absent fields are UNKNOWN (pre-HOW-34 events have no cache figures) — log/usage.ts */
+      usage?: TurnUsage;
     }
   | {
       type: "prompt-outcome";

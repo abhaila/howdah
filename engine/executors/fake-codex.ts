@@ -77,6 +77,9 @@ for await (const chunk of Bun.stdin.stream()) {
           : `All done.\n{"outputs": ${JSON.stringify(outputs)}}`;
         out({ jsonrpc: "2.0", method: "item/agentMessage/delta", params: { delta: text } });
         out({ jsonrpc: "2.0", method: "item/completed", params: { item: { type: "agentMessage", text } } });
+        // HOW-34: codex reports THREAD totals (cachedInputTokens included in inputTokens), so a
+        // repair turn's figures are the running total — the executor records the delta
+        out({ jsonrpc: "2.0", method: "thread/tokenUsage/updated", params: { threadId: "fake-thread-1", tokenUsage: { total: { inputTokens: 500 * turns, cachedInputTokens: 300 * turns, outputTokens: 40 * turns } } } });
         out({ jsonrpc: "2.0", method: "turn/completed", params: { turn: { id: turnId, status: "completed" } } });
         break;
       }

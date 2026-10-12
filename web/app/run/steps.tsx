@@ -23,6 +23,7 @@ import { StandingAsk } from "./ask";
 import { StepActivity } from "./activity";
 import { PromptAndContext } from "./prompt-context";
 import { OutputDocs, stepOutputs } from "./document";
+import { UsageRows } from "./usage";
 
 /** Status is a SHAPE first (DESIGN.md): the glyph alone must carry the state. */
 export function StepGlyph({ status }: { status: "running" | "succeeded" | "failed" | "needs-input" }) {
@@ -282,9 +283,7 @@ export function StepDetail({ runId, row, detail, ask, now, onResolved }: {
             </>
           )}
           <h2 className="rh">Usage</h2>
-          <div className="kv"><span className="k">input</span><span className="v">{detail.usage.input_tokens.toLocaleString()}</span></div>
-          <div className="kv"><span className="k">output</span><span className="v">{detail.usage.output_tokens.toLocaleString()}</span></div>
-          <div className="kv"><span className="k">cost</span><span className="v">${detail.usage.cost_usd.toFixed(4)}</span></div>
+          <UsageRows usage={detail.usage} valueClass="v" />
           {detail.allowance.map((a) => (
             <div key={a.harness} className="kv">
               <span className="k">{a.harness}</span>
@@ -330,6 +329,8 @@ export function StepDetail({ runId, row, detail, ask, now, onResolved }: {
                   {!finished && <div className="pd-note">no outcome recorded for {key} yet</div>}
                   {published && <h2 className="rh">Published</h2>}
                   {published && <OutputDocs outputs={published} />}
+                  {row.usage && <h2 className="rh">Usage{row.usage.harness ? ` · ${row.usage.harness}` : ""}</h2>}
+                  {row.usage && <UsageRows usage={row.usage} valueClass="v" />}
                 </>
               );
             })()}

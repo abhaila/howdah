@@ -10,6 +10,7 @@
  * late follow-up writes (a PR merged days later) simply layer more fields onto the same
  * hash; the LAST write per field wins.
  */
+import type { TurnUsage } from "../adapter/events";
 import type { ChunkKind, LoggedEvent, RunEvent } from "./events";
 
 export interface TurnPart {
@@ -26,7 +27,7 @@ export interface CoalescedTurn {
   /** contiguous same-kind text chunks merged; tool calls kept in stream order */
   parts: TurnPart[];
   finalized: boolean;
-  usage?: { input_tokens?: number; output_tokens?: number; cost_usd?: number };
+  usage?: TurnUsage;
 }
 
 type ChunkEvent = Extract<RunEvent, { type: "chunk" }>;

@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { formatMetrics, metricsReport, readRunMetrics, runMetrics } from "./metrics";
 import type { LoggedEvent, RunEvent } from "../log/events";
 import { emptyCounts } from "../map/drift";
+import { emptyRollup } from "../log/usage";
 
 const T0 = Date.parse("2026-09-19T10:00:00Z");
 const at = (min: number) => new Date(T0 + min * 60_000).toISOString();
@@ -28,6 +29,12 @@ const drift = (missing: number): RunEvent => ({
 });
 const nodeStarted = (node: string, visit = 1): RunEvent => ({ type: "node-started", node, visit, attempt_id: `${node}#${visit}` });
 const reject = (to = "implementation.implement"): RunEvent => ({ type: "edge-taken", from: "implementation.local_review", to, label: "review_verdict == 'reject'" });
+const turn = (node: string, cost: number | null, visit = 1): RunEvent => ({
+  type: "turn-finalized", node, visit, turn: 1,
+  usage: cost === null
+    ? { input_tokens: 10, output_tokens: 5, cost_usd: null, cost_source: "unpriced" }
+    : { input_tokens: 10, output_tokens: 5, cost_usd: cost, cost_source: "reported" },
+});
 const pass: RunEvent = { type: "edge-taken", from: "implementation.local_review", to: "delivery.publish", label: "review_verdict == 'pass'" };
 
 // a slice run: v1 → feedback after 2m → v2 → approved after 1m → one reject → publish with drift → merged
@@ -39,6 +46,7 @@ const SLICE_OK = log([
   [4, proposed(5)],
   [5, { type: "slice-approved", proposal_id: 5, proposal_hash: "h5", manifest_hash: "m" }],
   [6, nodeStarted("implementation.implement")],
+  [6, turn("implementation.implement", 0.25)],
   [7, drift(2)],
   [8, reject()],
   [9, nodeStarted("implementation.implement", 2)],
@@ -62,6 +70,8 @@ const SLICE_ABORTED_EARLY = log([[0, started("implement-slice")], [1, { type: "r
 // the baseline: two reject loops (local_review → plan_review), published, no drift check
 const TICKET = log([
   [0, started("implement-ticket")],
+  [1, turn("implementation.implement", 0.5)],
+  [2, turn("implementation.implement", null, 2)], // fell back to codex: unpriced
   [5, reject("implementation.plan_review")],
   [8, reject("implementation.plan_review")],
   [9, pass],
@@ -84,6 +94,7 @@ describe("runMetrics", () => {
       drift_at_publish: { ...emptyCounts(), verified: 3 },
       abandoned: false,
       pr_closed: false,
+      usage: expect.objectContaining({ turns: 1, cost_usd: 0.25, partial: false }),
     });
   });
 
@@ -138,9 +149,12 @@ describe("metricsReport over runs/*/run.jsonl", () => {
     expect(report.runs.map((r) => r.run).sort()).toEqual(["slice-abandoned", "slice-early", "slice-ok", "ticket", "ticket-aborted"]);
     expect(report.slice).toEqual({
       runs: 3, finished: 3, median_review_ms: 90_000, mean_redraws: 0.33, mean_reject_loops: 0.33, drift_problems_at_publish: 0, abandoned: 1,
+      median_cost_usd: 0.25, total_cost_usd: 0.25, priced_runs: 1, partial_cost_runs: 0,
     });
     expect(report.baseline).toEqual({
       runs: 2, finished: 2, median_review_ms: null, mean_redraws: 0, mean_reject_loops: 1, drift_problems_at_publish: 0, abandoned: 1,
+      // HOW-34: the ticket run fell back to an unpriced harness — counted, never averaged in
+      median_cost_usd: null, total_cost_usd: null, priced_runs: 0, partial_cost_runs: 1,
     });
   });
 
@@ -150,6 +164,15 @@ describe("metricsReport over runs/*/run.jsonl", () => {
     expect(text).toContain("implement-ticket (base)");
     expect(text).toContain("slice-ok  implement-slice  success  rounds 2  review 2m/1m  rejects 1");
     expect(text).toContain("slice-abandoned  implement-slice  aborted (abandoned)");
+    // HOW-34: the cost column, partial where the run was
+    expect(text).toContain("cost(med)");
+    expect(text).toContain("cost $0.2500");
+    expect(text).toContain("cost $0.5000 (partial: 1 of 2 turns unpriced)");
+    expect(text).toContain("— +1 partial");
+  });
+
+  test("HOW-34: a run with no turns has an empty rollup and no cost", () => {
+    expect(runMetrics("t2", TICKET_ABORTED)?.usage).toEqual(emptyRollup());
   });
 
   test("no runs directory is an empty report, not an error", () => {

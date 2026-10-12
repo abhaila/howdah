@@ -43,6 +43,7 @@ import { RunSteps, StepDetail, StepsSplit } from "./steps";
 import { RunLogs } from "./logs";
 import { RunContext } from "./context";
 import { RunChat } from "./chat";
+import { UsageRows } from "./usage";
 
 type RunTab = "steps" | "context" | "logs" | "chat" | "graph";
 type DetailDto = RunDetail & { cwd_exists?: boolean; editor_configured?: boolean };
@@ -537,9 +538,7 @@ export function RunView({ id, graceMs = OPEN_GRACE_MS }: { id: string; graceMs?:
         </section>
         <section>
           <h2><Coins size={12} /> Usage</h2>
-          <div className="kv"><span className="k">input tokens</span><span>{detail.usage.input_tokens.toLocaleString()}</span></div>
-          <div className="kv"><span className="k">output tokens</span><span>{detail.usage.output_tokens.toLocaleString()}</span></div>
-          <div className="kv"><span className="k">cost</span><span>${detail.usage.cost_usd.toFixed(4)}</span></div>
+          <UsageRows usage={detail.usage} />
           {detail.allowance.map((a) => (
             <div key={a.harness} className="kv">
               <span className="k">{a.harness} allowance</span>

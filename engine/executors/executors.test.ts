@@ -87,7 +87,11 @@ describe("claude executor over the fake wire", () => {
     const text = events.filter((e: any) => e.type === "chunk" && e.kind === "text").map((e: any) => e.content).join("");
     expect(text).toContain("Working on it — doing the thing. 🐘");
     const finalized: any = events.find((e) => e.type === "turn-finalized");
-    expect(finalized.usage).toEqual({ input_tokens: 321, output_tokens: 45, cost_usd: 0.0042 });
+    // HOW-34: all three input figures, and the price with its source
+    expect(finalized.usage).toEqual({
+      input_tokens: 321, cache_read_input_tokens: 1000, cache_creation_input_tokens: 200, output_tokens: 45,
+      cost_usd: 0.0042, cost_source: "reported",
+    });
     expect(events.some((e: any) => e.type === "allowance" && e.harness === "claude" && e.remaining === 0.31)).toBe(true);
     const finish: any = events.find((e: any) => e.type === "node-finished" && e.node === "draft");
     expect(finish.writes).toEqual({ doc_summary: "fake doc_summary" });
@@ -617,8 +621,9 @@ describe("the prompt proof covers what is sent (system-map 0.1)", () => {
       });
       const result = await engine.start({ goal: "prove the hash" });
       const sent = readFileSync(capture, "utf8").trim().split("\n").map((l) => JSON.parse(l) as string);
-      const renders = engine.log.read().filter((e) => e.type === "prompt-rendered") as Extract<ReturnType<typeof engine.log.read>[number], { type: "prompt-rendered" }>[];
-      return { result, sent, renders };
+      const events = engine.log.read();
+      const renders = events.filter((e) => e.type === "prompt-rendered") as Extract<ReturnType<typeof engine.log.read>[number], { type: "prompt-rendered" }>[];
+      return { result, sent, renders, events };
     } finally {
       for (const k of ["FAKE_CAPTURE", "FAKE_CLAUDE_ASK", "FAKE_CLAUDE_RATELIMIT", "FAKE_CLAUDE_VERDICT"]) delete process.env[k];
     }
@@ -676,6 +681,28 @@ describe("the prompt proof covers what is sent (system-map 0.1)", () => {
           expect(renderedHash(repair)).not.toBe(render.rendered_hash);
           expect(repair).toBe(buildRepairInstruction(render.output_keys ?? []));
         });
+      } finally {
+        delete process.env[dropVar];
+      }
+    }, 20000);
+
+    // HOW-34: the repair is its OWN turn — turn 2 of the visit, with its own usage — so it can
+    // be told apart from the attempt's turn, and a cumulative report is never double-counted
+    test(`${harness}: the outputs repair is numbered turn 2, with its own usage`, async () => {
+      const dropVar = DROP_VAR[harness];
+      process.env[dropVar] = "1";
+      try {
+        const { events } = await runCapturing(harness);
+        const finals = events.filter((e) => e.type === "turn-finalized" && e.node === "draft") as any[];
+        expect(finals.map((e) => e.turn)).toEqual([1, 2]);
+        if (harness === "claude") {
+          // the CLI said 0.0042 then 0.0084 (cumulative): each turn records its own share
+          expect(finals.map((e) => e.usage.cost_usd)).toEqual([0.0042, 0.0042]);
+        } else if (harness === "codex") {
+          // thread totals 500/300/40 then 1000/600/80: the delta, cached input moved across
+          expect(finals[0].usage).toEqual({ input_tokens: 200, cache_read_input_tokens: 300, output_tokens: 40, cost_usd: null, cost_source: "unpriced" });
+          expect(finals[1].usage).toEqual({ input_tokens: 200, cache_read_input_tokens: 300, output_tokens: 40, cost_usd: null, cost_source: "unpriced" });
+        }
       } finally {
         delete process.env[dropVar];
       }

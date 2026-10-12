@@ -194,12 +194,17 @@ if (scriptPath) {
   }
 }
 
-const emitResult = (result: string) =>
+// total_cost_usd is SESSION-CUMULATIVE on the real CLI (adapter/fixtures/claude-turn-cache.jsonl),
+// so a repair turn's result reports the running total, exactly as claude does
+let sessionCost = 0;
+const emitResult = (result: string) => {
+  sessionCost = Math.round((sessionCost + 0.0042) * 1e6) / 1e6;
   out({
     type: "result", subtype: "success", is_error: false,
-    usage: { input_tokens: 321, output_tokens: 45 }, total_cost_usd: 0.0042,
+    usage: { input_tokens: 321, cache_read_input_tokens: 1000, cache_creation_input_tokens: 200, output_tokens: 45 }, total_cost_usd: sessionCost,
     result,
   });
+};
 
 // FAKE_CLAUDE_DROP_OUTPUTS=1 reproduces the live failure (6a31486): a long turn ending in
 // prose with no contract. The real CLI stays open for more stdin turns, so the executor's

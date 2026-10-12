@@ -131,10 +131,14 @@ export function mapClaudeEvent(raw: unknown): AgentEvent[] {
       const error = e.is_error ? String(e.result ?? e.subtype ?? "error") : undefined;
       return [{
         type: "turn_end",
+        // HOW-34: the cache figures are separate fields on the wire, and on a long agent turn
+        // most input is cached — `input_tokens` alone was a large undercount
         usage: {
-          input_tokens: e.usage?.input_tokens,
-          output_tokens: e.usage?.output_tokens,
-          cost_usd: e.total_cost_usd,
+          input_tokens: num(e.usage?.input_tokens),
+          cache_read_input_tokens: num(e.usage?.cache_read_input_tokens),
+          cache_creation_input_tokens: num(e.usage?.cache_creation_input_tokens),
+          output_tokens: num(e.usage?.output_tokens),
+          ...(typeof e.total_cost_usd === "number" ? { cost_usd: e.total_cost_usd, cost_source: "reported" as const } : {}),
         },
         error,
         result_text: !e.is_error && typeof e.result === "string" ? e.result : undefined,
@@ -157,6 +161,8 @@ export function mapClaudeEvent(raw: unknown): AgentEvent[] {
       return []; // unknown types are ignored, never fatal — the CLI is a moving target
   }
 }
+
+const num = (v: unknown): number | undefined => (typeof v === "number" ? v : undefined);
 
 /** stdin reply to a permission_request (S2 wire shape, verified). */
 export function buildClaudePermissionResponse(

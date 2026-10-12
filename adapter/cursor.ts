@@ -128,8 +128,14 @@ export function mapCursorEvent(raw: unknown): AgentEvent[] {
         // `if (turn.turnError)` would fall through to the outputs check and blame the model
         // for a turn cursor itself said had failed. A failure always carries a sentence.
         error: failed ? String(e.error || text || "cursor reported an error") : undefined,
+        // HOW-34: cursor documents tokens and no price — unpriced, never a silent 0
         usage: usage
-          ? { input_tokens: usage.input_tokens ?? usage.inputTokens, output_tokens: usage.output_tokens ?? usage.outputTokens }
+          ? {
+              input_tokens: usage.input_tokens ?? usage.inputTokens,
+              output_tokens: usage.output_tokens ?? usage.outputTokens,
+              cost_usd: null,
+              cost_source: "unpriced" as const,
+            }
           : undefined,
       }];
     }

@@ -76,8 +76,9 @@ export function cursorExecutor(opts: CursorExecutorOpts = {}): Executor {
     const workdir = effectiveCwd(log.path, cwd) ?? dirname(log.path);
 
     let index = 0;
+    let turnNo = 1; // HOW-34: the outputs-repair spawn is turn 2
     const chunk = (kind: "text" | "thinking" | "tool_call" | "tool_result", content: string, tool?: { id?: string; name?: string }) =>
-      log.append({ type: "chunk", node: nodeId, visit, turn: 1, index: index++, kind, content, tool_id: tool?.id, tool_name: tool?.name });
+      log.append({ type: "chunk", node: nodeId, visit, turn: turnNo, index: index++, kind, content, tool_id: tool?.id, tool_name: tool?.name });
 
     const stderrChunks: string[] = [];
     let sessionId: string | undefined;
@@ -127,7 +128,7 @@ export function cursorExecutor(opts: CursorExecutorOpts = {}): Executor {
                 log.append({ type: "allowance", harness: "cursor", state: ev.state, remaining: ev.remaining, resets_at: ev.resets_at, raw: ev.raw });
                 break;
               case "turn_end":
-                log.append({ type: "turn-finalized", node: nodeId, visit, turn: 1, usage: ev.usage });
+                log.append({ type: "turn-finalized", node: nodeId, visit, turn: turnNo, usage: ev.usage });
                 resultText = ev.result_text ?? accumulated;
                 turnError = ev.error;
                 turnEnded = true;
@@ -153,6 +154,7 @@ export function cursorExecutor(opts: CursorExecutorOpts = {}): Executor {
     // a fresh spawn would be a re-run of the node, not a repair.
     if (turn.turnEnded && !turn.turnError && sessionId && writeKeys.length && !parseOutputs(turn.text, writeKeys).ok) {
       chunk("text", "\n[outputs object missing — asking for it]");
+      turnNo = 2;
       turn = await runTurn(buildRepairInstruction(writeKeys), sessionId);
     }
 

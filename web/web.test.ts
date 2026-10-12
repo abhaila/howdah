@@ -76,7 +76,13 @@ describe("derive", () => {
     expect(d.timeline).toEqual([
       expect.objectContaining({ node: "doc.draft", visit: 1, status: "succeeded", duration_ms: 5000 }),
     ]);
-    expect(d.usage).toEqual({ input_tokens: 100, output_tokens: 50, cost_usd: 0.01 });
+    // HOW-34: an old-shape usage (no cache figures, no cost_source) reads as reported cost and
+    // UNKNOWN cache — never a 0 it did not say
+    expect(d.usage).toMatchObject({
+      turns: 1, priced_turns: 1, partial: false, cost_usd: 0.01,
+      input_tokens: { total: 100, missing: 0 }, output_tokens: { total: 50, missing: 0 },
+      cache_read_input_tokens: { total: null, missing: 1 },
+    });
     expect(d.allowance).toEqual([expect.objectContaining({ harness: "claude", state: "ok", remaining: 0.42 })]);
     expect(d.pinned_prompts).toEqual({ "doc.draft": 1 });
     expect(d.ask?.reason).toBe("needs your reply");
