@@ -78,6 +78,24 @@ export interface AgentConfig {
    * run parks for a human. Default 1. 0 restores HOW-14's park-every-time.
    */
   contextRetries?: number;
+  /**
+   * HOW-41: the node's action space — tool names (or claude patterns like `Bash(git *)`) the
+   * agent may use without asking (`allow`) and may never use (`deny`). Translated per harness
+   * by core/harnesses.ts `toolFlags`; a harness that cannot honour a restriction REFUSES TO
+   * START the node (park `tools-unsupported`), because silently running unrestricted is the
+   * dangerous failure. `readOnly` beats it: a plan-mode node keeps `deny` and loses `allow`.
+   */
+  tools?: AgentTools;
+}
+
+export interface AgentTools {
+  allow?: string[];
+  deny?: string[];
+}
+
+/** a tools setting that says nothing (no names on either side) is no setting at all */
+export function hasTools(t: AgentTools | undefined): t is AgentTools {
+  return !!t && ((t.allow?.length ?? 0) > 0 || (t.deny?.length ?? 0) > 0);
 }
 
 /**
@@ -86,7 +104,7 @@ export interface AgentConfig {
  * the other. `effortInert` is absent on purpose: it is a RESOLUTION result, never a setting.
  */
 export const AGENT_CONFIG_KEYS = [
-  "harness", "model", "effort", "permissionMode", "maxTurns", "skills", "turnTimeoutMs", "stuckDetection", "contextCap", "contextRetries",
+  "harness", "model", "effort", "permissionMode", "maxTurns", "skills", "turnTimeoutMs", "stuckDetection", "contextCap", "contextRetries", "tools",
 ] as const satisfies ReadonlyArray<Exclude<keyof AgentConfig, "effortInert">>;
 
 /** the AgentConfig a node declares, copied key by key (undefined keys omitted) */
@@ -167,6 +185,7 @@ export function resolveAgentConfigLayers(
     stuckDetection: pick("stuckDetection"),
     contextCap: pick("contextCap"),
     contextRetries: pick("contextRetries"),
+    tools: pick("tools"),
   };
 }
 

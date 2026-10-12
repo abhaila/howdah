@@ -12,6 +12,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { GitBranch, FolderGit2, SlidersHorizontal, Pencil, Plus, RotateCcw as ResetIcon } from "lucide-react";
 import type { GraphCatalog } from "@/lib/types";
 import { navigate } from "@/lib/nav";
+import { useTypedText } from "@/lib/hooks";
 import { getJSON } from "@/lib/net";
 import { GraphDag, useGraphShape, type GraphShapeDto, type AgentConfigDto } from "../graph-dag";
 import { modelFitsHarness } from "../../../core/graph";
@@ -102,6 +103,7 @@ export function resolvePreview(layers: Array<AgentConfigDto | undefined>, config
     permissionMode: spec?.forcedPermissionMode ?? (pick("permissionMode") as string | undefined),
     maxTurns: pick("maxTurns") as number | undefined,
     skills: pick("skills") as string[] | undefined,
+    tools: pick("tools") as AgentConfigDto["tools"],
   };
 }
 
@@ -117,6 +119,31 @@ export function previewShape(shape: GraphShapeDto, tuning: GraphTuningDto): Grap
       return { ...n, node_tuning: nodeTuning, effective, harness: effective.harness, model: effective.model, effort: effective.effort };
     }),
   };
+}
+
+/** the tools setting from two lists — absent when both are empty, so "inherit" stays inherit */
+function toolsOf(allow: string[] | undefined, deny: string[] | undefined): AgentConfigDto["tools"] {
+  if (!allow?.length && !deny?.length) return undefined;
+  return { ...(allow?.length ? { allow } : {}), ...(deny?.length ? { deny } : {}) };
+}
+
+const parseList = (typed: string) => typed.split(",").map((x) => x.trim()).filter(Boolean);
+
+/**
+ * A comma-separated list box that keeps what was TYPED while it still means the stored list —
+ * so a trailing comma, or the space before the next name, survives the keystroke (the
+ * useTypedText rule; a box fed straight back from `string[]` ate both).
+ */
+function ListInput({ value, placeholder, onChange }: { value: string[] | undefined; placeholder: string; onChange: (v: string[] | undefined) => void }) {
+  const stored = (value ?? []).join(", ");
+  const [shown, setShown] = useTypedText(stored, (typed) => parseList(typed).join(", "));
+  return (
+    <Input value={shown} placeholder={placeholder} onChange={(e) => {
+      setShown(e.target.value);
+      const list = parseList(e.target.value);
+      onChange(list.length ? list : undefined);
+    }} />
+  );
 }
 
 export function ConfigFields(
@@ -159,7 +186,16 @@ export function ConfigFields(
       </Label>
       <Label>
         Skills (comma-separated)
-        <Input value={(value.skills ?? []).join(", ")} placeholder={ph("skills", "none")} onChange={(e) => onChange({ ...value, skills: e.target.value ? e.target.value.split(",").map((x) => x.trim()).filter(Boolean) : undefined })} />
+        <ListInput value={value.skills} placeholder={ph("skills", "none")} onChange={(skills) => onChange({ ...value, skills })} />
+      </Label>
+      {/* HOW-41: the node's action space — a harness that cannot restrict tools refuses the node */}
+      <Label>
+        Tools allowed without asking (comma-separated)
+        <ListInput value={value.tools?.allow} placeholder={baseline?.tools?.allow?.length ? `inherits: ${baseline.tools.allow.join(", ")}` : "harness default"} onChange={(allow) => onChange({ ...value, tools: toolsOf(allow, value.tools?.deny) })} />
+      </Label>
+      <Label>
+        Tools denied (comma-separated, e.g. WebFetch, Bash(git push *))
+        <ListInput value={value.tools?.deny} placeholder={baseline?.tools?.deny?.length ? `inherits: ${baseline.tools.deny.join(", ")}` : "none"} onChange={(deny) => onChange({ ...value, tools: toolsOf(value.tools?.allow, deny) })} />
       </Label>
     </>
   );

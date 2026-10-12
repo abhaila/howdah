@@ -44,6 +44,8 @@ export interface AgentConfigDto {
   permissionMode?: string;
   maxTurns?: number;
   skills?: string[];
+  /** HOW-41: the node's action space */
+  tools?: { allow?: string[]; deny?: string[] };
 }
 
 export interface GraphShapeDto {

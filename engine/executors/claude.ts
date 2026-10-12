@@ -103,6 +103,9 @@ export function claudeExecutor(opts: ClaudeExecutorOpts): Executor {
         // HOW-33: resolved for THIS harness (effortFor) — undefined when inert, never dropped
         // silently: the inert reason is on this attempt's prompt-rendered
         effort: agentConfig?.effort,
+        // HOW-41: resolved (readOnly already stripped any allowance), translated per core/harnesses.ts
+        allowedTools: agentConfig?.tools?.allow,
+        disallowedTools: agentConfig?.tools?.deny,
       })],
       // HOW-38: its own process group, so a stuck or timed-out turn is ended with every
       // child it started (a test runner's workers) rather than leaving them orphaned

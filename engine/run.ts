@@ -62,11 +62,11 @@
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { agentConfigOf, nodeReads, resolveAgentConfigLayers, type Graph, type NodeDef, type EdgeDef, type AgentConfig, type ApprovalNodeDef, type Harness } from "../core/graph";
+import { agentConfigOf, hasTools, nodeReads, resolveAgentConfigLayers, type Graph, type NodeDef, type EdgeDef, type AgentConfig, type ApprovalNodeDef, type Harness } from "../core/graph";
 import { basename } from "node:path";
 import { ContextStore, type Scope } from "../core/context";
 import { DEFAULT_CONTEXT_CAP, RENDER_VERSION, SUFFIX_VERSION, assemblePrompt, expandIncludes, renderTemplate, renderedHash, skillsForHarness, splitFrontMatter } from "../core/template";
-import { defaultHarness, fallbackChain, harnessNames } from "../core/harnesses";
+import { defaultHarness, fallbackChain, harnessNames, harnessSpec, isHarness } from "../core/harnesses";
 import { EventLog } from "../log/write";
 import type { LoggedEvent, ParkCode } from "../log/events";
 import { replayState, effectKey } from "./replay";
@@ -230,8 +230,12 @@ export function resolveAgentConfig(
     layers.tuning?.defaults,
     graph.def.defaults,
   ], { configuredDefaultHarness: layers.defaultHarness });
-  // system-map 1a (D6/5A): a hard constraint — no layer above the node can raise it
-  return def.readOnly ? { ...resolved, permissionMode: "plan" } : resolved;
+  // system-map 1a (D6/5A): a hard constraint — no layer above the node can raise it. HOW-41: nor
+  // can a tool ALLOWANCE (an allow list pre-approves tools, which would raise a plan-mode node);
+  // a deny list only narrows, so it stays
+  if (!def.readOnly) return resolved;
+  const { tools, ...rest } = resolved;
+  return { ...rest, permissionMode: "plan", ...(tools?.deny?.length ? { tools: { deny: tools.deny } } : {}) };
 }
 
 /** did the run arrive at `node`'s current visit through an operator-jump (not graph routing)? */
@@ -462,6 +466,10 @@ export class Engine {
       // system-map 1a: pre-start, like maxVisits — a refusal logs no node-started, consumes no visit
       const gate = await this.requiresGate(current, def, visit);
       if (gate) return this.park(current, visit, gate.code, gate.reason);
+      // HOW-41: a tool restriction the resolved harness cannot honour refuses the node — this
+      // also catches a fallback hop onto such a harness, because the hop re-resolves first
+      const tools = this.toolsGate(current, def);
+      if (tools) return this.park(current, visit, "tools-unsupported", tools);
 
       if (this.opts.beforeNode) await this.opts.beforeNode(current, def);
       const attemptId = `${current}#${visit}`;
@@ -577,6 +585,20 @@ export class Engine {
       log: this.log,
       reads, renderedPrompt, agentConfig, effects,
     });
+  }
+
+  /** HOW-41: why this agent node cannot start on its resolved harness, or null */
+  private toolsGate(nodeId: string, def: NodeDef<any>): string | null {
+    if (def.kind !== "agent") return null;
+    const config = this.resolveAgentConfig(def, nodeId);
+    if (!hasTools(config.tools) || !config.harness || !isHarness(config.harness)) return null;
+    if (harnessSpec(config.harness).toolFlags) return null;
+    const asked = [
+      ...(config.tools.allow?.length ? [`allow ${config.tools.allow.join(", ")}`] : []),
+      ...(config.tools.deny?.length ? [`deny ${config.tools.deny.join(", ")}`] : []),
+    ].join("; ");
+    return `"${nodeId}" restricts its tools (${asked}) but ${config.harness} cannot restrict tools, so it would run unrestricted — ` +
+      `move the node to a harness that can (claude), or remove the restriction in tuning, then resume`;
   }
 
   // ---- context exhaustion: continue once before parking (HOW-43) ----------------
@@ -1061,6 +1083,7 @@ export class Engine {
       model: config?.model,
       effort: config?.effort,
       ...(config?.effortInert !== undefined ? { effort_inert: config.effortInert } : {}),
+      ...(hasTools(config?.tools) ? { tools: config!.tools } : {}),
       skills,
       output_keys: outputKeys,
       suffix_version: SUFFIX_VERSION,

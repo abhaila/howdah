@@ -57,6 +57,11 @@ export type ParkCode =
   | "stuck"
   /** HOW-38: an agent turn ran past its `turnTimeoutMs` ceiling and its process group was killed */
   | "turn-timeout"
+  /**
+   * HOW-41: the node restricts its tools and its resolved harness cannot (core/harnesses.ts
+   * toolFlags) — refused before it starts, because running unrestricted is the dangerous failure
+   */
+  | "tools-unsupported"
   | "executor-threw"
   | "max-visits"
   | "no-edge"
@@ -139,6 +144,8 @@ export type RunEvent =
        * supported by cursor"). Absent: no effort was set, or it was sent as `effort` says.
        */
       effort_inert?: string;
+      /** HOW-41: the tool restriction the agent ran under, as resolved (readOnly applied) */
+      tools?: { allow?: string[]; deny?: string[] };
       /**
        * system-map 0.1 — the suffix inputs, so reconstruction can rebuild the prompt AS SENT.
        * Absent on pre-0.1 events, whose hash covered the template (+ jump suffix) only.

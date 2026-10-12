@@ -79,8 +79,25 @@ export interface HarnessSpec {
    * value its API refuses
    */
   effortMap?: Partial<Record<Effort, Effort>>;
+  /**
+   * HOW-41: the flags that restrict the agent's tools, or null when the harness has none. A
+   * node with a tools setting on a null harness is refused before it starts — never run
+   * unrestricted. (codex has sandbox modes, not a tool list; cursor-agent documents none.)
+   */
+  toolFlags: { allow: string; deny: string } | null;
+  /**
+   * HOW-41: the tool names this harness ships, for ADVICE in the builder (a name outside the
+   * list is probably a typo, but CLIs add tools, so it never blocks). Empty: nothing to check.
+   */
+  knownTools: readonly string[];
   status: HarnessStatus;
 }
+
+/** claude 2.1.296's built-in tools (`claude --help` / the tool list its init event reports) */
+const CLAUDE_TOOLS = [
+  "Bash", "BashOutput", "Edit", "ExitPlanMode", "Glob", "Grep", "KillShell", "LS", "MultiEdit", "NotebookEdit",
+  "NotebookRead", "Read", "Task", "TodoWrite", "WebFetch", "WebSearch", "Write", "AskUserQuestion", "Skill", "SlashCommand",
+] as const;
 
 const SPECS: Record<HarnessName, HarnessSpec> = {
   claude: {
@@ -94,6 +111,8 @@ const SPECS: Record<HarnessName, HarnessSpec> = {
     forcedPermissionMode: "auto",
     // `claude --help` (2.1.296): --effort <level> (low, medium, high, xhigh, max)
     effortLevels: ["low", "medium", "high", "xhigh", "max"],
+    toolFlags: { allow: "--allowedTools", deny: "--disallowedTools" },
+    knownTools: CLAUDE_TOOLS,
     status: "core",
   },
   codex: {
@@ -108,6 +127,8 @@ const SPECS: Record<HarnessName, HarnessSpec> = {
     // string; the gpt-5 family advertises low..xhigh. There is no `max`, so it is mapped down.
     effortLevels: ["low", "medium", "high", "xhigh"],
     effortMap: { max: "xhigh" },
+    toolFlags: null,
+    knownTools: [],
     status: "core",
   },
   cursor: {
@@ -124,6 +145,8 @@ const SPECS: Record<HarnessName, HarnessSpec> = {
     skillHint: false,
     // cursor-agent documents no effort flag: an effort set for a cursor node is inert
     effortLevels: null,
+    toolFlags: null,
+    knownTools: [],
     status: "optional",
   },
   opencode: {
@@ -137,6 +160,8 @@ const SPECS: Record<HarnessName, HarnessSpec> = {
     skillHint: true,
     // the claude binary, so claude's levels
     effortLevels: ["low", "medium", "high", "xhigh", "max"],
+    toolFlags: { allow: "--allowedTools", deny: "--disallowedTools" },
+    knownTools: CLAUDE_TOOLS,
     status: "internal",
   },
 };
@@ -182,6 +207,15 @@ export function effortFor(harness: HarnessName, effort: string | undefined): { e
   const mapped = spec.effortMap?.[effort as Effort];
   if (mapped !== undefined) return { effort: mapped };
   return { inert: `effort ${effort}: not accepted by ${harness} (it takes ${spec.effortLevels.join(", ")})` };
+}
+
+/**
+ * HOW-41: a tool name as the harness's known list sees it — `Bash(git *)` is the Bash tool
+ * with a pattern, so only the part before `(` is a name.
+ */
+export function toolBaseName(tool: string): string {
+  const i = tool.indexOf("(");
+  return (i < 0 ? tool : tool.slice(0, i)).trim();
 }
 
 /** the built-in default, used when neither the environment nor config.json names one */

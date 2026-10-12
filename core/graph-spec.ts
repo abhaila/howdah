@@ -45,7 +45,7 @@
  * editor and forfeits the round trip, which the builder says once, at the point of need.
  */
 import { Graph, defineGraph, type AgentConfig, type Condition, type EdgeDef, type Effort, type NodeDef, type PermissionMode, type PromptRef } from "./graph";
-import { isHarness } from "./harnesses";
+import { defaultHarness, harnessSpec, isHarness, toolBaseName } from "./harnesses";
 import type { Scope } from "./context";
 import type { Violation } from "./validate";
 import { VERIFY_BUILTIN, VERIFY_PRODUCES } from "./verify";
@@ -851,6 +851,22 @@ export function specAdvice(spec: GraphSpec): SpecProblem[] {
   const who = (id: string) => `**${titleOf(spec, id)}**`;
 
   for (const n of spec.nodes) {
+    // HOW-41: A TOOL NAME THE HARNESS DOES NOT SHIP. Probably a typo — `Bassh` restricts nothing
+    // and allows nothing — but CLIs add tools between releases, so it is advice, never a refusal.
+    // A harness with no tool flags at all is not advised here: that one refuses at run time.
+    if (n.kind === "agent" && n.config?.tools) {
+      const picked = n.config.harness ?? spec.defaults?.harness;
+      const harness = isHarness(picked) ? picked : defaultHarness();
+      const known = harnessSpec(harness).knownTools;
+      const names = [...(n.config.tools.allow ?? []), ...(n.config.tools.deny ?? [])];
+      const unknown = known.length ? names.filter((t) => !known.includes(toolBaseName(t))) : [];
+      if (unknown.length)
+        advise({
+          node: n.id, where: "steps",
+          message: `${who(n.id)} names ${unknown.map((t) => `\`${t}\``).join(", ")}, which ${harness} does not ship as ${unknown.length === 1 ? "a tool" : "tools"} — check the spelling (it is ${known.slice(0, 6).join(", ")}, …).`,
+        });
+    }
+
     // AN AGENT THAT IS GIVEN NOTHING. `reads` is derived from the instructions, so an empty one
     // means the body names no field at all: the step is sent the seeded "Do the work." and is
     // never told the goal, the ticket, or what the step before it produced.
@@ -972,6 +988,10 @@ export function parseAgentConfig(v: unknown): AgentConfig | undefined {
   if (typeof v.stuckDetection === "boolean") out.stuckDetection = v.stuckDetection;
   const cap = posInt(v.contextCap);
   if (cap !== undefined) out.contextCap = cap;
+  const names = (x: unknown) => strArray(x).map((t) => t.trim()).filter(Boolean);
+  const allow = isObj(v.tools) ? names(v.tools.allow) : [];
+  const deny = isObj(v.tools) ? names(v.tools.deny) : [];
+  if (allow.length || deny.length) out.tools = { ...(allow.length ? { allow } : {}), ...(deny.length ? { deny } : {}) };
   // 0 is meaningful here (never continue automatically), so not posInt
   if (typeof v.contextRetries === "number" && Number.isInteger(v.contextRetries) && v.contextRetries >= 0) out.contextRetries = v.contextRetries;
   return Object.keys(out).length ? out : undefined;

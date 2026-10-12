@@ -33,12 +33,19 @@
  *     `context_compacted`. Not a failure; the turn goes on, on a summary.
  */
 import type { AgentEvent } from "./events";
+import { harnessSpec } from "../core/harnesses";
+
+/** HOW-41: the flag names live in the harness table, the one home of per-harness facts */
+const CLAUDE_TOOL_FLAGS = harnessSpec("claude").toolFlags!;
 
 /** argv for a headless claude session the engine can own. */
 export function claudeArgs(opts: {
   sessionId: string; permissionMode?: string; resume?: boolean; model?: string; maxTurns?: number;
   /** HOW-33: already mapped for claude by core/harnesses.ts effortFor — sent verbatim */
   effort?: string;
+  /** HOW-41: the node's action space; each name its own argv item, so `Bash(git *)` stays whole */
+  allowedTools?: readonly string[];
+  disallowedTools?: readonly string[];
 }): string[] {
   return [
     "-p",
@@ -51,6 +58,8 @@ export function claudeArgs(opts: {
     ...(opts.model ? ["--model", opts.model] : []),
     ...(opts.maxTurns ? ["--max-turns", String(opts.maxTurns)] : []),
     ...(opts.effort ? ["--effort", opts.effort] : []),
+    ...(opts.allowedTools?.length ? [CLAUDE_TOOL_FLAGS.allow, ...opts.allowedTools] : []),
+    ...(opts.disallowedTools?.length ? [CLAUDE_TOOL_FLAGS.deny, ...opts.disallowedTools] : []),
     ...(opts.resume ? ["--resume", opts.sessionId] : ["--session-id", opts.sessionId]),
   ];
 }
