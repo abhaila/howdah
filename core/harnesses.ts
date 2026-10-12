@@ -90,6 +90,12 @@ export interface HarnessSpec {
    * list is probably a typo, but CLIs add tools, so it never blocks). Empty: nothing to check.
    */
   knownTools: readonly string[];
+  /**
+   * HOW-39: can the harness run a command after each file edit, inside the agent's turn, and
+   * hand its output back to the model? claude can (a PostToolUse hook through `--settings`).
+   * The others cannot yet, and a prompt line pretending otherwise would be worse than nothing.
+   */
+  editHooks: boolean;
   status: HarnessStatus;
 }
 
@@ -113,6 +119,7 @@ const SPECS: Record<HarnessName, HarnessSpec> = {
     effortLevels: ["low", "medium", "high", "xhigh", "max"],
     toolFlags: { allow: "--allowedTools", deny: "--disallowedTools" },
     knownTools: CLAUDE_TOOLS,
+    editHooks: true,
     status: "core",
   },
   codex: {
@@ -129,6 +136,7 @@ const SPECS: Record<HarnessName, HarnessSpec> = {
     effortMap: { max: "xhigh" },
     toolFlags: null,
     knownTools: [],
+    editHooks: false,
     status: "core",
   },
   cursor: {
@@ -147,6 +155,7 @@ const SPECS: Record<HarnessName, HarnessSpec> = {
     effortLevels: null,
     toolFlags: null,
     knownTools: [],
+    editHooks: false,
     status: "optional",
   },
   opencode: {
@@ -162,6 +171,7 @@ const SPECS: Record<HarnessName, HarnessSpec> = {
     effortLevels: ["low", "medium", "high", "xhigh", "max"],
     toolFlags: { allow: "--allowedTools", deny: "--disallowedTools" },
     knownTools: CLAUDE_TOOLS,
+    editHooks: true,
     status: "internal",
   },
 };

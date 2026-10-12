@@ -159,6 +159,8 @@ export interface EngineOpts {
   beforeNode?: (nodeId: string, def: NodeDef<any>) => Promise<void>;
   /** run-level agent overrides — beat node settings, which beat graph defaults */
   overrides?: AgentConfig;
+  /** HOW-39: the workspace's diagnostics command for a repo path (config.json, read by the caller) */
+  diagnosticsCommandFor?: (repoPath: string) => string | undefined;
   /** UI tuning overlay: per-node beats TS node; graph-level beats TS defaults */
   tuning?: { defaults?: AgentConfig; nodes?: Record<string, AgentConfig> };
   /**
@@ -234,7 +236,8 @@ export function resolveAgentConfig(
   // can a tool ALLOWANCE (an allow list pre-approves tools, which would raise a plan-mode node);
   // a deny list only narrows, so it stays
   if (!def.readOnly) return resolved;
-  const { tools, ...rest } = resolved;
+  // HOW-39: and a read-only node never gets the post-edit hook — it makes no edits to check
+  const { tools, diagnostics: _diagnostics, ...rest } = resolved;
   return { ...rest, permissionMode: "plan", ...(tools?.deny?.length ? { tools: { deny: tools.deny } } : {}) };
 }
 
@@ -877,12 +880,18 @@ export class Engine {
   }
 
   private resolveAgentConfig(def: Extract<NodeDef<any>, { kind: "agent" }>, nodeId: string): AgentConfig {
-    return resolveAgentConfig(this.graph, def, nodeId, {
+    const resolved = resolveAgentConfig(this.graph, def, nodeId, {
       overrides: this.opts.overrides,
       tuning: this.opts.tuning,
       fallbackHarness: this.forcedFallbackHarness(),
       defaultHarness: this.opts.harnesses?.default,
     });
+    // HOW-39: the diagnostics hook needs all three — a node that asked, a harness that can, and
+    // a workspace command. Any one missing is no hook and no error.
+    if (!resolved.diagnostics || resolved.permissionMode === "plan" || !resolved.harness || !isHarness(resolved.harness)) return resolved;
+    if (!harnessSpec(resolved.harness).editHooks || !this.opts.cwd) return resolved;
+    const command = this.opts.diagnosticsCommandFor?.(this.opts.cwd);
+    return command ? { ...resolved, diagnosticsCommand: command } : resolved;
   }
 
   /**
@@ -1084,6 +1093,7 @@ export class Engine {
       effort: config?.effort,
       ...(config?.effortInert !== undefined ? { effort_inert: config.effortInert } : {}),
       ...(hasTools(config?.tools) ? { tools: config!.tools } : {}),
+      ...(config?.diagnosticsCommand !== undefined ? { diagnostics_command: config.diagnosticsCommand } : {}),
       skills,
       output_keys: outputKeys,
       suffix_version: SUFFIX_VERSION,

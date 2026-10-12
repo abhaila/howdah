@@ -46,6 +46,8 @@ export interface AgentConfigDto {
   skills?: string[];
   /** HOW-41: the node's action space */
   tools?: { allow?: string[]; deny?: string[] };
+  /** HOW-39: run the workspace's diagnosticsCommand after every edit (claude only) */
+  diagnostics?: boolean;
 }
 
 export interface GraphShapeDto {

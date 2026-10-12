@@ -20,6 +20,7 @@ import { defaultHarness, effortFor, harnessNames, harnessSpec, isHarness } from 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
@@ -104,6 +105,7 @@ export function resolvePreview(layers: Array<AgentConfigDto | undefined>, config
     maxTurns: pick("maxTurns") as number | undefined,
     skills: pick("skills") as string[] | undefined,
     tools: pick("tools") as AgentConfigDto["tools"],
+    diagnostics: pick("diagnostics") as boolean | undefined,
   };
 }
 
@@ -197,6 +199,12 @@ export function ConfigFields(
         Tools denied (comma-separated, e.g. WebFetch, Bash(git push *))
         <ListInput value={value.tools?.deny} placeholder={baseline?.tools?.deny?.length ? `inherits: ${baseline.tools.deny.join(", ")}` : "none"} onChange={(deny) => onChange({ ...value, tools: toolsOf(value.tools?.allow, deny) })} />
       </Label>
+      {/* HOW-39: opt-in; unticked means inherit, so a graph default still applies */}
+      <Checkbox
+        label={`Post-edit diagnostics (claude; runs the workspace's diagnostics command after every edit)${baseline?.diagnostics ? " — inherits: on" : ""}`}
+        checked={value.diagnostics === true}
+        onChange={(e) => onChange({ ...value, diagnostics: e.target.checked ? true : undefined })}
+      />
     </>
   );
 }

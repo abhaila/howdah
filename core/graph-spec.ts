@@ -992,6 +992,7 @@ export function parseAgentConfig(v: unknown): AgentConfig | undefined {
   const allow = isObj(v.tools) ? names(v.tools.allow) : [];
   const deny = isObj(v.tools) ? names(v.tools.deny) : [];
   if (allow.length || deny.length) out.tools = { ...(allow.length ? { allow } : {}), ...(deny.length ? { deny } : {}) };
+  if (typeof v.diagnostics === "boolean") out.diagnostics = v.diagnostics;
   // 0 is meaningful here (never continue automatically), so not posInt
   if (typeof v.contextRetries === "number" && Number.isInteger(v.contextRetries) && v.contextRetries >= 0) out.contextRetries = v.contextRetries;
   return Object.keys(out).length ? out : undefined;

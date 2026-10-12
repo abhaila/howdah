@@ -147,6 +147,12 @@ export type RunEvent =
       /** HOW-41: the tool restriction the agent ran under, as resolved (readOnly applied) */
       tools?: { allow?: string[]; deny?: string[] };
       /**
+       * HOW-39: the command the post-edit hook ran after every edit, when the node had one. The
+       * rendered hash covers the prompt, not claude's --settings, so this is what says what
+       * in-turn feedback the agent had. Absent: no hook.
+       */
+      diagnostics_command?: string;
+      /**
        * system-map 0.1 — the suffix inputs, so reconstruction can rebuild the prompt AS SENT.
        * Absent on pre-0.1 events, whose hash covered the template (+ jump suffix) only.
        * `skills` is what the hint actually named (codex: always []).
@@ -201,6 +207,24 @@ export type RunEvent =
       input_hash?: string;
       /** HOW-38 — tool_result only: the harness said the call failed. Absent: not reported. */
       is_error?: boolean;
+    }
+  | {
+      /**
+       * HOW-39: the post-edit diagnostics hook ran after `tool_name` (tool_use_id) — appended by
+       * the hook process itself (engine/hooks/diagnostics.ts), under the log lock. `output` is
+       * the tail the agent was shown, capped; `timed_out` means nothing was checked.
+       */
+      type: "diagnostics-ran";
+      node: string;
+      visit: number;
+      tool_use_id?: string;
+      tool_name: string;
+      file?: string;
+      command: string;
+      exit_code: number | null;
+      timed_out: boolean;
+      duration_ms: number;
+      output: string;
     }
   | {
       /**

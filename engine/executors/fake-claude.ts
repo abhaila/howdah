@@ -201,6 +201,37 @@ for (let i = 0; i < repeat; i++) {
   await Bun.sleep(5);
 }
 
+/**
+ * HOW-39 — FAKE_CLAUDE_EDIT=1 makes one Edit, honouring a `--settings` PostToolUse hook the way
+ * claude 2.1.296 does (adapter/fixtures/claude-posttooluse-hook.jsonl): the hook command runs
+ * with the PostToolUse JSON on stdin and claude's environment, BEFORE the tool_result is
+ * emitted, and its `additionalContext` goes to the model — not to the stream. The fake "model"
+ * repeats it in its final words so a test can prove it got there.
+ */
+let hookContext = "";
+if (process.env.FAKE_CLAUDE_EDIT === "1") {
+  const id = "toolu_edit_1";
+  const input = { file_path: "src/a.ts", old_string: "1", new_string: "2" };
+  out({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id, name: "Edit", input }] } });
+  const argv = process.argv.slice(2);
+  const settingsAt = argv.indexOf("--settings");
+  if (settingsAt >= 0) {
+    const settings = JSON.parse(argv[settingsAt + 1]!) as { hooks?: { PostToolUse?: Array<{ matcher: string; hooks: Array<{ command: string }> }> } };
+    for (const group of settings.hooks?.PostToolUse ?? []) {
+      if (!new RegExp(`^(${group.matcher})$`).test("Edit")) continue;
+      for (const h of group.hooks) {
+        const r = Bun.spawnSync(["bash", "-c", h.command], {
+          stdin: new TextEncoder().encode(JSON.stringify({ hook_event_name: "PostToolUse", tool_name: "Edit", tool_input: input, tool_response: {}, tool_use_id: id, cwd: process.cwd() })),
+          env: process.env, stdout: "pipe", stderr: "pipe",
+        });
+        try { hookContext += (JSON.parse(new TextDecoder().decode(r.stdout)) as any).hookSpecificOutput?.additionalContext ?? ""; } catch {}
+      }
+    }
+  }
+  out({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: "The file src/a.ts has been updated.", is_error: false }] } });
+  if (hookContext) out({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: ` The hook told me: ${hookContext.replace(/\n/g, " ")}` } } });
+}
+
 if (process.env.FAKE_CLAUDE_RATELIMIT === "1")
   out({ type: "rate_limit_event", rate_limit: { status: "allowed", remaining: 0.31, resetsAt: "2026-09-13T18:00:00Z" } });
 

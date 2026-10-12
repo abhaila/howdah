@@ -86,6 +86,17 @@ export interface AgentConfig {
    * dangerous failure. `readOnly` beats it: a plan-mode node keeps `deny` and loses `allow`.
    */
   tools?: AgentTools;
+  /**
+   * HOW-39: run the workspace's `diagnosticsCommand` after every edit, inside the turn (a
+   * claude PostToolUse hook). Opt-in, default off until an A/B result says otherwise;
+   * `readOnly` forces it off. A harness without edit hooks ignores it, and says so.
+   */
+  diagnostics?: boolean;
+  /**
+   * HOW-39 — RESOLVED configs only: the command the hook will actually run, set by the engine
+   * when the node opted in, the harness can, and the workspace has one. Never a setting.
+   */
+  diagnosticsCommand?: string;
 }
 
 export interface AgentTools {
@@ -101,11 +112,12 @@ export function hasTools(t: AgentTools | undefined): t is AgentTools {
 /**
  * Every AgentConfig key a node or layer may set, in one list — what the engine and the
  * viewer's graph API copy off a node, so a new knob cannot be resolved in one and dropped by
- * the other. `effortInert` is absent on purpose: it is a RESOLUTION result, never a setting.
+ * the other. `effortInert` and `diagnosticsCommand` are absent on purpose: they are RESOLUTION
+ * results, never settings.
  */
 export const AGENT_CONFIG_KEYS = [
-  "harness", "model", "effort", "permissionMode", "maxTurns", "skills", "turnTimeoutMs", "stuckDetection", "contextCap", "contextRetries", "tools",
-] as const satisfies ReadonlyArray<Exclude<keyof AgentConfig, "effortInert">>;
+  "harness", "model", "effort", "permissionMode", "maxTurns", "skills", "turnTimeoutMs", "stuckDetection", "contextCap", "contextRetries", "tools", "diagnostics",
+] as const satisfies ReadonlyArray<Exclude<keyof AgentConfig, "effortInert" | "diagnosticsCommand">>;
 
 /** the AgentConfig a node declares, copied key by key (undefined keys omitted) */
 export function agentConfigOf(def: AgentConfig): AgentConfig {
@@ -186,6 +198,7 @@ export function resolveAgentConfigLayers(
     contextCap: pick("contextCap"),
     contextRetries: pick("contextRetries"),
     tools: pick("tools"),
+    diagnostics: pick("diagnostics"),
   };
 }
 

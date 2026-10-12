@@ -52,6 +52,7 @@ import { AttentionCenter, osNotifier, type Notifier } from "../attention";
 import { readLog } from "../../log/write";
 import { effectiveCwd } from "./worktree";
 import { killGroup } from "./shell";
+import { diagnosticsSettings } from "../hooks/diagnostics";
 import { ToolWatch, TurnCeiling, stuckReason, turnTimeoutReason, type StuckThresholds } from "./stuck";
 import { isAllowReply } from "./reply";
 import {
@@ -77,6 +78,8 @@ export interface ClaudeExecutorOpts {
   viewerBase?: string;
   /** HOW-38: config.json `stuck` thresholds (default warn 5, stop 8) */
   stuck?: StuckThresholds;
+  /** HOW-39: the diagnostics hook's own ceiling (default engine/hooks/diagnostics.ts) */
+  diagnosticsTimeoutMs?: number;
 }
 
 /**
@@ -106,10 +109,27 @@ export function claudeExecutor(opts: ClaudeExecutorOpts): Executor {
         // HOW-41: resolved (readOnly already stripped any allowance), translated per core/harnesses.ts
         allowedTools: agentConfig?.tools?.allow,
         disallowedTools: agentConfig?.tools?.deny,
+        // HOW-39: resolved by the engine only when the node, the harness and the workspace all say yes
+        ...(agentConfig?.diagnosticsCommand ? { settings: diagnosticsSettings(opts.diagnosticsTimeoutMs) } : {}),
       })],
       // HOW-38: its own process group, so a stuck or timed-out turn is ended with every
       // child it started (a test runner's workers) rather than leaving them orphaned
-      { cwd: effectiveCwd(log.path, cwd) ?? dirname(log.path), env: { ...process.env }, stdin: "pipe", stdout: "pipe", stderr: "pipe", detached: true },
+      {
+        cwd: effectiveCwd(log.path, cwd) ?? dirname(log.path),
+        // HOW-39: claude hands its environment to its hooks — this is how the hook learns its
+        // command and where to record what it ran
+        env: agentConfig?.diagnosticsCommand
+          ? {
+              ...process.env,
+              HOWDAH_DIAG_CMD: agentConfig.diagnosticsCommand,
+              HOWDAH_DIAG_LOG: log.path,
+              HOWDAH_DIAG_NODE: nodeId,
+              HOWDAH_DIAG_VISIT: String(visit),
+              ...(opts.diagnosticsTimeoutMs ? { HOWDAH_DIAG_TIMEOUT_MS: String(opts.diagnosticsTimeoutMs) } : {}),
+            }
+          : { ...process.env },
+        stdin: "pipe", stdout: "pipe", stderr: "pipe", detached: true,
+      },
     );
     proc.stdin.write(buildClaudeUserTurn(prompt));
     proc.stdin.flush();
@@ -261,10 +281,18 @@ export function claudeExecutor(opts: ClaudeExecutorOpts): Executor {
               chunk("tool_call", summary, { id: ev.id, name: ev.name, input_hash: watch.call(ev.id, ev.name, ev.input, summary) });
               break;
             }
-            case "tool_result":
+            case "tool_result": {
               chunk("tool_result", ev.content.slice(0, 400), { id: ev.id, ...(ev.is_error !== undefined ? { is_error: ev.is_error } : {}) });
               watch.result(ev.id, ev.is_error === true, ev.content);
+              // HOW-39: the hook ran before claude emitted this result and recorded itself in the
+              // log; a PostToolUse hook has no stream event, so this is how the transcript sees it
+              if (agentConfig?.diagnosticsCommand) {
+                const ran = readLog(log.path).findLast((e) => e.type === "diagnostics-ran" && e.tool_use_id === ev.id);
+                if (ran?.type === "diagnostics-ran")
+                  chunk("text", `\n[diagnostics after ${ran.tool_name}${ran.file ? ` ${ran.file}` : ""}: ${ran.timed_out ? "timed out" : ran.exit_code === 0 ? "passed" : `exit ${ran.exit_code}\n${ran.output.slice(-400)}`}]`);
+              }
               break;
+            }
             case "permission_request": {
               // HOW-25: the harness's own flag decides. A question needs the question card;
               // everything else is an ordinary permission and keeps its exact prior semantics.

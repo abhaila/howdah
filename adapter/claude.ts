@@ -46,6 +46,8 @@ export function claudeArgs(opts: {
   /** HOW-41: the node's action space; each name its own argv item, so `Bash(git *)` stays whole */
   allowedTools?: readonly string[];
   disallowedTools?: readonly string[];
+  /** HOW-39: a settings JSON (the post-edit diagnostics hook) */
+  settings?: string;
 }): string[] {
   return [
     "-p",
@@ -60,6 +62,7 @@ export function claudeArgs(opts: {
     ...(opts.effort ? ["--effort", opts.effort] : []),
     ...(opts.allowedTools?.length ? [CLAUDE_TOOL_FLAGS.allow, ...opts.allowedTools] : []),
     ...(opts.disallowedTools?.length ? [CLAUDE_TOOL_FLAGS.deny, ...opts.disallowedTools] : []),
+    ...(opts.settings ? ["--settings", opts.settings] : []),
     ...(opts.resume ? ["--resume", opts.sessionId] : ["--session-id", opts.sessionId]),
   ];
 }
