@@ -24,6 +24,7 @@ import { StepActivity } from "./activity";
 import { PromptAndContext } from "./prompt-context";
 import { OutputDocs, stepOutputs } from "./document";
 import { UsageRows } from "./usage";
+import { describeProfile } from "../../../log/trajectory";
 
 /** Status is a SHAPE first (DESIGN.md): the glyph alone must carry the state. */
 export function StepGlyph({ status }: { status: "running" | "succeeded" | "failed" | "needs-input" }) {
@@ -305,6 +306,8 @@ export function StepDetail({ runId, row, detail, ask, now, onResolved }: {
             {bar("agent working", work, total, "work")}
             {row.waiting_ms > 0 && bar("waiting on you", row.waiting_ms, total, "waiting")}
           </div>
+          {/* HOW-35: what the agent did, by rule from its tool calls */}
+          {row.profile && <div className="pd-note" data-testid="step-profile">{describeProfile(row.profile)}</div>}
           <PanelTabs value={shown} onValueChange={setPane} items={panes} />
           <div className="sd-body">
             {(shown === "approval" || shown === "drift" || shown === "map") && detail.slice && (

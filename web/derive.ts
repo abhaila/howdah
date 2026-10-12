@@ -25,6 +25,7 @@ import { replayState } from "../engine/replay";
 import type { Scope } from "../core/context";
 import { coalesce, outcomesByHash, type CoalescedTurn, type JoinedOutcome } from "../log/coalesce";
 import { rollupRun, usageByVisit, type UsageRollup, type VisitUsage } from "../log/usage";
+import { deriveProfile, verifyCommandFromLog, type TrajectoryProfile } from "../log/trajectory";
 import { ghostEdgeId, ghostEntityIds, orphanedComments, OPS, type GhostSet, type GhostTrace, type Op } from "../map/ghosts";
 import { DRIFT_OUTCOMES, type DriftItem, type DriftOutcome } from "../map/drift";
 import { PROBLEM_OUTCOMES, snapshotStamp } from "../engine/slice-map";
@@ -85,6 +86,8 @@ export interface TimelineRow {
   waiting_ms: number;
   /** HOW-34: this attempt's usage (log/usage.ts) — null when it finalized no turn */
   usage: VisitUsage | null;
+  /** HOW-35: what the agent did (log/trajectory.ts) — null for a step that rendered no prompt */
+  profile: TrajectoryProfile | null;
 }
 
 export interface RunDetail {
@@ -223,7 +226,7 @@ export function deriveTimeline(events: LoggedEvent[]): TimelineRow[] {
       }
       open.clear();
       const key = `${e.node}@${e.visit}`;
-      const row: TimelineRow = { node: e.node, visit: e.visit, started_at: e.ts, finished_at: null, status: "running", duration_ms: null, offset_ms: 0, run_span_ms: 0, waiting_ms: 0, usage: null };
+      const row: TimelineRow = { node: e.node, visit: e.visit, started_at: e.ts, finished_at: null, status: "running", duration_ms: null, offset_ms: 0, run_span_ms: 0, waiting_ms: 0, usage: null, profile: null };
       rows.push(row);
       open.set(key, row);
     } else if (e.type === "node-finished") {
@@ -240,6 +243,10 @@ export function deriveTimeline(events: LoggedEvent[]): TimelineRow[] {
   if (rows.length === 0) return rows;
   const usage = new Map(usageByVisit(events).map((u) => [`${u.node}@${u.visit}`, u]));
   for (const r of rows) r.usage = usage.get(`${r.node}@${r.visit}`) ?? null;
+  const agentRows = new Set(events.flatMap((e) => (e.type === "prompt-rendered" ? [`${e.node}@${e.visit}`] : [])));
+  const verifyCommand = verifyCommandFromLog(events);
+  for (const r of rows)
+    if (agentRows.has(`${r.node}@${r.visit}`)) r.profile = deriveProfile(events, r.node, r.visit, verifyCommand ? { verifyCommand } : {});
   const origin = new Date(rows[0]!.started_at).getTime();
   const lastEventAt = events.at(-1)?.ts;
   // a run still waiting on a human measures to NOW, not to its last event — otherwise the

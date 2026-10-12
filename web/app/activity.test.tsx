@@ -19,7 +19,7 @@ let host: HTMLElement | null = null;
 
 const ROW = {
   node: "slice.propose", visit: 1, started_at: "2026-01-01T00:00:00.000Z", finished_at: null,
-  status: "succeeded" as const, duration_ms: 10, offset_ms: 0, run_span_ms: 10, waiting_ms: 0, usage: null,
+  status: "succeeded" as const, duration_ms: 10, offset_ms: 0, run_span_ms: 10, waiting_ms: 0, usage: null, profile: null,
 };
 const turn = (parts: TurnPart[]): CoalescedTurn => ({ node: ROW.node, visit: 1, turn: 1, parts, finalized: true });
 

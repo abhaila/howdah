@@ -73,3 +73,62 @@ describe("partials: revised only from an includer's evidence", () => {
     expect(text).toContain("The feedback below judged renders of repair, which includes it");
   });
 });
+
+/**
+ * HOW-35: the reviser gets behavioural evidence — the trajectory profile of every past visit of
+ * the prompt — and the block is absent when there is none.
+ */
+describe("behavioural evidence (HOW-35)", () => {
+  const { loadProfiles, summariseProfiles } = require("./revise") as typeof import("./revise");
+  type Ev = Record<string, unknown>;
+  /** a run under <home>/runs/<id> whose `node` rendered `prompt` and then made the given calls */
+  function writeRun(home: string, id: string, prompt: string, calls: Array<[string, unknown]>) {
+    const events: Ev[] = [
+      { type: "run-started", graph: "g", inputs: {}, pinned_prompts: {} },
+      { type: "node-started", node: "impl", visit: 1, attempt_id: "impl#1" },
+      { type: "prompt-rendered", node: "impl", visit: 1, prompt, prompt_version: 1, rendered_hash: "h", context_read: {}, harness: "claude" },
+      ...calls.map(([name, input], i) => ({ type: "chunk", node: "impl", visit: 1, turn: 1, index: i, kind: "tool_call", content: JSON.stringify(input), tool_id: `t${i}`, tool_name: name })),
+      { type: "node-finished", node: "impl", visit: 1, status: "succeeded", writes: {} },
+    ];
+    mkdirSync(join(home, "runs", id), { recursive: true });
+    writeFileSync(join(home, "runs", id, "run.jsonl"), events.map((e, i) => JSON.stringify({ ...e, seq: i + 1, ts: "2026-10-12T00:00:00Z" })).join("\n") + "\n");
+  }
+  const edit = ["Edit", { file_path: "a.ts", old_string: "x", new_string: "y" }] as [string, unknown];
+  const test_ = ["Bash", { command: "bun test" }] as [string, unknown];
+
+  test("the summary counts visits that verified 3+ times after their last edit, as 'X of N'", () => {
+    const home = mkdtempSync(join(tmpdir(), "howdah-rev-home-"));
+    writeRun(home, "r1", "other", [edit, test_, test_, test_]);
+    writeRun(home, "r2", "other", [edit, test_]);
+    writeRun(home, "r3", "unrelated", [test_]);
+    const profiles = loadProfiles("other", home);
+    expect(profiles).toHaveLength(2);
+    const summary = summariseProfiles(profiles)!;
+    expect(summary).toContain("2 visits with tool data");
+    expect(summary).toContain("In 1 of 2 visits this prompt's node ran verification 3+ times after its last edit.");
+  });
+
+  test("no tool data anywhere: no summary, and the reflection carries no evidence block", () => {
+    const home = mkdtempSync(join(tmpdir(), "howdah-rev-home-"));
+    writeRun(home, "r1", "other", []);
+    expect(summariseProfiles(loadProfiles("other", home))).toBeUndefined();
+    expect(buildReflection("other", 1, "x", [], {})).not.toContain("BEHAVIOURAL EVIDENCE");
+  });
+
+  test("HOWDAH_STUB=1: the CLI writes the reflection prompt, evidence included, and calls no model", () => {
+    const r = root();
+    mkdirSync(join(r, "feedback"));
+    writeFileSync(join(r, "feedback", "other.jsonl"), JSON.stringify({ run: "r1", node: "impl", visit: 1, verdict: "reject", note: "too slow" }) + "\n");
+    const home = mkdtempSync(join(tmpdir(), "howdah-rev-home-"));
+    writeRun(home, "r1", "other", [edit, test_, test_, test_]);
+    const out = join(r, "out");
+    const res = Bun.spawnSync(["bun", join(import.meta.dir, "revise.ts"), "other", "--root", r, "--out", out], {
+      env: { ...process.env, HOWDAH_STUB: "1", HOWDAH_HOME: home },
+    });
+    expect(res.exitCode).toBe(0);
+    const prompt = require("node:fs").readFileSync(join(out, "other.v2.reflection-prompt.md"), "utf8") as string;
+    expect(prompt).toContain("BEHAVIOURAL EVIDENCE");
+    expect(prompt).toContain("In 1 of 1 visit this prompt's node ran verification 3+ times after its last edit.");
+    expect(prompt).toContain("too slow");
+  });
+});

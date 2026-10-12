@@ -526,7 +526,7 @@ describe("slice panes and progress", () => {
     const { log } = awaitingSlice();
     log.add(drift([{ key: "a", outcome: "verified" }]));
     const slice = deriveSlice(log.events)!;
-    const row = (node: string) => ({ node, visit: 1, started_at: "", finished_at: null, status: "running" as const, duration_ms: null, offset_ms: 0, run_span_ms: 1, waiting_ms: 0, usage: null });
+    const row = (node: string) => ({ node, visit: 1, started_at: "", finished_at: null, status: "running" as const, duration_ms: null, offset_ms: 0, run_span_ms: 1, waiting_ms: 0, usage: null, profile: null });
     expect(slicePanes(slice, row("slice.approve")).map((p) => p.value)).toEqual(["approval"]);
     expect(slicePanes(slice, row("map.drift")).map((p) => p.value)).toEqual(["drift"]);
     expect(slicePanes(slice, row("implementation.implement"))).toEqual([]);
