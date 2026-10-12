@@ -45,6 +45,7 @@ import { RunContext } from "./context";
 import { RunChat } from "./chat";
 import { UsageRows } from "./usage";
 import { ProgressPanel, liveStep, steerableTurn } from "./progress";
+import { AcceptanceCard } from "./acceptance";
 import { SOFT_STOP_ESCALATE_MS } from "../../../core/steer";
 import type { LiveGit } from "../../live-git";
 
@@ -526,6 +527,12 @@ export function RunView({ id, graceMs = OPEN_GRACE_MS }: { id: string; graceMs?:
           <section>
             <h2><Activity size={12} /> Progress</h2>
             <ProgressPanel detail={detail} liveGit={liveGit} variant="rail" runId={id} />
+          </section>
+        )}
+        {/* HOW-51: the contract while the run is still being judged; once finished it leads Chat */}
+        {detail.acceptance && detail.summary.outcome === null && detail.ask?.code !== "acceptance-unmet" && (
+          <section>
+            <AcceptanceCard runId={id} detail={detail} onChanged={reload} />
           </section>
         )}
         <section>

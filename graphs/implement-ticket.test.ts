@@ -23,6 +23,8 @@ interface Script {
   localReview: () => "pass" | "reject";
   /** HOW-40: what verify.run publishes (default: a pass) */
   verify?: () => VerifyResult;
+  /** HOW-51: does the reviewer flip the criterion? default yes */
+  flips?: boolean;
   repairReview?: () => "pass" | "reject";
   pr?: () => PrState;
 }
@@ -52,8 +54,16 @@ function engineFor(dir: string, script: Script, prompts: Map<string, string>, ex
           case "implementation.implement":
           case "implementation.implement_review":
             return ok({ implementation_summary: "summary" });
+          case "implementation.criteria":
+            return ok({ acceptance: [{ id: "ac-1", text: "the bug is fixed", source: "plan", passes: false, evidence: null }] });
           case "implementation.local_review":
-            return ok({ review_verdict: script.localReview(), review_findings: ["nit"] });
+            // a passing review flips the one criterion on the (stubbed) passing tests
+            return ok({
+              review_verdict: script.localReview(), review_findings: ["nit"],
+              acceptance: [script.flips === false
+                ? { id: "ac-1", text: "the bug is fixed", source: "plan", passes: false, evidence: null }
+                : { id: "ac-1", text: "the bug is fixed", source: "plan", passes: true, evidence: { kind: "verify.result" } }],
+            });
           case "delivery.publish":
             return ok({ publication_summary: "pr opened" });
           case "delivery.review_repairs":
@@ -203,7 +213,7 @@ describe("implement-ticket runs verify:run before its review (HOW-40)", () => {
       expect(await engine.start(INPUTS)).toEqual({ state: "finished", outcome: "success" });
       const events = engine.log.read();
       const order = events.flatMap((e) => (e.type === "node-started" ? [e.node] : []));
-      expect(order.slice(0, 6)).toEqual(["create_worktree", "implementation.plan", "implementation.implement", "verify.run", "implementation.evidence", "implementation.local_review"]);
+      expect(order.slice(0, 7)).toEqual(["create_worktree", "implementation.plan", "implementation.criteria", "implementation.implement", "verify.run", "implementation.evidence", "implementation.local_review"]);
       const review = events.find((e) => e.type === "prompt-rendered" && e.node === "implementation.local_review");
       expect(review?.type === "prompt-rendered" && review.context_read["verify.result"]).toEqual(verify);
       expect(prompts.get("implementation.local_review@1")).toContain(`"outcome":"${label}"`);
@@ -228,5 +238,25 @@ describe("implement-ticket runs verify:run before its review (HOW-40)", () => {
       expect(raw(id)).toContain("{{> review._verify_result }}");
       expect(raw(id)).not.toContain("{{ context.verify.result }}"); // only the partial carries it
     }
+  });
+});
+
+describe("implement-ticket's acceptance gate (HOW-51)", () => {
+  test("a review that PASSES but leaves a criterion unmet is still held before delivery.publish", async () => {
+    const engine = engineFor(tmp(), { localReview: () => "pass", flips: false }, new Map());
+    const result = await engine.start(INPUTS);
+    expect(result).toMatchObject({ state: "parked", node: "delivery.publish", code: "acceptance-unmet" });
+    expect(started(engine.log.read(), "delivery.publish")).toEqual([]);
+  });
+
+  test("the criteria step runs once, after the plan and before any code", async () => {
+    const engine = engineFor(tmp(), { localReview: () => "pass" }, new Map());
+    await engine.start(INPUTS);
+    const order = engine.log.read().flatMap((e) => (e.type === "node-started" ? [e.node] : []));
+    expect(order.slice(0, 7)).toEqual([
+      "create_worktree", "implementation.plan", "implementation.criteria", "implementation.implement",
+      "verify.run", "implementation.evidence", "implementation.local_review",
+    ]);
+    expect(order.filter((n) => n === "implementation.criteria")).toHaveLength(1);
   });
 });

@@ -106,8 +106,11 @@ describe("deliveryGraph extraction keeps implement-ticket identical", () => {
     // the same list against its fixture):
     //   HOW-52  `implementation.evidence` (evidence:screenshot) before every local review;
     //           local_review reads evidence.items through `ticket.local_review`
+    //   HOW-51  `implementation.criteria` (read-only) opens the acceptance contract; HOW-40's
+    //           `implementation.verify` runs before the evidence step; local_review is read-only
+    //           and writes `acceptance`; delivery.publish reads it and `requiresAcceptance`
     const s = JSON.stringify(sortDeep(shapeOf(implementTicket)));
-    expect(createHash("sha256").update(s).digest("hex")).toBe("a732a356cf7ad1d364277f49e5e46bd5408cb7449c87503b904264c2fff1ca67");
+    expect(createHash("sha256").update(s).digest("hex")).toBe("d8437614f4394c23a005b134e39a9b664bbcd04c14b73d73ae7be6b00f01f498");
   });
 ;
 

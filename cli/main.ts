@@ -25,6 +25,7 @@
  *   howdah metrics [--json]                          implement-slice runs vs the implement-ticket baseline (cli/metrics.ts)
  */
 import { softStop, steer } from "../engine/steer";
+import { waiveCriterion } from "../engine/acceptance-decision";
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { Engine } from "../engine/run";
@@ -318,6 +319,24 @@ export function softStopCommand(runId: string): void {
     : `stop sent to ${sent.node}@${sent.visit} — the agent stops at its next tool call; \`pause ${runId}\` stops it now`);
 }
 
+/**
+ * HOW-51: `howdah waive <run> <criterion-id> <reason>` — accept an unmet criterion without
+ * evidence, on the record. The same decision the Acceptance card makes; when it was the last
+ * unmet one and the run is parked on the delivery gate, the run is resumed.
+ */
+export async function waiveCommand(runId: string, criterionId: string, reason: string): Promise<void> {
+  const runDir = join(runsDir, runId);
+  const r = waiveCriterion(runDir, criterionId, reason);
+  if (!r.ok) throw new Error(r.message);
+  console.log(r.appended ? `waived "${criterionId}"` : `"${criterionId}" was already waived`);
+  if (r.remaining > 0) return console.log(`${r.remaining} criteria still unmet — delivery stays held`);
+  const parked = replayState(readLog(join(runDir, "run.jsonl"))).parked;
+  if (parked?.code === "acceptance-unmet") {
+    console.log("every criterion is met or waived; resuming");
+    await resumeCommand(runId);
+  }
+}
+
 export async function upCommand(opts: { intervalMs?: number; once?: boolean } = {}): Promise<void> {
   const interval = opts.intervalMs ?? 5000;
   console.log(`howdah up: supervising ${runsDir}`);
@@ -604,6 +623,7 @@ if (import.meta.main) {
     else if (verb === "jump") await jumpCommand(rest[0] ?? "", rest[1] ?? "", rest.slice(2).join(" ") || undefined);
     else if (verb === "steer") steerCommand(rest[0] ?? "", rest.slice(1).join(" "));
     else if (verb === "stop") softStopCommand(rest[0] ?? "");
+    else if (verb === "waive") await waiveCommand(rest[0] ?? "", rest[1] ?? "", rest.slice(2).join(" "));
     else if (verb === "approve" || verb === "send-feedback" || verb === "comment") {
       const { proposalId, rest: args } = splitProposalFlag(rest, verb === "comment" ? 2 : Infinity);
       if (verb === "approve") await approveCommand(args[0] ?? "", proposalId);
@@ -693,7 +713,7 @@ if (import.meta.main) {
       console.log(`scaffolded ${path} — edit it, then: howdah run ${rest[0]}`);
     }
     else {
-      console.error("usage: howdah setup|run|resume|pause|stop|abort|jump|steer|reply|resolve-effect|approve|comment|send-feedback|redesign|map|metrics|runs|graphs|new-graph|workspace|up|doctor");
+      console.error("usage: howdah setup|run|resume|pause|stop|abort|jump|steer|waive|reply|resolve-effect|approve|comment|send-feedback|redesign|map|metrics|runs|graphs|new-graph|workspace|up|doctor");
       process.exit(1);
     }
   } catch (err) {

@@ -46,6 +46,8 @@ import { LiveGitHub, liveTargetOf } from "./live-git";
 import { softStop, steer } from "../engine/steer";
 import { SOFT_STOP_ESCALATE_MS } from "../core/steer";
 import { isEvidencePath } from "../core/evidence";
+import { waiveCriterion } from "../engine/acceptance-decision";
+import { replayState } from "../engine/replay";
 import { BoardCache, boardRow } from "./board";
 import { currentProposal } from "../engine/slice-decision";
 import { loadSnapshot } from "../engine/slice-map";
@@ -675,6 +677,25 @@ export function createHowdahServer(opts: ServerOpts) {
           stdout: "ignore", stderr: "ignore", env: { ...process.env },
         }).unref();
         return json({ id: runId }, 202);
+      }
+
+      /**
+       * HOW-51: waive an acceptance criterion — a human decision, appended under the log lock
+       * (engine/acceptance-decision.ts). When it was the last one holding delivery and the run
+       * is parked on the gate, the runner is resumed, as a slice decision resumes it: the waiver
+       * alone answers that park. 409 with the refusal's own words otherwise.
+       */
+      const aw = url.pathname.match(/^\/api\/runs\/([^/]+)\/acceptance\/waive$/);
+      if (aw && req.method === "POST") {
+        const runId = aw[1]!;
+        const runDir = join(opts.runsDir, runId);
+        const body = (await req.json().catch(() => ({}))) as { criterion?: unknown; reason?: unknown };
+        const r = waiveCriterion(runDir, String(body.criterion ?? ""), String(body.reason ?? ""));
+        if (!r.ok) return json({ error: r.message }, 409);
+        const parked = replayState(readLog(join(runDir, "run.jsonl"))).parked;
+        const resumed = r.remaining === 0 && parked?.code === "acceptance-unmet" && !runnerAlive(runDir);
+        if (resumed) launchResume(runId);
+        return json({ ok: true, appended: r.appended, remaining: r.remaining, resumed }, 202);
       }
 
       /**

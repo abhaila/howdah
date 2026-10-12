@@ -50,7 +50,7 @@ import { dirname, join } from "node:path";
 import type { Executor } from "../run";
 import { JsonlChunkParser } from "../../adapter/parse";
 import { mapClaudeEvent, buildClaudePermissionResponse, buildClaudeUserTurn, claudeArgs } from "../../adapter/claude";
-import { buildRepairInstruction, parseOutputs } from "./outputs";
+import { buildRepairInstruction, checkWrites, parseOutputs } from "./outputs";
 import { classifyHarnessExit, compactionNote, contextExhaustedFailure } from "./harness-failure";
 import { AttentionCenter, osNotifier, type Notifier } from "../attention";
 import { readLog } from "../../log/write";
@@ -98,9 +98,10 @@ export function turnShare(cumulative: number, before: number): number {
 }
 
 export function claudeExecutor(opts: ClaudeExecutorOpts): Executor {
-  return async ({ nodeId, def, visit, runId, cwd, log, renderedPrompt, agentConfig }) => {
+  return async ({ nodeId, def, visit, runId, cwd, log, renderedPrompt, agentConfig, reads }) => {
     if (def.kind !== "agent") throw new Error("claudeExecutor on non-agent node");
     const writeKeys = Object.keys(def.writes ?? {});
+    const check = (w: Record<string, unknown>) => checkWrites(w, reads ?? {}); // HOW-51
     const prompt = renderedPrompt ?? ""; // exactly what rendered_hash covers (system-map 0.1)
     const sessionId = randomUUID();
 
@@ -322,6 +323,8 @@ export function claudeExecutor(opts: ClaudeExecutorOpts): Executor {
 
     let turnEnded = false;
     let repairSent = false;
+    /** HOW-51: why the first answer's outputs were refused — the reason if the repair never answers */
+    let refusedFirst: string | undefined;
     let sawEvent = false; // did the CLI ever speak stream-json? a logged-out CLI never does
     readLoop: for await (const bytes of proc.stdout) {
       for (const record of parser.push(bytes)) {
@@ -430,14 +433,17 @@ export function claudeExecutor(opts: ClaudeExecutorOpts): Executor {
         // (never with a steer in limbo: the CLI would answer the queued steer before the repair)
         const limbo = [...steersPending.values()].some((p) => p.written) || (stop.written && !stop.delivered);
         // HOW-48: a turn that ended after the stop reached it OBEYED — it is not asked for outputs
-        if (!repairSent && !limbo && !stop.delivered && !turnError && writeKeys.length && !parseOutputs(resultText ?? accumulated, writeKeys).ok) {
+        const firstParse = writeKeys.length ? parseOutputs(resultText ?? accumulated, writeKeys, check) : { ok: true };
+        if (!repairSent && !limbo && !stop.delivered && !turnError && writeKeys.length && !firstParse.ok) {
           repairSent = true;
           turnEnded = false;
           resultText = undefined;
           accumulated = "";
-          chunk("text", "\n[outputs object missing — asking for it]");
+          const refused = "refused" in firstParse && firstParse.refused ? firstParse.problem : undefined;
+          refusedFirst = refused;
+          chunk("text", refused ? `\n[outputs refused — ${refused} — asking again]` : "\n[outputs object missing — asking for it]");
           turn = 2;
-          proc.stdin.write(buildClaudeUserTurn(buildRepairInstruction(writeKeys)));
+          proc.stdin.write(buildClaudeUserTurn(buildRepairInstruction(writeKeys, refused)));
           proc.stdin.flush();
           continue;
         }
@@ -526,7 +532,9 @@ export function claudeExecutor(opts: ClaudeExecutorOpts): Executor {
       chunk("text", `\n[turn error: ${turnError}]`);
       return { status: "failed", writes: {}, reason: `turn error: ${turnError}` };
     }
-    const parsed = parseOutputs(resultText ?? accumulated, writeKeys);
+    const parsed = parseOutputs(resultText ?? accumulated, writeKeys, check);
+    // a repair turn that never answered must not hide what was wrong with the first answer
+    if (!parsed.ok && refusedFirst !== undefined && resultText === undefined && !accumulated.trim()) parsed.problem = refusedFirst;
     if (!parsed.ok) {
       chunk("text", `\n[output contract violation: ${parsed.problem}]`);
       return { status: "failed", writes: {}, reason: `output contract violation: ${parsed.problem}` };

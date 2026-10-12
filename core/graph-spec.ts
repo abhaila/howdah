@@ -211,6 +211,8 @@ export type NodeSpec =
       readOnly?: true;
       /** the id of an approval step this one may not start before (requires.approvalOf) */
       requires?: string;
+      /** HOW-51: may not start while a live acceptance criterion is unmet and unwaived */
+      requiresAcceptance?: true;
       config?: AgentConfig;
     })
   | (NodeBase & { kind: "command"; run: string; reads: string[]; writes: string[]; timeoutMs?: number; maxVisits?: number })
@@ -424,6 +426,7 @@ function compileNode(n: NodeSpec, scopes: Record<string, Scope>, fields: FieldSp
         ...(n.maxVisits !== undefined ? { maxVisits: n.maxVisits } : {}),
         ...(n.readOnly ? { readOnly: true as const } : {}),
         ...(n.requires ? { requires: { approvalOf: n.requires } } : {}),
+        ...(n.requiresAcceptance ? { requiresAcceptance: true as const } : {}),
         ...(n.config ?? {}),
         ...cls,
       };
@@ -1046,6 +1049,7 @@ function parseNode(v: unknown): NodeSpec | undefined {
         ...(maxVisits !== undefined ? { maxVisits } : {}),
         ...(v.readOnly === true ? { readOnly: true as const } : {}),
         ...(requires ? { requires } : {}),
+        ...(v.requiresAcceptance === true ? { requiresAcceptance: true as const } : {}),
         ...(config ? { config } : {}),
       };
     }

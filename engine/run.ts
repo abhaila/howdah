@@ -69,6 +69,8 @@ import { DEFAULT_CONTEXT_CAP, RENDER_VERSION, SUFFIX_VERSION, assemblePrompt, ex
 import { defaultHarness, fallbackChain, harnessNames, harnessSpec, isHarness } from "../core/harnesses";
 import { EventLog } from "../log/write";
 import type { LoggedEvent, ParkCode } from "../log/events";
+import { ACCEPTANCE_KEY, asAcceptance, unmetCriteria, type AcceptanceRow } from "../core/acceptance";
+import { waivedCriteria } from "./acceptance-decision";
 import { softStopState, stopResumeFor, undeliveredSteers } from "./steer-state";
 import { replayState, effectKey } from "./replay";
 import type { PromptId } from "../core/prompt-ids";
@@ -710,7 +712,12 @@ export class Engine {
    * fingerprint that cannot be computed parks stale-base — never a pass.
    */
   private async requiresGate(nodeId: string, def: NodeDef<any>, visit: number): Promise<{ code: ParkCode; reason: string } | null> {
-    if (def.kind !== "agent" || !def.requires) return null;
+    if (def.kind !== "agent") return null;
+    if (def.requiresAcceptance) {
+      const unmet = this.acceptanceGate(nodeId, visit);
+      if (unmet) return unmet;
+    }
+    if (!def.requires) return null;
     const approvalId = def.requires.approvalOf;
     const approval = this.graph.def.nodes[approvalId];
     if (!approval || approval.kind !== "approval") throw new EngineError(`"${nodeId}" requires unknown approval node "${approvalId}"`);
@@ -751,6 +758,30 @@ export class Engine {
       if (moved) return stale(moved);
     }
     return null;
+  }
+
+  /**
+   * HOW-51: the acceptance gate. Every live criterion must pass, or have been WAIVED by an
+   * operator decision event — never a flag, and never `attention-resolved`: resume() resolves
+   * every standing park, so a gate that trusted it would let any resume through. A plain resume
+   * therefore re-checks here and parks again until the contract is met or waived.
+   */
+  private acceptanceGate(nodeId: string, visit: number): { code: ParkCode; reason: string } | null {
+    const unmet = (why: string) => ({ code: "acceptance-unmet" as const, reason: `"${nodeId}" requires the acceptance criteria to be met: ${why}` });
+    if (!this.ctx.has(ACCEPTANCE_KEY)) return unmet("no acceptance criteria were recorded");
+    let rows: AcceptanceRow[] | null;
+    try {
+      rows = asAcceptance(this.ctx.get(ACCEPTANCE_KEY, { node: `${nodeId}(requires)`, visit }));
+    } catch (err) {
+      return unmet(err instanceof Error ? err.message : String(err));
+    }
+    if (!rows) return unmet(`"${ACCEPTANCE_KEY}" is not a list of criteria`);
+    const left = unmetCriteria(rows, waivedCriteria(this.log.read()));
+    if (left.length === 0) return null;
+    return unmet(
+      `${left.length} unmet — ${left.map((r) => `"${r.id}" (${r.text.length > 80 ? `${r.text.slice(0, 77)}…` : r.text})`).join("; ")}. ` +
+        `Waive a criterion that cannot be checked, or jump back to the review once it is met.`,
+    );
   }
 
   /**

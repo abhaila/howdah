@@ -20,6 +20,7 @@
  */
 import { askQuestions, type UserQuestion } from "../core/ask";
 import { asEvidenceResult, EVIDENCE_KEY, type EvidenceResult } from "../core/evidence";
+import { latestAcceptance, unmetCriteria, waivedCriteria, type AcceptanceRow } from "../core/acceptance";
 import type { LoggedEvent, RunOutcome } from "../log/events";
 import { currentProposal, decisionAnswers, decisionKind, findDecision } from "../engine/slice-decision";
 import { replayState } from "../engine/replay";
@@ -167,6 +168,17 @@ export interface RunDetail {
    * only files under the run's evidence/ folder survive it.
    */
   evidence: Array<{ node: string; visit: number; at: string; result: EvidenceResult }>;
+  /**
+   * HOW-51: the acceptance contract as it stands — the latest list any node wrote, each row with
+   * its waiver (a decision event) when an operator waived it, plus every earlier version's rows
+   * that the latest list no longer carries live (superseded rows stay, by the contract's rules).
+   * Null for a run that never wrote one, so an old run renders no card rather than an empty red one.
+   */
+  acceptance: {
+    rows: Array<AcceptanceRow & { waived: { reason: string; at: string } | null }>;
+    written_by: { node: string; visit: number; at: string };
+    unmet: number;
+  } | null;
   /**
    * HOW-46/HOW-49: when the agent last produced anything (a chunk or a turn boundary) — the
    * "last activity Ns ago" clock and the quiet-for-N-minutes signal. Null before any turn.
@@ -465,6 +477,16 @@ export function deriveDetail(
     plan: timeline.length ? derivePlan(events, timeline.at(-1)!.node, timeline.at(-1)!.visit) : null,
     steers: steerStates(events),
     soft_stop: timeline.length ? softStopState(events, timeline.at(-1)!.node, timeline.at(-1)!.visit) : null,
+    acceptance: (() => {
+      const latest = latestAcceptance(events);
+      if (!latest) return null;
+      const waived = waivedCriteria(events);
+      return {
+        rows: latest.rows.map((r) => ({ ...r, waived: waived.get(r.id) ?? null })),
+        written_by: { node: latest.node, visit: latest.visit, at: latest.at },
+        unmet: unmetCriteria(latest.rows, waived).length,
+      };
+    })(),
     evidence: events.flatMap((e) => {
       if (e.type !== "node-finished" || !(EVIDENCE_KEY in e.writes)) return [];
       const result = asEvidenceResult(e.writes[EVIDENCE_KEY]);
@@ -664,6 +686,8 @@ export function deriveLogRows(events: LoggedEvent[]): LogRow[] {
           summary: `${e.forced ? "stopped hard (kept calling tools)" : "stopped"} · ${e.last_message.slice(0, 200)}` };
       case "soft-stop-moot":
         return { ...base, ...at(e.node, e.visit), kind: "operator", depth: 1, summary: "stop moot — the step finished first; pausing at the boundary" };
+      case "acceptance-waived":
+        return { ...base, node: null, visit: null, kind: "operator", depth: 0, summary: `waived criterion "${e.criterion_id}" · ${e.reason.slice(0, 160)}` };
       default: {
         const never: never = e;
         throw new Error(`unhandled event type in deriveLogRows: ${JSON.stringify(never)}`);

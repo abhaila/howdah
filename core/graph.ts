@@ -22,6 +22,7 @@
  * (Orbital semantics: stages without a matching edge await the operator). Exhaustive
  * conditional sets over closed choice types are therefore legal and common.
  */
+import { ACCEPTANCE_KEY } from "./acceptance";
 import { validateGraph, formatViolations, type GraphShape, type Violation } from "./validate";
 import { defaultHarness, effortFor, harnessNames, harnessSpec, isHarness, type HarnessName } from "./harnesses";
 import type { Scope } from "./context";
@@ -265,6 +266,12 @@ export type NodeDef<C extends object> =
        * proposer that wrote files would move the fingerprint and invalidate its own proposal.
        */
       readOnly?: true;
+      /**
+       * HOW-51: a pre-start gate like `requires` — the node starts only while every live
+       * criterion in `acceptance` passes or was waived by a human decision event. The node
+       * must read `acceptance` (validate() checks), which is also what proves a writer exists.
+       */
+      requiresAcceptance?: true;
     } & AgentConfig)
   | {
       kind: "command";
@@ -427,6 +434,8 @@ export class Graph<C extends object> {
    *   7. approval wiring (system-map 1a): distinct decision/feedback keys, a real
    *      redesignTo that does not itself declare the (engine-owned) feedback key, one
    *      approval per proposal key, and every `requires.approvalOf` names an approval node
+   *   8. the acceptance contract (HOW-51): only read-only agents write `acceptance`, and a
+   *      `requiresAcceptance` node reads it
    */
   validate(): { structural: string[]; paths: Violation[] } {
     const structural: string[] = [];
@@ -454,6 +463,7 @@ export class Graph<C extends object> {
     }
 
     structural.push(...this.approvalProblems());
+    structural.push(...this.acceptanceProblems());
 
     this.declarations(); // throws GraphError on scope conflicts
 
@@ -485,6 +495,23 @@ export class Graph<C extends object> {
         if (!gate || gate.kind !== "approval")
           problems.push(`node "${id}" requires approval of "${node.requires.approvalOf}", which is not an approval node`);
       }
+    }
+    return problems;
+  }
+
+  /**
+   * HOW-51: the acceptance contract's two structural rules. Only a READ-ONLY agent may write
+   * `acceptance` — the step that can flip a criterion must not be able to change the code it
+   * judges — and a node gated on the contract must read it.
+   */
+  private acceptanceProblems(): string[] {
+    const problems: string[] = [];
+    for (const [id, node] of Object.entries(this.def.nodes)) {
+      if (node.kind === "terminal") continue;
+      if (ACCEPTANCE_KEY in nodeWrites(node) && !(node.kind === "agent" && node.readOnly))
+        problems.push(`node "${id}" writes "${ACCEPTANCE_KEY}" but is not a read-only agent — only a read-only evaluator may set or flip acceptance criteria`);
+      if (node.kind === "agent" && node.requiresAcceptance && !((node.reads ?? []) as string[]).includes(ACCEPTANCE_KEY))
+        problems.push(`node "${id}" requires acceptance but does not read "${ACCEPTANCE_KEY}"`);
     }
     return problems;
   }

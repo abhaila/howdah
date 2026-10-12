@@ -27,6 +27,9 @@
  *   HOW-52  implement-ticket: `implementation.evidence` (evidence:screenshot) runs after
  *           `verify.run`, before every local review, which reads `evidence.items` through the
  *           new `ticket.local_review`.
+ *   HOW-51  implement-ticket: `implementation.criteria` opens the acceptance contract,
+ *           local_review is read-only and writes `acceptance`, and delivery.publish
+ *           `requiresAcceptance`.
  */
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";

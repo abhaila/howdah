@@ -63,6 +63,7 @@ import { Button } from "@/components/ui/button";
 import { StandingAsk } from "./ask";
 import { ProgressPanel, steerableTurn } from "./progress";
 import { EvidenceStrip } from "./evidence";
+import { AcceptanceCard } from "./acceptance";
 import type { LiveGit } from "../../live-git";
 import { Chip } from "@/components/ui/chip";
 import { Badge } from "@/components/ui/badge";
@@ -398,6 +399,11 @@ export function RunChat({ runId, detail, ask, onPickStep, onResolved, liveGit = 
               at?" answered without scrolling a hundred tool calls. Renders nothing otherwise. */}
           <div className="chat-col">
             <ProgressPanel detail={detail} liveGit={liveGit} runId={runId} />
+            {/* HOW-51: a finished run's story LEADS with its contract, and so does a run held
+                at the delivery gate — the prose underneath is the account, this is the verdict */}
+            {(detail.summary.outcome !== null || detail.ask?.code === "acceptance-unmet") && (
+              <AcceptanceCard runId={runId} detail={detail} onChanged={onResolved} />
+            )}
           </div>
         </div>
 

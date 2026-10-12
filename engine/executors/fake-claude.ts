@@ -373,6 +373,20 @@ if (process.env.FAKE_CLAUDE_DROP_OUTPUTS === "1" && keys.length) {
   emitResult(`All done.\n{"outputs": ${JSON.stringify(repaired)}}`);
 } else {
   emitResult(`All done.\n{"outputs": ${JSON.stringify(outputs)}}`);
+  /**
+   * HOW-51: FAKE_CLAUDE_REPAIR_OUTPUTS=<json> — if the executor REFUSES what this turn returned
+   * and asks again on the same session, answer the repair turn with these outputs (the repair
+   * text is captured like any user turn). Without a repair turn the executor closes stdin and
+   * this exits as before.
+   */
+  if (process.env.FAKE_CLAUDE_REPAIR_OUTPUTS) {
+    const next = await Promise.race([nextLine(), Bun.sleep(3000).then(() => null)]);
+    if (next) {
+      const repairText = (JSON.parse(next) as { message: { content: Array<{ text?: string }> } }).message.content[0]?.text ?? "";
+      if (process.env.FAKE_CAPTURE) appendFileSync(process.env.FAKE_CAPTURE, JSON.stringify(repairText) + "\n");
+      emitResult(`Fixed.\n{"outputs": ${JSON.stringify({ ...outputs, ...JSON.parse(process.env.FAKE_CLAUDE_REPAIR_OUTPUTS) })}}`);
+    }
+  }
 }
 process.exit(0);
 

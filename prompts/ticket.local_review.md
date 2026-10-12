@@ -1,8 +1,8 @@
 ---
 id: ticket.local_review
-version: 1
+version: 2
 tags: [implement-ticket]
-provenance: HOW-52 — implementation.local_review (v2, with HOW-40's review._verify_result) for implement-ticket, which now hands the reviewer screenshot evidence of the changed screens; improve-codebase keeps implementation.local_review unchanged
+provenance: HOW-52 — implementation.local_review (v2, with HOW-40's review._verify_result) for implement-ticket, which now hands the reviewer screenshot evidence of the changed screens; improve-codebase keeps implementation.local_review unchanged. v2 (HOW-51) adds the default-FAIL acceptance contract the reviewer flips on evidence
 ---
 Discover and use relevant installed skills for code review and communicating findings.
 
@@ -47,5 +47,23 @@ Compare each finding with previous reviews and attempted corrections. If the sam
 For each blocking finding, identify the requirement or defect, supporting evidence and the correction needed.
 
 This step is read-only. Leave files, commits, branches, pull requests and tracker records unchanged.
+
+## The acceptance contract
+
+Every criterion below started failing, and stays failing until YOU have evidence it is met:
+
+{{ context.acceptance }}
+
+Return the whole list again as `acceptance`, with every row it already has — same ids, same text. For each live criterion you have checked:
+
+- Set `"passes": true` only with evidence that is real in this run, as one of:
+  - `{"kind": "verify.result", "note": "…which tests cover it…"}` — only when the verify outcome above is `pass`;
+  - `{"kind": "screenshot", "file": "evidence/…png", "note": "…what it shows…"}` — the `file` of a screenshot listed above, which you opened;
+  - `{"kind": "command", "command": "…", "output": "…"}` — a read-only command you ran and the output that convinced you.
+- Leave `"passes": false` and `"evidence": null` for anything you could not verify. Plausibility is not correctness: the implementation summary's claim that something works is not evidence.
+- A criterion only a human can judge stays false — the operator will waive it.
+- If the plan changed and a criterion no longer applies, set `"superseded": true` on it and add its replacement as a new row with a new id. Never delete or reword a row.
+
+A flip without real evidence is refused and you will be asked again.
 
 Return review_verdict as reject only when actionable, machine-checkable blocking findings remain. Otherwise return pass. Keep outstanding human or manual checks and concerns excluded. Return `review_findings` as an array containing those findings, or an empty array when the review passes.

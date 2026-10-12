@@ -75,7 +75,13 @@ export type ParkCode =
    * its turn where it was. Not a failure and never a contract violation: the agent obeyed. A
    * reply or resume retries the step, briefed with the agent's own last words (suffix v6).
    */
-  | "paused-by-operator";
+  | "paused-by-operator"
+  /**
+   * HOW-51: a node gated on the acceptance contract (`requiresAcceptance`) found a live
+   * criterion that neither passes nor was waived. A reply cannot fix it: waive the criterion
+   * (`howdah waive`, the Acceptance card) or jump back to the review once it is met.
+   */
+  | "acceptance-unmet";
 
 export type ResolutionSource = "operator" | "resume";
 
@@ -616,6 +622,17 @@ export type RunEvent =
       type: "soft-stop-moot";
       node: string;
       visit: number;
+    }
+  | {
+      /**
+       * HOW-51: an operator WAIVED an acceptance criterion — a human decision, recorded as its
+       * own event so the delivery gate reads decisions, never flags or `attention-resolved`.
+       * One per criterion (engine/acceptance-decision.ts waive): a repeat is idempotent.
+       */
+      type: "acceptance-waived";
+      criterion_id: string;
+      reason: string;
+      by: "operator";
     }
   | { type: "run-finished"; outcome: RunOutcome };
 

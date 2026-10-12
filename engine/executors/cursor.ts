@@ -32,7 +32,7 @@ import { dirname, join } from "node:path";
 import type { Executor } from "../run";
 import { JsonlChunkParser } from "../../adapter/parse";
 import { cursorArgs, mapCursorEvent } from "../../adapter/cursor";
-import { buildRepairInstruction, parseOutputs } from "./outputs";
+import { buildRepairInstruction, checkWrites, parseOutputs } from "./outputs";
 import { classifyHarnessExit } from "./harness-failure";
 import { harnessSpec } from "../../core/harnesses";
 import { effectiveCwd } from "./worktree";
@@ -70,9 +70,10 @@ export function cursorApprovalMode(permissionMode: string | undefined): string[]
 }
 
 export function cursorExecutor(opts: CursorExecutorOpts = {}): Executor {
-  return async ({ nodeId, def, visit, cwd, log, renderedPrompt, agentConfig }) => {
+  return async ({ nodeId, def, visit, cwd, log, renderedPrompt, agentConfig, reads }) => {
     if (def.kind !== "agent") throw new Error("cursorExecutor on non-agent node");
     const writeKeys = Object.keys(def.writes ?? {});
+    const check = (w: Record<string, unknown>) => checkWrites(w, reads ?? {}); // HOW-51
     const prompt = renderedPrompt ?? ""; // exactly what rendered_hash covers (system-map 0.1)
     const binary = opts.binary ?? harnessSpec("cursor").binary;
     const permissionMode = opts.readOnly ? "plan" : agentConfig?.permissionMode;
@@ -171,10 +172,13 @@ export function cursorExecutor(opts: CursorExecutorOpts = {}): Executor {
     // missing contract costs a short turn instead of re-running the whole node. It can only
     // be asked on a chat we know the id of: without one there is no session to resume, and
     // a fresh spawn would be a re-run of the node, not a repair.
-    if (!interrupted() && turn.turnEnded && !turn.turnError && sessionId && writeKeys.length && !parseOutputs(turn.text, writeKeys).ok) {
-      chunk("text", "\n[outputs object missing — asking for it]");
+    const firstParse = writeKeys.length ? parseOutputs(turn.text, writeKeys, check) : { ok: true as const };
+    if (!interrupted() && turn.turnEnded && !turn.turnError && sessionId && writeKeys.length && !firstParse.ok) {
+      // HOW-51: a value the outputs check refused is named, so the repair fixes THAT
+      const refused = "refused" in firstParse && firstParse.refused ? firstParse.problem : undefined;
+      chunk("text", refused ? `\n[outputs refused — ${refused} — asking again]` : "\n[outputs object missing — asking for it]");
       turnNo = 2;
-      turn = await runTurn(buildRepairInstruction(writeKeys), sessionId);
+      turn = await runTurn(buildRepairInstruction(writeKeys, refused), sessionId);
     }
 
     if (stderrChunks.length)
@@ -207,7 +211,7 @@ export function cursorExecutor(opts: CursorExecutorOpts = {}): Executor {
       chunk("text", "\n[turn error: cursor stream ended before a result]");
       return { status: "failed", writes: {}, reason: "turn error: cursor stream ended before a result" };
     }
-    const parsed = parseOutputs(turn.text, writeKeys);
+    const parsed = parseOutputs(turn.text, writeKeys, check);
     if (!parsed.ok) {
       chunk("text", `\n[output contract violation: ${parsed.problem}]`);
       return { status: "failed", writes: {}, reason: `output contract violation: ${parsed.problem}` };

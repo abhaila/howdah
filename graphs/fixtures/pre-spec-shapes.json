@@ -758,7 +758,8 @@
         "prompt": "delivery.publish",
         "reads": [
           "goal",
-          "work"
+          "work",
+          "acceptance"
         ],
         "writes": {
           "publication_summary": {
@@ -766,6 +767,7 @@
           }
         },
         "maxVisits": 5,
+        "requiresAcceptance": true,
         "class": "delivery"
       },
       "delivery.resolve_conflicts": {
@@ -827,6 +829,22 @@
         "class": "delivery",
         "writes": {}
       },
+      "implementation.criteria": {
+        "kind": "agent",
+        "prompt": "ticket.acceptance",
+        "reads": [
+          "goal",
+          "work",
+          "implementation_plan"
+        ],
+        "writes": {
+          "acceptance": {
+            "scope": "sticky"
+          }
+        },
+        "readOnly": true,
+        "class": "implementation"
+      },
       "implementation.evidence": {
         "kind": "command",
         "run": "evidence:screenshot",
@@ -881,9 +899,13 @@
           "implementation_plan",
           "implementation_summary",
           "verify.result",
-          "evidence.items"
+          "evidence.items",
+          "acceptance"
         ],
         "writes": {
+          "acceptance": {
+            "scope": "sticky"
+          },
           "review_findings": {
             "scope": "cleared"
           },
@@ -891,6 +913,7 @@
             "scope": "cleared"
           }
         },
+        "readOnly": true,
         "class": "implementation"
       },
       "implementation.plan": {
@@ -945,6 +968,10 @@
       },
       {
         "from": "implementation.plan",
+        "to": "implementation.criteria"
+      },
+      {
+        "from": "implementation.criteria",
         "to": "implementation.implement"
       },
       {
