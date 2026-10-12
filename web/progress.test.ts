@@ -79,6 +79,8 @@ describe("liveness", () => {
     expect(fmtAgo(14_000)).toBe("14s");
     expect(fmtAgo(4 * 60_000)).toBe("4m");
     expect(fmtAgo(65 * 60_000)).toBe("1h 05m");
+    expect(fmtAgo(47 * 3_600_000)).toBe("47h 00m");
+    expect(fmtAgo(5 * 86_400_000)).toBe("5d");
   });
 });
 

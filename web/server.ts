@@ -37,12 +37,13 @@
  * The port compared against is the BOUND one (server.port), so port 0 works and a port
  * change cannot lock the UI out of its own writes.
  */
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { readLog } from "../log/write";
 import { deriveDetail, deriveSummary, deriveTimeline, runDigest, snapshotIndex, sortRuns, type RunSummary, type SnapshotIndex } from "./derive";
 import { LiveGitHub, liveTargetOf } from "./live-git";
+import { BoardCache, boardRow } from "./board";
 import { currentProposal } from "../engine/slice-decision";
 import { loadSnapshot } from "../engine/slice-map";
 import { MapStore, defaultStoreDir } from "../map/store";
@@ -218,6 +219,7 @@ export function createHowdahServer(opts: ServerOpts) {
       return liveTargetOf(events, effectiveCwd(p, started?.type === "run-started" ? started.cwd : undefined));
     },
   });
+  const board = new BoardCache();
   const launchTerminal =
     opts.openTerminal ??
     ((argv: string[]) => Bun.spawn(argv, { stdout: "ignore", stderr: "ignore" }).unref());
@@ -616,6 +618,43 @@ export function createHowdahServer(opts: ServerOpts) {
           folders: Object.entries(c.folders).map(([name, f]) => ({ name, ...f })),
         });
       }
+      /**
+       * HOW-50: ONE stream for the whole board, not a poll per row. It watches each run log's
+       * SIZE (a stat, no read) and says which runs changed; the client refetches the board,
+       * whose incremental fold then reads only the appended bytes. A runner dying writes
+       * nothing, so liveness is not visible here — the client keeps a slow safety refresh.
+       */
+      if (url.pathname === "/api/board/events") {
+        let timer: ReturnType<typeof setInterval>;
+        const sizes = new Map<string, number>();
+        const scan = (): string[] => {
+          const changed: string[] = [];
+          const seen = new Set<string>();
+          for (const rid of listRunIds(opts.runsDir)) {
+            seen.add(rid);
+            let size = -1;
+            try { size = statSync(logPath(opts.runsDir, rid)).size; } catch { /* removed mid-scan */ }
+            if (sizes.get(rid) !== size) { sizes.set(rid, size); changed.push(rid); }
+          }
+          for (const rid of [...sizes.keys()]) if (!seen.has(rid)) { sizes.delete(rid); changed.push(rid); }
+          return changed;
+        };
+        const stream = new ReadableStream({
+          start(controller) {
+            controller.enqueue(": connected\n\n");
+            scan(); // the baseline: the client already has the board it just fetched
+            timer = setInterval(() => {
+              try {
+                const changed = scan();
+                if (changed.length) controller.enqueue(`data: ${JSON.stringify({ changed })}\n\n`);
+              } catch { /* the runs dir is mid-change: the next tick sees it */ }
+            }, pollMs * 2);
+          },
+          cancel() { clearInterval(timer); },
+        });
+        return new Response(stream, { headers: { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" } });
+      }
+
       if (url.pathname === "/api/runs" && req.method === "POST") {
         // launch: hand off to the CLI, detached — the viewer never owns an engine loop
         const body = (await req.json()) as LaunchBody;
@@ -659,9 +698,20 @@ export function createHowdahServer(opts: ServerOpts) {
       const [, id, sub] = m;
 
       if (!id) {
-        const runs = listRunIds(opts.runsDir).map((rid) => {
-          const events = readLog(logPath(opts.runsDir, rid));
-          return withRunnerLiveness(deriveSummary(rid, events), events, join(opts.runsDir, rid));
+        // HOW-50: the board. Each run's log is folded incrementally (web/board.ts) — a tick
+        // re-reads only what was appended — so hundreds of runs stay cheap on every refresh.
+        const ids = listRunIds(opts.runsDir);
+        board.retain(ids.map((rid) => logPath(opts.runsDir, rid)));
+        const runs = ids.map((rid) => {
+          const p = logPath(opts.runsDir, rid);
+          const fold = board.fold(p);
+          const started = fold.events.find((e) => e.type === "run-started");
+          return boardRow(rid, fold, {
+            // the run's own repo: a removed worktree's commits still live in its object store
+            cwd: started?.type === "run-started" ? started.cwd : undefined,
+            commits: (cwd, base, head) => board.commitsBetween(cwd, base, head),
+            liveness: (summary, events) => withRunnerLiveness(summary, events, join(opts.runsDir, rid)),
+          });
         });
         return json(sortRuns(runs));
       }

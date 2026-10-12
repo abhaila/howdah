@@ -1219,7 +1219,7 @@ export function deriveSlice(events: LoggedEvent[], snapshot: SnapshotIndex | nul
 export { citeParts, type CitePart } from "./cite";
 
 /** runs list ordering: needs-input first (longest wait first), then running, then terminal */
-export function sortRuns(runs: RunSummary[]): RunSummary[] {
+export function sortRuns<T extends RunSummary>(runs: T[]): T[] {
   const rank = (s: RunStatus): number =>
     s === "needs-input" ? 0 : s === "harness-dead" ? 1 : s === "running" || s === "waiting" || s === "queued" ? 2 : s === "failed-recoverable" ? 3 : 4;
   return [...runs].sort((a, b) => {

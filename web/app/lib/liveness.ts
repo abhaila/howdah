@@ -12,13 +12,15 @@
 /** five minutes of silence from the agent is worth a glance; it is not, by itself, a failure */
 export const QUIET_MS = 5 * 60_000;
 
-/** an age in the shortest honest unit: 12s / 4m / 1h 05m */
+/** an age in the shortest honest unit: 12s / 4m / 1h 05m / 5d */
 export function fmtAgo(ms: number): string {
   const s = Math.max(0, Math.floor(ms / 1000));
   if (s < 60) return `${s}s`;
   const m = Math.floor(s / 60);
   if (m < 60) return `${m}m`;
-  return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, "0")}m`;
+  const h = Math.floor(m / 60);
+  if (h < 48) return `${h}h ${String(m % 60).padStart(2, "0")}m`;
+  return `${Math.floor(h / 24)}d`;
 }
 
 export interface Liveness {
