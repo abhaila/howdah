@@ -35,7 +35,11 @@
 import type { AgentEvent } from "./events";
 
 /** argv for a headless claude session the engine can own. */
-export function claudeArgs(opts: { sessionId: string; permissionMode?: string; resume?: boolean; model?: string; maxTurns?: number }): string[] {
+export function claudeArgs(opts: {
+  sessionId: string; permissionMode?: string; resume?: boolean; model?: string; maxTurns?: number;
+  /** HOW-33: already mapped for claude by core/harnesses.ts effortFor — sent verbatim */
+  effort?: string;
+}): string[] {
   return [
     "-p",
     "--verbose", // required by --output-format stream-json under -p (claude >= 2.1.2xx)
@@ -46,6 +50,7 @@ export function claudeArgs(opts: { sessionId: string; permissionMode?: string; r
     "--permission-mode", opts.permissionMode ?? "auto",
     ...(opts.model ? ["--model", opts.model] : []),
     ...(opts.maxTurns ? ["--max-turns", String(opts.maxTurns)] : []),
+    ...(opts.effort ? ["--effort", opts.effort] : []),
     ...(opts.resume ? ["--resume", opts.sessionId] : ["--session-id", opts.sessionId]),
   ];
 }

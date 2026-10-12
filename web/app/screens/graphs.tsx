@@ -15,7 +15,7 @@ import { navigate } from "@/lib/nav";
 import { getJSON } from "@/lib/net";
 import { GraphDag, useGraphShape, type GraphShapeDto, type AgentConfigDto } from "../graph-dag";
 import { modelFitsHarness } from "../../../core/graph";
-import { defaultHarness, harnessNames, harnessSpec, isHarness } from "../../../core/harnesses";
+import { defaultHarness, effortFor, harnessNames, harnessSpec, isHarness } from "../../../core/harnesses";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -36,7 +36,7 @@ import { useToast } from "@/components/ui/toast";
  * The leading "" is the inherit option.
  */
 const HARNESSES = ["", ...harnessNames().filter((h) => harnessSpec(h).status !== "internal")];
-const EFFORTS = ["", "low", "medium", "high", "xhigh"];
+const EFFORTS = ["", "low", "medium", "high", "xhigh", "max"];
 const PERMISSION_MODES = ["", "auto"];
 const MODEL_SUGGESTIONS = ["claude-opus-5", "claude-sonnet-5", "claude-haiku-5", "gpt-5", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"];
 const BULK_PRESETS: Array<{ id: string; label: string; target: string; cfg: AgentConfigDto }> = [
@@ -91,10 +91,14 @@ export function resolvePreview(layers: Array<AgentConfigDto | undefined>, config
       break;
     }
   }
+  // HOW-33: the same verdict the engine reaches — an effort this harness cannot take is shown
+  // as inert, not displayed as if a run would use it
+  const effort = spec ? effortFor(spec.name, pick("effort") as string | undefined) : { effort: pick("effort") as string | undefined };
   return {
     harness,
     model,
-    effort: pick("effort") as string | undefined,
+    effort: effort.effort,
+    ...("inert" in effort && effort.inert !== undefined ? { effortInert: effort.inert } : {}),
     permissionMode: spec?.forcedPermissionMode ?? (pick("permissionMode") as string | undefined),
     maxTurns: pick("maxTurns") as number | undefined,
     skills: pick("skills") as string[] | undefined,
@@ -284,7 +288,7 @@ export function GraphTuner({ shape, onSaved }: { shape: GraphShapeDto; onSaved: 
             <>
               <CardHeader>
                 <CardTitle className="font-mono">{node.id}</CardTitle>
-                <CardDescription>prompt: {node.prompt} · effective now: {node.effective?.harness}{node.effective?.model ? ` · ${node.effective.model}` : ""}{node.effective?.effort ? ` · ${node.effective.effort}` : ""}{node.effective?.permissionMode ? ` · ${node.effective.permissionMode}` : ""}</CardDescription>
+                <CardDescription>prompt: {node.prompt} · effective now: {node.effective?.harness}{node.effective?.model ? ` · ${node.effective.model}` : ""}{node.effective?.effort ? ` · ${node.effective.effort}` : ""}{node.effective?.effortInert ? ` · ${node.effective.effortInert}` : ""}{node.effective?.permissionMode ? ` · ${node.effective.permissionMode}` : ""}</CardDescription>
               </CardHeader>
               <CardContent>
                 <ConfigFields value={tuning.nodes?.[node.id] ?? {}} baseline={node.baseline} inheritedHarness={shape.default_harness} onChange={(v) => setNodeCfg(node.id, v)} />
@@ -324,7 +328,7 @@ export function GraphTuner({ shape, onSaved }: { shape: GraphShapeDto; onSaved: 
                   <TableCell>{n.class ?? "—"}</TableCell>
                   <TableCell className="font-mono">{n.effective?.harness ?? "claude"}</TableCell>
                   <TableCell className="font-mono">{n.effective?.model ?? "default"}</TableCell>
-                  <TableCell className="font-mono">{n.effective?.effort ?? "—"}</TableCell>
+                  <TableCell className="font-mono">{n.effective?.effortInert ? `inert (${n.effective.effortInert})` : n.effective?.effort ?? "—"}</TableCell>
                   <TableCell>{n.node_tuning ? <Badge variant="attention">node</Badge> : <Badge variant="outline">inherit</Badge>}</TableCell>
                 </TableRow>
               ))}

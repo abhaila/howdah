@@ -39,6 +39,8 @@ export interface AgentConfigDto {
   harness?: string;
   model?: string;
   effort?: string;
+  /** HOW-33: resolved configs only — why the set effort does not reach this harness */
+  effortInert?: string;
   permissionMode?: string;
   maxTurns?: number;
   skills?: string[];

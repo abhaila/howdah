@@ -8,6 +8,8 @@
  * FAKE_CAPTURE=<file> appends the exact prompt text of EVERY user turn received on stdin
  * (one JSON string per line, in order) so tests can prove rendered_hash covers the bytes
  * of the first turn (system-map 0.1); an in-session repair turn lands on a later line.
+ * FAKE_CLAUDE_ARGV=<file> appends this spawn's argv (one JSON array per line) — HOW-33 pins
+ * that a resolved effort reaches the CLI as `--effort <level>`.
  * FAKE_CLAUDE_DROP_OUTPUTS=1 ends the first turn in prose with no contract.
  * FAKE_CLAUDE_QUESTION asks the OPERATOR a question (HOW-25) — see the block below.
  * FAKE_CLAUDE_CONTEXT (HOW-14), shapes from claude 2.1.283's SDK types, not a captured turn:
@@ -28,6 +30,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileS
 import { dirname, join } from "node:path";
 
 const out = (o: unknown) => process.stdout.write(JSON.stringify(o) + "\n");
+if (process.env.FAKE_CLAUDE_ARGV) appendFileSync(process.env.FAKE_CLAUDE_ARGV, JSON.stringify(process.argv.slice(2)) + "\n");
 
 const decoder = new TextDecoder();
 let buffer = "";

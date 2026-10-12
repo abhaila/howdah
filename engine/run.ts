@@ -953,6 +953,7 @@ export class Engine {
       harness: config?.harness,
       model: config?.model,
       effort: config?.effort,
+      ...(config?.effortInert !== undefined ? { effort_inert: config.effortInert } : {}),
       skills,
       output_keys: outputKeys,
       suffix_version: SUFFIX_VERSION,

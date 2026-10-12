@@ -93,6 +93,29 @@ describe("claude executor over the fake wire", () => {
     expect(finish.writes).toEqual({ doc_summary: "fake doc_summary" });
   });
 
+  test("HOW-33: a node's resolved effort reaches the claude CLI as --effort", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "howdah-exec-"));
+    const argvFile = join(dir, "argv.jsonl");
+    process.env.FAKE_CLAUDE_ARGV = argvFile;
+    try {
+      const engine = new Engine(miniGraph(), {
+        dir,
+        promptsDir: promptDir(),
+        overrides: { effort: "high" },
+        executors: { agent: claudeExecutor({ attentionDir: join(dir, "attn"), binary: FAKE, askPollMs: 30, notifiers: [] }) },
+      });
+      process.env.FAKE_CLAUDE_VERDICT = "pass";
+      expect(await engine.start({ goal: "g" })).toEqual({ state: "finished", outcome: "success" });
+      const spawns = readFileSync(argvFile, "utf8").trim().split("\n").map((l) => JSON.parse(l) as string[]);
+      expect(spawns.length).toBe(2);
+      for (const argv of spawns) expect(argv.slice(argv.indexOf("--effort"), argv.indexOf("--effort") + 2)).toEqual(["--effort", "high"]);
+      const rendered = engine.log.read().filter((e: any) => e.type === "prompt-rendered") as any[];
+      expect(rendered.every((e) => e.effort === "high" && e.effort_inert === undefined)).toBe(true);
+    } finally {
+      delete process.env.FAKE_CLAUDE_ARGV;
+    }
+  });
+
   // every agent node asks under FAKE_CLAUDE_ASK=1, so the replier answers each new ask
   function autoReplier(dir: string, attentionDir: string, reply: string, stop: { done: boolean }) {
     return (async () => {

@@ -942,7 +942,7 @@ export function point(v: unknown): Point | undefined {
 const SCOPES = ["sticky", "cleared", "per-visit"] as const;
 const FIELD_KINDS = ["text", "choice", "number", "boolean", "json"] as const;
 const OUTCOMES = ["success", "failed", "aborted"] as const;
-const EFFORTS = ["low", "medium", "high", "xhigh"] as const;
+const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
 const PERMISSION_MODES = ["manual", "acceptEdits", "auto", "bypassPermissions", "dontAsk", "plan"] as const;
 
 /**

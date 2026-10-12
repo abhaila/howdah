@@ -88,6 +88,9 @@ export function claudeExecutor(opts: ClaudeExecutorOpts): Executor {
         permissionMode: agentConfig?.permissionMode ?? opts.permissionMode ?? "auto",
         model: agentConfig?.model ?? opts.model,
         maxTurns: agentConfig?.maxTurns,
+        // HOW-33: resolved for THIS harness (effortFor) — undefined when inert, never dropped
+        // silently: the inert reason is on this attempt's prompt-rendered
+        effort: agentConfig?.effort,
       })],
       { cwd: effectiveCwd(log.path, cwd) ?? dirname(log.path), env: { ...process.env }, stdin: "pipe", stdout: "pipe", stderr: "pipe" },
     );

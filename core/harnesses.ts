@@ -17,7 +17,7 @@
  * harness Select), exactly like core/clock-time.ts. Anything this file imported would ship
  * to the browser with it, so `PermissionMode` comes in as a type only.
  */
-import type { PermissionMode } from "./graph";
+import type { Effort, PermissionMode } from "./graph";
 
 /**
  * Every harness, in preference order. This IS the order the viewer offers, doctor checks,
@@ -66,6 +66,19 @@ export interface HarnessSpec {
    * entry here takes the resolved mode — cursor must not silently inherit claude's `auto`.
    */
   forcedPermissionMode?: PermissionMode;
+  /**
+   * HOW-33: the effort levels this harness's CLI accepts, as Howdah spells them, or null when
+   * it has no effort control at all. A resolved effort the harness cannot take is reported
+   * as inert (effortFor) rather than dropped: a knob the viewer shows and the run ignores
+   * would make an A/B comparison over it measure noise.
+   */
+  effortLevels: readonly Effort[] | null;
+  /**
+   * an explicit translation for a Howdah level this harness does not accept verbatim — the
+   * only way a level crosses harnesses, so a claude-only `max` never leaks onto codex as a
+   * value its API refuses
+   */
+  effortMap?: Partial<Record<Effort, Effort>>;
   status: HarnessStatus;
 }
 
@@ -79,6 +92,8 @@ const SPECS: Record<HarnessName, HarnessSpec> = {
     acceptsForeignModels: false,
     skillHint: true,
     forcedPermissionMode: "auto",
+    // `claude --help` (2.1.296): --effort <level> (low, medium, high, xhigh, max)
+    effortLevels: ["low", "medium", "high", "xhigh", "max"],
     status: "core",
   },
   codex: {
@@ -89,6 +104,10 @@ const SPECS: Record<HarnessName, HarnessSpec> = {
     modelFamily: /gpt|codex|terra|luna|^o\d/i,
     acceptsForeignModels: false,
     skillHint: false,
+    // turn/start `effort`: the app-server schema (0.154.0) types it as a model-advertised
+    // string; the gpt-5 family advertises low..xhigh. There is no `max`, so it is mapped down.
+    effortLevels: ["low", "medium", "high", "xhigh"],
+    effortMap: { max: "xhigh" },
     status: "core",
   },
   cursor: {
@@ -103,6 +122,8 @@ const SPECS: Record<HarnessName, HarnessSpec> = {
     acceptsForeignModels: true,
     // cursor-agent has no Claude Code skills, so a skill hint would name tools it cannot run
     skillHint: false,
+    // cursor-agent documents no effort flag: an effort set for a cursor node is inert
+    effortLevels: null,
     status: "optional",
   },
   opencode: {
@@ -114,6 +135,8 @@ const SPECS: Record<HarnessName, HarnessSpec> = {
     modelFamily: /$^/, // matches nothing: it routes whatever it is given
     acceptsForeignModels: true,
     skillHint: true,
+    // the claude binary, so claude's levels
+    effortLevels: ["low", "medium", "high", "xhigh", "max"],
     status: "internal",
   },
 };
@@ -140,6 +163,25 @@ export function isHarness(name: string | undefined): name is HarnessName {
 export function harnessSpecForCommand(command: string): HarnessSpec | undefined {
   if (isHarness(command)) return SPECS[command];
   return harnessNames().map(harnessSpec).find((s) => s.binary === command && s.status !== "internal");
+}
+
+/**
+ * HOW-33: what a resolved effort becomes on this harness — `effort` when the CLI will receive
+ * it (verbatim, or through the harness's explicit `effortMap`), `inert` with the reason when
+ * it will not. Never both, and never neither for a set value: an effort is either sent or
+ * said to be ignored. `effort` is typed as a string because tuning.json is hand-edited and
+ * blind-cast, so a value outside the vocabulary must be refused in words, not trusted.
+ */
+export function effortFor(harness: HarnessName, effort: string | undefined): { effort?: Effort; inert?: string } {
+  if (effort === undefined || effort === "") return {};
+  const spec = SPECS[harness];
+  if (!spec) return { inert: `effort ${effort}: not supported by ${harness}` };
+  if (spec.effortLevels === null) return { inert: `effort ${effort}: not supported by ${harness}` };
+  const levels: readonly string[] = spec.effortLevels;
+  if (levels.includes(effort)) return { effort: effort as Effort };
+  const mapped = spec.effortMap?.[effort as Effort];
+  if (mapped !== undefined) return { effort: mapped };
+  return { inert: `effort ${effort}: not accepted by ${harness} (it takes ${spec.effortLevels.join(", ")})` };
 }
 
 /** the built-in default, used when neither the environment nor config.json names one */

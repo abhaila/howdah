@@ -123,7 +123,13 @@ export type RunEvent =
       /** resolved execution config — run override → node → graph default */
       harness?: Harness;
       model?: string;
+      /** the effort the harness was SENT (already mapped for it by core/harnesses.ts effortFor) */
       effort?: string;
+      /**
+       * HOW-33: why an effort some layer set did NOT reach this harness ("effort high: not
+       * supported by cursor"). Absent: no effort was set, or it was sent as `effort` says.
+       */
+      effort_inert?: string;
       /**
        * system-map 0.1 — the suffix inputs, so reconstruction can rebuild the prompt AS SENT.
        * Absent on pre-0.1 events, whose hash covered the template (+ jump suffix) only.

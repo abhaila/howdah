@@ -23,7 +23,7 @@
  * conditional sets over closed choice types are therefore legal and common.
  */
 import { validateGraph, formatViolations, type GraphShape, type Violation } from "./validate";
-import { defaultHarness, harnessNames, harnessSpec, isHarness, type HarnessName } from "./harnesses";
+import { defaultHarness, effortFor, harnessNames, harnessSpec, isHarness, type HarnessName } from "./harnesses";
 import type { Scope } from "./context";
 import type { GraphSpec } from "./graph-spec";
 import type { PromptId } from "./prompt-ids";
@@ -34,7 +34,8 @@ export type PromptRef = PromptId;
 /** HOW-17: the names, and every per-harness fact, live in core/harnesses.ts. */
 export type Harness = HarnessName;
 
-export type Effort = "low" | "medium" | "high" | "xhigh";
+/** HOW-33: `max` is claude's; core/harnesses.ts says what each harness does with each level */
+export type Effort = "low" | "medium" | "high" | "xhigh" | "max";
 export type PermissionMode = "manual" | "acceptEdits" | "auto" | "bypassPermissions" | "dontAsk" | "plan";
 
 /** per-agent execution config — resolution order: run override → node → graph default */
@@ -42,6 +43,13 @@ export interface AgentConfig {
   harness?: Harness;
   model?: string;
   effort?: Effort;
+  /**
+   * HOW-33 — RESOLVED configs only: why the effort some layer set does not reach the harness
+   * ("effort high: not supported by cursor"). Set by resolveAgentConfigLayers, never by a
+   * layer; when it is set `effort` is undefined, so nothing downstream sends a value the
+   * harness would refuse or silently ignore.
+   */
+  effortInert?: string;
   permissionMode?: PermissionMode;
   maxTurns?: number;
   /** skills the node expects available; surfaced to the agent and asserted by doctor */
@@ -103,10 +111,15 @@ export function resolveAgentConfigLayers(
       break;
     }
   }
+  // HOW-33: effort is re-mapped for the harness that RESOLVED — which is what keeps a claude
+  // level from leaking onto the fallback harness — and an effort it cannot take is said to be
+  // inert rather than dropped
+  const effort = effortFor(harness, pick("effort"));
   return {
     harness,
     model,
-    effort: pick("effort"),
+    effort: effort.effort,
+    ...(effort.inert !== undefined ? { effortInert: effort.inert } : {}),
     permissionMode: harnessSpec(harness).forcedPermissionMode ?? pick("permissionMode"),
     maxTurns: pick("maxTurns"),
     skills: pick("skills"),

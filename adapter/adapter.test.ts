@@ -150,6 +150,12 @@ describe("claude adapter mapping", () => {
     expect(args).toContain("--include-partial-messages");
     expect(claudeArgs({ sessionId: "s1", resume: true })).toContain("--resume");
   });
+
+  test("HOW-33: a resolved effort is sent as --effort, and none sends no flag", () => {
+    const args = claudeArgs({ sessionId: "s1", effort: "high" });
+    expect(args.slice(args.indexOf("--effort"), args.indexOf("--effort") + 2)).toEqual(["--effort", "high"]);
+    expect(claudeArgs({ sessionId: "s1" })).not.toContain("--effort");
+  });
 });
 
 describe("codex adapter mapping", () => {
