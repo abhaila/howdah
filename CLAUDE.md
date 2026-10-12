@@ -49,7 +49,7 @@ in `css-contract.test.ts`'s scan list, for the same reason React Flow's sheet is
 
 ```bash
 bun install                      # required on a fresh clone (node_modules/ is gitignored)
-bun test                         # whole suite (1628 tests, ~3 min) — bun:test, happy-dom preloaded via bunfig.toml
+bun test                         # whole suite (~1900 tests, ~2 min) — bun:test, happy-dom preloaded via bunfig.toml
 bun test engine/engine.test.ts   # one file
 bun test -t "resume"             # one test by name
 bun run check                    # tsc --noEmit + prompt-id codegen staleness gate
@@ -146,6 +146,17 @@ Break one of these and the design stops working, so check them before changing t
   `Graph.validate()` + `core/validate.ts`: a forward MUST-analysis proving every read has a
   writer on *every* path from entry. `graphs/index.ts` validates every registered graph at
   import time, so a broken graph fails the registry rather than a run.
+- **The built-ins are migrating from `defineGraph` to a `GraphSpec` (HOW-31 B1,
+  `docs/designs/graph-drafting.md`).** `implement-ticket`, `improve-codebase`,
+  `review-teammate-pr`, `quick-task`, `write-doc` and `research` are now a `GraphSpec` literal
+  compiled by `buildGraph`, so each carries its own spec and the builder can open it;
+  `implement-slice` and `plan-feature` are still hand-written `defineGraph<Ctx>()`. A
+  conversion is safe only if the compiled `Graph` is indistinguishable from the hand-written
+  one: `graphs/spec-shape.ts` `shapeOf()` reduces a graph to everything the engine can
+  observe, and `graphs/spec-equivalence.test.ts` pins it against
+  `graphs/fixtures/pre-spec-shapes.json`, a snapshot taken BEFORE conversion. Do not
+  regenerate that fixture to make a conversion pass — a diff there is the conversion changing
+  behaviour.
 - **A built graph is still a file; the spec is what is inside it (HOW-22, HOW-24).** The graph
   builder (`/graphs/new`, `/graphs/:name/build`) is now the primary authoring path, and it
   changes nothing downstream: it writes an ordinary local `.ts` whose body is a `GraphSpec`
@@ -488,7 +499,8 @@ failed. Which card a park gets is decided by the ask's OWN kind where the cards 
 contract — the sending → delivered → collapsing motion moment, a refusal shown VERBATIM rather
 than collapsed into "failed", and `id="needs-input"` so a notification's deep link lands on the
 control. Design tokens (palette, type scale, motion) live in `web/public/tokens.css` +
-`app/globals.css` and are decided in `shaping.md`'s Design section; tokens.css is the ONLY
+`app/globals.css` and are decided in `DESIGN.md` (which wins over tokens.css when they
+disagree; it supersedes `shaping.md`'s Design section, see T25); tokens.css is the ONLY
 place a hex or a `font-size: Npx` may appear. The components are shadcn patterns vendored and
 rewritten onto those tokens — one file each under `app/components/ui/`, wired to `shadcn add`
 by the root `components.json` (style `base-vega`) and the `@/*` path in `tsconfig.json`.
