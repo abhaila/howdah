@@ -827,6 +827,17 @@
         "class": "delivery",
         "writes": {}
       },
+      "implementation.evidence": {
+        "kind": "command",
+        "run": "evidence:screenshot",
+        "reads": [],
+        "writes": {
+          "evidence.items": {
+            "scope": "per-visit"
+          }
+        },
+        "class": "implementation"
+      },
       "implementation.implement": {
         "kind": "agent",
         "prompt": "implementation.implement",
@@ -863,13 +874,14 @@
       },
       "implementation.local_review": {
         "kind": "agent",
-        "prompt": "implementation.local_review",
+        "prompt": "ticket.local_review",
         "reads": [
           "goal",
           "work",
           "implementation_plan",
           "implementation_summary",
-          "verify.result"
+          "verify.result",
+          "evidence.items"
         ],
         "writes": {
           "review_findings": {
@@ -941,6 +953,10 @@
       },
       {
         "from": "verify.run",
+        "to": "implementation.evidence"
+      },
+      {
+        "from": "implementation.evidence",
         "to": "implementation.local_review"
       },
       {

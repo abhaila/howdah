@@ -39,7 +39,7 @@ import { harnessNames, harnessSpec, isHarness } from "../core/harnesses";
 import { GRAPHS, graphCatalog } from "../graphs/index";
 import { loadRegistry, catalogOf } from "../graphs/registry";
 import { promptSearchPath } from "../graphs/local";
-import { howdahHome, loadConfig, saveConfig, resolveWorkspace, repoNameFor, workspaceNameFor, verifyCommandFor, setVerifyCommand, stuckThresholds, diagnosticsCommandFor, setDiagnosticsCommand, diagnosticsCommandProblem, ensureHowdahHome } from "../config/config";
+import { howdahHome, loadConfig, saveConfig, resolveWorkspace, repoNameFor, workspaceNameFor, verifyCommandFor, setVerifyCommand, stuckThresholds, diagnosticsCommandFor, setDiagnosticsCommand, diagnosticsCommandProblem, previewFor, setPreview, ensureHowdahHome } from "../config/config";
 import { loadTuning } from "../config/tuning";
 import { normalizeRunName } from "../core/run-name";
 import {
@@ -74,6 +74,8 @@ function executors() {
         verifyCommandFor: (repoPath) => verifyCommandFor(loadConfig(base), repoPath),
         // HOW-38: read once per runner — thresholds are not something a run changes mid-flight
         stuck: stuckThresholds(loadConfig(base)),
+        // HOW-52: likewise the preview `evidence:screenshot` starts
+        previewFor: (repoPath) => previewFor(loadConfig(base), repoPath),
       });
 }
 
@@ -658,6 +660,23 @@ if (import.meta.main) {
         saveConfig(config, base);
         const now = config.repos[name]?.diagnosticsCommand;
         console.log(now ? `diagnostics command for "${name}": ${now}` : `cleared the diagnostics command for "${name}" — no post-edit hook will run`);
+      } else if (action === "preview" && name) {
+        // HOW-52: `workspace preview <name> <command…> --paths "/,/runs"` — blank command clears it
+        let words = positional.slice(2);
+        const flag = (f: string): string | undefined => {
+          const at = words.indexOf(f);
+          if (at < 0) return undefined;
+          const v = words[at + 1];
+          words = [...words.slice(0, at), ...words.slice(at + 2)];
+          return v;
+        };
+        const paths = (flag("--paths") ?? "/").split(",");
+        const readyWhen = flag("--ready-when");
+        setPreview(config, name, words.join(" "), paths);
+        if (readyWhen && config.repos[name]?.preview) config.repos[name]!.preview!.readyWhen = readyWhen;
+        saveConfig(config, base);
+        const now = config.repos[name]?.preview;
+        console.log(now ? `preview for "${name}": ${now.command} → ${now.paths.join(", ")}` : `cleared the preview for "${name}" — evidence:screenshot will report not-checked`);
       } else if (action === "remove" && name) {
         delete config.repos[name];
         delete config.folders[name];
@@ -665,7 +684,7 @@ if (import.meta.main) {
         console.log(`removed "${name}"`);
       } else if (action === "list" || action === undefined) {
         console.log(JSON.stringify({ repos: config.repos, folders: config.folders }, null, 2));
-      } else throw new Error('usage: howdah workspace add <name> <path> [--verify "<cmd>"] | verify <name> [<cmd>] | diagnostics <name> [<cmd>] | add-github <owner/name> | remove <name> | list');
+      } else throw new Error('usage: howdah workspace add <name> <path> [--verify "<cmd>"] | verify <name> [<cmd>] | diagnostics <name> [<cmd>] | preview <name> [<cmd> --paths /,/x --ready-when "<js>"] | add-github <owner/name> | remove <name> | list');
     }
     else if (verb === "new-graph") {
       const { newGraph } = await import("./new-graph");

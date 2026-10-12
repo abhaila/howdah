@@ -100,8 +100,14 @@ describe("deliveryGraph extraction keeps implement-ticket identical", () => {
         : v && typeof v === "object"
           ? Object.fromEntries(Object.keys(v as object).sort().map((k) => [k, sortDeep((v as Record<string, unknown>)[k])]))
           : v;
+    //
+    // DELIBERATE CHANGES SINCE, each moving this pin in the same commit as the graph edit
+    // (the provenance above is the chain they extend; graphs/spec-equivalence.test.ts records
+    // the same list against its fixture):
+    //   HOW-52  `implementation.evidence` (evidence:screenshot) before every local review;
+    //           local_review reads evidence.items through `ticket.local_review`
     const s = JSON.stringify(sortDeep(shapeOf(implementTicket)));
-    expect(createHash("sha256").update(s).digest("hex")).toBe("1e60d47a0e86f7974eb8deb8a51451987349adf74a3223e3dfd710bbcf98295b");
+    expect(createHash("sha256").update(s).digest("hex")).toBe("a732a356cf7ad1d364277f49e5e46bd5408cb7449c87503b904264c2fff1ca67");
   });
 ;
 

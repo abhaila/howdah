@@ -37,7 +37,7 @@
  * The port compared against is the BOUND one (server.port), so port 0 works and a port
  * change cannot lock the UI out of its own writes.
  */
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { readLog } from "../log/write";
@@ -45,6 +45,7 @@ import { deriveDetail, deriveSummary, deriveTimeline, runDigest, snapshotIndex, 
 import { LiveGitHub, liveTargetOf } from "./live-git";
 import { softStop, steer } from "../engine/steer";
 import { SOFT_STOP_ESCALATE_MS } from "../core/steer";
+import { isEvidencePath } from "../core/evidence";
 import { BoardCache, boardRow } from "./board";
 import { currentProposal } from "../engine/slice-decision";
 import { loadSnapshot } from "../engine/slice-map";
@@ -674,6 +675,25 @@ export function createHowdahServer(opts: ServerOpts) {
           stdout: "ignore", stderr: "ignore", env: { ...process.env },
         }).unref();
         return json({ id: runId }, 202);
+      }
+
+      /**
+       * HOW-52: a run's evidence files (screenshots, console.txt, preview.log). Only paths that
+       * core/evidence.ts isEvidencePath accepts — under evidence/, no `..`, an allowed extension —
+       * and only once the resolved file is still inside that run's evidence folder, so a crafted
+       * path or a symlink cannot read anything else off the disk.
+       */
+      const ef = url.pathname.match(/^\/api\/runs\/([^/]+)\/file\/(evidence\/.+)$/);
+      if (ef && req.method === "GET") {
+        const rel = decodeURIComponent(ef[2]!);
+        if (!isEvidencePath(rel)) return json({ error: "not an evidence file" }, 400);
+        const root = join(opts.runsDir, ef[1]!, "evidence");
+        const target = join(opts.runsDir, ef[1]!, rel);
+        let real: string;
+        try { real = realpathSync(target); } catch { return json({ error: "no such evidence file" }, 404); }
+        if (!real.startsWith(realpathSync(root) + sep)) return json({ error: "not an evidence file" }, 400);
+        const type = rel.endsWith(".png") ? "image/png" : "text/plain; charset=utf-8";
+        return new Response(Bun.file(real), { headers: { "content-type": type, "cache-control": "no-cache" } });
       }
 
       // the rendered prompt for one turn, rebuilt from the pinned template and proven by

@@ -21,6 +21,12 @@
  * implement-slice together: create_worktree publishes `worktree.verify_command` and each graph's
  * implement step reads it. The rule still stands for conversions: a diff here that no ticket
  * asked for is a conversion changing behaviour.
+ *
+ * Each further deliberate change is listed here, and moves only the changed graph's entry, in
+ * the SAME commit as the graph edit, with its existing key order kept:
+ *   HOW-52  implement-ticket: `implementation.evidence` (evidence:screenshot) runs after
+ *           `verify.run`, before every local review, which reads `evidence.items` through the
+ *           new `ticket.local_review`.
  */
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";

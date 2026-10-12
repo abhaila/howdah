@@ -19,6 +19,7 @@
  * redesign requests, extraction progress and drift reports, all folded from the log.
  */
 import { askQuestions, type UserQuestion } from "../core/ask";
+import { asEvidenceResult, EVIDENCE_KEY, type EvidenceResult } from "../core/evidence";
 import type { LoggedEvent, RunOutcome } from "../log/events";
 import { currentProposal, decisionAnswers, decisionKind, findDecision } from "../engine/slice-decision";
 import { replayState } from "../engine/replay";
@@ -160,6 +161,12 @@ export interface RunDetail {
   steers: SteerState[];
   /** HOW-48: the soft stop on the newest step, and how far it got — null when none was asked for */
   soft_stop: SoftStopState | null;
+  /**
+   * HOW-52: every screenshot-evidence result a step published (`evidence.items`), oldest first.
+   * Validated through core/evidence.ts asEvidenceResult — context is untrusted to the viewer, and
+   * only files under the run's evidence/ folder survive it.
+   */
+  evidence: Array<{ node: string; visit: number; at: string; result: EvidenceResult }>;
   /**
    * HOW-46/HOW-49: when the agent last produced anything (a chunk or a turn boundary) — the
    * "last activity Ns ago" clock and the quiet-for-N-minutes signal. Null before any turn.
@@ -458,6 +465,11 @@ export function deriveDetail(
     plan: timeline.length ? derivePlan(events, timeline.at(-1)!.node, timeline.at(-1)!.visit) : null,
     steers: steerStates(events),
     soft_stop: timeline.length ? softStopState(events, timeline.at(-1)!.node, timeline.at(-1)!.visit) : null,
+    evidence: events.flatMap((e) => {
+      if (e.type !== "node-finished" || !(EVIDENCE_KEY in e.writes)) return [];
+      const result = asEvidenceResult(e.writes[EVIDENCE_KEY]);
+      return result ? [{ node: e.node, visit: e.visit, at: e.ts, result }] : [];
+    }),
     last_agent_event_at: lastAgent?.ts ?? null,
     renders,
     outcomes: [...outcomesByHash(events).values()],

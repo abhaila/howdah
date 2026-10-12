@@ -17,6 +17,7 @@
  * executor by accident of phrasing rather than by decision — and why a third harness would
  * have silently spawned `claude` instead of failing loudly.
  */
+import type { PreviewContract } from "../../core/evidence";
 import type { Executor, EngineOpts } from "../run";
 import { claudeExecutor } from "./claude";
 import { codexExecutor } from "./codex";
@@ -69,6 +70,8 @@ export interface LiveExecutorDeps {
   workspaces?: WorkspaceLookup;
   /** HOW-12: the workspace's verify command for a repo path — what `verify:run` runs */
   verifyCommandFor?: (repoPath: string) => string | undefined;
+  /** HOW-52: the workspace's preview contract for a repo path — what `evidence:screenshot` starts */
+  previewFor?: (repoPath: string) => PreviewContract | undefined;
   viewerBase?: string;
   notifiers?: Notifier[];
   claudeBinary?: string;
@@ -105,6 +108,7 @@ export function liveExecutors(deps: LiveExecutorDeps): EngineOpts["executors"] {
         ...(deps.workspaces ? { workspaces: deps.workspaces } : {}),
       },
       ...(deps.verifyCommandFor ? { verify: { commandFor: deps.verifyCommandFor } } : {}),
+      ...(deps.previewFor ? { evidence: { previewFor: deps.previewFor } } : {}),
     }),
     worktree: worktreeExecutor({
       reposDir: deps.reposDir ?? join(deps.attentionDir, "..", "repos"),

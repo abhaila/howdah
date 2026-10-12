@@ -15,6 +15,7 @@ import { COMMAND_BUILTINS, WORKTREE_FACTS, coerceOperand, isBlocking, keepPath, 
 import { LAUNCH_BUILTIN, LAUNCH_PRODUCES, LAUNCH_READS } from "../engine/executors/launch";
 import { MAP_BUILTINS } from "../engine/executors/map";
 import { VERIFY_BUILTIN, VERIFY_PRODUCES } from "../engine/executors/verify";
+import { EVIDENCE_BUILTIN } from "../engine/executors/evidence";
 // the reducer is plain data over core/ — no React, no DOM — so the browser's verdict can be
 // driven from here and compared against this file's gate, which is the whole point below
 import { PRESETS, bySeverity, draftProblems, draftReducer, newStep, pickPrompts, type Draft, type DraftAction } from "../web/app/lib/spec-draft";
@@ -375,7 +376,7 @@ describe("what an executor can emit — the table checked against the executors 
    * returns undefined, which MEANS "anything the operator declares is legal".
    */
   test("every built-in the command executor dispatches is in the table", () => {
-    expect([...MAP_BUILTINS, LAUNCH_BUILTIN, VERIFY_BUILTIN, "probe:pr"].sort()).toEqual(COMMAND_BUILTINS.map((b) => b.run).sort());
+    expect([...MAP_BUILTINS, LAUNCH_BUILTIN, VERIFY_BUILTIN, EVIDENCE_BUILTIN, "probe:pr"].sort()).toEqual(COMMAND_BUILTINS.map((b) => b.run).sort());
   });
 
   // HOW-12. The row reads core/verify.ts rather than repeating it, so what is pinned here is

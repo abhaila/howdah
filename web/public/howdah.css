@@ -1089,3 +1089,20 @@ main { flex: 1; min-width: 0; min-height: 0; overflow: hidden; display: flex; fl
 .run-menu-item { justify-content: flex-start; }
 .run-menu-note { margin: 0; font-size: var(--type-xs); line-height: 1.5; color: var(--fg-muted); }
 .run-escalate { display: inline-flex; align-items: center; gap: 8px; font-size: var(--type-xs); color: var(--attention); }
+
+/* HOW-52: the Evidence strip — what the harness saw of the change, per step */
+.ev-strip { margin: 10px 0; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-raised); }
+.ev-strip[data-outcome="failed"], .ev-strip[data-outcome="not-checked"] { background: var(--bg-inset); }
+.ev-head { display: flex; align-items: center; gap: 7px; font-size: var(--type-sm); color: var(--fg-muted); }
+.ev-count { margin-left: auto; font-size: var(--type-xs); color: var(--fg-faint); }
+.ev-reason { margin-top: 4px; font-size: var(--type-xs); color: var(--fg-muted); }
+.ev-thumbs { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+.ev-thumb { position: relative; display: flex; flex-direction: column; align-items: stretch; gap: 3px; width: 168px; height: auto; padding: 4px; white-space: normal; }
+.ev-thumb img { width: 160px; height: 100px; object-fit: cover; object-position: top left; border: 1px solid var(--border); border-radius: var(--radius-xs); }
+.ev-thumb-path { font-family: var(--font-mono); font-size: var(--type-xs); color: var(--fg-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
+.ev-thumb-errors { position: absolute; top: 8px; right: 8px; display: inline-flex; align-items: center; gap: 3px; padding: 1px 5px; border-radius: 999px; font-size: var(--type-xs); background: var(--status-failed-recoverable); color: var(--bg); }
+.ev-lightbox { width: min(1100px, 92vw); }
+.ev-lightbox-body { display: flex; flex-direction: column; gap: 6px; }
+.ev-lightbox-body img { width: 100%; border: 1px solid var(--border); border-radius: var(--radius-xs); }
+.ev-console { margin: 0; padding: 8px; max-height: 160px; overflow: auto; font-size: var(--type-xs); background: var(--bg-inset); border-radius: var(--radius-xs); white-space: pre-wrap; }
+.pp-evidence { width: 100%; max-width: 280px; border: 1px solid var(--border); border-radius: var(--radius-xs); }

@@ -525,7 +525,7 @@ export function RunView({ id, graceMs = OPEN_GRACE_MS }: { id: string; graceMs?:
         {liveStep(detail) && (
           <section>
             <h2><Activity size={12} /> Progress</h2>
-            <ProgressPanel detail={detail} liveGit={liveGit} variant="rail" />
+            <ProgressPanel detail={detail} liveGit={liveGit} variant="rail" runId={id} />
           </section>
         )}
         <section>

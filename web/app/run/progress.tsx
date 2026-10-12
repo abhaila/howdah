@@ -17,7 +17,8 @@
  * It renders only while the newest step's turn is LIVE (derive.ts turn_states), pinned at the
  * top of Chat and as a section of the rail. A finished step's story is the transcript.
  */
-import { CheckCircle2, Circle, CircleDot, GitCommitHorizontal, ListChecks } from "lucide-react";
+import { Camera, CheckCircle2, Circle, CircleDot, GitCommitHorizontal, ListChecks } from "lucide-react";
+import { evidenceUrl } from "./evidence";
 import type { RunDetail } from "../../derive";
 import type { LiveGit } from "../../live-git";
 import { useNow } from "@/lib/hooks";
@@ -45,8 +46,10 @@ export function steerableTurn(detail: Pick<RunDetail, "timeline" | "turn_states"
 const STATUS_ICON = { completed: CheckCircle2, in_progress: CircleDot, pending: Circle } as const;
 const ago = (iso: string, now: number) => fmtAgo(now - new Date(iso).getTime());
 
-export function ProgressPanel({ detail, liveGit, variant = "pinned" }: {
+export function ProgressPanel({ detail, liveGit, variant = "pinned", runId }: {
   detail: RunDetail;
+  /** HOW-52: needed to link the newest evidence thumbnail */
+  runId?: string;
   /** the latest `git-live` push for this run, or null before the first one arrives */
   liveGit: LiveGit | null;
   variant?: "pinned" | "rail";
@@ -90,6 +93,19 @@ export function ProgressPanel({ detail, liveGit, variant = "pinned" }: {
           <div className="pp-empty">{harness === "claude" ? "no plan reported yet" : "no plan reported by this harness"}</div>
         )}
       </div>
+
+      {/* HOW-52: what the harness has captured of the change so far, newest first */}
+      {(() => {
+        const screens = detail.evidence.flatMap((e) => e.result.items);
+        const newest = screens.at(-1);
+        if (!screens.length || !runId) return null;
+        return (
+          <div className="pp-block">
+            <div className="pp-label"><Camera size={12} aria-hidden /> Evidence · {screens.length} screen{screens.length === 1 ? "" : "s"}</div>
+            {newest && <img className="pp-evidence" src={evidenceUrl(runId, newest.file)} alt={`newest screenshot: ${newest.path}`} loading="lazy" />}
+          </div>
+        );
+      })()}
 
       <div className="pp-block">
         <div className="pp-label"><GitCommitHorizontal size={12} aria-hidden /> Worktree</div>

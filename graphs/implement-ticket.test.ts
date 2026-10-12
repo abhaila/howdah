@@ -35,9 +35,12 @@ function engineFor(dir: string, script: Script, prompts: Map<string, string>, ex
     ...extra,
     executors: {
       worktree: async ({ nodeId }) => ok(nodeId.startsWith("cleanup") ? { "worktree.clean": true } : { "worktree.verify_command": "" }),
+      // verify, the evidence capture and the probe are the only command steps; each publishes its own fact
       command: async ({ nodeId }) =>
         nodeId === "verify.run"
           ? ok({ "verify.result": script.verify?.() ?? VERIFY_PASS })
+          : nodeId === "implementation.evidence"
+          ? ok({ "evidence.items": { outcome: "not-checked", items: [], reason: "stub" } })
           : ok({ "pr.state": script.pr?.() ?? "OPEN" }),
       wait: async () => ok(),
       agent: async ({ nodeId, visit, renderedPrompt }) => {
@@ -200,7 +203,7 @@ describe("implement-ticket runs verify:run before its review (HOW-40)", () => {
       expect(await engine.start(INPUTS)).toEqual({ state: "finished", outcome: "success" });
       const events = engine.log.read();
       const order = events.flatMap((e) => (e.type === "node-started" ? [e.node] : []));
-      expect(order.slice(0, 5)).toEqual(["create_worktree", "implementation.plan", "implementation.implement", "verify.run", "implementation.local_review"]);
+      expect(order.slice(0, 6)).toEqual(["create_worktree", "implementation.plan", "implementation.implement", "verify.run", "implementation.evidence", "implementation.local_review"]);
       const review = events.find((e) => e.type === "prompt-rendered" && e.node === "implementation.local_review");
       expect(review?.type === "prompt-rendered" && review.context_read["verify.result"]).toEqual(verify);
       expect(prompts.get("implementation.local_review@1")).toContain(`"outcome":"${label}"`);
@@ -219,9 +222,9 @@ describe("implement-ticket runs verify:run before its review (HOW-40)", () => {
     const engine = engineFor(tmp(), { localReview: () => "pass", pr: () => "MERGED" }, new Map());
     await engine.start(INPUTS);
     const startedEv = engine.log.read().find((e) => e.type === "run-started");
-    expect(startedEv?.type === "run-started" && startedEv.pinned_includes?.["implementation.local_review"]).toMatchObject({ "review._verify_result": 1 });
+    expect(startedEv?.type === "run-started" && startedEv.pinned_includes?.["ticket.local_review"]).toMatchObject({ "review._verify_result": 1 });
     const raw = (id: string) => readFileSync(join(PROMPTS, `${id}.md`), "utf8");
-    for (const id of ["implementation.local_review", "slice.local_review"]) {
+    for (const id of ["implementation.local_review", "ticket.local_review", "slice.local_review"]) {
       expect(raw(id)).toContain("{{> review._verify_result }}");
       expect(raw(id)).not.toContain("{{ context.verify.result }}"); // only the partial carries it
     }

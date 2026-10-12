@@ -49,6 +49,7 @@ import { defaultHarness, harnessSpec, isHarness, toolBaseName } from "./harnesse
 import type { Scope } from "./context";
 import type { Violation } from "./validate";
 import { VERIFY_BUILTIN, VERIFY_PRODUCES } from "./verify";
+import { EVIDENCE_BUILTIN, EVIDENCE_PRODUCES } from "./evidence";
 
 export const SPEC_VERSION = 1;
 
@@ -265,6 +266,7 @@ export const COMMAND_BUILTINS: Array<{ run: string; label: string; produces: str
   { run: "map:drift", label: "Compare the map against the approved design", produces: ["slice.drift"] },
   { run: "runs:launch", label: "Launch one run per approved slice", produces: ["launched"], reads: ["plan.slices", "tickets"] },
   { run: VERIFY_BUILTIN, label: "Run the workspace's tests", produces: [...VERIFY_PRODUCES] },
+  { run: EVIDENCE_BUILTIN, label: "Screenshot the workspace's preview", produces: [...EVIDENCE_PRODUCES] },
 ];
 
 /** A worktree CLEAN-UP step emits these two facts and no others (engine/executors/worktree.ts). */

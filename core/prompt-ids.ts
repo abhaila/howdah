@@ -36,7 +36,8 @@ export type PromptId =
   | "slice.propose"
   | "slice.resolve_conflicts"
   | "slice.review_repairs"
-  | "slice.revise_repairs";
+  | "slice.revise_repairs"
+  | "ticket.local_review";
 
 export const PROMPT_IDS = [
   "checkout.pull_pr",
@@ -76,4 +77,5 @@ export const PROMPT_IDS = [
   "slice.resolve_conflicts",
   "slice.review_repairs",
   "slice.revise_repairs",
+  "ticket.local_review",
 ] as const;

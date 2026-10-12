@@ -62,6 +62,7 @@ import { AgentProse, beatsOf, groupBeats, ToolBeat, ToolGroup, ToolDisclosureCon
 import { Button } from "@/components/ui/button";
 import { StandingAsk } from "./ask";
 import { ProgressPanel, steerableTurn } from "./progress";
+import { EvidenceStrip } from "./evidence";
 import type { LiveGit } from "../../live-git";
 import { Chip } from "@/components/ui/chip";
 import { Badge } from "@/components/ui/badge";
@@ -111,6 +112,7 @@ export type ChatMessage =
   | { kind: "step"; key: string; node: string; visit: number; index: number; prompt: { id: string; version: number; read: string[] } | null }
   | { kind: "beats"; key: string; beats: ReturnType<typeof beatsOf>; state: TurnState | undefined }
   | { kind: "steer"; key: string; steer: RunDetail["steers"][number] }
+  | { kind: "evidence"; key: string; entry: RunDetail["evidence"][number] }
   | { kind: "asked"; key: string; reason: string }
   | { kind: "answered"; key: string; text: string }
   | { kind: "wrote"; key: string; keys: string[] };
@@ -179,12 +181,15 @@ export function conversation(detail: RunDetail): ChatMessage[] {
       .filter((c) => c.writes.some((w) => w.node === row.node && w.visit === row.visit))
       .map((c) => c.key);
     if (wrote.length) out.push({ kind: "wrote", key: `wrote:${key}`, keys: wrote });
+    // HOW-52: what the harness saw of the change, drawn as the step that captured it closes
+    const ev = detail.evidence.find((e) => e.node === row.node && e.visit === row.visit);
+    if (ev) out.push({ kind: "evidence", key: `evidence:${key}`, entry: ev });
   }
   return out;
 }
 
 /** one transcript row. Split out so the scroller's item wrapper stays one line per message. */
-function Row({ m, onPickStep, lastActivityAt }: { m: ChatMessage; onPickStep: (key: string) => void; lastActivityAt: string | null }) {
+function Row({ m, onPickStep, lastActivityAt, runId }: { m: ChatMessage; onPickStep: (key: string) => void; lastActivityAt: string | null; runId: string }) {
   switch (m.kind) {
     case "step":
       return (
@@ -224,6 +229,8 @@ function Row({ m, onPickStep, lastActivityAt }: { m: ChatMessage; onPickStep: (k
       );
     case "steer":
       return <SteerBubble steer={m.steer} />;
+    case "evidence":
+      return <EvidenceStrip runId={runId} entry={m.entry} />;
     case "asked":
       return (
         <div className="cv-asked">
@@ -390,7 +397,7 @@ export function RunChat({ runId, detail, ask, onPickStep, onResolved, liveGit = 
           {/* HOW-49: pinned above the transcript while the newest step is live — "where is it
               at?" answered without scrolling a hundred tool calls. Renders nothing otherwise. */}
           <div className="chat-col">
-            <ProgressPanel detail={detail} liveGit={liveGit} />
+            <ProgressPanel detail={detail} liveGit={liveGit} runId={runId} />
           </div>
         </div>
 
@@ -411,7 +418,7 @@ export function RunChat({ runId, detail, ask, onPickStep, onResolved, liveGit = 
               )}
               {messages.map((m) => (
                 <MessageScrollerItem key={m.key} messageId={m.key} scrollAnchor={m.kind === "step"}>
-                  <Row m={m} onPickStep={onPickStep} lastActivityAt={detail.last_agent_event_at} />
+                  <Row m={m} onPickStep={onPickStep} lastActivityAt={detail.last_agent_event_at} runId={runId} />
                 </MessageScrollerItem>
               ))}
               {turns.map((t, i) => (
