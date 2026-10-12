@@ -88,6 +88,10 @@ describe("deliveryGraph extraction keeps implement-ticket identical", () => {
     // and confirming they agree, so it still pins the graph the old hash pinned: upstream
     // implement-ticket as of origin/main 6a31486 via the rebased T5 commit 7c590df, plus our
     // maxVisits. Reproduce by hashing either revision the same way.
+    //
+    // RE-PINNED ONCE, ON PURPOSE (HOW-40, 2026-10-12): implement-ticket gained `verify.run`
+    // between implement/implement_review and local_review. That is a behaviour change, not an
+    // extraction or a conversion, so the old value (f5b93bec…) no longer describes the graph.
     const sortDeep = (v: unknown): unknown =>
       Array.isArray(v)
         ? v.map(sortDeep)
@@ -95,7 +99,7 @@ describe("deliveryGraph extraction keeps implement-ticket identical", () => {
           ? Object.fromEntries(Object.keys(v as object).sort().map((k) => [k, sortDeep((v as Record<string, unknown>)[k])]))
           : v;
     const s = JSON.stringify(sortDeep(shapeOf(implementTicket)));
-    expect(createHash("sha256").update(s).digest("hex")).toBe("f5b93becfb56508909894d0c3a4c9c75f513698c61bc0814890778e4e9223b74");
+    expect(createHash("sha256").update(s).digest("hex")).toBe("20513cd5d24c071d6340d913f8a74ec9aa89f9bec1a9aa7cb9db91775448f22d");
   });
 ;
 

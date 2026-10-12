@@ -5,18 +5,24 @@
  * Each park is asserted by its code (system-map 0.2), not only its reason text.
  */
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
-import { implementTicket, type PrState } from "./implement-ticket";
+import { implementTicket, spec, type PrState } from "./implement-ticket";
+import { buildGraph, type GraphSpec } from "../core/graph-spec";
 import { Engine, type AttemptResult, type EngineOpts } from "../engine/run";
 import type { LoggedEvent } from "../log/events";
+import type { VerifyResult } from "../core/verify";
+
+const VERIFY_PASS: VerifyResult = { outcome: "pass", command: "bun test", exit_code: 0, commit: "abc123", dirty: false, output_tail: "12 pass" };
 
 const PROMPTS = join(dirname(import.meta.dir), "prompts");
 const ok = (writes: Record<string, unknown> = {}): AttemptResult => ({ status: "succeeded", writes });
 
 interface Script {
   localReview: () => "pass" | "reject";
+  /** HOW-40: what verify.run publishes (default: a pass) */
+  verify?: () => VerifyResult;
   repairReview?: () => "pass" | "reject";
   pr?: () => PrState;
 }
@@ -29,7 +35,10 @@ function engineFor(dir: string, script: Script, prompts: Map<string, string>, ex
     ...extra,
     executors: {
       worktree: async ({ nodeId }) => ok(nodeId.startsWith("cleanup") ? { "worktree.clean": true } : {}),
-      command: async () => ok({ "pr.state": script.pr?.() ?? "OPEN" }),
+      command: async ({ nodeId }) =>
+        nodeId === "verify.run"
+          ? ok({ "verify.result": script.verify?.() ?? VERIFY_PASS })
+          : ok({ "pr.state": script.pr?.() ?? "OPEN" }),
       wait: async () => ok(),
       agent: async ({ nodeId, visit, renderedPrompt }) => {
         prompts.set(`${nodeId}@${visit}`, renderedPrompt ?? "");
@@ -154,5 +163,67 @@ describe("jump after a maxVisits park (system-map 0.3 budget floors)", () => {
       "implementation.plan_review@7:max-visits",
     ]);
     expectNoDuplicateAttempts(events);
+  });
+});
+
+/**
+ * HOW-40: implement-ticket never ran verify:run, so its reviewer judged only the agent's own
+ * claims about which checks it ran. Now every implementation pass is followed by verify.run,
+ * and the reviewer reads `verify.result` through the partial implement-slice's reviewer uses.
+ */
+describe("implement-ticket runs verify:run before its review (HOW-40)", () => {
+  test("the graph validates, and the validator proves verify.result is written on every path to the review", () => {
+    const clean = implementTicket.validate();
+    expect([...clean.structural, ...clean.paths]).toEqual([]);
+    const withoutVerify: GraphSpec = {
+      ...spec,
+      nodes: spec.nodes.filter((n) => n.id !== "verify.run"),
+      edges: spec.edges
+        .filter((e) => e.from !== "verify.run")
+        .map((e) => (e.to === "verify.run" ? { ...e, to: "implementation.local_review" } : e)),
+    };
+    // the MUST-analysis names the read and the path that reaches it unwritten
+    expect(buildGraph(withoutVerify).validate().paths).toContainEqual(
+      expect.objectContaining({ node: "implementation.local_review", key: "verify.result" }),
+    );
+  });
+
+  const cases: Array<[string, VerifyResult]> = [
+    ["pass", VERIFY_PASS],
+    ["fail", { outcome: "fail", command: "bun test", exit_code: 1, output_tail: "1 fail" }],
+    ["not-checked", { outcome: "not-checked", output_tail: "", reason: "workspace \"w\" has no verifyCommand" }],
+  ];
+  for (const [label, verify] of cases) {
+    test(`a ${label} verify result reaches local_review, which reads it`, async () => {
+      const prompts = new Map<string, string>();
+      const engine = engineFor(tmp(), { localReview: () => "pass", pr: () => "MERGED", verify: () => verify }, prompts);
+      expect(await engine.start(INPUTS)).toEqual({ state: "finished", outcome: "success" });
+      const events = engine.log.read();
+      const order = events.flatMap((e) => (e.type === "node-started" ? [e.node] : []));
+      expect(order.slice(0, 5)).toEqual(["create_worktree", "implementation.plan", "implementation.implement", "verify.run", "implementation.local_review"]);
+      const review = events.find((e) => e.type === "prompt-rendered" && e.node === "implementation.local_review");
+      expect(review?.type === "prompt-rendered" && review.context_read["verify.result"]).toEqual(verify);
+      expect(prompts.get("implementation.local_review@1")).toContain(`"outcome":"${label}"`);
+      expect(prompts.get("implementation.local_review@1")).toContain("## Behaviour: the workspace's tests");
+    });
+  }
+
+  test("an implement_review repair is re-verified before the review sees it again", async () => {
+    let reviews = 0;
+    const engine = engineFor(tmp(), { localReview: () => (reviews++ === 0 ? "reject" : "pass"), pr: () => "MERGED" }, new Map());
+    expect(await engine.start(INPUTS)).toEqual({ state: "finished", outcome: "success" });
+    expect(started(engine.log.read(), "verify.run")).toEqual([1, 2]);
+  });
+
+  test("both reviewer prompts include the same partial, and the run pins it", async () => {
+    const engine = engineFor(tmp(), { localReview: () => "pass", pr: () => "MERGED" }, new Map());
+    await engine.start(INPUTS);
+    const startedEv = engine.log.read().find((e) => e.type === "run-started");
+    expect(startedEv?.type === "run-started" && startedEv.pinned_includes?.["implementation.local_review"]).toMatchObject({ "review._verify_result": 1 });
+    const raw = (id: string) => readFileSync(join(PROMPTS, `${id}.md`), "utf8");
+    for (const id of ["implementation.local_review", "slice.local_review"]) {
+      expect(raw(id)).toContain("{{> review._verify_result }}");
+      expect(raw(id)).not.toContain("{{ context.verify.result }}"); // only the partial carries it
+    }
   });
 });
