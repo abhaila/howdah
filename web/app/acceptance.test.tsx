@@ -98,6 +98,22 @@ describe("the Acceptance card", () => {
     expect(el.querySelector(".field-error")!.textContent).toBe("criterion \"ac-5\" was superseded — waive the row that replaced it");
   });
 
+  // HOW-58: the rail's layout (judged-by on its own line, waive aligned under the text) rests
+  // on this structure — the CSS addresses these elements as children of these parents
+  test("structure the rail layout depends on: 'judged by' in the head, Waive… in its row's body", () => {
+    const el = render(<AcceptanceCard runId="r1" detail={deriveDetail("r1", contractLog(false).events)} onChanged={() => {}} />);
+    const by = el.querySelector(".ac-by")!;
+    expect(by.parentElement!.classList.contains("ac-head")).toBe(true);
+    expect(by.textContent).toBe("judged by implementation.local_review@1");
+    const open = el.querySelector(".ac-waive-open")!;
+    expect(open.parentElement!.classList.contains("ac-row-body")).toBe(true);
+    expect(open.closest(".ac-row")!.getAttribute("data-state")).toBe("fail");
+    act(() => (open as HTMLButtonElement).click());
+    // the input is the first child: `.ac-waive > :first-child` is what lets it share a line or wrap
+    expect(el.querySelector(".ac-waive")!.firstElementChild!.tagName).toBe("INPUT");
+    expect(el.querySelector(".ac-waive")!.parentElement!.classList.contains("ac-row-body")).toBe(true);
+  });
+
   test("a finished run offers no waiver — there is no gate left to open", () => {
     const el = render(<AcceptanceCard runId="r1" detail={deriveDetail("r1", contractLog().events)} onChanged={() => {}} />);
     expect(el.querySelector(".ac-waive-open")).toBeNull();

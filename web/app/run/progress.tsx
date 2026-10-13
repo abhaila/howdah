@@ -16,12 +16,22 @@
  *
  * It renders only while the newest step's turn is LIVE (derive.ts turn_states), pinned at the
  * top of Chat and as a section of the rail. A finished step's story is the transcript.
+ *
+ * HOW-58: pinned, a long plan and five commits pushed the transcript itself halfway down the
+ * column — the panel blocked the stream it sits above — so the pinned panel collapses to its
+ * head line: the step, the liveness (still amber when quiet, so a collapsed panel still says
+ * whether the agent is moving) and a one-phrase summary. Collapsed-ness is an operator
+ * preference stored like a pane width (lib/panel.ts), never a run fact. The rail copy has no
+ * toggle: the rail is where the detail lives, and it is already out of the stream's way.
  */
-import { Camera, CheckCircle2, Circle, CircleDot, GitCommitHorizontal, ListChecks } from "lucide-react";
+import { useId, useState } from "react";
+import { Camera, CheckCircle2, ChevronDown, ChevronRight, Circle, CircleDot, GitCommitHorizontal, ListChecks } from "lucide-react";
 import { evidenceUrl } from "./evidence";
 import type { RunDetail } from "../../derive";
 import type { LiveGit } from "../../live-git";
+import { Button } from "@/components/ui/button";
 import { useNow } from "@/lib/hooks";
+import { readStored, writeStored } from "@/lib/panel";
 import { fmtAgo, liveness } from "@/lib/liveness";
 import { harnessSpec, isHarness } from "../../../core/harnesses";
 
@@ -46,6 +56,10 @@ export function steerableTurn(detail: Pick<RunDetail, "timeline" | "turn_states"
 const STATUS_ICON = { completed: CheckCircle2, in_progress: CircleDot, pending: Circle } as const;
 const ago = (iso: string, now: number) => fmtAgo(now - new Date(iso).getTime());
 
+/** one preference for every run: an operator who wants the stream clear wants it clear everywhere */
+export const PROGRESS_COLLAPSED_KEY = "howdah.chat.progress.collapsed";
+const parseFlag = (raw: string) => (raw === "true" ? true : raw === "false" ? false : null);
+
 export function ProgressPanel({ detail, liveGit, variant = "pinned", runId }: {
   detail: RunDetail;
   /** HOW-52: needed to link the newest evidence thumbnail */
@@ -55,6 +69,10 @@ export function ProgressPanel({ detail, liveGit, variant = "pinned", runId }: {
   variant?: "pinned" | "rail";
 }) {
   const now = useNow();
+  const bodyId = useId();
+  const [stored, setStored] = useState(() => readStored(PROGRESS_COLLAPSED_KEY, false, parseFlag));
+  const collapsible = variant === "pinned";
+  const collapsed = collapsible && stored;
   const step = liveStep(detail);
   if (!step) return null;
   const plan = detail.plan && detail.plan.node === step.node && detail.plan.visit === step.visit ? detail.plan : null;
@@ -63,76 +81,101 @@ export function ProgressPanel({ detail, liveGit, variant = "pinned", runId }: {
   // a push for an earlier step is history, not this step's progress
   const git = liveGit && liveGit.node === step.node && liveGit.visit === step.visit ? liveGit : null;
   const done = plan?.items.filter((i) => i.status === "completed").length ?? 0;
+  // what a collapsed panel still says: only the facts there are, never a placeholder
+  const summary = [
+    ...(plan && plan.items.length > 0 ? [`plan ${done} of ${plan.items.length} done`] : []),
+    ...(git ? [`${git.commit_count} commit${git.commit_count === 1 ? "" : "s"}`] : []),
+  ];
 
   return (
-    <section className="progress-panel" data-variant={variant} aria-label="Live progress">
+    <section className="progress-panel" data-variant={variant} data-collapsed={collapsed ? "true" : "false"} aria-label="Live progress">
       <div className="pp-head">
-        <span className="pp-step">{step.node}@{step.visit}</span>
+        {collapsible ? (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="pp-toggle"
+            aria-expanded={!collapsed}
+            aria-controls={collapsed ? undefined : bodyId}
+            aria-label={`${collapsed ? "Expand" : "Collapse"} live progress for ${step.node}@${step.visit}`}
+            onClick={() => { setStored(!collapsed); writeStored(PROGRESS_COLLAPSED_KEY, String(!collapsed)); }}
+          >
+            {collapsed ? <ChevronRight size={12} aria-hidden /> : <ChevronDown size={12} aria-hidden />}
+            <span className="pp-step">{step.node}@{step.visit}</span>
+          </Button>
+        ) : (
+          <span className="pp-step">{step.node}@{step.visit}</span>
+        )}
+        {collapsed && summary.length > 0 && <span className="pp-summary">{summary.join(" · ")}</span>}
         <span className="pp-live" data-quiet={quiet ? "true" : "false"}>
           working{ageMs !== null && <> · last activity {fmtAgo(ageMs)} ago</>}
           {quiet && <> — quiet for a while</>}
         </span>
       </div>
 
-      <div className="pp-block">
-        <div className="pp-label"><ListChecks size={12} aria-hidden /> Plan{plan && plan.items.length > 0 && <> · {done} of {plan.items.length} done</>}</div>
-        {plan && plan.items.length > 0 ? (
-          <ul className="pp-plan">
-            {plan.items.map((item, i) => {
-              const Icon = STATUS_ICON[item.status];
-              return (
-                <li key={i} className="pp-item" data-status={item.status}>
-                  <Icon size={12} aria-hidden />
-                  <span>{item.content}</span>
-                  <span className="sr-only">({item.status.replace("_", " ")})</span>
-                </li>
-              );
-            })}
-          </ul>
-        ) : (
-          <div className="pp-empty">{harness === "claude" ? "no plan reported yet" : "no plan reported by this harness"}</div>
-        )}
-      </div>
-
-      {/* HOW-52: what the harness has captured of the change so far, newest first */}
-      {(() => {
-        const screens = detail.evidence.flatMap((e) => e.result.items);
-        const newest = screens.at(-1);
-        if (!screens.length || !runId) return null;
-        return (
+      {!collapsed && (
+        <div className="pp-body" id={bodyId}>
           <div className="pp-block">
-            <div className="pp-label"><Camera size={12} aria-hidden /> Evidence · {screens.length} screen{screens.length === 1 ? "" : "s"}</div>
-            {newest && <img className="pp-evidence" src={evidenceUrl(runId, newest.file)} alt={`newest screenshot: ${newest.path}`} loading="lazy" />}
-          </div>
-        );
-      })()}
-
-      <div className="pp-block">
-        <div className="pp-label"><GitCommitHorizontal size={12} aria-hidden /> Worktree</div>
-        {git ? (
-          <>
-            <div className="pp-git">
-              <span>{git.commit_count} commit{git.commit_count === 1 ? "" : "s"} this step</span>
-              <span>{git.uncommitted} uncommitted file{git.uncommitted === 1 ? "" : "s"}</span>
-              <span>{git.last_commit_at ? <>last commit {ago(git.last_commit_at, now)} ago</> : "no commits yet"}</span>
-            </div>
-            {git.commits.length > 0 && (
-              <ul className="pp-commits">
-                {git.commits.slice(0, 5).map((c) => (
-                  <li key={c.sha} className="pp-commit">
-                    <span className="m">{c.sha}</span>
-                    <span className="pp-subject">{c.subject}</span>
-                    <span className="pp-age">{ago(c.at, now)}</span>
-                  </li>
-                ))}
+            <div className="pp-label"><ListChecks size={12} aria-hidden /> Plan{plan && plan.items.length > 0 && <> · {done} of {plan.items.length} done</>}</div>
+            {plan && plan.items.length > 0 ? (
+              <ul className="pp-plan">
+                {plan.items.map((item, i) => {
+                  const Icon = STATUS_ICON[item.status];
+                  return (
+                    <li key={i} className="pp-item" data-status={item.status}>
+                      <Icon size={12} aria-hidden />
+                      <span>{item.content}</span>
+                      <span className="sr-only">({item.status.replace("_", " ")})</span>
+                    </li>
+                  );
+                })}
               </ul>
+            ) : (
+              <div className="pp-empty">{harness === "claude" ? "no plan reported yet" : "no plan reported by this harness"}</div>
             )}
-            <div className="pp-empty">probed {ago(git.probed_at, now)} ago</div>
-          </>
-        ) : (
-          <div className="pp-empty">worktree not probed yet</div>
-        )}
-      </div>
+          </div>
+
+          {/* HOW-52: what the harness has captured of the change so far, newest first */}
+          {(() => {
+            const screens = detail.evidence.flatMap((e) => e.result.items);
+            const newest = screens.at(-1);
+            if (!screens.length || !runId) return null;
+            return (
+              <div className="pp-block">
+                <div className="pp-label"><Camera size={12} aria-hidden /> Evidence · {screens.length} screen{screens.length === 1 ? "" : "s"}</div>
+                {newest && <img className="pp-evidence" src={evidenceUrl(runId, newest.file)} alt={`newest screenshot: ${newest.path}`} loading="lazy" />}
+              </div>
+            );
+          })()}
+
+          <div className="pp-block">
+            <div className="pp-label"><GitCommitHorizontal size={12} aria-hidden /> Worktree</div>
+            {git ? (
+              <>
+                <div className="pp-git">
+                  <span>{git.commit_count} commit{git.commit_count === 1 ? "" : "s"} this step</span>
+                  <span>{git.uncommitted} uncommitted file{git.uncommitted === 1 ? "" : "s"}</span>
+                  <span>{git.last_commit_at ? <>last commit {ago(git.last_commit_at, now)} ago</> : "no commits yet"}</span>
+                </div>
+                {git.commits.length > 0 && (
+                  <ul className="pp-commits">
+                    {git.commits.slice(0, 5).map((c) => (
+                      <li key={c.sha} className="pp-commit">
+                        <span className="m">{c.sha}</span>
+                        <span className="pp-subject">{c.subject}</span>
+                        <span className="pp-age">{ago(c.at, now)}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                <div className="pp-empty">probed {ago(git.probed_at, now)} ago</div>
+              </>
+            ) : (
+              <div className="pp-empty">worktree not probed yet</div>
+            )}
+          </div>
+        </div>
+      )}
     </section>
   );
 }
