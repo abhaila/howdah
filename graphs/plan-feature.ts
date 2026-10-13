@@ -40,8 +40,8 @@
  *   `doctor` asserts declared skills exist, and hard-coding them would fail on a machine that
  *   does not have them.
  * - THE RUN ENDS AT THE LAUNCH. `runs.launch` starts N detached runs and this run finishes; it
- *   never waits on a child, and `depends_on` orders the launches rather than gating them.
- *   Wave-gating a dependent slice on its prerequisite's merge is a follow-up, not this ticket.
+ *   never waits on a child. `depends_on` is a gate the CHILD keeps (HOW-57): a dependent slice
+ *   is launched as `implement-stacked`, which waits for its dependencies itself.
  *
  * Loop bounds, each one a park for the operator rather than a spin:
  * - no maxVisits on plan.propose — every redraw follows a human decision event;
@@ -53,7 +53,9 @@
  *   third failure is a refusal it will keep making.
  */
 import { defineGraph, type ProposalRun } from "../core/graph";
-import { howdahHome, loadConfig } from "../config/config";
+import { join } from "node:path";
+import { howdahHome, loadConfig, workspaceNameFor } from "../config/config";
+import { readLog } from "../log/write";
 import type { ApprovalDecision, BaseSnapshot, FeedbackItem } from "../engine/slice-decision";
 import { validateSlicePlan, type LaunchResult, type SlicePlan, type SliceTicket } from "./slice-plan";
 
@@ -80,9 +82,22 @@ const perVisit = { scope: "per-visit" } as const;
  * what the operator approves is what gets built. (`graphs/local.ts` already reads
  * $HOWDAH_HOME, so a graph touching config is in keeping.)
  */
-export function validatePlanProposal(proposal: unknown, _run?: ProposalRun): string | null {
-  const checked = validateSlicePlan(proposal, { knownWorkspaces: Object.keys(loadConfig(howdahHome()).repos) });
+export function validatePlanProposal(proposal: unknown, run?: ProposalRun): string | null {
+  const config = loadConfig(howdahHome());
+  const checked = validateSlicePlan(proposal, { knownWorkspaces: Object.keys(config.repos), parentWorkspace: parentWorkspaceOf(config, run) });
   return checked.ok ? null : checked.errors.join("\n");
+}
+
+/**
+ * HOW-57: the workspace this planning run was launched in — what a slice with no `workspace`
+ * builds in — so a stack base can be checked to be in the same repo as its dependent. Read from
+ * the run's own `run-started` (its cwd is the registered workspace path; the run then works in
+ * a worktree of it). Unknown is null, never a guess.
+ */
+function parentWorkspaceOf(config: ReturnType<typeof loadConfig>, run: ProposalRun | undefined): string | null {
+  if (!run) return null;
+  const started = readLog(join(run.dir, "run.jsonl")).find((e) => e.type === "run-started");
+  return started?.type === "run-started" && started.cwd ? workspaceNameFor(config, started.cwd) : null;
 }
 
 export const planFeature = defineGraph<PlanFeatureCtx>({

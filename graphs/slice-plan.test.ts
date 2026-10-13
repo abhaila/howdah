@@ -3,9 +3,9 @@
  * human, so the tests assert the words that tell it what to do next — not only that it failed.
  */
 import { describe, expect, test } from "bun:test";
-import { dependencyCycles, MAX_SLICES, validateSlicePlan, type Slice } from "./slice-plan";
+import { dependencyCycles, describeDep, MAX_SLICES, stackBase, validateSlicePlan, type Slice } from "./slice-plan";
 
-const OPTS = { knownWorkspaces: ["api", "web"] };
+const OPTS: { knownWorkspaces: string[]; parentWorkspace?: string | null } = { knownWorkspaces: ["api", "web"] };
 
 /** `over` is deliberately untyped: most of these tests feed the validator what a MODEL sent. */
 const slice = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
@@ -199,6 +199,109 @@ describe("depends_on", () => {
     expect(joined(plan([slice({ depends_on: "the other one" })]))).toContain('"depends_on" is a string');
   });
 
+  test("a cycle is found over the object form too", () => {
+    const message = joined(
+      plan([slice({ id: "a", depends_on: [{ slice: "b", until: "published" }] }), slice({ id: "b", depends_on: [{ slice: "a", until: "package" }] })]),
+    );
+    expect(message).toContain("cycle (a → b → a)");
+  });
+});
+
+describe("depends_on until (HOW-57)", () => {
+  const accepted = (v: unknown, opts: Parameters<typeof validateSlicePlan>[1] = OPTS) => {
+    const r = validateSlicePlan(v, opts);
+    if (!r.ok) throw new Error(r.errors.join("\n"));
+    return r.plan;
+  };
+
+  test("the string form still parses, and means merged", () => {
+    const p = accepted(plan([slice({ id: "a", depends_on: ["b"] }), slice({ id: "b" })]));
+    expect(p.slices[0]!.depends_on).toEqual([{ slice: "b", until: "merged" }]);
+  });
+
+  test("the object form parses each until", () => {
+    const p = accepted(
+      plan([
+        slice({ id: "a", depends_on: [{ slice: "b", until: "published" }, { slice: "c", until: "package" }, { slice: "d", until: "merged" }] }),
+        slice({ id: "b" }), slice({ id: "c", workspace: "api" }), slice({ id: "d" }),
+      ]),
+    );
+    expect(p.slices[0]!.depends_on).toEqual([
+      { slice: "b", until: "published" },
+      { slice: "c", until: "package" },
+      { slice: "d", until: "merged" },
+    ]);
+    expect(stackBase(p.slices[0]!)).toEqual({ slice: "b", until: "published" });
+    expect(stackBase(p.slices[1]!)).toBeUndefined();
+  });
+
+  test("an object with no until means merged, like the string form", () => {
+    const p = accepted(plan([slice({ id: "a", depends_on: [{ slice: "b" }] }), slice({ id: "b" })]));
+    expect(p.slices[0]!.depends_on).toEqual([{ slice: "b", until: "merged" }]);
+  });
+
+  test("an unknown until is refused, naming the three it may be", () => {
+    expect(joined(plan([slice({ id: "a", depends_on: [{ slice: "b", until: "deployed" }] }), slice({ id: "b" })]))).toBe(
+      'slice "a": depends_on[0]: "until" is "deployed" — it must be "published" (stack on its open PR, same repo), ' +
+        '"merged" (wait for its PR to merge) or "package" (merged, and its package published)',
+    );
+  });
+
+  test("an entry that is neither a string nor { slice } is refused", () => {
+    expect(joined(plan([slice({ id: "a", depends_on: [42] })]))).toBe(
+      'slice "a": depends_on[0] is a number — each dependency is { "slice": <id of a slice in this plan>, "until": "published" | "merged" | "package" }',
+    );
+  });
+
+  test("the same dependency twice is refused", () => {
+    expect(joined(plan([slice({ id: "a", depends_on: ["b", { slice: "b", until: "package" }] }), slice({ id: "b" })]))).toBe(
+      'slice "a": depends_on[1]: "b" is listed twice — name each dependency once, with the furthest "until" it needs',
+    );
+  });
+
+  test("one published dependency in the same workspace is the stack base", () => {
+    expect(validateSlicePlan(plan([slice({ id: "fe-2", workspace: "web", depends_on: [{ slice: "fe-1", until: "published" }] }), slice({ id: "fe-1", workspace: "web" })]), OPTS).ok).toBe(true);
+    // both omitted: both are the run's own workspace, known or not
+    expect(validateSlicePlan(plan([slice({ id: "a", depends_on: [{ slice: "b", until: "published" }] }), slice({ id: "b" })]), OPTS).ok).toBe(true);
+  });
+
+  test("two published dependencies are refused", () => {
+    expect(
+      joined(
+        plan([
+          slice({ id: "a", depends_on: [{ slice: "b", until: "published" }, { slice: "c", until: "published" }] }),
+          slice({ id: "b" }), slice({ id: "c" }),
+        ]),
+      ),
+    ).toBe(
+      'slice "a": "b" and "c" are both "until": "published" — at most one published dependency, which is the stack base ' +
+        "this slice's branch is built on; make the others \"merged\" or \"package\"",
+    );
+  });
+
+  test("a published dependency in another workspace is refused", () => {
+    expect(joined(plan([slice({ id: "fe-1", workspace: "web", depends_on: [{ slice: "be-1", until: "published" }] }), slice({ id: "be-1", workspace: "api" })]))).toBe(
+      'slice "fe-1" (web) stacks on "be-1" (api) with "until": "published" — a stack base must be in the same workspace; ' +
+        'use "merged" or "package" across repos',
+    );
+  });
+
+  test("an omitted workspace is compared as the run's own when that is known", () => {
+    const plain = plan([slice({ id: "fe-1", workspace: "web", depends_on: [{ slice: "be-1", until: "published" }] }), slice({ id: "be-1" })]);
+    expect(validateSlicePlan(plain, { ...OPTS, parentWorkspace: "web" }).ok).toBe(true);
+    expect(joined(plain, { ...OPTS, parentWorkspace: "api" })).toContain("a stack base must be in the same workspace");
+    // unknown: an omitted workspace cannot be proven equal to a named one, so it is refused
+    expect(joined(plain)).toContain(`"be-1" (this run's own workspace)`);
+  });
+
+  test("package across repos is fine — it is how the FE waits for the BE's client", () => {
+    expect(validateSlicePlan(plan([slice({ id: "fe-1", workspace: "web", depends_on: [{ slice: "be-1", until: "package" }] }), slice({ id: "be-1", workspace: "api" })]), OPTS).ok).toBe(true);
+  });
+
+  test("describeDep reads as prose", () => {
+    expect(describeDep({ slice: "be-1", until: "package" })).toBe("be-1 (until package)");
+  });
+
   test("a two-slice cycle is named as a loop", () => {
     const message = joined(plan([slice({ id: "a", depends_on: ["b"] }), slice({ id: "b", depends_on: ["a"] })]));
     expect(message).toContain("cycle (a → b → a)");
@@ -245,7 +348,7 @@ describe("depends_on", () => {
 });
 
 describe("dependencyCycles", () => {
-  const s = (id: string, depends_on: string[]): Slice => ({ id, title: "t", goal: "g", work: "w", verify: "v", depends_on });
+  const s = (id: string, deps: string[]): Slice => ({ id, title: "t", goal: "g", work: "w", verify: "v", depends_on: deps.map((slice) => ({ slice, until: "merged" as const })) });
 
   test("no edges, no cycles", () => {
     expect(dependencyCycles([s("a", []), s("b", ["a"])])).toEqual([]);

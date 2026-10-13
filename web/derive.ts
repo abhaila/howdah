@@ -1057,9 +1057,27 @@ export function asGhostSet(v: unknown): GhostSet | null {
  */
 export interface SlicePlanView {
   feature: string;
-  slices: Array<{ id: string; title: string; goal: string; workspace: string | null; verify: string; work: string; depends_on: string[] }>;
+  slices: Array<{ id: string; title: string; goal: string; workspace: string | null; verify: string; work: string; depends_on: SliceDepView[] }>;
   out_of_scope: string[];
   risks: string[];
+}
+
+/** HOW-57: one dependency and how far it must get — the bare-string form reads as `merged`. */
+export interface SliceDepView {
+  slice: string;
+  until: "published" | "merged" | "package";
+}
+
+const UNTILS = ["published", "merged", "package"] as const;
+
+export function asSliceDeps(v: unknown): SliceDepView[] {
+  if (!Array.isArray(v)) return [];
+  return v.flatMap((d): SliceDepView[] => {
+    if (typeof d === "string") return [{ slice: d, until: "merged" }];
+    if (!isRecord(d) || typeof d.slice !== "string") return [];
+    const until = (UNTILS as readonly unknown[]).includes(d.until) ? (d.until as SliceDepView["until"]) : "merged";
+    return [{ slice: d.slice, until }];
+  });
 }
 
 export function asSlicePlan(v: unknown): SlicePlanView | null {
@@ -1075,7 +1093,7 @@ export function asSlicePlan(v: unknown): SlicePlanView | null {
           workspace: str(s.workspace) ? s.workspace : null,
           verify: text(s.verify),
           work: text(s.work),
-          depends_on: Array.isArray(s.depends_on) ? s.depends_on.filter(str) : [],
+          depends_on: asSliceDeps(s.depends_on),
         }]
       : [],
   );

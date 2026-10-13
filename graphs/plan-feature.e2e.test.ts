@@ -212,7 +212,7 @@ describe("plan-feature E2E (fake-claude, real map, real worktree, real decisions
     // each child is handed its own ticket as `work` — it never sees the plan
     const handler = run.spawned[1]!;
     expect(inputOf(handler, "work")).toContain("HOW-41: Slice api-handler");
-    expect(inputOf(handler, "work")).toContain("Depends on other slices of this feature (each has its own ticket and PR): api-route");
+    expect(inputOf(handler, "work")).toContain("Depends on other slices of this feature (each has its own ticket and PR; this run waits for them): api-route (until merged)");
     expect(inputOf(handler, "goal")).toContain("one vertical slice of: let users delete their account");
 
     expect(events.filter((e) => e.type === "run-spawned").map((e) => e.type === "run-spawned" && e.child)).toEqual([

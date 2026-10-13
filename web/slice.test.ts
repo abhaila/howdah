@@ -7,7 +7,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { asGhostSet, deriveDetail, deriveSlice, groupGhosts, snapshotIndex } from "./derive";
+import { asGhostSet, asSliceDeps, asSlicePlan, deriveDetail, deriveSlice, groupGhosts, snapshotIndex } from "./derive";
 import { baseIndex, createHowdahServer, UNREADABLE_TTL_MS } from "./server";
 import type { RunEvent } from "../log/events";
 import { DRIFT_OUTCOMES } from "../map/drift";
@@ -19,6 +19,27 @@ import { MapStore, writeManifestTo } from "../map/store";
 import { assemble } from "../map/assemble";
 
 const index = () => snapshotIndex(SNAPSHOT);
+
+describe("asSliceDeps (HOW-57)", () => {
+  test("reads both forms: a bare id is merged, an object keeps its until", () => {
+    expect(asSliceDeps(["a", { slice: "b", until: "published" }, { slice: "c", until: "package" }])).toEqual([
+      { slice: "a", until: "merged" },
+      { slice: "b", until: "published" },
+      { slice: "c", until: "package" },
+    ]);
+  });
+
+  test("tolerates what it cannot read: an unknown until is merged, junk entries are dropped", () => {
+    expect(asSliceDeps([{ slice: "a", until: "deployed" }, 42, { until: "merged" }, null])).toEqual([{ slice: "a", until: "merged" }]);
+    expect(asSliceDeps("a")).toEqual([]);
+  });
+
+  test("a plan's rows carry the normalised dependencies", () => {
+    const plan = asSlicePlan({ feature: "f", slices: [{ id: "a", depends_on: ["b"] }, { id: "b" }] });
+    expect(plan?.slices[0]?.depends_on).toEqual([{ slice: "b", until: "merged" }]);
+    expect(plan?.slices[1]?.depends_on).toEqual([]);
+  });
+});
 
 describe("deriveSlice", () => {
   test("null for a run with no proposal, extraction or drift events", () => {

@@ -1,8 +1,8 @@
 ---
 id: plan.propose
-version: 2
+version: 3
 tags: [plan-feature]
-provenance: HOW-23 — the read-only proposer that decomposes one large feature into vertical slices; v2 names the base snapshot the map and the approval both bind to (HOW-31 B1)
+provenance: HOW-23 — the read-only proposer that decomposes one large feature into vertical slices; v2 names the base snapshot the map and the approval both bind to (HOW-31 B1); v3 makes depends_on a gate with an `until` (HOW-57)
 ---
 Discover and use relevant installed skills for shaping and decomposing work.
 
@@ -46,7 +46,7 @@ A JSON array. `source: "comment"` items are pinned to one slice id of your previ
     "goal": <the user-visible outcome this slice delivers>,
     "work": <the ticket body: scope, acceptance criteria, the modules and files to touch>,
     "verify": <how a human confirms it works>,
-    "depends_on": [<slice id>, ...]
+    "depends_on": [{"slice": <slice id>, "until": "published" | "merged" | "package"}, ...]
   }],
   "out_of_scope": [<what this feature deliberately does not cover>],
   "risks": [<what could go wrong across the slices>]
@@ -59,7 +59,10 @@ No other fields. Rules the plan is checked against before anyone sees it — a p
 - **`id` is a slug**: lower-case letters, digits and hyphens, starting with a letter or digit, at most 41 characters, unique in the plan. It becomes part of the run id and the git branch of the run that builds the slice, so it is identity — `title` is the label.
 - **`title`, `goal`, `work` and `verify` are required** and must be non-empty.
 - **`workspace` must be a registered workspace**, or omitted. Omit it whenever the slice belongs in the repository this run is looking at; name one only for a slice that belongs in a different registered repository. A workspace that is not registered is refused, because no run could be launched in it.
-- **`depends_on` names slice ids from THIS plan**, and the dependencies must not form a cycle. It is ORDERING ONLY: dependent slices are launched too, at the same time, and the dependency is recorded in the ticket body as prose for the human and the agent who build them.
+- **`depends_on` names slice ids from THIS plan**, and the dependencies must not form a cycle. Every slice is launched at once, and a dependent slice WAITS: its run does not start building until each dependency has reached its `until`. Choose `until` per dependency:
+  - **`"published"`** when this slice builds directly on the other slice's code in the SAME repository. It stacks on that slice's open pull request: its branch starts from that PR's head and its PR targets that branch, so reviewers see only this slice's diff. **At most one `published` dependency per slice**, and only in the same workspace — a stack cannot cross repositories.
+  - **`"package"`** when this slice consumes something another repository PUBLISHES — for example a frontend slice that uses the backend's generated OpenAPI client. It waits until that slice has merged AND its workspace's package check passes.
+  - **`"merged"`** otherwise: this slice only needs the other one to have landed.
 
 ### What makes a good slice
 

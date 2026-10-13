@@ -587,7 +587,8 @@ function GhostRowView({ row, slice, runId, canPin, proposalId, onChanged }: {
  * the same pin affordance works on a slice as on a ghost. Every field shown is prose the
  * OPERATOR judges (nothing here is verified against code the way a ghost is), and what makes
  * the row worth reading before approving is what it will cost: each one becomes a ticket, a
- * run, a worktree and a pull request. `depends_on` is shown as ordering, never as a gate.
+ * run, a worktree and a pull request. `depends_on` is a gate the CHILD keeps (HOW-57): every
+ * slice is launched at once and a dependent one waits until each dependency reaches its `until`.
  */
 function SlicePlanView({ plan, slice, runId, canPin, proposalId, onChanged }: {
   plan: NonNullable<SliceProposal["plan"]>; slice: SliceView; runId: string; canPin: boolean; proposalId: number; onChanged: () => void;
@@ -625,7 +626,7 @@ function SliceRowView({ n, s, slice, runId, canPin, proposalId, onChanged }: {
       </div>
       {s.depends_on.length > 0 && (
         <div className="gr-sub plan-sub">
-          <span className="plan-deps">after {s.depends_on.join(", ")} <span className="gr-unverified">ordering only — every slice is launched</span></span>
+          <span className="plan-deps">after {s.depends_on.map((d) => `${d.slice} · ${d.until}`).join(", ")} <span className="gr-unverified">launched now, waits until then</span></span>
         </div>
       )}
       {comments.map((c) => <CommentLine key={c.id} c={c} current={c.proposal_id === proposalId} />)}

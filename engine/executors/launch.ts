@@ -51,7 +51,7 @@ import { launchArgs, type LaunchRequest } from "../../core/launch-args";
 import { normalizeRunName } from "../../core/run-name";
 // the slice-plan contract (the plan, its tickets, and what a launch publishes) is pure data
 // and lives with the graph that declares those keys — no graph imports an executor
-import { validateSlicePlan, type LaunchResult, type Slice, type SlicePlan, type SliceTicket } from "../../graphs/slice-plan";
+import { describeDep, validateSlicePlan, type LaunchResult, type Slice, type SlicePlan, type SliceTicket } from "../../graphs/slice-plan";
 
 export type { LaunchResult, SliceTicket };
 
@@ -210,7 +210,10 @@ function precheck(
 
   // the plan was already validated when the round opened; checking it again is what makes an
   // operator jump straight onto this node safe, and costs one pass over at most 8 slices
-  const validated = validateSlicePlan(reads[PLAN_KEY], { knownWorkspaces: workspaces.repoNames() });
+  const validated = validateSlicePlan(reads[PLAN_KEY], {
+    knownWorkspaces: workspaces.repoNames(),
+    parentWorkspace: parentCwd ? workspaces.nameFor(parentCwd) : null,
+  });
   if (!validated.ok) return failed(`the approved plan in "${PLAN_KEY}" is not launchable: ${validated.errors.join("; ")}`);
   const plan = validated.plan;
 
@@ -276,7 +279,7 @@ function readTickets(v: unknown): SliceTicket[] | null {
  */
 export function launchOrder(slices: readonly Slice[]): Slice[] {
   const ids = new Set(slices.map((s) => s.id));
-  const pending = slices.map((s) => ({ slice: s, deps: new Set(s.depends_on.filter((d) => ids.has(d) && d !== s.id)) }));
+  const pending = slices.map((s) => ({ slice: s, deps: new Set(s.depends_on.map((d) => d.slice).filter((d) => ids.has(d) && d !== s.id)) }));
   const done = new Set<string>();
   const ordered: Slice[] = [];
   while (pending.length) {
@@ -340,7 +343,10 @@ function childGoal(slice: Slice, plan: SlicePlan): string {
 function childWork(slice: Slice, ticket: SliceTicket, plan: SlicePlan): string {
   const parts = [`${ticket.identifier}: ${ticket.title ?? slice.title}`, ticket.url, "", slice.work, "", `How to verify:\n${slice.verify}`];
   if (slice.depends_on.length)
-    parts.push("", `Depends on other slices of this feature (each has its own ticket and PR): ${slice.depends_on.join(", ")}`);
+    parts.push(
+      "",
+      `Depends on other slices of this feature (each has its own ticket and PR; this run waits for them): ${slice.depends_on.map(describeDep).join(", ")}`,
+    );
   if (plan.out_of_scope.length) parts.push("", `Out of scope for the whole feature: ${plan.out_of_scope.join("; ")}`);
   return parts.join("\n");
 }

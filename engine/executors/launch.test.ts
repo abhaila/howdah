@@ -176,14 +176,14 @@ describe("the argv a child is launched with", () => {
     expect(h.spawned.map((a) => flag(a, "--workspace"))).toEqual(["api", "web"]);
   });
 
-  test("a dependency is recorded in the ticket body as prose — nothing waits on it", async () => {
+  test("a dependency is recorded in the ticket body with its until — the child waits on it (HOW-57)", async () => {
     const h = harness();
     await h.run({
       "plan.slices": { feature: "f", slices: [slice({ id: "base" }), slice({ id: "on-top", depends_on: ["base"] })], out_of_scope: ["the admin UI"] },
       tickets: { tickets: [ticket({ slice_id: "base" }), ticket({ slice_id: "on-top", identifier: "HOW-32" })] },
     });
     const work = input(h.spawned[1]!, "work")!;
-    expect(work).toContain("Depends on other slices of this feature (each has its own ticket and PR): base");
+    expect(work).toContain("Depends on other slices of this feature (each has its own ticket and PR; this run waits for them): base (until merged)");
     expect(work).toContain("Out of scope for the whole feature: the admin UI");
   });
 
@@ -449,7 +449,7 @@ describe("nothing is launched until everything checks out", () => {
 });
 
 describe("launchOrder", () => {
-  const s = (id: string, depends_on: string[] = []) => ({ id, title: "t", goal: "g", work: "w", verify: "v", depends_on });
+  const s = (id: string, deps: string[] = []) => ({ id, title: "t", goal: "g", work: "w", verify: "v", depends_on: deps.map((slice) => ({ slice, until: "merged" as const })) });
 
   test("a plan with no dependencies launches exactly as it was written", () => {
     expect(launchOrder([s("a"), s("b"), s("c")]).map((x) => x.id)).toEqual(["a", "b", "c"]);

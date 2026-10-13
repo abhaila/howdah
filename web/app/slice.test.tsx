@@ -374,8 +374,8 @@ describe("ApprovalCard over a slice plan", () => {
     // a slice that names its own workspace says so; one that inherits shows nothing
     expect($(el, '.plan-slice[data-id="web-client"] .gr-kind')!.textContent).toBe("web");
     expect($(el, '.plan-slice[data-id="api-route"] .gr-kind')).toBeNull();
-    expect($(el, '.plan-slice[data-id="web-client"] .plan-deps')!.textContent).toContain("after api-route");
-    expect($(el, '.plan-slice[data-id="web-client"] .plan-deps')!.textContent).toContain("ordering only");
+    expect($(el, '.plan-slice[data-id="web-client"] .plan-deps')!.textContent).toContain("after api-route · package");
+    expect($(el, '.plan-slice[data-id="web-client"] .plan-deps')!.textContent).toContain("waits until then");
 
     // the plan's edges are as much a decision as its slices
     expect(el.textContent).toContain("Out of scope");
