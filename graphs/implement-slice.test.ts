@@ -100,8 +100,19 @@ describe("deliveryGraph extraction keeps implement-ticket identical", () => {
         : v && typeof v === "object"
           ? Object.fromEntries(Object.keys(v as object).sort().map((k) => [k, sortDeep((v as Record<string, unknown>)[k])]))
           : v;
+    //
+    // DELIBERATE CHANGES SINCE, each moving this pin in the same commit as the graph edit
+    // (the provenance above is the chain they extend; graphs/spec-equivalence.test.ts records
+    // the same list against its fixture):
+    //   HOW-52  `implementation.evidence` (evidence:screenshot) before every local review;
+    //           local_review reads evidence.items through `ticket.local_review`
+    //   HOW-51  `implementation.criteria` (read-only) opens the acceptance contract; HOW-40's
+    //           `verify.run` runs before the evidence step; local_review is read-only
+    //           and writes `acceptance`; delivery.publish reads it and `requiresAcceptance`
+    //   HOW-53  delivery.review_repairs is read-only (plan mode, no override can raise it)
+    //   HOW-54  plan_review and delivery.publish declare `changesFiles: false` (no-progress check)
     const s = JSON.stringify(sortDeep(shapeOf(implementTicket)));
-    expect(createHash("sha256").update(s).digest("hex")).toBe("1e60d47a0e86f7974eb8deb8a51451987349adf74a3223e3dfd710bbcf98295b");
+    expect(createHash("sha256").update(s).digest("hex")).toBe("d0ba89ed85027b388f019ba5e9fe26acea90964ca686a3d35b72ed3d9bafa4b0");
   });
 ;
 
@@ -284,7 +295,10 @@ describe("verifyAfterRepair: a CI fix that breaks a ghost surfaces drift before 
     expect(revise).toContain(`missing ${DELETE_USER_TS}`);
   });
 
-  test("a repair that keeps breaking the design parks on revise_repairs' maxVisits instead of publishing", async () => {
+  // HOW-54: this used to spin revise_repairs up to its maxVisits. Its repair changes nothing, so
+  // the second visit already finishes with the worktree the first left — it parks `no-progress`
+  // there, earlier and saying why, and still never republishes the broken design.
+  test("a repair that keeps breaking the design parks (no-progress) instead of publishing", async () => {
     const run = sliceRun({
       pr: ["CI_FAILED"],
       agents: {
@@ -301,7 +315,8 @@ describe("verifyAfterRepair: a CI fix that breaks a ghost surfaces drift before 
     await run.engine().start({ goal: SLICE_GOAL, work: SLICE_WORK });
     approve(run.runDir);
     const result = await run.engine().resume();
-    expect(result).toMatchObject({ state: "parked", node: "delivery.revise_repairs", code: "max-visits" });
+    expect(result).toMatchObject({ state: "parked", node: "delivery.revise_repairs", code: "no-progress" });
+    expect((result as { reason: string }).reason).toContain("delivery.revise_repairs@2 changed nothing in the worktree since visit 1");
     const publishes = run.events().filter((e) => e.type === "node-started" && e.node === "delivery.publish");
     expect(publishes.length).toBe(1); // never republished with the design broken
   });
@@ -347,7 +362,7 @@ describe("validateProposal (GhostSet against the base the proposal was drawn on)
     expect(retry).toContain("com.example.api.<top>.nope(Request)");
     const retryRender = run.events().filter((e) => e.type === "prompt-rendered" && e.node === "slice.propose")[1]!;
     if (retryRender.type !== "prompt-rendered") throw new Error("no render");
-    expect(retryRender.suffix_version).toBe(5);
+    expect(retryRender.suffix_version).toBe(7);
     expect(reconstructRender(run.runDir, retryRender.rendered_hash)).toMatchObject({ verified: true, text: retry });
 
     // ...once: the redraw after operator feedback does not repeat it

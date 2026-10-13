@@ -49,6 +49,7 @@ import { defaultHarness, harnessSpec, isHarness, toolBaseName } from "./harnesse
 import type { Scope } from "./context";
 import type { Violation } from "./validate";
 import { VERIFY_BUILTIN, VERIFY_PRODUCES } from "./verify";
+import { EVIDENCE_BUILTIN, EVIDENCE_PRODUCES } from "./evidence";
 
 export const SPEC_VERSION = 1;
 
@@ -210,6 +211,10 @@ export type NodeSpec =
       readOnly?: true;
       /** the id of an approval step this one may not start before (requires.approvalOf) */
       requires?: string;
+      /** HOW-51: may not start while a live acceptance criterion is unmet and unwaived */
+      requiresAcceptance?: true;
+      /** HOW-54: never changes the worktree (it plans or publishes) — not progress-checked on a cycle */
+      changesFiles?: false;
       config?: AgentConfig;
     })
   | (NodeBase & { kind: "command"; run: string; reads: string[]; writes: string[]; timeoutMs?: number; maxVisits?: number })
@@ -265,6 +270,7 @@ export const COMMAND_BUILTINS: Array<{ run: string; label: string; produces: str
   { run: "map:drift", label: "Compare the map against the approved design", produces: ["slice.drift"] },
   { run: "runs:launch", label: "Launch one run per approved slice", produces: ["launched"], reads: ["plan.slices", "tickets"] },
   { run: VERIFY_BUILTIN, label: "Run the workspace's tests", produces: [...VERIFY_PRODUCES] },
+  { run: EVIDENCE_BUILTIN, label: "Screenshot the workspace's preview", produces: [...EVIDENCE_PRODUCES] },
 ];
 
 /** A worktree CLEAN-UP step emits these two facts and no others (engine/executors/worktree.ts). */
@@ -422,6 +428,8 @@ function compileNode(n: NodeSpec, scopes: Record<string, Scope>, fields: FieldSp
         ...(n.maxVisits !== undefined ? { maxVisits: n.maxVisits } : {}),
         ...(n.readOnly ? { readOnly: true as const } : {}),
         ...(n.requires ? { requires: { approvalOf: n.requires } } : {}),
+        ...(n.requiresAcceptance ? { requiresAcceptance: true as const } : {}),
+        ...(n.changesFiles === false ? { changesFiles: false as const } : {}),
         ...(n.config ?? {}),
         ...cls,
       };
@@ -1044,6 +1052,8 @@ function parseNode(v: unknown): NodeSpec | undefined {
         ...(maxVisits !== undefined ? { maxVisits } : {}),
         ...(v.readOnly === true ? { readOnly: true as const } : {}),
         ...(requires ? { requires } : {}),
+        ...(v.requiresAcceptance === true ? { requiresAcceptance: true as const } : {}),
+        ...(v.changesFiles === false ? { changesFiles: false as const } : {}),
         ...(config ? { config } : {}),
       };
     }

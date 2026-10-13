@@ -16,7 +16,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Rows3, Workflow, Play, Pause, OctagonX, RotateCcw, ExternalLink, GitBranch, GitPullRequest,
   Clock, Coins, Pin, Fingerprint, MessagesSquare, CornerDownRight, X, ScrollText, Loader2,
-  FolderOpen, Copy, GitFork,
+  FolderOpen, Copy, GitFork, Activity, Hand, ChevronDown,
 } from "lucide-react";
 import type { RunDetail } from "../../derive";
 import type { CoalescedTurn } from "../../../log/coalesce";
@@ -44,26 +44,47 @@ import { RunLogs } from "./logs";
 import { RunContext } from "./context";
 import { RunChat } from "./chat";
 import { UsageRows } from "./usage";
+import { ProgressPanel, liveStep, steerableTurn } from "./progress";
+import { AcceptanceCard } from "./acceptance";
+import { SOFT_STOP_ESCALATE_MS } from "../../../core/steer";
+import type { LiveGit } from "../../live-git";
 
 type RunTab = "steps" | "context" | "logs" | "chat" | "graph";
-type DetailDto = RunDetail & { cwd_exists?: boolean; editor_configured?: boolean };
+type DetailDto = RunDetail & { cwd_exists?: boolean; editor_configured?: boolean; soft_stop_escalate_ms?: number };
 
 /**
  * Pause / resume / abort. Abort is the one irreversible verb in this app, so it is the one
  * that asks — through an AlertDialog rather than by relabelling itself in place.
+ *
+ * HOW-48: while an agent turn is live on a steerable harness, the PRIMARY action is "Stop at
+ * next tool call" — the soft pause, which lets the agent finish its thought, leave the work
+ * consistent and say where it is. The old Pause (SIGTERM, wherever the agent happens to be)
+ * becomes "Stop now" in a menu, with a line saying how the two differ. A soft stop that has not
+ * taken effect after `escalateMs` (the agent may be inside one long tool call) offers Stop now.
  */
-export function RunControls({ runId, summary, onAction }: { runId: string; summary: RunDetail["summary"]; onAction: () => void }) {
+export function RunControls({ runId, summary, onAction, softStoppable = false, softStop = null, escalateMs = SOFT_STOP_ESCALATE_MS, now = Date.now() }: {
+  runId: string;
+  summary: RunDetail["summary"];
+  onAction: () => void;
+  /** a live turn on a harness with a steer channel (progress.tsx steerableTurn) */
+  softStoppable?: boolean;
+  softStop?: RunDetail["soft_stop"];
+  escalateMs?: number;
+  now?: number;
+}) {
   const [confirmAbort, setConfirmAbort] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
   const [pending, setPending] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const { toast } = useToast();
   const act = async (verb: string) => {
     setPending(verb);
     setError(null);
+    setMenuOpen(false);
     try {
       const r = await fetch(`/api/runs/${runId}/${verb}`, { method: "POST" });
       if (!r.ok) throw new Error(((await r.json().catch(() => null)) as any)?.error ?? `${verb} failed`);
-      toast(`${verb} accepted — the runner is acting on it`);
+      toast(verb === "soft-stop" ? "stop sent — the agent stops at its next tool call" : `${verb} accepted — the runner is acting on it`);
       setTimeout(onAction, 300);
     } catch (e) {
       const why = e instanceof Error ? e.message : String(e);
@@ -78,12 +99,47 @@ export function RunControls({ runId, summary, onAction }: { runId: string; summa
   const active = ["running", "needs-input", "waiting", "failed-recoverable", "queued", "harness-dead"].includes(summary.status);
   if (!active) return null;
   const busy = pending !== null;
+  const soft = summary.status === "running" && softStoppable;
+  const stopping = softStop && (softStop.state === "requested" || softStop.state === "delivered");
+  const overdue = stopping && now - new Date(softStop.requested_at).getTime() >= escalateMs;
   return (
     <span className="run-controls">
-      {resumable
-        ? <Button variant="outline" size="sm" disabled={busy} onClick={() => act("resume")}>{pending === "resume" ? <Loader2 className="animate-spin" /> : <Play />}{pending === "resume" ? "Resuming…" : "Resume"}</Button>
-        : summary.status === "running" && <Button variant="outline" size="sm" disabled={busy} onClick={() => act("pause")}>{pending === "pause" ? <Loader2 className="animate-spin" /> : <Pause />}{pending === "pause" ? "Pausing…" : "Pause"}</Button>}
+      {resumable ? (
+        <Button variant="outline" size="sm" disabled={busy} onClick={() => act("resume")}>{pending === "resume" ? <Loader2 className="animate-spin" /> : <Play />}{pending === "resume" ? "Resuming…" : "Resume"}</Button>
+      ) : soft ? (
+        <>
+          <Button variant="outline" size="sm" className="run-soft-stop" disabled={busy || !!stopping} onClick={() => act("soft-stop")}>
+            {pending === "soft-stop" || stopping ? <Loader2 className="animate-spin" /> : <Hand />}
+            {stopping ? (softStop!.state === "delivered" ? "Agent is stopping…" : "Stopping at next tool call…") : "Stop at next tool call"}
+          </Button>
+          <span className="run-menu-wrap" onKeyDown={(e) => { if (e.key === "Escape") setMenuOpen(false); }}>
+            <Button variant="outline" size="sm" aria-label="more ways to stop" aria-expanded={menuOpen} aria-haspopup="menu" disabled={busy} onClick={() => setMenuOpen((o) => !o)}>
+              <ChevronDown />
+            </Button>
+            {menuOpen && (
+              <div className="run-menu" role="menu" aria-label="stop options">
+                <Button variant="ghost" size="sm" role="menuitem" className="run-menu-item" onClick={() => act("pause")}>
+                  <Pause />Stop now
+                </Button>
+                <p className="run-menu-note">
+                  Stop now interrupts the agent wherever it is — mid-edit or mid-sentence — and the
+                  step starts again from scratch on resume. Stop at next tool call lets it finish its
+                  thought, leave the work consistent and say where it is.
+                </p>
+              </div>
+            )}
+          </span>
+        </>
+      ) : (
+        summary.status === "running" && <Button variant="outline" size="sm" disabled={busy} onClick={() => act("pause")}>{pending === "pause" ? <Loader2 className="animate-spin" /> : <Pause />}{pending === "pause" ? "Pausing…" : "Pause"}</Button>
+      )}
       <Button variant="outline" size="sm" disabled={busy} onClick={() => setConfirmAbort(true)}>{pending === "abort" ? <Loader2 className="animate-spin" /> : <OctagonX />}{pending === "abort" ? "Aborting…" : "Abort"}</Button>
+      {overdue && (
+        <span className="run-escalate" role="status">
+          not stopped after {fmtDur(now - new Date(softStop!.requested_at).getTime())} — it may be in one long tool call.
+          <Button variant="destructive-outline" size="sm" disabled={busy} onClick={() => act("pause")}><Pause />Stop now</Button>
+        </span>
+      )}
       {/* The dialog closes BEFORE the verb is sent, the way every other confirmation in this
           app does (slice.tsx, settings.tsx). A modal dialog makes the rest of the document
           inert and covers it with its ::backdrop, and both explanations of a refusal — the
@@ -99,6 +155,45 @@ export function RunControls({ runId, summary, onAction }: { runId: string; summa
       />
       {error && <span className="field-error">{error}</span>}
     </span>
+  );
+}
+
+/**
+ * HOW-55: what the newest agent ran WITH, beyond the prompt its hash proves — which of the
+ * operator's settings loaded, the hooks that ran before it started (and how much text they
+ * injected), and how many skills, plugins and MCP servers it had. A run from before HOW-55 says
+ * "not recorded" rather than guessing.
+ */
+export function AgentEnvironment({ env }: { env: RunDetail["agent_env"] }) {
+  if (!env) return <div className="kv"><span className="k">agent environment</span><span>not recorded</span></div>;
+  const injected = (env.hooks ?? []).filter((h) => h.injected);
+  const files = env.files.filter((f) => f.sha256 !== null);
+  return (
+    <>
+      <div className="kv">
+        <span className="k">agent environment</span>
+        <Tooltip content={env.setting_sources ? `--setting-sources ${env.setting_sources}` : `${env.harness} has no switch for the operator's own config; what it read is hashed`}>
+          <span>{env.harness} · {env.setting_sources === null ? "its own config" : env.inherits_user ? "your user settings + project" : "project settings only"}</span>
+        </Tooltip>
+      </div>
+      {env.hooks && env.hooks.length > 0 && (
+        <div className="kv">
+          <span className="k">hooks ran</span>
+          <Tooltip content={injected.map((h) => `${h.name}: ${h.injected!.chars} chars, sha256 ${h.injected!.sha256.slice(0, 12)}`).join("\n") || "none injected context"}>
+            <span className={injected.length ? "allowance-unreachable" : ""}>{env.hooks.length}{injected.length ? ` · ${injected.length} injected context` : ""}</span>
+          </Tooltip>
+        </div>
+      )}
+      {env.skills && (
+        <div className="kv"><span className="k">loaded</span><span>{env.skills.length} skills · {env.plugins?.length ?? 0} plugins · {env.mcp_servers?.length ?? 0} MCP</span></div>
+      )}
+      <div className="kv">
+        <span className="k">settings files</span>
+        <Tooltip content={env.files.map((f) => `${f.scope} ${f.path}${f.sha256 ? ` ${f.sha256.slice(0, 12)}` : " (absent)"}`).join("\n")}>
+          <span>{files.length} hashed</span>
+        </Tooltip>
+      </div>
+    </>
   );
 }
 
@@ -251,6 +346,7 @@ export function RunView({ id, graceMs = OPEN_GRACE_MS }: { id: string; graceMs?:
   // in the conversation, and the ticket was filed because it had nowhere to be seen.
   const [tab, setTab] = useState<RunTab>("chat");
   const [picked, setPicked] = useState<string | null>(null);
+  const [liveGit, setLiveGit] = useState<LiveGit | null>(null);
   const [bannerAction, setBannerAction] = useState<"resume" | null>(null);
   const [bannerError, setBannerError] = useState<string | null>(null);
   const [missing, setMissing] = useState(false);
@@ -327,6 +423,10 @@ export function RunView({ id, graceMs = OPEN_GRACE_MS }: { id: string; graceMs?:
     if (!detail) return;
     const es = new EventSource(`/api/runs/${id}/events?since=${detail.events_seq}`);
     es.onmessage = () => reload();
+    // HOW-49: the live worktree probe arrives as its own named event — never a log event
+    es.addEventListener("git-live", (m) => {
+      try { setLiveGit(JSON.parse((m as MessageEvent).data) as LiveGit); } catch { /* a torn frame: the next probe replaces it */ }
+    });
     return () => es.close();
     // subscribe once per run; reload() refetches the derived view on any new event
   }, [id, detail === null]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -383,7 +483,11 @@ export function RunView({ id, graceMs = OPEN_GRACE_MS }: { id: string; graceMs?:
               { value: "graph", label: "Graph", icon: <Workflow /> },
             ]}
           />
-          <RunControls runId={id} summary={summary} onAction={reload} />
+          <RunControls
+            runId={id} summary={summary} onAction={reload} now={now}
+            softStoppable={steerableTurn(detail) !== null} softStop={detail.soft_stop}
+            escalateMs={detail.soft_stop_escalate_ms ?? SOFT_STOP_ESCALATE_MS}
+          />
           <OpenIdeButton runId={id} detail={detail} />
           <RunFolderButton runId={id} />
         </div>
@@ -438,7 +542,7 @@ export function RunView({ id, graceMs = OPEN_GRACE_MS }: { id: string; graceMs?:
         {tab === "context" ? (
           <RunContext entries={detail.context} />
         ) : tab === "chat" ? (
-          <RunChat runId={id} detail={detail} ask={ask} onResolved={reload} onPickStep={(k) => { setPicked(k); setTab("steps"); }} />
+          <RunChat runId={id} detail={detail} ask={ask} liveGit={liveGit} onResolved={reload} onPickStep={(k) => { setPicked(k); setTab("steps"); }} />
         ) : tab === "logs" ? (
           <RunLogs rows={detail.log_rows} />
         ) : tab === "graph" ? (
@@ -458,6 +562,18 @@ export function RunView({ id, graceMs = OPEN_GRACE_MS }: { id: string; graceMs?:
       </PanelResizer>
 
       <div className="rail" aria-label="Run inspector">
+        {liveStep(detail) && (
+          <section>
+            <h2><Activity size={12} /> Progress</h2>
+            <ProgressPanel detail={detail} liveGit={liveGit} variant="rail" runId={id} />
+          </section>
+        )}
+        {/* HOW-51: the contract while the run is still being judged; once finished it leads Chat */}
+        {detail.acceptance && detail.summary.outcome === null && detail.ask?.code !== "acceptance-unmet" && (
+          <section>
+            <AcceptanceCard runId={id} detail={detail} onChanged={reload} />
+          </section>
+        )}
         <section>
           <h2><Fingerprint size={12} /> Identity</h2>
           <div className="kv"><span className="k">run</span><span>{id}</span></div>
@@ -469,6 +585,7 @@ export function RunView({ id, graceMs = OPEN_GRACE_MS }: { id: string; graceMs?:
           {/* HOW-23: a child of a fan-out says which run planned it. A link, not a status —
               the parent's own log is the only thing that knows how the parent is doing. */}
           {summary.parent && <div className="kv"><span className="k">planned by</span><a href={`/run/${summary.parent}`} className="pr-link">{summary.parent}</a></div>}
+          <AgentEnvironment env={detail.agent_env} />
         </section>
         {detail.persistence && (
           <section>

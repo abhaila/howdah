@@ -32,6 +32,7 @@ export interface ShellOpts {
   now?: () => number;
 }
 
+/** signal a whole process group (a `detached` spawn leads its own) — also used by HOW-52's preview */
 export function signalGroup(pid: number, signal: NodeJS.Signals): void {
   try {
     process.kill(-pid, signal);

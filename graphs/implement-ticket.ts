@@ -5,9 +5,9 @@
  * one prompt. Here the graph references `delivery.publish` by id and gets whatever version
  * the prompt store holds — currently v2, the first accepted reviser proposal.
  *
- *   create_worktree → plan → implement → verify.run → local_review ─┬─reject─▶ plan_review → implement_review ─┐
- *            ▲                                ▲                     └─pass───▶ publish → probe_pr ─┬─ MERGED ─▶ complete_ticket → cleanup_merged ─▶ complete
- *            │                                └────────────────────────────────────────────────────┘(loop)    ├─ CLOSED ─▶ cleanup_closed ─▶ closed
+ *   create_worktree → plan → criteria → implement → verify.run → evidence → local_review ─┬─reject─▶ plan_review → implement_review ─┐
+ *            ▲                                          ▲                                 └─pass───▶ publish → probe_pr ─┬─ MERGED ─▶ complete_ticket → cleanup_merged ─▶ complete
+ *            │                                          └────────────────────────────────────────────────────────────────┘(loop)    ├─ CLOSED ─▶ cleanup_closed ─▶ closed
  *                                                                                      ├─ CONFLICTS/CI/CHANGES ─▶ repairs → review_repairs ─┬─pass─▶ publish
  *                                                                                      │                                      └─reject─▶ revise ─▶ publish
  *                                                                                      └─ (fallback) wait 5m ─▶ probe_pr
@@ -39,6 +39,28 @@
  * behaviour change, not a conversion, so `fixtures/pre-spec-shapes.json`'s implement-ticket
  * entry was updated on purpose (see spec-equivalence.test.ts).
  *
+ * HOW-52: `implementation.evidence` (`evidence:screenshot`) runs after `verify.run`, before
+ * EVERY local review — after the first implementation and after each repair — so the reviewer judges the screens of
+ * the code it is reviewing. The review uses `ticket.local_review`, a copy of
+ * `implementation.local_review` that reads the evidence; improve-codebase shares the original
+ * and has no evidence step, so it keeps it unchanged.
+ *
+ * HOW-51: the default-FAIL acceptance contract. `implementation.criteria` (read-only) opens it
+ * from the ticket's checkboxes — or proposes criteria from the plan when there are none — with
+ * every row failing; `implementation.local_review` (read-only, HOW-53) is the only node that
+ * flips a row, and only on evidence real in this run (engine/executors/outputs.ts checkWrites);
+ * `delivery.publish` will not start while a live criterion is unmet and unwaived. HOW-40's
+ * `implementation.verify` (verify:run) runs before every review so the contract has the test
+ * verdict to cite. The repair-side reviewer (delivery.review_repairs) does not write the contract:
+ * its prompt is shared with improve-codebase, and the list it would re-judge was already settled
+ * before the first publish, which is where the gate stands.
+ *
+ * HOW-54: on the two cycles, a step expected to change files (implement_review and the delivery
+ * repairs) that finishes with the worktree exactly as its previous visit left it parks
+ * `no-progress` instead of sending the same code back round the loop. plan_review and publish
+ * declare `changesFiles: false` — they plan and push, they do not edit — and the reviewers are
+ * read-only, so none of those is ever mistaken for a stall.
+ *
  * `worktree.clean` IS NOW STRICT, as in improve-codebase: the hand-written edges tested
  * truthiness, `is-true` tests `=== true`. Every write site in `engine/executors/worktree.ts`
  * publishes a literal boolean, so they cannot disagree on a value the engine produces.
@@ -64,6 +86,8 @@ export interface ImplementTicketCtx {
   "verify.result": VerifyResult;
   /** HOW-44: the workspace's verify command ("" when none), published by create_worktree */
   "worktree.verify_command": string;
+  "evidence.items": unknown;
+  acceptance: unknown;
 }
 
 const impl = "implementation";
@@ -96,27 +120,40 @@ export const spec: GraphSpec = {
     { key: "worktree.clean", kind: "boolean", scope: "per-visit" },
     { key: "verify.result", kind: "json", scope: "per-visit" },
     { key: "worktree.verify_command", kind: "text", scope: "sticky" },
+    // HOW-52: what the reviewer LOOKS at — screenshots of the worktree's preview, per review
+    { key: "evidence.items", kind: "json", scope: "per-visit" },
+    // HOW-51: the default-FAIL contract — opened by the criteria step, flipped only by the evaluator
+    { key: "acceptance", kind: "json", scope: "sticky" },
   ],
   nodes: [
     // HOW-44: publishes the verify command so the build prompt can say the harness verifies after it
     { id: "create_worktree", kind: "worktree", action: "create", writes: ["worktree.verify_command"] },
 
     { id: "implementation.plan", kind: "agent", prompt: "implementation.plan", reads: ["goal", "work"], writes: ["implementation_plan"], class: impl },
+    // HOW-51: the criteria, from the ticket's checkboxes or proposed from the plan — all failing.
+    // Read-only, because only a read-only node may write `acceptance` (core/graph.ts validate).
+    { id: "implementation.criteria", kind: "agent", prompt: "ticket.acceptance", reads: ["goal", "work", "implementation_plan"], writes: ["acceptance"], readOnly: true, class: impl },
     { id: "implementation.implement", kind: "agent", prompt: "implementation.implement", reads: ["goal", "work", "implementation_plan", "worktree.verify_command"], writes: ["implementation_summary"], class: impl },
-    // HOW-40: the workspace's verifyCommand, run in the worktree (`not-checked` with a reason when none)
+    // HOW-40/HOW-52: the harness's own evidence, gathered before every review — the tests, run
+    // in the worktree (`not-checked` with a reason when none), then the screens, captured from
+    // the worktree's preview
     { id: "verify.run", kind: "command", run: "verify:run", reads: [], writes: ["verify.result"], class: impl },
-    { id: "implementation.local_review", kind: "agent", prompt: "implementation.local_review", reads: ["goal", "work", "implementation_plan", "implementation_summary", "verify.result"], writes: ["review_verdict", "review_findings"], class: impl },
+    { id: "implementation.evidence", kind: "command", run: "evidence:screenshot", reads: [], writes: ["evidence.items"], class: impl },
+    // HOW-51: the evaluator flips criteria on evidence — and so must be read-only (HOW-53)
+    { id: "implementation.local_review", kind: "agent", prompt: "ticket.local_review", reads: ["goal", "work", "implementation_plan", "implementation_summary", "verify.result", "evidence.items", "acceptance"], writes: ["review_verdict", "review_findings", "acceptance"], readOnly: true, class: impl },
     // bounds local_review → plan_review → implement_review
-    { id: "implementation.plan_review", kind: "agent", prompt: "implementation.plan_review", reads: ["goal", "work", "implementation_plan", "implementation_summary", "review_verdict", "review_findings"], writes: ["implementation_plan"], maxVisits: 3, class: impl },
+    { id: "implementation.plan_review", kind: "agent", prompt: "implementation.plan_review", reads: ["goal", "work", "implementation_plan", "implementation_summary", "review_verdict", "review_findings"], writes: ["implementation_plan"], maxVisits: 3, changesFiles: false, class: impl },
     { id: "implementation.implement_review", kind: "agent", prompt: "implementation.implement_review", reads: ["goal", "work", "implementation_plan", "implementation_summary", "review_verdict", "review_findings"], writes: ["implementation_summary"], class: impl },
 
     // ---- the delivery half, inlined from deliveryGraph({ verifyAfterRepair: false }) ----
-    { id: "delivery.publish", kind: "agent", prompt: "delivery.publish", reads: ["goal", "work"], writes: ["publication_summary"], maxVisits: 5, class: deliv },
+    // HOW-51: nothing is published while a live criterion is unmet and unwaived
+    { id: "delivery.publish", kind: "agent", prompt: "delivery.publish", reads: ["goal", "work", "acceptance"], writes: ["publication_summary"], maxVisits: 5, requiresAcceptance: true, changesFiles: false, class: deliv },
     { id: "delivery.probe_pr", kind: "command", run: "probe:pr", reads: ["publication_summary"], writes: ["pr.state"], class: deliv },
     { id: "delivery.address_reviews", kind: "agent", prompt: "delivery.address_reviews", reads: ["goal", "work", "publication_summary", "review_verdict", "review_findings"], writes: ["repair_summary"], class: deliv },
     { id: "delivery.fix_ci", kind: "agent", prompt: "delivery.fix_ci", reads: ["goal", "work", "publication_summary", "review_verdict", "review_findings"], writes: ["repair_summary"], class: deliv },
     { id: "delivery.resolve_conflicts", kind: "agent", prompt: "delivery.resolve_conflicts", reads: ["goal", "work", "publication_summary"], writes: ["repair_summary"], class: deliv },
-    { id: "delivery.review_repairs", kind: "agent", prompt: "delivery.review_repairs", reads: ["goal", "work", "publication_summary", "repair_summary"], writes: ["review_verdict", "review_findings"], class: deliv },
+    // HOW-53: read-only like local_review — a reviewer that can edit can pass its own fix
+    { id: "delivery.review_repairs", kind: "agent", prompt: "delivery.review_repairs", reads: ["goal", "work", "publication_summary", "repair_summary"], writes: ["review_verdict", "review_findings"], readOnly: true, class: deliv },
     { id: "delivery.revise_repairs", kind: "agent", prompt: "delivery.revise_repairs", reads: ["goal", "work", "publication_summary", "repair_summary", "review_verdict", "review_findings"], writes: ["repair_summary"], maxVisits: 3, class: deliv },
     { id: "delivery.wait", kind: "wait", duration: "5m", class: deliv },
 
@@ -129,9 +166,11 @@ export const spec: GraphSpec = {
   ],
   edges: [
     { from: "create_worktree", to: "implementation.plan" },
-    { from: "implementation.plan", to: "implementation.implement" },
+    { from: "implementation.plan", to: "implementation.criteria" },
+    { from: "implementation.criteria", to: "implementation.implement" },
     { from: "implementation.implement", to: "verify.run" },
-    { from: "verify.run", to: "implementation.local_review" },
+    { from: "verify.run", to: "implementation.evidence" },
+    { from: "implementation.evidence", to: "implementation.local_review" },
     { from: "implementation.local_review", to: "implementation.plan_review", when: { op: "equals", key: "review_verdict", value: "reject" } },
     { from: "implementation.local_review", to: "delivery.publish", when: { op: "equals", key: "review_verdict", value: "pass" } },
     { from: "implementation.plan_review", to: "implementation.implement_review" },

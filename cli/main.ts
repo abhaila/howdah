@@ -24,6 +24,9 @@
  *                                                    extract + assemble a snapshot (map/cli.ts)
  *   howdah metrics [--json]                          implement-slice runs vs the implement-ticket baseline (cli/metrics.ts)
  */
+import { userHookReport } from "../engine/executors/agent-env";
+import { softStop, steer } from "../engine/steer";
+import { waiveCriterion } from "../engine/acceptance-decision";
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { Engine } from "../engine/run";
@@ -38,7 +41,7 @@ import { harnessNames, harnessSpec, isHarness } from "../core/harnesses";
 import { GRAPHS, graphCatalog } from "../graphs/index";
 import { loadRegistry, catalogOf } from "../graphs/registry";
 import { promptSearchPath } from "../graphs/local";
-import { howdahHome, loadConfig, saveConfig, resolveWorkspace, repoNameFor, workspaceNameFor, verifyCommandFor, setVerifyCommand, stuckThresholds, diagnosticsCommandFor, setDiagnosticsCommand, diagnosticsCommandProblem, ensureHowdahHome } from "../config/config";
+import { howdahHome, loadConfig, saveConfig, resolveWorkspace, repoNameFor, workspaceNameFor, verifyCommandFor, setVerifyCommand, stuckThresholds, diagnosticsCommandFor, setDiagnosticsCommand, diagnosticsCommandProblem, previewFor, setPreview, inheritsUserSettings, setInheritUserSettings, ensureHowdahHome } from "../config/config";
 import { loadTuning } from "../config/tuning";
 import { normalizeRunName } from "../core/run-name";
 import {
@@ -73,6 +76,10 @@ function executors() {
         verifyCommandFor: (repoPath) => verifyCommandFor(loadConfig(base), repoPath),
         // HOW-38: read once per runner — thresholds are not something a run changes mid-flight
         stuck: stuckThresholds(loadConfig(base)),
+        // HOW-52: likewise the preview `evidence:screenshot` starts
+        previewFor: (repoPath) => previewFor(loadConfig(base), repoPath),
+        // HOW-55: read per attempt, so an opt-in applies to the next agent, not the next runner
+        inheritsUserSettings: (path) => inheritsUserSettings(loadConfig(base), path),
       });
 }
 
@@ -291,6 +298,48 @@ export async function jumpCommand(runId: string, node: string, message?: string)
   await resumeCommand(runId);
 }
 
+/**
+ * HOW-47: say something to a RUNNING agent without pausing it. The precheck and the append are
+ * engine/steer.ts `steer` — the same function the viewer's route calls — so the CLI and the
+ * composer refuse the same runs in the same words. Delivery is the runner's job: this only
+ * records the steer, and the claude executor writes it to the agent at its next tool call.
+ */
+export function steerCommand(runId: string, text: string): void {
+  const sent = steer(join(runsDir, runId), text);
+  if (!sent.ok) throw new Error(sent.message);
+  console.log(`steer #${sent.seq} sent to ${sent.node}@${sent.visit} — it reaches the agent at its next tool call`);
+}
+
+/**
+ * HOW-48: `howdah stop <run>` — ask the running agent to stop at its next tool call, leave the
+ * work consistent and say where it is. The soft pause; `pause` is still the hard one.
+ */
+export function softStopCommand(runId: string): void {
+  const sent = softStop(join(runsDir, runId));
+  if (!sent.ok) throw new Error(sent.message);
+  console.log(sent.already
+    ? `a stop is already on its way to ${sent.node}@${sent.visit}`
+    : `stop sent to ${sent.node}@${sent.visit} — the agent stops at its next tool call; \`pause ${runId}\` stops it now`);
+}
+
+/**
+ * HOW-51: `howdah waive <run> <criterion-id> <reason>` — accept an unmet criterion without
+ * evidence, on the record. The same decision the Acceptance card makes; when it was the last
+ * unmet one and the run is parked on the delivery gate, the run is resumed.
+ */
+export async function waiveCommand(runId: string, criterionId: string, reason: string): Promise<void> {
+  const runDir = join(runsDir, runId);
+  const r = waiveCriterion(runDir, criterionId, reason);
+  if (!r.ok) throw new Error(r.message);
+  console.log(r.appended ? `waived "${criterionId}"` : `"${criterionId}" was already waived`);
+  if (r.remaining > 0) return console.log(`${r.remaining} criteria still unmet — delivery stays held`);
+  const parked = replayState(readLog(join(runDir, "run.jsonl"))).parked;
+  if (parked?.code === "acceptance-unmet") {
+    console.log("every criterion is met or waived; resuming");
+    await resumeCommand(runId);
+  }
+}
+
 export async function upCommand(opts: { intervalMs?: number; once?: boolean } = {}): Promise<void> {
   const interval = opts.intervalMs ?? 5000;
   console.log(`howdah up: supervising ${runsDir}`);
@@ -392,6 +441,11 @@ export async function doctorCommand(): Promise<boolean> {
   }
   for (const [name, f] of Object.entries(config.folders))
     checks.push([`folder ${name}`, existsSync(f.path), f.path]);
+  // HOW-55: which of YOUR hooks an agent would run — none unless a workspace opted in
+  for (const r of userHookReport([
+    ...Object.entries(config.repos).map(([name, w]) => ({ name, inherits: w.inheritUserSettings === true })),
+    ...Object.entries(config.folders).map(([name, w]) => ({ name, inherits: w.inheritUserSettings === true })),
+  ])) checks.push([r.name, true, r.detail]);
   const hb = existsSync(join(base, "heartbeat.json"));
   checks.push(["howdah up heartbeat", hb, hb ? join(base, "heartbeat.json") : "not running — start `howdah up`"]);
 
@@ -575,6 +629,9 @@ if (import.meta.main) {
     }
     else if (verb === "abort") { writeControl(join(runsDir, rest[0] ?? ""), "abort"); console.log("abort requested — lands at the next node boundary"); }
     else if (verb === "jump") await jumpCommand(rest[0] ?? "", rest[1] ?? "", rest.slice(2).join(" ") || undefined);
+    else if (verb === "steer") steerCommand(rest[0] ?? "", rest.slice(1).join(" "));
+    else if (verb === "stop") softStopCommand(rest[0] ?? "");
+    else if (verb === "waive") await waiveCommand(rest[0] ?? "", rest[1] ?? "", rest.slice(2).join(" "));
     else if (verb === "approve" || verb === "send-feedback" || verb === "comment") {
       const { proposalId, rest: args } = splitProposalFlag(rest, verb === "comment" ? 2 : Infinity);
       if (verb === "approve") await approveCommand(args[0] ?? "", proposalId);
@@ -631,6 +688,33 @@ if (import.meta.main) {
         saveConfig(config, base);
         const now = config.repos[name]?.diagnosticsCommand;
         console.log(now ? `diagnostics command for "${name}": ${now}` : `cleared the diagnostics command for "${name}" — no post-edit hook will run`);
+      } else if (action === "preview" && name) {
+        // HOW-52: `workspace preview <name> <command…> --paths "/,/runs"` — blank command clears it
+        let words = positional.slice(2);
+        const flag = (f: string): string | undefined => {
+          const at = words.indexOf(f);
+          if (at < 0) return undefined;
+          const v = words[at + 1];
+          words = [...words.slice(0, at), ...words.slice(at + 2)];
+          return v;
+        };
+        const paths = (flag("--paths") ?? "/").split(",");
+        const readyWhen = flag("--ready-when");
+        setPreview(config, name, words.join(" "), paths);
+        if (readyWhen && config.repos[name]?.preview) config.repos[name]!.preview!.readyWhen = readyWhen;
+        saveConfig(config, base);
+        const now = config.repos[name]?.preview;
+        console.log(now ? `preview for "${name}": ${now.command} → ${now.paths.join(", ")}` : `cleared the preview for "${name}" — evidence:screenshot will report not-checked`);
+      } else if (action === "user-settings" && name) {
+        // HOW-55: `workspace user-settings <name> on|off` — whether its agents load YOUR hooks,
+        // plugins and CLAUDE.md as well as the project's (recorded on every attempt either way)
+        const v = positional[2];
+        if (v !== "on" && v !== "off") throw new Error("usage: howdah workspace user-settings <name> on|off");
+        setInheritUserSettings(config, name, v === "on");
+        saveConfig(config, base);
+        console.log(v === "on"
+          ? `agents in "${name}" now load your user-level settings (hooks, plugins, CLAUDE.md) too`
+          : `agents in "${name}" load the project's settings only`);
       } else if (action === "remove" && name) {
         delete config.repos[name];
         delete config.folders[name];
@@ -638,7 +722,7 @@ if (import.meta.main) {
         console.log(`removed "${name}"`);
       } else if (action === "list" || action === undefined) {
         console.log(JSON.stringify({ repos: config.repos, folders: config.folders }, null, 2));
-      } else throw new Error('usage: howdah workspace add <name> <path> [--verify "<cmd>"] | verify <name> [<cmd>] | diagnostics <name> [<cmd>] | add-github <owner/name> | remove <name> | list');
+      } else throw new Error('usage: howdah workspace add <name> <path> [--verify "<cmd>"] | verify <name> [<cmd>] | diagnostics <name> [<cmd>] | preview <name> [<cmd> --paths /,/x --ready-when "<js>"] | user-settings <name> on|off | add-github <owner/name> | remove <name> | list');
     }
     else if (verb === "new-graph") {
       const { newGraph } = await import("./new-graph");
@@ -647,7 +731,7 @@ if (import.meta.main) {
       console.log(`scaffolded ${path} — edit it, then: howdah run ${rest[0]}`);
     }
     else {
-      console.error("usage: howdah setup|run|resume|pause|abort|jump|reply|resolve-effect|approve|comment|send-feedback|redesign|map|metrics|runs|graphs|new-graph|workspace|up|doctor");
+      console.error("usage: howdah setup|run|resume|pause|stop|abort|jump|steer|waive|reply|resolve-effect|approve|comment|send-feedback|redesign|map|metrics|runs|graphs|new-graph|workspace|up|doctor");
       process.exit(1);
     }
   } catch (err) {

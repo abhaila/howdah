@@ -22,6 +22,8 @@ const realAssign = window.location.assign;
 class StubEventSource {
   onmessage: ((e: unknown) => void) | null = null;
   constructor(readonly url: string) {}
+  /** HOW-49: named events (`git-live`) are listened for, as on the real EventSource */
+  addEventListener(_type: string, _fn: (e: unknown) => void) {}
   close() {}
 }
 

@@ -29,7 +29,8 @@
  */
 import { spawnSync } from "node:child_process";
 import { createHash, type Hash } from "node:crypto";
-import { createReadStream, lstatSync, readlinkSync } from "node:fs";
+import { createReadStream, lstatSync, mkdtempSync, readlinkSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { nodeReads, type NodeDef } from "../core/graph";
 import type { Fingerprint } from "../log/events";
@@ -291,5 +292,36 @@ export class Reconciler {
     }
 
     return { git, forge, disagreements, at: (this.deps.clock?.() ?? new Date()).toISOString() };
+  }
+}
+
+// ---- the worktree's CONTENT identity (HOW-54) ---------------------------------------
+
+/**
+ * HOW-54: the git tree id of what is in the worktree right now — tracked edits and untracked,
+ * non-ignored files included — or null when `cwd` is not a git work tree (or git fails).
+ *
+ * It compares the TREE, not HEAD, on purpose: a repair that only commits work already on disk,
+ * makes an empty commit or rewords a message changes no file, and must not count as progress.
+ * `fingerprint()` cannot answer that — it keys on HEAD, so a commit moves it.
+ *
+ * Built with a THROWAWAY index (GIT_INDEX_FILE in a temp dir): `git add -A` + `git write-tree`
+ * against it never touches the worktree's own index or takes its `index.lock`. The blobs it
+ * writes are ordinary loose objects; they are content-addressed, so a second call re-uses them,
+ * and `git gc` collects the ones nothing references.
+ */
+export function worktreeTree(cwd: string | undefined): string | null {
+  if (!cwd) return null;
+  const dir = mkdtempSync(join(tmpdir(), "howdah-tree-"));
+  const env = { ...process.env, GIT_INDEX_FILE: join(dir, "index") };
+  const git = (...args: string[]) => spawnSync("git", args, { cwd, env, encoding: "utf8" });
+  try {
+    if (git("rev-parse", "--is-inside-work-tree").stdout.trim() !== "true") return null;
+    if (git("rev-parse", "--verify", "-q", "HEAD").status === 0) git("read-tree", "HEAD"); // a head start for add
+    if (git("add", "-A").status !== 0) return null;
+    const tree = git("write-tree");
+    return tree.status === 0 && /^[0-9a-f]{40,64}$/.test(tree.stdout.trim()) ? tree.stdout.trim() : null;
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 }

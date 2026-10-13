@@ -29,8 +29,8 @@ afterEach(() => {
  * reading a live panel gives. `sinceLastEvent` is how far the operator's clock has moved past
  * the last event, which is the only thing the panel's live timing depends on.
  */
-function renderStep(log: FakeLog, node: string | null, visit = 1, sinceLastEvent = 0): HTMLElement {
-  const detail = deriveDetail("r1", log.events);
+function renderStep(log: FakeLog, node: string | null, visit = 1, sinceLastEvent = 0, runnerAlive?: boolean): HTMLElement {
+  const detail = deriveDetail("r1", log.events, {}, { runnerAlive });
   const row = node === null ? null : detail.timeline.findLast((t) => t.node === node && t.visit === visit) ?? null;
   if (node !== null) expect(row).not.toBeNull();
   const now = new Date(log.last.ts).getTime() + sinceLastEvent;
@@ -258,5 +258,30 @@ describe("askRowKey", () => {
     expect(askRowKey(detail.timeline, deriveStatus(log.events).ask)).toBeNull();
     log.add({ type: "attention-raised", node: "b", visit: 1, reason: "now", code: "attempt-failed" });
     expect(askRowKey(deriveDetail("r", log.events).timeline, deriveStatus(log.events).ask)).toBe("b@1");
+  });
+});
+
+describe("HOW-46: the Steps pane reads the derived turn state", () => {
+  const streaming = () => {
+    const log = new FakeLog();
+    log.add({ type: "run-started", graph: "quick-task", inputs: { goal: "g" }, pinned_prompts: {} });
+    log.add({ type: "node-started", node: "do", visit: 1, attempt_id: "do#1" });
+    log.add({ type: "chunk", node: "do", visit: 1, turn: 1, index: 0, kind: "text", content: "half a thou" });
+    return log;
+  };
+  const activity = (el: HTMLElement) => act(() => tabs(el).find((t) => t.textContent === "Activity")!.click());
+
+  test("a live runner's streaming turn is working, not dead", () => {
+    const el = renderStep(streaming(), "do", 1, 0, true);
+    activity(el);
+    expect(el.textContent).not.toContain("died inside this turn");
+    expect(el.querySelector(".act-live")).not.toBeNull();
+  });
+
+  test("the same turn on a dead runner says the process died", () => {
+    const el = renderStep(streaming(), "do", 1, 0, false);
+    activity(el);
+    expect(el.querySelector(".act-note")!.textContent).toContain("died inside this turn");
+    expect(el.querySelector(".act-live")).toBeNull();
   });
 });

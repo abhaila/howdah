@@ -69,7 +69,25 @@ export type ParkCode =
   | "ambiguous-effect"
   | "awaiting-approval"
   | "approval-missing"
-  | "stale-base";
+  | "stale-base"
+  /**
+   * HOW-48: the operator asked the agent to stop at its next tool call, and it did — it ended
+   * its turn where it was. Not a failure and never a contract violation: the agent obeyed. A
+   * reply or resume retries the step, briefed with the agent's own last words (suffix v7).
+   */
+  | "paused-by-operator"
+  /**
+   * HOW-51: a node gated on the acceptance contract (`requiresAcceptance`) found a live
+   * criterion that neither passes nor was waived. A reply cannot fix it: waive the criterion
+   * (`howdah waive`, the Acceptance card) or jump back to the review once it is met.
+   */
+  | "acceptance-unmet"
+  /**
+   * HOW-54: a step on a review → repair cycle finished with the worktree exactly as its previous
+   * visit left it — the loop would go round again on the same code for the same verdict. A reply
+   * is carried into the step's next attempt; jump or steer are the other ways on.
+   */
+  | "no-progress";
 
 export type ResolutionSource = "operator" | "resume";
 
@@ -185,6 +203,17 @@ export type RunEvent =
        * stub named. Only elided keys appear; `context_read` still holds every value in full.
        */
       context_sources?: Record<string, string>;
+      /**
+       * HOW-47: the `operator-steered` events (by seq) this render carries because they never
+       * reached the turn they were sent to (suffix v6+). A suffix INPUT, logged so
+       * reconstruction reads the same texts rather than guessing which steers were pending.
+       */
+      steers_carried?: number[];
+      /**
+       * HOW-48: the seq of the `soft-stop-honored` this render briefs the step to resume from
+       * (suffix v7+) — logged so reconstruction reads the same last message.
+       */
+      resumed_after_stop?: number;
     }
   | {
       type: "chunk";
@@ -292,6 +321,14 @@ export type RunEvent =
        * (core/template.ts refusalInstruction, suffix v3); reconstruction rebuilds it from here.
        */
       refused?: string;
+      /**
+       * HOW-54: the worktree's CONTENT identity (a git tree id, engine/reconcile.ts
+       * worktreeTree) when the attempt ended — recorded for agent nodes that are
+       * progress-checked (on a cycle, expected to change files). Compared with the same node's
+       * previous visit to tell a repair that changed nothing; replay reads it, so a fresh process
+       * reaches the same decision. Absent: not checked, or not a git work tree.
+       */
+      tree?: string;
     }
   | {
       /** written BEFORE a side-effecting step (OV-1) — intent without a matching done
@@ -530,6 +567,114 @@ export type RunEvent =
       /** the tracker identifier the slice was raised as, when there is one */
       ticket?: string;
       workspace?: string;
+    }
+  | {
+      /**
+       * HOW-47: the operator said something to a RUNNING agent turn, without pausing it.
+       * Appended by the server or CLI under the log lock, only while that node@visit is the
+       * live turn of a proven runner on a harness with a steer channel (engine/control.ts
+       * steerRefusal). The executor delivers it at the next tool boundary; until then it is
+       * pending. It is outside `rendered_hash`, which is why it must be in the log: a reader
+       * has to be able to see why the agent changed course.
+       */
+      type: "operator-steered";
+      node: string;
+      visit: number;
+      text: string;
+      by: "operator";
+    }
+  | {
+      /**
+       * HOW-47: the harness consumed the steer `steer_seq` — proven by its own echo of the
+       * message (`--replay-user-messages`), which arrives at the tool boundary it landed at.
+       * `after_tool_id` is the tool call whose result it rode in after, so the transcript can
+       * draw it exactly where the agent read it.
+       */
+      type: "steer-delivered";
+      node: string;
+      visit: number;
+      steer_seq: number;
+      after_tool_id?: string;
+    }
+  | {
+      /**
+       * HOW-48: "stop at the next tool call" — a soft pause. Appended by the server or CLI
+       * under the log lock for the live agent turn (engine/steer.ts softStop). The executor
+       * delivers the stop over the steer channel; it does not interrupt anything itself.
+       */
+      type: "soft-stop-requested";
+      node: string;
+      visit: number;
+      by: "operator";
+    }
+  | {
+      /** HOW-48: the harness echoed the stop message — the agent has read it (cf. steer-delivered) */
+      type: "soft-stop-delivered";
+      node: string;
+      visit: number;
+      after_tool_id?: string;
+    }
+  | {
+      /**
+       * HOW-48: the turn ENDED after the stop reached it. `last_message` is the agent's own final
+       * words about where it is — the park quotes them, and the step's next visit is rendered
+       * with them (suffix v7 stopResumeInstruction), which is why they are logged here rather
+       * than re-read from chunks: reconstruction needs one exact source.
+       */
+      type: "soft-stop-honored";
+      node: string;
+      visit: number;
+      last_message: string;
+      /** the agent kept calling tools after the stop and was stopped hard (killed) instead */
+      forced?: boolean;
+    }
+  | {
+      /**
+       * HOW-48: the turn finished on its own before the stop could be delivered (no tool call
+       * came). The step's work stands; the run pauses at the next node boundary instead.
+       */
+      type: "soft-stop-moot";
+      node: string;
+      visit: number;
+    }
+  | {
+      /**
+       * HOW-51: an operator WAIVED an acceptance criterion — a human decision, recorded as its
+       * own event so the delivery gate reads decisions, never flags or `attention-resolved`.
+       * One per criterion (engine/acceptance-decision.ts waive): a repeat is idempotent.
+       */
+      type: "acceptance-waived";
+      criterion_id: string;
+      reason: string;
+      by: "operator";
+    }
+  | {
+      /**
+       * HOW-55: what an agent's ENVIRONMENT was, beyond the prompt `rendered_hash` proves — so
+       * two runs of the same pinned prompt that behaved differently can be told apart, and an
+       * A/B comparison (HOW-42) can see what the operator's setup was that day. Recorded once
+       * per agent attempt, from the harness's own init where it reports one.
+       */
+      type: "agent-environment";
+      node: string;
+      visit: number;
+      harness: Harness;
+      /** the `--setting-sources` passed (claude), or null when the harness has no such switch */
+      setting_sources: string | null;
+      /** the workspace opted in to the operator's user-level settings */
+      inherits_user: boolean;
+      version?: string;
+      model?: string;
+      permission_mode?: string;
+      tools?: string[];
+      skills?: string[];
+      plugins?: Array<{ name: string; source: string }>;
+      mcp_servers?: Array<{ name: string; source: string }>;
+      memory_paths?: string[];
+      /** hooks that ran before the session started, and the context each one injected (hashed, and its text bounded) */
+      hooks?: Array<{ name: string; exit_code?: number; injected?: { sha256: string; chars: number; text: string } }>;
+      /** settings and instruction files the harness reads, hashed; `sha256: null` = absent */
+      files: Array<{ path: string; scope: "project" | "user"; sha256: string | null }>;
     }
   | { type: "run-finished"; outcome: RunOutcome };
 

@@ -12,6 +12,9 @@
  */
 export { buildOutputInstruction } from "../../core/template";
 import { locateOutputs } from "../../core/outputs";
+import { ACCEPTANCE_KEY, acceptanceProblem } from "../../core/acceptance";
+import { asEvidenceResult, EVIDENCE_KEY } from "../../core/evidence";
+import { VERIFY_RESULT_KEY } from "../../core/verify";
 
 /**
  * Asked as a follow-up turn when the final message arrived without the contract. Observed
@@ -19,7 +22,15 @@ import { locateOutputs } from "../../core/outputs";
  * after 40+ tool calls). The thread still holds all the work, so this costs one short turn
  * instead of re-running the node.
  */
-export function buildRepairInstruction(keys: string[]): string {
+export function buildRepairInstruction(keys: string[], refused?: string): string {
+  // HOW-51: the object arrived but a value broke a rule — say WHICH, so the fix is one turn
+  if (refused !== undefined)
+    return (
+      `Your outputs object was refused, so this step cannot complete: ${refused}\n` +
+      `Fix that value and reply with ONLY the corrected JSON object and nothing else:\n` +
+      `{"outputs": {${keys.map((k) => `"${k}": <value>`).join(", ")}}}\n` +
+      `containing exactly these keys: ${keys.join(", ")}.`
+    );
   return (
     `Your previous message did not end with the required outputs object, so this step cannot complete.\n` +
     `Do not redo any work and do not use any tools — the analysis you just finished is what I need recorded.\n` +
@@ -33,13 +44,33 @@ export interface ParsedOutputs {
   ok: boolean;
   writes: Record<string, unknown>;
   problem?: string;
+  /** HOW-51: the object parsed, but `check` refused a value — `problem` says why */
+  refused?: true;
+}
+
+/**
+ * HOW-51: the rules a write must satisfy beyond "the key is present". Today: `acceptance`
+ * (core/acceptance.ts) — the first list is all-failing, earlier rows survive, and a flip names
+ * evidence that is real in this run, judged against what the node READ (its previous list, the
+ * verify result, the captured screenshots). Null when every value may be accepted.
+ */
+export function checkWrites(writes: Record<string, unknown>, reads: Record<string, unknown>): string | null {
+  if (ACCEPTANCE_KEY in writes) {
+    const evidence = asEvidenceResult(reads[EVIDENCE_KEY]);
+    return acceptanceProblem(writes[ACCEPTANCE_KEY], {
+      ...(ACCEPTANCE_KEY in reads ? { previous: reads[ACCEPTANCE_KEY] } : {}),
+      verify: reads[VERIFY_RESULT_KEY],
+      evidenceFiles: evidence?.items.map((i) => i.file) ?? [],
+    });
+  }
+  return null;
 }
 
 /**
  * Find the LAST {"outputs": ...} object in the text; tolerate fences and surrounding prose.
  * The scan itself is `core/outputs.ts` locateOutputs, shared with the viewer (HOW-29).
  */
-export function parseOutputs(text: string, expectedKeys: string[]): ParsedOutputs {
+export function parseOutputs(text: string, expectedKeys: string[], check?: (writes: Record<string, unknown>) => string | null): ParsedOutputs {
   if (expectedKeys.length === 0) return { ok: true, writes: {} };
   const span = locateOutputs(text);
   if (!span)
@@ -60,5 +91,7 @@ export function parseOutputs(text: string, expectedKeys: string[]): ParsedOutput
   if (missing.length) return { ok: false, writes: {}, problem: `outputs missing keys: ${missing.join(", ")}` };
   const writes: Record<string, unknown> = {};
   for (const k of expectedKeys) writes[k] = outputs[k];
+  const refused = check?.(writes) ?? null;
+  if (refused !== null) return { ok: false, writes: {}, problem: refused, refused: true };
   return { ok: true, writes };
 }

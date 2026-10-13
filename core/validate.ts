@@ -139,3 +139,59 @@ export function formatViolations(vs: Violation[]): string {
     )
     .join("\n");
 }
+
+/**
+ * HOW-54: the nodes that sit on a CYCLE — a strongly connected component of more than one node,
+ * or a node with an edge to itself. Tarjan's algorithm, iterative so a long graph cannot blow
+ * the stack. Computed from the shape alone (no conditions are evaluated), so it is the set of
+ * nodes a run COULD revisit: the only place "this visit changed nothing" can mean a stalled loop.
+ */
+export function cycleNodes(g: Pick<GraphShape, "nodes" | "edges">): Set<string> {
+  const ids = Object.keys(g.nodes);
+  const succ = new Map<string, string[]>(ids.map((id) => [id, []]));
+  const selfLoop = new Set<string>();
+  for (const e of g.edges) {
+    succ.get(e.from)?.push(e.to);
+    if (e.from === e.to) selfLoop.add(e.from);
+  }
+  const index = new Map<string, number>();
+  const low = new Map<string, number>();
+  const onStack = new Set<string>();
+  const stack: string[] = [];
+  const out = new Set<string>(selfLoop);
+  let next = 0;
+  for (const root of ids) {
+    if (index.has(root)) continue;
+    // each frame: the node and how many of its successors have been visited
+    const work: Array<{ v: string; i: number }> = [{ v: root, i: 0 }];
+    index.set(root, next); low.set(root, next); next++;
+    stack.push(root); onStack.add(root);
+    while (work.length) {
+      const frame = work.at(-1)!;
+      const ws = succ.get(frame.v) ?? [];
+      if (frame.i < ws.length) {
+        const w = ws[frame.i++]!;
+        if (!index.has(w)) {
+          index.set(w, next); low.set(w, next); next++;
+          stack.push(w); onStack.add(w);
+          work.push({ v: w, i: 0 });
+        } else if (onStack.has(w)) low.set(frame.v, Math.min(low.get(frame.v)!, index.get(w)!));
+        continue;
+      }
+      work.pop();
+      const parent = work.at(-1);
+      if (parent) low.set(parent.v, Math.min(low.get(parent.v)!, low.get(frame.v)!));
+      if (low.get(frame.v) === index.get(frame.v)) {
+        const scc: string[] = [];
+        for (;;) {
+          const w = stack.pop()!;
+          onStack.delete(w);
+          scc.push(w);
+          if (w === frame.v) break;
+        }
+        if (scc.length > 1) for (const w of scc) out.add(w);
+      }
+    }
+  }
+  return out;
+}

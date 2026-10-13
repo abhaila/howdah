@@ -86,4 +86,29 @@ export type AgentEvent =
       resets_at?: string;
       raw: unknown;
     }
-  | { type: "error"; message: string; context_exceeded?: true };
+  | { type: "error"; message: string; context_exceeded?: true }
+  /**
+   * HOW-47: the harness echoing back a user message it has just CONSUMED (claude
+   * `--replay-user-messages`, `isReplay: true`). A message written mid-turn is echoed at the
+   * tool boundary it was delivered at, so the echo is the executor's proof of delivery.
+   */
+  | { type: "user_echo"; text: string }
+  /**
+   * HOW-55: what the session loaded, from the harness's own init — tools, skills, plugins, MCP
+   * servers, memory paths. The rendered prompt is proven by its hash; THIS is the rest of the
+   * agent's input, recorded so two runs of one pinned prompt can be told apart.
+   */
+  | {
+      type: "agent_env";
+      version?: string;
+      model?: string;
+      permission_mode?: string;
+      tools: string[];
+      /** undefined: the harness did not report a skills list (unknown — not "none") */
+      skills?: string[];
+      plugins: Array<{ name: string; source: string }>;
+      mcp_servers: Array<{ name: string; source: string }>;
+      memory_paths: string[];
+    }
+  /** HOW-55: a settings hook ran in the session; `injected` is context its output added to it */
+  | { type: "hook"; phase: "started" | "response"; name: string; exit_code?: number; injected?: string };

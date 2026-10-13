@@ -35,6 +35,10 @@
  * user turn, not part of the first-turn prompt, so it sits outside rendered_hash by design.
  * stderr goes to a file in the run dir, never the UI.
  *
+ * HOW-47: an operator STEER reaches a running turn without pausing it — written to stdin while
+ * a tool call is in flight, delivered by the CLI at that tool's result boundary, and proven by
+ * the CLI's echo. See the steer channel below and engine/steer.ts.
+ *
  * HOW-14: a turn that died because the context window filled fails with its own code,
  * `context-exhausted`, rather than `turn error: Prompt is too long` — the engine parks it
  * without hopping harnesses and briefs the retry to re-enter. A mid-turn compaction is only
@@ -46,7 +50,7 @@ import { dirname, join } from "node:path";
 import type { Executor } from "../run";
 import { JsonlChunkParser } from "../../adapter/parse";
 import { mapClaudeEvent, buildClaudePermissionResponse, buildClaudeUserTurn, claudeArgs } from "../../adapter/claude";
-import { buildRepairInstruction, parseOutputs } from "./outputs";
+import { buildRepairInstruction, checkWrites, parseOutputs } from "./outputs";
 import { classifyHarnessExit, compactionNote, contextExhaustedFailure } from "./harness-failure";
 import { AttentionCenter, osNotifier, type Notifier } from "../attention";
 import { readLog } from "../../log/write";
@@ -54,7 +58,11 @@ import { effectiveCwd } from "./worktree";
 import { killGroup } from "./shell";
 import { diagnosticsSettings } from "../hooks/diagnostics";
 import { ToolWatch, TurnCeiling, stuckReason, turnTimeoutReason, type StuckThresholds } from "./stuck";
+import { readWorktreeRecord } from "./worktree-record";
+import { environmentFiles, injectedRecord } from "./agent-env";
+import { harnessSpec, isHarness } from "../../core/harnesses";
 import { isAllowReply } from "./reply";
+import { READ_ONLY_REFUSAL, STOP_GRACE_TOOL_CALLS, STOP_MESSAGE, steerTurnText, stopTurnText } from "../../core/steer";
 import {
   answersToReplyText, askReason, askResultMessage, normalizeAskPayload, parseFreeTextAnswer,
   validateAnswers, type UserQuestion,
@@ -74,6 +82,14 @@ export interface ClaudeExecutorOpts {
    * with a stated reason instead of answering into a closed door.
    */
   askTimeoutMs?: number;
+  /** HOW-47: how often the log is read for operator steers (default: askPollMs, then 400ms) */
+  steerPollMs?: number;
+  /**
+   * HOW-55: has this run's workspace opted in to the operator's USER-level settings (hooks,
+   * plugins, CLAUDE.md)? Keyed by the repo path (or the plain folder) the run works in. Default
+   * no: an agent is configured by the project alone, `--setting-sources project,local`.
+   */
+  inheritsUserSettings?: (repoPath: string) => boolean;
   notifiers?: Notifier[];
   viewerBase?: string;
   /** HOW-38: config.json `stuck` thresholds (default warn 5, stop 8) */
@@ -91,16 +107,28 @@ export function turnShare(cumulative: number, before: number): number {
 }
 
 export function claudeExecutor(opts: ClaudeExecutorOpts): Executor {
-  return async ({ nodeId, def, visit, runId, cwd, log, renderedPrompt, agentConfig }) => {
+  return async ({ nodeId, def, visit, runId, cwd, log, renderedPrompt, agentConfig, reads }) => {
     if (def.kind !== "agent") throw new Error("claudeExecutor on non-agent node");
     const writeKeys = Object.keys(def.writes ?? {});
+    const check = (w: Record<string, unknown>) => checkWrites(w, reads ?? {}); // HOW-51
+    // HOW-53: resolveAgentConfig makes a readOnly node "plan", whatever any override says
+    const permissionMode = agentConfig?.permissionMode ?? opts.permissionMode ?? "auto";
+    const readOnly = permissionMode === "plan";
+    // HOW-55: which of the operator's settings this agent loads — the project's alone, unless
+    // the workspace opted in. Recorded on `agent-environment` with everything the CLI reports.
+    const harnessName = agentConfig?.harness ?? "claude";
+    const switchable = isHarness(harnessName) ? harnessSpec(harnessName).settingSources : harnessSpec("claude").settingSources;
+    const repoPath = readWorktreeRecord(dirname(log.path))?.repo ?? cwd;
+    const inheritsUser = repoPath !== undefined && (opts.inheritsUserSettings?.(repoPath) ?? false);
+    const settingSources = switchable ? (inheritsUser ? switchable.withUser : switchable.isolated) : undefined;
+    const workDir = effectiveCwd(log.path, cwd) ?? dirname(log.path);
     const prompt = renderedPrompt ?? ""; // exactly what rendered_hash covers (system-map 0.1)
     const sessionId = randomUUID();
 
     const proc = Bun.spawn(
       [opts.binary ?? "claude", ...claudeArgs({
         sessionId,
-        permissionMode: agentConfig?.permissionMode ?? opts.permissionMode ?? "auto",
+        permissionMode,
         model: agentConfig?.model ?? opts.model,
         maxTurns: agentConfig?.maxTurns,
         // HOW-33: resolved for THIS harness (effortFor) — undefined when inert, never dropped
@@ -111,11 +139,12 @@ export function claudeExecutor(opts: ClaudeExecutorOpts): Executor {
         disallowedTools: agentConfig?.tools?.deny,
         // HOW-39: resolved by the engine only when the node, the harness and the workspace all say yes
         ...(agentConfig?.diagnosticsCommand ? { settings: diagnosticsSettings(opts.diagnosticsTimeoutMs) } : {}),
+        settingSources,
       })],
       // HOW-38: its own process group, so a stuck or timed-out turn is ended with every
       // child it started (a test runner's workers) rather than leaving them orphaned
       {
-        cwd: effectiveCwd(log.path, cwd) ?? dirname(log.path),
+        cwd: workDir,
         // HOW-39: claude hands its environment to its hooks — this is how the hook learns its
         // command and where to record what it ran
         env: agentConfig?.diagnosticsCommand
@@ -199,22 +228,27 @@ export function claudeExecutor(opts: ClaudeExecutorOpts): Executor {
       const center = new AttentionCenter(opts.attentionDir, opts.notifiers ?? [osNotifier], { viewerBase: opts.viewerBase });
       // durable BEFORE delivered (engine/attention.ts): the record outlives a kill -9, so the
       // watchdog still rings even if this process never gets to notify
+      awaitingOperator = true;
       const raised = log.append({ type: "attention-raised", node: nodeId, visit, reason, ask });
       ceiling.pause(); // a human's thinking time is not the agent's (HOW-38)
       await center.raise({ run: runId, node: nodeId, visit, reason }).catch(() => {});
       const deadline = opts.askTimeoutMs === undefined ? null : Date.now() + opts.askTimeoutMs;
       // the reply arrives in the log from the web card / CLI — poll for it, however long it takes
-      for (;;) {
-        await Bun.sleep(opts.askPollMs ?? 400);
-        const resolved = readLog(log.path).find((e) => e.type === "attention-resolved" && e.seq > raised.seq);
-        if (resolved && resolved.type === "attention-resolved") {
-          ceiling.start();
-          return { ok: true, reply: (resolved.reply ?? "").trim(), answers: resolved.answers };
+      try {
+        for (;;) {
+          await Bun.sleep(opts.askPollMs ?? 400);
+          const resolved = readLog(log.path).find((e) => e.type === "attention-resolved" && e.seq > raised.seq);
+          if (resolved && resolved.type === "attention-resolved") {
+            ceiling.start();
+            return { ok: true, reply: (resolved.reply ?? "").trim(), answers: resolved.answers };
+          }
+          if (harnessGone)
+            return { ok: false, reason: `the harness exited while it was waiting for you to answer: ${reason}` };
+          if (deadline !== null && Date.now() > deadline)
+            return { ok: false, reason: `nobody answered within the configured wait: ${reason}` };
         }
-        if (harnessGone)
-          return { ok: false, reason: `the harness exited while it was waiting for you to answer: ${reason}` };
-        if (deadline !== null && Date.now() > deadline)
-          return { ok: false, reason: `nobody answered within the configured wait: ${reason}` };
+      } finally {
+        awaitingOperator = false;
       }
     };
 
@@ -260,8 +294,63 @@ export function claudeExecutor(opts: ClaudeExecutorOpts): Executor {
       chunk("tool_result", answersToReplyText(questions, answers) || "(no answer)", { id: toolUseId, name: toolName });
     };
 
+    /**
+     * HOW-47: the operator's steer channel. A poll reads this node@visit's `operator-steered`
+     * events from the log; a steer is WRITTEN to stdin only while a tool call is in flight, so
+     * the CLI delivers it at that tool's result boundary (adapter/fixtures/claude-steer.jsonl).
+     * Writing it while the model is only generating text would let it queue behind the turn's
+     * end, where the CLI would run it as a fresh turn nobody is reading. Delivery is proven by
+     * the harness's own echo (`user_echo`), never assumed from the write; a steer still unwritten
+     * when the turn ends was never seen, and the engine carries it into the next render.
+     */
+    const steersPending = new Map<number, { line: string; written: boolean }>();
+    /**
+     * HOW-48: the soft stop rides the same channel. Requested → written while a tool is in
+     * flight → echoed (delivered). The turn that ends after delivery is `paused-by-operator`;
+     * one that ends before the stop was even written is moot (the engine pauses at the boundary).
+     */
+    const stop = { requested: false, written: false, delivered: false, textFrom: 0, toolsAfter: 0, forced: false };
+    const stopLine = stopTurnText();
+    let awaitingOperator = false; // never write into stdin while the CLI waits on a control_response
+    const steersSeen = new Set<number>();
+    const toolsInFlight = new Set<string>();
+    let lastToolResultId: string | undefined;
+    const pollSteers = () => {
+      let events: ReturnType<typeof readLog>;
+      try { events = readLog(log.path); } catch { return; } // a torn tail mid-write: next tick
+      const delivered = new Set(events.flatMap((e) => (e.type === "steer-delivered" ? [e.steer_seq] : [])));
+      if (!stop.requested && events.some((e) => e.type === "soft-stop-requested" && e.node === nodeId && e.visit === visit)) stop.requested = true;
+      for (const e of events) {
+        if (e.type !== "operator-steered" || e.node !== nodeId || e.visit !== visit) continue;
+        if (steersSeen.has(e.seq) || delivered.has(e.seq)) continue;
+        steersSeen.add(e.seq);
+        steersPending.set(e.seq, { line: steerTurnText(e.text), written: false });
+      }
+    };
+    const flushSteers = () => {
+      if (toolsInFlight.size === 0 || awaitingOperator) return;
+      for (const s of steersPending.values()) {
+        if (s.written) continue;
+        proc.stdin.write(buildClaudeUserTurn(s.line));
+        s.written = true;
+      }
+      if (stop.requested && !stop.written) {
+        proc.stdin.write(buildClaudeUserTurn(stopLine));
+        stop.written = true;
+      }
+      proc.stdin.flush();
+    };
+    const steerTimer = setInterval(() => { pollSteers(); flushSteers(); }, opts.steerPollMs ?? opts.askPollMs ?? 400);
+
+    /** HOW-55: hooks that ran before the session's init — the text they injected is recorded */
+    const startupHooks: Array<{ name: string; exit_code?: number; injected?: ReturnType<typeof injectedRecord> }> = [];
+    let envRecorded = false;
+    let envRefusal: string | null = null;
+
     let turnEnded = false;
     let repairSent = false;
+    /** HOW-51: why the first answer's outputs were refused — the reason if the repair never answers */
+    let refusedFirst: string | undefined;
     let sawEvent = false; // did the CLI ever speak stream-json? a logged-out CLI never does
     readLoop: for await (const bytes of proc.stdout) {
       for (const record of parser.push(bytes)) {
@@ -276,13 +365,64 @@ export function claudeExecutor(opts: ClaudeExecutorOpts): Executor {
             case "thinking_delta":
               chunk("thinking", ev.text);
               break;
+            case "hook":
+              if (!envRecorded && ev.phase === "response")
+                startupHooks.push({ name: ev.name, ...(ev.exit_code !== undefined ? { exit_code: ev.exit_code } : {}), ...(ev.injected ? { injected: injectedRecord(ev.injected) } : {}) });
+              break;
+            case "agent_env": {
+              if (envRecorded) break;
+              envRecorded = true;
+              const { type: _t, ...env } = ev;
+              log.append({
+                type: "agent-environment", node: nodeId, visit, harness: isHarness(harnessName) ? harnessName : "claude",
+                setting_sources: settingSources ?? null, inherits_user: inheritsUser, ...env,
+                hooks: startupHooks,
+                files: environmentFiles(harnessName, workDir, inheritsUser || !switchable),
+              });
+              // a skill the node names that this session did not load would be silently missing
+              // from the agent's toolbox — refuse instead, saying where it lives (HOW-55)
+              // only against a list the CLI REPORTED: an init without one says nothing either way
+              const loaded = env.skills;
+              const missing = loaded ? (agentConfig?.skills ?? []).filter((k) => !loaded.some((have) => have === k || have.endsWith(`:${k}`))) : [];
+              if (missing.length)
+                envRefusal = `skill${missing.length === 1 ? "" : "s"} ${missing.map((k) => `"${k}"`).join(", ")} ${missing.length === 1 ? "is" : "are"} not available with --setting-sources ${settingSources ?? "(default)"}` +
+                  (inheritsUser ? "" : " — a user-installed skill loads only when the workspace opts in to user settings (`howdah workspace user-settings <name> on`)") +
+                  "; remove it from the node or install it in the project";
+              break;
+            }
+            case "user_echo": {
+              // HOW-47: the harness consumed a stdin message. Match it to the steer we wrote —
+              // the echo of the prompt itself, or of a repair turn, matches nothing here
+              if (stop.written && !stop.delivered && ev.text === stopLine) {
+                stop.delivered = true;
+                stop.textFrom = accumulated.length; // the agent's words AFTER reading the stop
+                log.append({ type: "soft-stop-delivered", node: nodeId, visit, ...(lastToolResultId !== undefined ? { after_tool_id: lastToolResultId } : {}) });
+                break;
+              }
+              const hit = [...steersPending.entries()].find(([, p]) => p.written && p.line === ev.text);
+              if (hit) {
+                steersPending.delete(hit[0]);
+                log.append({ type: "steer-delivered", node: nodeId, visit, steer_seq: hit[0], ...(lastToolResultId !== undefined ? { after_tool_id: lastToolResultId } : {}) });
+              }
+              break;
+            }
             case "tool_call": {
-              const summary = JSON.stringify(ev.input).slice(0, 400);
+              // Tool inputs are clipped to 400 chars: the transcript wants a one-line summary,
+              // not a 40KB Write. The ONE exception is TodoWrite (HOW-49): its input IS the
+              // agent's own plan, the live progress panel derives the checklist from the latest
+              // one (web/derive.ts derivePlan), and a plan cut mid-JSON cannot be parsed at all.
+              const summary = ev.name === "TodoWrite" ? JSON.stringify(ev.input) : JSON.stringify(ev.input).slice(0, 400);
               chunk("tool_call", summary, { id: ev.id, name: ev.name, input_hash: watch.call(ev.id, ev.name, ev.input, summary) });
+              toolsInFlight.add(ev.id);
+              flushSteers(); // a steer waiting for a boundary has one now
+              // HOW-48: an agent that read the stop and keeps working is stopped hard
+              if (stop.delivered && ++stop.toolsAfter > STOP_GRACE_TOOL_CALLS) stop.forced = true;
               break;
             }
             case "tool_result": {
               chunk("tool_result", ev.content.slice(0, 400), { id: ev.id, ...(ev.is_error !== undefined ? { is_error: ev.is_error } : {}) });
+              toolsInFlight.delete(ev.id);
+              lastToolResultId = ev.id;
               watch.result(ev.id, ev.is_error === true, ev.content);
               // HOW-39: the hook ran before claude emitted this result and recorded itself in the
               // log; a PostToolUse hook has no stream event, so this is how the transcript sees it
@@ -294,11 +434,31 @@ export function claudeExecutor(opts: ClaudeExecutorOpts): Executor {
               break;
             }
             case "permission_request": {
+              // HOW-53: a READ-ONLY step never gets to ask. Plan mode routes an Edit (and
+              // ExitPlanMode, which a plan-mode agent reaches for at the end) to this permission
+              // channel rather than refusing it, so refusing here is what makes readOnly real —
+              // an operator's "allow" would let a reviewer change the code it judges. A question
+              // FOR the operator is not a permission and still reaches them.
+              if (readOnly && ev.requires_user_interaction !== true) {
+                proc.stdin.write(buildClaudePermissionResponse(ev.id, { behavior: "deny", message: READ_ONLY_REFUSAL }));
+                proc.stdin.flush();
+                chunk("tool_result", `refused: ${ev.tool_name} — this step is read-only`, { id: ev.tool_use_id, name: ev.tool_name });
+                break;
+              }
+              // HOW-48: once the operator has asked for a stop, nothing new is asked of them —
+              // the request is refused with the stop itself, as cwc's kill switch does
+              if (stop.requested) {
+                proc.stdin.write(buildClaudePermissionResponse(ev.id, { behavior: "deny", message: STOP_MESSAGE }));
+                proc.stdin.flush();
+                chunk("tool_result", `refused: the operator asked the agent to stop`, { id: ev.tool_use_id, name: ev.tool_name });
+                break;
+              }
               // HOW-25: the harness's own flag decides. A question needs the question card;
               // everything else is an ordinary permission and keeps its exact prior semantics.
               const questions = ev.requires_user_interaction === true ? normalizeAskPayload(ev.input) : null;
               if (questions) await answerQuestion(ev.id, ev.tool_name, ev.tool_use_id, questions);
               else await answerPermission(ev.id, ev.tool_name, ev.input, ev.suggestions, ev.tool_use_id);
+              flushSteers(); // a steer or stop that waited out the ask can go now
               break;
             }
             case "rate_limit":
@@ -328,17 +488,25 @@ export function claudeExecutor(opts: ClaudeExecutorOpts): Executor {
       }
       if (stopped !== null) break readLoop; // nothing will answer now — park instead of reading on
       if (watch.stopped) break readLoop; // HOW-38: the same failing call, again — end the turn
+      if (envRefusal !== null) break readLoop; // HOW-55: refused before it could act without its skill
+      if (stop.forced) break readLoop; // HOW-48: it ignored the stop; the kill below ends it
       if (turnEnded) {
         // one repair turn before giving up: the session still holds the work, so asking for
         // the missing contract costs a short turn instead of re-running the whole node
-        if (!repairSent && !turnError && writeKeys.length && !parseOutputs(resultText ?? accumulated, writeKeys).ok) {
+        // (never with a steer in limbo: the CLI would answer the queued steer before the repair)
+        const limbo = [...steersPending.values()].some((p) => p.written) || (stop.written && !stop.delivered);
+        // HOW-48: a turn that ended after the stop reached it OBEYED — it is not asked for outputs
+        const firstParse = writeKeys.length ? parseOutputs(resultText ?? accumulated, writeKeys, check) : { ok: true };
+        if (!repairSent && !limbo && !stop.delivered && !turnError && writeKeys.length && !firstParse.ok) {
           repairSent = true;
           turnEnded = false;
           resultText = undefined;
           accumulated = "";
-          chunk("text", "\n[outputs object missing — asking for it]");
+          const refused = "refused" in firstParse && firstParse.refused ? firstParse.problem : undefined;
+          refusedFirst = refused;
+          chunk("text", refused ? `\n[outputs refused — ${refused} — asking again]` : "\n[outputs object missing — asking for it]");
           turn = 2;
-          proc.stdin.write(buildClaudeUserTurn(buildRepairInstruction(writeKeys)));
+          proc.stdin.write(buildClaudeUserTurn(buildRepairInstruction(writeKeys, refused)));
           proc.stdin.flush();
           continue;
         }
@@ -350,6 +518,12 @@ export function claudeExecutor(opts: ClaudeExecutorOpts): Executor {
     ceiling.clear();
     // HOW-38: a stuck turn is still running — end it and everything it started
     if (watch.stopped) killGroup(proc.pid);
+    clearInterval(steerTimer);
+    // HOW-47: a steer written but never echoed is queued inside the CLI, which would run it as a
+    // fresh turn after this one — work nobody is reading. Stop the process instead of letting it
+    // drain stdin; the steer is undelivered, so the engine carries it into the next render.
+    const steerInLimbo = [...steersPending.values()].some((p) => p.written) || (stop.written && !stop.delivered);
+    if (steerInLimbo || stop.forced || envRefusal !== null) proc.kill();
     try { proc.stdin.end(); } catch {}
     // grace, then make sure it is gone
     const exited = await Promise.race([proc.exited, Bun.sleep(3000).then(() => null)]);
@@ -384,6 +558,30 @@ export function claudeExecutor(opts: ClaudeExecutorOpts): Executor {
       return { status: "failed", writes: {}, reason: startup.reason, code: startup.code };
     }
 
+    // HOW-48: classified from what the executor itself saw (the stop was echoed, then the turn
+    // ended), never from the agent's prose. Obeying the operator is not a contract violation.
+    if (stop.delivered && (turnEnded || stop.forced)) {
+      const said = (stop.forced ? accumulated.slice(stop.textFrom) : (resultText ?? accumulated.slice(stop.textFrom))).trim();
+      const lastMessage = said.slice(-1500) || "(the agent ended its turn without saying where it was)";
+      log.append({ type: "soft-stop-honored", node: nodeId, visit, last_message: lastMessage, ...(stop.forced ? { forced: true } : {}) });
+      const excerpt = lastMessage.replace(/\s+/g, " ").slice(0, 240);
+      return {
+        status: "failed", writes: {}, code: "paused-by-operator",
+        reason: stop.forced
+          ? `stopped hard: the agent kept calling tools after the operator's stop — it last said: "${excerpt}"`
+          : `paused by the operator at a tool boundary — the agent said: "${excerpt}"`,
+      };
+    }
+    if (stop.requested && !stop.delivered && turnEnded) {
+      // the step finished before another tool call: its work stands, the engine pauses at the boundary
+      log.append({ type: "soft-stop-moot", node: nodeId, visit });
+    }
+
+    if (envRefusal !== null) {
+      chunk("text", `\n[${envRefusal}]`);
+      return { status: "failed", writes: {}, reason: envRefusal };
+    }
+
     // a wait that ended without an answer is the failure — saying "output contract violation"
     // here would blame the model for a question nobody answered
     if (stopped !== null) {
@@ -402,7 +600,9 @@ export function claudeExecutor(opts: ClaudeExecutorOpts): Executor {
       chunk("text", `\n[turn error: ${turnError}]`);
       return { status: "failed", writes: {}, reason: `turn error: ${turnError}` };
     }
-    const parsed = parseOutputs(resultText ?? accumulated, writeKeys);
+    const parsed = parseOutputs(resultText ?? accumulated, writeKeys, check);
+    // a repair turn that never answered must not hide what was wrong with the first answer
+    if (!parsed.ok && refusedFirst !== undefined && resultText === undefined && !accumulated.trim()) parsed.problem = refusedFirst;
     if (!parsed.ok) {
       chunk("text", `\n[output contract violation: ${parsed.problem}]`);
       return { status: "failed", writes: {}, reason: `output contract violation: ${parsed.problem}` };

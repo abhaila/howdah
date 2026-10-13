@@ -11,7 +11,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import type { CoalescedTurn, TurnPart } from "../../log/coalesce";
-import type { RunDetail } from "../derive";
+import type { RunDetail, TurnState } from "../derive";
 import { StepActivity, beatsOf, groupBeats, toolLabel, toolSummary } from "./run/activity";
 
 let root: Root | null = null;
@@ -23,11 +23,11 @@ const ROW = {
 };
 const turn = (parts: TurnPart[]): CoalescedTurn => ({ node: ROW.node, visit: 1, turn: 1, parts, finalized: true });
 
-function render(turns: CoalescedTurn[], context: RunDetail["context"] = []): HTMLElement {
+function render(turns: CoalescedTurn[], context: RunDetail["context"] = [], state?: TurnState, lastActivityAt: string | null = null): HTMLElement {
   host = document.createElement("div");
   document.body.appendChild(host);
   root = createRoot(host);
-  act(() => root!.render(<StepActivity turns={turns} row={ROW} context={context} />));
+  act(() => root!.render(<StepActivity turns={turns} row={ROW} context={context} state={state ?? (turns.every((t) => t.finalized) ? "done" : "died")} lastActivityAt={lastActivityAt} />));
   return host;
 }
 
@@ -119,6 +119,28 @@ describe("StepActivity", () => {
   test("a turn the process died inside says so, rather than reading as complete", () => {
     const el = render([{ ...turn([{ kind: "text", content: "half a th" }]), finalized: false }]);
     expect(el.querySelector(".act-note")!.textContent).toContain("died inside this turn");
+  });
+
+  test("HOW-46: a LIVE turn is working, not dead — and says how recently it last spoke", () => {
+    const at = new Date(Date.now() - 12_000).toISOString();
+    const el = render([{ ...turn([{ kind: "text", content: "half a th" }]), finalized: false }], [], "live", at);
+    expect(el.querySelector(".act-note")).toBeNull();
+    expect(el.textContent).not.toContain("died");
+    const live = el.querySelector(".act-live")!;
+    expect(live.textContent).toMatch(/working · last activity 1[2-4]s ago/);
+    expect(live.className).not.toContain("quiet");
+  });
+
+  test("HOW-46: a live turn that has been silent past the threshold turns amber", () => {
+    const at = new Date(Date.now() - 6 * 60_000).toISOString();
+    const el = render([{ ...turn([{ kind: "text", content: "x" }]), finalized: false }], [], "live", at);
+    expect(el.querySelector(".act-live")!.className).toContain("quiet");
+  });
+
+  test("HOW-46: a turn waiting on a mid-turn ask draws neither note", () => {
+    const el = render([{ ...turn([{ kind: "text", content: "x" }]), finalized: false }], [], "waiting");
+    expect(el.querySelector(".act-note")).toBeNull();
+    expect(el.querySelector(".act-live")).toBeNull();
   });
 
   test("what the step published closes it, read off the context entries", () => {

@@ -19,9 +19,12 @@
  * redesign requests, extraction progress and drift reports, all folded from the log.
  */
 import { askQuestions, type UserQuestion } from "../core/ask";
+import { asEvidenceResult, EVIDENCE_KEY, type EvidenceResult } from "../core/evidence";
+import { latestAcceptance, unmetCriteria, waivedCriteria, type AcceptanceRow } from "../core/acceptance";
 import type { LoggedEvent, RunOutcome } from "../log/events";
 import { currentProposal, decisionAnswers, decisionKind, findDecision } from "../engine/slice-decision";
 import { replayState } from "../engine/replay";
+import { softStopState, steerStates, type SoftStopState, type SteerState } from "../engine/steer-state";
 import type { Scope } from "../core/context";
 import { coalesce, outcomesByHash, type CoalescedTurn, type JoinedOutcome } from "../log/coalesce";
 import { rollupRun, usageByVisit, type UsageRollup, type VisitUsage } from "../log/usage";
@@ -139,7 +142,139 @@ export interface RunDetail {
    * reading.
    */
   children: Array<{ run_id: string; slice_id: string; ticket: string | null; graph: string; workspace: string | null; at: string }>;
+  /**
+   * HOW-46: what each step's agent turn is doing, keyed `node@visit` — decided HERE, once, so
+   * the Chat and Steps panes can never disagree about whether a process died. Only steps that
+   * have a turn are present. See `deriveTurnStates`.
+   */
+  turn_states: Record<string, TurnState>;
+  /**
+   * HOW-49: the agent's own plan for the NEWEST step — its latest TodoWrite, as a checklist.
+   * Null when that step reported none (codex has no plan channel the adapter sees; a step that
+   * never called TodoWrite). Never invented, never carried over from an earlier step.
+   */
+  plan: StepPlan | null;
+  /**
+   * HOW-47: every operator steer and what became of it — pending, delivered (with the tool call
+   * it landed after) or carried into a later render. engine/steer-state.ts decides; this only
+   * carries it to the transcript.
+   */
+  steers: SteerState[];
+  /** HOW-48: the soft stop on the newest step, and how far it got — null when none was asked for */
+  soft_stop: SoftStopState | null;
+  /**
+   * HOW-55: what the NEWEST agent attempt ran with, beyond its prompt — setting sources, hooks
+   * and the context they injected, plugins, skills, MCP servers and the hashed settings and
+   * CLAUDE.md files. Null for a run recorded before HOW-55: "not recorded", never a guess.
+   */
+  agent_env: Extract<LoggedEvent, { type: "agent-environment" }> | null;
+  /**
+   * HOW-52: every screenshot-evidence result a step published (`evidence.items`), oldest first.
+   * Validated through core/evidence.ts asEvidenceResult — context is untrusted to the viewer, and
+   * only files under the run's evidence/ folder survive it.
+   */
+  evidence: Array<{ node: string; visit: number; at: string; result: EvidenceResult }>;
+  /**
+   * HOW-51: the acceptance contract as it stands — the latest list any node wrote, each row with
+   * its waiver (a decision event) when an operator waived it, plus every earlier version's rows
+   * that the latest list no longer carries live (superseded rows stay, by the contract's rules).
+   * Null for a run that never wrote one, so an old run renders no card rather than an empty red one.
+   */
+  acceptance: {
+    rows: Array<AcceptanceRow & { waived: { reason: string; at: string } | null }>;
+    written_by: { node: string; visit: number; at: string };
+    unmet: number;
+  } | null;
+  /**
+   * HOW-46/HOW-49: when the agent last produced anything (a chunk or a turn boundary) — the
+   * "last activity Ns ago" clock and the quiet-for-N-minutes signal. Null before any turn.
+   */
+  last_agent_event_at: string | null;
   events_seq: number;
+}
+
+export interface PlanItem {
+  content: string;
+  status: "pending" | "in_progress" | "completed";
+}
+
+export interface StepPlan {
+  node: string;
+  visit: number;
+  items: PlanItem[];
+  /** when the agent last rewrote it */
+  at: string;
+}
+
+/**
+ * HOW-49: the plan an agent keeps for itself. claude's TodoWrite carries the WHOLE list on
+ * every call, so the latest call is the plan — earlier ones are history, not state. The input
+ * is logged unclipped for this one tool (engine/executors/claude.ts); a run logged before that
+ * exemption has a clipped, unparseable input, and that reads as "no plan" rather than as a
+ * half-plan, because a checklist missing its tail would claim the work was shorter than it is.
+ */
+export function derivePlan(events: readonly LoggedEvent[], node: string, visit: number): StepPlan | null {
+  const last = events.findLast((e) => e.type === "chunk" && e.kind === "tool_call" && e.tool_name === "TodoWrite" && e.node === node && e.visit === visit);
+  if (!last || last.type !== "chunk") return null;
+  let input: unknown;
+  try {
+    input = JSON.parse(last.content);
+  } catch {
+    return null;
+  }
+  const todos = (input as { todos?: unknown })?.todos;
+  if (!Array.isArray(todos)) return null;
+  const items: PlanItem[] = [];
+  for (const t of todos) {
+    if (!t || typeof t !== "object") continue;
+    const o = t as Record<string, unknown>;
+    const content = typeof o.content === "string" ? o.content : typeof o.activeForm === "string" ? o.activeForm : null;
+    if (!content) continue;
+    const status = o.status === "completed" || o.status === "in_progress" ? o.status : "pending";
+    items.push({ content, status });
+  }
+  return { node, visit, items, at: last.ts };
+}
+
+/**
+ * HOW-46: one step's agent turn, as the operator should read it.
+ *   live     un-finalised, on the newest step of a running run whose runner is alive — it is
+ *            working right now, which is the ordinary case and never a warning
+ *   waiting  un-finalised because a mid-turn ask (HOW-25) is holding the session open
+ *   died     un-finalised, and nothing can finish it any more: the step finished without it,
+ *            a later step started, the run stopped running, or its runner is gone
+ *   done     every turn of the step was finalised
+ */
+export type TurnState = "live" | "waiting" | "died" | "done";
+
+/**
+ * HOW-46: the "died" rule used to be decided twice, in two panes, and neither excluded the
+ * turn streaming on a live runner — so "the process died inside this turn" sat under EVERY
+ * running step, at exactly the moment someone was watching, and taught them to ignore the one
+ * warning that matters. `runnerAlive` is the server's proven-runner check (`runnerAlive()`,
+ * the same one the rail shows); it is undefined where nobody probed (tests, digests), and an
+ * unknown runner is not evidence of a death — status alone decides there.
+ */
+export function deriveTurnStates(
+  turns: readonly CoalescedTurn[],
+  timeline: readonly TimelineRow[],
+  ask: RunDetail["ask"],
+  status: RunStatus,
+  runnerAlive?: boolean,
+): Record<string, TurnState> {
+  const out: Record<string, TurnState> = {};
+  const newest = timeline.at(-1);
+  for (const row of timeline) {
+    const key = `${row.node}@${row.visit}`;
+    const mine = turns.filter((t) => t.node === row.node && t.visit === row.visit);
+    if (mine.length === 0) continue;
+    if (mine.every((t) => t.finalized)) { out[key] = "done"; continue; }
+    if (row.status !== "running" || row !== newest) out[key] = "died"; // finished without it, or overtaken
+    else if (ask?.node === row.node && ask.visit === row.visit) out[key] = "waiting";
+    else if (status !== "running" || runnerAlive === false) out[key] = "died";
+    else out[key] = "live";
+  }
+  return out;
 }
 
 export function deriveStatus(events: LoggedEvent[]): { status: RunStatus; ask: RunDetail["ask"]; failure: RunSummary["failure"]; paused: boolean; outcome: RunSummary["outcome"] } {
@@ -306,7 +441,7 @@ export function deriveDetail(
   id: string,
   events: LoggedEvent[],
   declarations: Declarations = {},
-  opts: { snapshot?: SnapshotIndex | null } = {},
+  opts: { snapshot?: SnapshotIndex | null; runnerAlive?: boolean } = {},
 ): RunDetail {
   const summary = deriveSummary(id, events);
   const allowanceByHarness = new Map<string, Extract<LoggedEvent, { type: "allowance" }>>();
@@ -337,10 +472,37 @@ export function deriveDetail(
 
   const { ask } = deriveStatus(events);
   const { id: _id, ...summaryRest } = summary;
+  const turns = coalesce(events);
+  const timeline = deriveTimeline(events);
+  const lastAgent = events.findLast((e) => e.type === "chunk" || e.type === "turn-finalized");
   return {
     summary: summaryRest,
-    turns: coalesce(events),
-    timeline: deriveTimeline(events),
+    turns,
+    timeline,
+    turn_states: deriveTurnStates(turns, timeline, ask, summary.status, opts.runnerAlive),
+    plan: timeline.length ? derivePlan(events, timeline.at(-1)!.node, timeline.at(-1)!.visit) : null,
+    steers: steerStates(events),
+    soft_stop: timeline.length ? softStopState(events, timeline.at(-1)!.node, timeline.at(-1)!.visit) : null,
+    agent_env: (() => {
+      const e = events.findLast((x) => x.type === "agent-environment");
+      return e?.type === "agent-environment" ? e : null;
+    })(),
+    acceptance: (() => {
+      const latest = latestAcceptance(events);
+      if (!latest) return null;
+      const waived = waivedCriteria(events);
+      return {
+        rows: latest.rows.map((r) => ({ ...r, waived: waived.get(r.id) ?? null })),
+        written_by: { node: latest.node, visit: latest.visit, at: latest.at },
+        unmet: unmetCriteria(latest.rows, waived).length,
+      };
+    })(),
+    evidence: events.flatMap((e) => {
+      if (e.type !== "node-finished" || !(EVIDENCE_KEY in e.writes)) return [];
+      const result = asEvidenceResult(e.writes[EVIDENCE_KEY]);
+      return result ? [{ node: e.node, visit: e.visit, at: e.ts, result }] : [];
+    }),
+    last_agent_event_at: lastAgent?.ts ?? null,
     renders,
     outcomes: [...outcomesByHash(events).values()],
     usage: rollupRun(events),
@@ -520,6 +682,25 @@ export function deriveLogRows(events: LoggedEvent[]): LogRow[] {
         return { ...base, ...at(e.node, e.visit), kind: "engine", depth: 0,
           summary: `drift @ ${e.stamp ?? e.commit?.slice(0, 12) ?? "(no commit)"} · ${counts || "nothing to check"}${e.truncated ? ` · ${e.truncated} more not listed` : ""}${e.extractor_mismatch ? ` · extractor mismatch ${e.extractor_mismatch.base} vs ${e.extractor_mismatch.after}` : ""}` };
       }
+      case "operator-steered":
+        return { ...base, ...at(e.node, e.visit), kind: "operator", depth: 1, summary: `steer · ${e.text.slice(0, 200)}` };
+      case "steer-delivered":
+        return { ...base, ...at(e.node, e.visit), kind: "operator", depth: 1,
+          summary: `steer #${e.steer_seq} delivered${e.after_tool_id ? ` after ${e.after_tool_id}` : ""}` };
+      case "soft-stop-requested":
+        return { ...base, ...at(e.node, e.visit), kind: "operator", depth: 1, summary: "stop at the next tool call" };
+      case "soft-stop-delivered":
+        return { ...base, ...at(e.node, e.visit), kind: "operator", depth: 1, summary: `stop delivered${e.after_tool_id ? ` after ${e.after_tool_id}` : ""}` };
+      case "soft-stop-honored":
+        return { ...base, ...at(e.node, e.visit), kind: "operator", depth: 0,
+          summary: `${e.forced ? "stopped hard (kept calling tools)" : "stopped"} · ${e.last_message.slice(0, 200)}` };
+      case "soft-stop-moot":
+        return { ...base, ...at(e.node, e.visit), kind: "operator", depth: 1, summary: "stop moot — the step finished first; pausing at the boundary" };
+      case "acceptance-waived":
+        return { ...base, node: null, visit: null, kind: "operator", depth: 0, summary: `waived criterion "${e.criterion_id}" · ${e.reason.slice(0, 160)}` };
+      case "agent-environment":
+        return { ...base, ...at(e.node, e.visit), kind: "engine", depth: 1,
+          summary: `${e.harness} environment · ${e.setting_sources ?? "no setting-sources switch"}${e.inherits_user ? " (user settings inherited)" : ""}${e.hooks?.length ? ` · ${e.hooks.length} hook${e.hooks.length === 1 ? "" : "s"} ran` : ""}${e.skills ? ` · ${e.skills.length} skills` : ""}${e.plugins ? ` · ${e.plugins.length} plugins` : ""}` };
       default: {
         const never: never = e;
         throw new Error(`unhandled event type in deriveLogRows: ${JSON.stringify(never)}`);
@@ -1112,7 +1293,7 @@ export function deriveSlice(events: LoggedEvent[], snapshot: SnapshotIndex | nul
 export { citeParts, type CitePart } from "./cite";
 
 /** runs list ordering: needs-input first (longest wait first), then running, then terminal */
-export function sortRuns(runs: RunSummary[]): RunSummary[] {
+export function sortRuns<T extends RunSummary>(runs: T[]): T[] {
   const rank = (s: RunStatus): number =>
     s === "needs-input" ? 0 : s === "harness-dead" ? 1 : s === "running" || s === "waiting" || s === "queued" ? 2 : s === "failed-recoverable" ? 3 : 4;
   return [...runs].sort((a, b) => {

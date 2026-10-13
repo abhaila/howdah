@@ -110,7 +110,7 @@ describe("claude adapter mapping", () => {
 
   test("full fixture maps to the normalized sequence", () => {
     expect(events.map((e) => e.type)).toEqual([
-      "session_started", "thinking_delta", "text_delta", "text_delta",
+      "session_started", "agent_env", "thinking_delta", "text_delta", "text_delta",
       "tool_call", "permission_request", "tool_result", "rate_limit", "turn_end",
     ]);
   });
@@ -151,6 +151,50 @@ describe("claude adapter mapping", () => {
     expect(args).toContain("stdio");
     expect(args).toContain("--include-partial-messages");
     expect(claudeArgs({ sessionId: "s1", resume: true })).toContain("--resume");
+    // HOW-47: the echo of a consumed stdin message is the proof a steer was delivered
+    expect(args).toContain("--replay-user-messages");
+  });
+});
+
+/**
+ * HOW-47 — the steer spike, captured from claude 2.1.296: a stdin user message written while a
+ * Bash call was in flight. Pinned here so an upgrade that changes WHERE it lands (or stops
+ * echoing it) fails a test instead of silently breaking delivery proof.
+ */
+describe("claude steer wire (adapter/fixtures/claude-steer.jsonl)", () => {
+  const steerFixture = readFileSync(join(import.meta.dir, "fixtures", "claude-steer.jsonl"));
+  const events = replay(steerFixture, 64).flatMap((r) => (r.ok ? mapClaudeEvent(r.value) : []));
+  const steerText = "[OPERATOR STEERING — from the human operator running this session, not from a tool] Change of plan: skip the remaining commands, and end your final reply with the single word PINEAPPLE.";
+
+  test("the steer is echoed AFTER the in-flight tool's result, as its own message, in the same turn", () => {
+    // (the fixture keeps no stream_event deltas: the capture dropped them to stay small)
+    expect(events.filter((e) => e.type !== "rate_limit").map((e) => e.type)).toEqual([
+      "session_started", "agent_env", "user_echo", "tool_call", "tool_result", "user_echo", "turn_end",
+    ]);
+    const call = events.findIndex((e) => e.type === "tool_call");
+    const result = events.findIndex((e) => e.type === "tool_result");
+    const echo = events.findIndex((e) => e.type === "user_echo" && e.text === steerText);
+    expect(call).toBeGreaterThan(-1);
+    expect(result).toBeGreaterThan(call);
+    expect(echo).toBeGreaterThan(result); // delivered at the tool boundary, not inside the result
+    expect(events.filter((e) => e.type === "turn_end")).toHaveLength(1); // no extra turn
+  });
+
+  test("the tool call was not lost, and the agent obeyed in the same turn", () => {
+    const result = events.find((e) => e.type === "tool_result");
+    expect(result).toMatchObject({ content: "one" });
+    const end = events.find((e) => e.type === "turn_end");
+    expect(end).toMatchObject({ result_text: expect.stringContaining("PINEAPPLE") });
+  });
+
+  test("the prompt's own echo is a user_echo too — the executor matches by exact text", () => {
+    const echoes = events.filter((e) => e.type === "user_echo");
+    expect(echoes).toHaveLength(2);
+    expect((echoes[0] as { text: string }).text).toStartWith("Run these three shell commands");
+  });
+
+  test("a user message that is not a replay is not an echo", () => {
+    expect(mapClaudeEvent({ type: "user", message: { content: [{ type: "text", text: "hi" }] } })).toEqual([]);
   });
 
   test("HOW-33: a resolved effort is sent as --effort, and none sends no flag", () => {
@@ -431,5 +475,67 @@ describe("cursor adapter (shapes documented, not captured)", () => {
     expect(mapCursorEvent({ type: "tool_call", subtype: "unheard-of" })).toEqual([]);
     expect(mapCursorEvent(null)).toEqual([]);
     expect(mapCursorEvent("not an object")).toEqual([]);
+  });
+});
+
+/**
+ * HOW-53 — plan mode, captured from claude 2.1.296. It is NOT a sandbox: `git diff` and Read run,
+ * but an Edit (and the ExitPlanMode a plan-mode agent reaches for) arrive as ordinary
+ * `can_use_tool` permission requests — to Howdah. So the executor's refusal of every permission
+ * request on a read-only node is what makes `readOnly` real (engine/executors/claude.ts).
+ */
+describe("claude plan mode (adapter/fixtures/claude-plan-mode-*.jsonl)", () => {
+  const load = (name: string) =>
+    replay(readFileSync(join(import.meta.dir, "fixtures", name)), 64).flatMap((r) => (r.ok ? mapClaudeEvent(r.value) : []));
+
+  test("a reviewer can still run git diff and read files", () => {
+    const events = load("claude-plan-mode-review.jsonl");
+    const calls = events.filter((e) => e.type === "tool_call").map((e) => (e as { name: string }).name);
+    expect(calls.slice(0, 2)).toEqual(["Bash", "Read"]);
+    const diff = events.find((e) => e.type === "tool_result");
+    expect(diff).toMatchObject({ content: expect.stringContaining("1 file changed") });
+  });
+
+  test("ExitPlanMode is a permission request, not a no-op", () => {
+    const asks = load("claude-plan-mode-review.jsonl").filter((e) => e.type === "permission_request");
+    expect(asks.map((e) => (e as { tool_name: string }).tool_name)).toEqual(["ExitPlanMode"]);
+  });
+
+  test("an Edit is a permission request — the CLI does not refuse it itself", () => {
+    const asks = load("claude-plan-mode-edit.jsonl").filter((e) => e.type === "permission_request");
+    expect(asks).toHaveLength(1);
+    expect(asks[0]).toMatchObject({ tool_name: "Edit" });
+    expect((asks[0] as { requires_user_interaction?: boolean }).requires_user_interaction).toBeUndefined();
+  });
+});
+
+/** HOW-55 — the startup a session reports: hooks before init, then what init says it loaded */
+describe("claude startup (adapter/fixtures/claude-init-*.jsonl)", () => {
+  const load = (name: string) =>
+    replay(readFileSync(join(import.meta.dir, "fixtures", name)), 128).flatMap((r) => (r.ok ? mapClaudeEvent(r.value) : []));
+
+  test("with user settings: five SessionStart hooks ran BEFORE init, four injecting context", () => {
+    const events = load("claude-init-user-settings.jsonl");
+    const init = events.findIndex((e) => e.type === "agent_env");
+    const hooks = events.filter((e) => e.type === "hook");
+    expect(hooks.length).toBe(10); // 5 started + 5 responses
+    expect(events.findLastIndex((e) => e.type === "hook")).toBeLessThan(init);
+    expect(hooks.filter((h) => (h as { injected?: string }).injected)).toHaveLength(4);
+  });
+
+  test("init maps to session_started and agent_env, names only", () => {
+    const events = load("claude-init-project-local.jsonl");
+    expect(events.map((e) => e.type)).toEqual(["session_started", "agent_env"]);
+    const env = events[1] as Extract<(typeof events)[number], { type: "agent_env" }>;
+    expect(env).toMatchObject({ version: "2.1.296", permission_mode: "plan" });
+    expect(env.skills).toHaveLength(19);
+    expect(env.plugins.map((p) => p.source)).toEqual(["cc-plugin-agents-md@builtin", "cc-plugin-telemetry@builtin", "cc-plugin-plugin-authoring@builtin"]);
+  });
+
+  test("a malformed init degrades to empty lists rather than throwing", () => {
+    const [, env] = mapClaudeEvent({ type: "system", subtype: "init", session_id: "s", tools: "nope", plugins: [null], skills: [1] });
+    expect(env).toMatchObject({ type: "agent_env", tools: [], plugins: [], skills: [] }); // a number is not a skill name: dropped, not stringified
+    // and an init that reports no skills list at all is UNKNOWN, not "no skills"
+    expect(mapClaudeEvent({ type: "system", subtype: "init", session_id: "s" })[1]).not.toHaveProperty("skills");
   });
 });

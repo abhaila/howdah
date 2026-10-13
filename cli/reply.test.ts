@@ -8,6 +8,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { SUFFIX_VERSION } from "../core/template";
 import { EventLog, readLog } from "../log/write";
 
 const MAIN = join(import.meta.dir, "main.ts");
@@ -118,6 +119,6 @@ describe("howdah reply (CLI, system-map 0.2)", () => {
       );
     }
     expect(retried).toBeDefined(); // the reply MOVED the run, and the retry rendered under v2
-    expect(retried.suffix_version).toBe(5);
+    expect(retried.suffix_version).toBe(SUFFIX_VERSION);
   }, 15000);
 });

@@ -5,6 +5,7 @@
  * probes; `folders` are Plain — no git anywhere near them. Everything else is settings the
  * web app edits in place (T19).
  */
+import type { PreviewContract } from "../core/evidence";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
@@ -27,10 +28,20 @@ export interface RepoWorkspace {
    * this workspace" (HOW-15's environment contract).
    */
   diagnosticsCommand?: string;
+  /**
+   * HOW-52: how to start this repo's app so `evidence:screenshot` can capture it — the command
+   * (run in the worktree on a free port, with a temp HOWDAH_HOME) and the paths to capture.
+   * Part of HOW-15's environment contract, like verifyCommand. Unset: `not-checked`.
+   */
+  preview?: PreviewContract;
+  /** HOW-55: agents in this workspace load the operator's USER-level settings too (default: project only) */
+  inheritUserSettings?: true;
 }
 
 export interface PlainWorkspace {
   path: string;
+  /** HOW-55: as on a repo workspace */
+  inheritUserSettings?: true;
 }
 
 export interface HowdahConfig {
@@ -38,6 +49,8 @@ export interface HowdahConfig {
   folders: Record<string, PlainWorkspace>;
   /** e.g. "idea" | "code" — the Open-in-IDE command (T19) */
   editorCommand?: string;
+  /** HOW-48: ms before the run header offers to escalate an unanswered soft stop (default 2 min) */
+  softStopEscalateMs?: number;
   /** where GitHub-picked repos are cloned; default ~/code */
   cloneRoot?: string;
   /**
@@ -135,6 +148,47 @@ export function repoNameFor(config: HowdahConfig, repoPath: string): string {
 export function verifyCommandFor(config: HowdahConfig, repoPath: string): string | undefined {
   const cmd = Object.values(config.repos).find((r) => r.path === repoPath)?.verifyCommand?.trim();
   return cmd ? cmd : undefined;
+}
+
+/**
+ * HOW-55: does the workspace at this path load the operator's user-level settings? Matched by
+ * path like verifyCommandFor, over repos AND plain folders. Default no: an agent is configured by
+ * the project alone, so its hooks, plugins and CLAUDE.md are the repository's, not the operator's.
+ */
+export function inheritsUserSettings(config: HowdahConfig, path: string): boolean {
+  return [...Object.values(config.repos), ...Object.values(config.folders)].some((w) => w.path === path && w.inheritUserSettings === true);
+}
+
+/** HOW-55: opt a workspace in to (or out of) the operator's user-level settings */
+export function setInheritUserSettings(config: HowdahConfig, name: string, on: boolean): void {
+  const w = config.repos[name] ?? config.folders[name];
+  if (!w) throw new Error(`unknown workspace "${name}"`);
+  if (on) w.inheritUserSettings = true;
+  else delete w.inheritUserSettings;
+}
+
+/** HOW-52: the preview contract registered for a repo path, or undefined (matched like verifyCommandFor) */
+export function previewFor(config: HowdahConfig, repoPath: string): PreviewContract | undefined {
+  const p = Object.values(config.repos).find((r) => r.path === repoPath)?.preview;
+  return p?.command?.trim() && p.paths?.length ? p : undefined;
+}
+
+/**
+ * HOW-52: set an existing repo workspace's preview, or clear it with a blank command. Paths are
+ * normalised to start with "/" and empty ones dropped; a command with no path is refused, since
+ * it could never capture anything.
+ */
+export function setPreview(config: HowdahConfig, name: string, command: string | undefined, paths: string[]): void {
+  const repo = config.repos[name];
+  if (!repo) {
+    if (config.folders[name]) throw new Error(`"${name}" is a Plain folder — evidence:screenshot only runs from a repo's worktree`);
+    throw new Error(`unknown repo workspace "${name}"`);
+  }
+  const cmd = command?.trim();
+  if (!cmd) { delete repo.preview; return; }
+  const clean = paths.map((p) => p.trim()).filter(Boolean).map((p) => (p.startsWith("/") ? p : `/${p}`));
+  if (!clean.length) throw new Error('a preview needs at least one path to capture, e.g. --paths "/"');
+  repo.preview = { command: cmd, paths: clean };
 }
 
 /**

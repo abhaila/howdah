@@ -559,6 +559,12 @@ export function reconstructRender(runDir: string, renderedHashWanted: string): R
     .map((e) => e.refused!)
     .reverse();
 
+  const carriedSteers = (render.steers_carried ?? []).map((seq) => {
+    const e = events.find((x) => x.seq === seq);
+    return e?.type === "operator-steered" ? e.text : null;
+  });
+  const stopEvent = render.resumed_after_stop === undefined ? undefined : events.find((x) => x.seq === render.resumed_after_stop);
+  const stopResumeText = stopEvent?.type === "soft-stop-honored" ? stopEvent.last_message : render.resumed_after_stop === undefined ? null : undefined;
   let candidates: string[];
   const builders = render.suffix_version === undefined ? undefined : suffixBuilders(render.suffix_version);
   const handoff = render.reentry_after_visit !== undefined && (render.suffix_version ?? 0) >= 5
@@ -567,7 +573,14 @@ export function reconstructRender(runDir: string, renderedHashWanted: string): R
   if (render.suffix_version === undefined) {
     // pre-0.1 event: the hash never covered the skill hint or outputs contract
     candidates = jumpOptions.map((m) => (m === undefined ? plain : plain + operatorInstructionSuffix(m)));
-  } else if (builders && (render.reentry_after_visit === undefined || builders.reentryInstruction)) {
+  } else if (
+    builders &&
+    (render.reentry_after_visit === undefined || builders.reentryInstruction) &&
+    // a carried steer this code cannot word, or one whose event is gone, is not reconstructable
+    (carriedSteers.length === 0 || (builders.steerInstruction && carriedSteers.every((t) => t !== null))) &&
+    // a stop-resume briefing whose event is gone, or that this version cannot word, is not either
+    (render.resumed_after_stop === undefined || (builders.stopResumeInstruction && typeof stopResumeText === "string"))
+  ) {
     const suffixVersion = render.suffix_version;
     const assemble = (jumpMessage?: string, replyMessage?: string, refusalMessage?: string) =>
       assemblePrompt({
@@ -576,6 +589,10 @@ export function reconstructRender(runDir: string, renderedHashWanted: string): R
         reentryAfterVisit: render.reentry_after_visit,
         // HOW-36: re-derived from the very events the engine derived it from (all before the render)
         ...(handoff ? { handoff } : {}),
+        // HOW-47: the same for carried steers — the seqs are logged, the texts are their events'
+        steerMessages: carriedSteers.filter((t): t is string => t !== null),
+        // HOW-48: likewise the stop-resume briefing — its text is the named event's last_message
+        stopResumeMessage: stopResumeText ?? undefined,
         skills: render.skills ?? [], outputKeys: render.output_keys ?? [], suffixVersion,
       });
     // [plain, ...jumps, ...replies] — never both: a jump clears any pending reply (replay.ts),

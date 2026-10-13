@@ -69,10 +69,14 @@ import { DEFAULT_CONTEXT_CAP, RENDER_VERSION, SUFFIX_VERSION, assemblePrompt, ex
 import { defaultHarness, fallbackChain, harnessNames, harnessSpec, isHarness } from "../core/harnesses";
 import { EventLog } from "../log/write";
 import type { LoggedEvent, ParkCode } from "../log/events";
+import { ACCEPTANCE_KEY, asAcceptance, unmetCriteria, type AcceptanceRow } from "../core/acceptance";
+import { waivedCriteria } from "./acceptance-decision";
+import { softStopState, stopResumeFor, undeliveredSteers } from "./steer-state";
+import { previousTree } from "./no-progress";
 import { replayState, effectKey } from "./replay";
 import type { PromptId } from "../core/prompt-ids";
 import { proposalHash } from "../core/proposal";
-import { describeFingerprintChange, fingerprint, type Fingerprint } from "./reconcile";
+import { describeFingerprintChange, fingerprint, worktreeTree, type Fingerprint } from "./reconcile";
 import { effectiveCwd } from "./executors/worktree-record";
 import { currentProposal, findDecision, isApproved, nextSeq, pendingRedesigns, readBase } from "./slice-decision";
 import { claimRunner, releaseRunner, type RunnerHolder } from "./control";
@@ -257,7 +261,7 @@ const INPUTS_NODE = "__inputs__";
  * Failures that are never evidence of a spent allowance, whatever the transcript says, so
  * they never hop harnesses and never mark a harness spent (HOW-14, HOW-38).
  */
-const NO_HOP_CODES: ReadonlySet<string> = new Set(["context-exhausted", "stuck", "turn-timeout"]);
+const NO_HOP_CODES: ReadonlySet<string> = new Set(["context-exhausted", "stuck", "turn-timeout", "paused-by-operator"]);
 
 /**
  * HOW-43: automatic continuations of `node` in the current streak — the context-continued
@@ -425,6 +429,15 @@ export class Engine {
 
   // ---- the loop --------------------------------------------------------------
 
+  /** HOW-54: the steps whose visits must change the worktree (Graph.progressChecked), computed once */
+  private get progressChecked(): Set<string> {
+    return (this._progressChecked ??= this.graph.progressChecked());
+  }
+  private _progressChecked: Set<string> | undefined;
+
+  /** HOW-48: a moot soft stop — pause at the next node boundary (set after the step, read at the loop top) */
+  private pauseAtBoundary = false;
+
   private async loop(startAt: string): Promise<RunState> {
     let current = startAt;
     const maxSteps = this.opts.maxSteps ?? 1000;
@@ -438,7 +451,11 @@ export class Engine {
         this.attributeTerminal("aborted");
         return { state: "finished", outcome: "aborted" };
       }
-      if (command === "pause") {
+      // HOW-48: a soft stop the step finished before reaching is not dropped — the run holds at
+      // this boundary exactly as a pause would, so "stop" still means stop. Not before a terminal:
+      // the run is done, and holding it one step short of finishing would only cost a resume.
+      if (command === "pause" || (this.pauseAtBoundary && def.kind !== "terminal")) {
+        this.pauseAtBoundary = false;
         this.log.append({ type: "run-paused", by: "operator" });
         return { state: "paused", node: current };
       }
@@ -512,10 +529,17 @@ export class Engine {
       for (const [k, v] of Object.entries(result.writes)) this.ctx.set(k, v);
       this.ctx.endAttempt(result.status);
       for (const round of rounds) this.openRound(current, round);
+      // HOW-54: what the worktree holds now, for the steps whose visits must make progress
+      const tree = this.progressChecked.has(current) ? worktreeTree(this.workCwd()) ?? undefined : undefined;
       this.log.append({
         type: "node-finished", node: current, visit, status: result.status, writes: result.writes,
         ...(result.refused !== undefined ? { refused: result.refused } : {}),
+        ...(tree !== undefined ? { tree } : {}),
       });
+      if (result.status === "succeeded" && tree !== undefined) {
+        const stalled = this.noProgress(current, visit, tree);
+        if (stalled) return this.park(current, visit, "no-progress", stalled);
+      }
 
       if (result.status === "failed") {
         // HOW-14: a full context window is not an allowance problem, whatever the attempt's
@@ -545,6 +569,7 @@ export class Engine {
         return this.park(current, visit, result.code ?? "attempt-failed", result.reason ?? "attempt failed");
       }
 
+      if (def.kind === "agent" && softStopState(this.log.read(), current, visit)) this.pauseAtBoundary = true;
       const next = this.route(current, visit);
       if (!next) return this.park(current, visit, "no-edge", "no edge matched (conditions exhausted)");
       this.log.append({ type: "edge-taken", from: current, to: next.to, label: next.condition?.label });
@@ -701,7 +726,12 @@ export class Engine {
    * fingerprint that cannot be computed parks stale-base — never a pass.
    */
   private async requiresGate(nodeId: string, def: NodeDef<any>, visit: number): Promise<{ code: ParkCode; reason: string } | null> {
-    if (def.kind !== "agent" || !def.requires) return null;
+    if (def.kind !== "agent") return null;
+    if (def.requiresAcceptance) {
+      const unmet = this.acceptanceGate(nodeId, visit);
+      if (unmet) return unmet;
+    }
+    if (!def.requires) return null;
     const approvalId = def.requires.approvalOf;
     const approval = this.graph.def.nodes[approvalId];
     if (!approval || approval.kind !== "approval") throw new EngineError(`"${nodeId}" requires unknown approval node "${approvalId}"`);
@@ -742,6 +772,55 @@ export class Engine {
       if (moved) return stale(moved);
     }
     return null;
+  }
+
+  /**
+   * HOW-54: a step on a cycle that is expected to change files finished with the worktree exactly
+   * as its previous visit left it. The review → repair loop would go round again on the same code
+   * for the same verdict, spending a visit and an allowance on nothing, until maxVisits parked it
+   * with a generic reason — so it parks NOW, saying why and quoting the findings it was answering.
+   * Decided from the trees on the log's node-finished events, so a fresh process replaying the
+   * same log decides the same way. A first visit has nothing to compare with.
+   *
+   * Out of scope, by construction: changes outside this worktree (another repo, a tracker, a PR
+   * comment) are invisible to a tree id — a repair that only did those reads as no progress.
+   */
+  private noProgress(node: string, visit: number, tree: string): string | null {
+    const previous = previousTree(this.log.read(), node, visit);
+    if (!previous || previous.tree !== tree) return null;
+    let findings = "";
+    try {
+      if (this.ctx.has("review_findings")) {
+        const f = this.ctx.get("review_findings", { node: `${node}(no-progress)`, visit });
+        const text = typeof f === "string" ? f : JSON.stringify(f);
+        if (text && text !== "[]") findings = ` The findings it was answering: ${text.length > 600 ? `${text.slice(0, 597)}…` : text}`;
+      }
+    } catch { /* unreadable: the park still says what happened */ }
+    return `${node}@${visit} changed nothing in the worktree since visit ${previous.visit} — another review would judge the same code.${findings}`;
+  }
+
+  /**
+   * HOW-51: the acceptance gate. Every live criterion must pass, or have been WAIVED by an
+   * operator decision event — never a flag, and never `attention-resolved`: resume() resolves
+   * every standing park, so a gate that trusted it would let any resume through. A plain resume
+   * therefore re-checks here and parks again until the contract is met or waived.
+   */
+  private acceptanceGate(nodeId: string, visit: number): { code: ParkCode; reason: string } | null {
+    const unmet = (why: string) => ({ code: "acceptance-unmet" as const, reason: `"${nodeId}" requires the acceptance criteria to be met: ${why}` });
+    if (!this.ctx.has(ACCEPTANCE_KEY)) return unmet("no acceptance criteria were recorded");
+    let rows: AcceptanceRow[] | null;
+    try {
+      rows = asAcceptance(this.ctx.get(ACCEPTANCE_KEY, { node: `${nodeId}(requires)`, visit }));
+    } catch (err) {
+      return unmet(err instanceof Error ? err.message : String(err));
+    }
+    if (!rows) return unmet(`"${ACCEPTANCE_KEY}" is not a list of criteria`);
+    const left = unmetCriteria(rows, waivedCriteria(this.log.read()));
+    if (left.length === 0) return null;
+    return unmet(
+      `${left.length} unmet — ${left.map((r) => `"${r.id}" (${r.text.length > 80 ? `${r.text.slice(0, 77)}…` : r.text})`).join("; ")}. ` +
+        `Waive a criterion that cannot be checked, or jump back to the review once it is met.`,
+    );
   }
 
   /**
@@ -1053,13 +1132,20 @@ export class Engine {
       refusalMessage = this.refusalNote.message;
       this.refusalNote = null; // consumed by this attempt (replay: at node-started)
     }
-    const reentryAfterVisit = this.reentryAfterVisit(this.log.read(), nodeId, visit);
+    const logged = this.log.read();
+    const reentryAfterVisit = this.reentryAfterVisit(logged, nodeId, visit);
+    // HOW-47: a steer whose turn ended before another tool call never reached it. The executor
+    // that could have delivered it has returned by now, so it is carried into THIS render —
+    // the run's next agent prompt — and its seq is logged so reconstruction reads the same text
+    const carried = undeliveredSteers(logged);
+    // HOW-48: the previous visit stopped where the operator asked — brief this one from its words
+    const stopResume = stopResumeFor(logged, nodeId, visit);
     // HOW-36: what that visit had done, derived from the log — reconstruction re-derives it
-    const handoff = reentryAfterVisit === undefined ? undefined : deriveHandoff(this.log.read(), nodeId, reentryAfterVisit, outputKeys);
+    const handoff = reentryAfterVisit === undefined ? undefined : deriveHandoff(logged, nodeId, reentryAfterVisit, outputKeys);
     // HOW-37: render rules v2 — an oversized value is elided around a stub naming where the
     // whole of it lives; the run's own inputs (the operator's words) are never elided
     const contextCap = config?.contextCap ?? DEFAULT_CONTEXT_CAP;
-    const priorEvents = this.log.read();
+    const priorEvents = logged;
     const { text: rendered, read: contextRead, elided } = renderTemplate(
       body,
       (key) => (key in reads ? reads[key] : this.ctx.get(key, { node: nodeId, visit })),
@@ -1074,6 +1160,8 @@ export class Engine {
       refusalMessage,
       reentryAfterVisit,
       ...(handoff ? { handoff } : {}),
+      steerMessages: carried.map((c) => c.text),
+      stopResumeMessage: stopResume?.last_message,
       skills,
       outputKeys,
       suffixVersion: SUFFIX_VERSION,
@@ -1102,6 +1190,8 @@ export class Engine {
       render_version: RENDER_VERSION,
       context_cap: contextCap,
       ...(Object.keys(elided).length ? { context_sources: elided } : {}),
+      ...(carried.length ? { steers_carried: carried.map((c) => c.seq) } : {}),
+      ...(stopResume ? { resumed_after_stop: stopResume.seq } : {}),
     });
     return finalRendered;
   }

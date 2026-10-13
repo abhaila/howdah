@@ -162,7 +162,8 @@
           }
         },
         "class": "delivery",
-        "maxVisits": 5
+        "maxVisits": 5,
+        "changesFiles": false
       },
       "delivery.reextract": {
         "kind": "command",
@@ -226,7 +227,8 @@
             "scope": "cleared"
           }
         },
-        "class": "delivery"
+        "class": "delivery",
+        "readOnly": true
       },
       "delivery.revise_repairs": {
         "kind": "agent",
@@ -297,7 +299,8 @@
             "scope": "cleared"
           }
         },
-        "class": "implementation"
+        "class": "implementation",
+        "readOnly": true
       },
       "map.drift": {
         "kind": "command",
@@ -758,7 +761,8 @@
         "prompt": "delivery.publish",
         "reads": [
           "goal",
-          "work"
+          "work",
+          "acceptance"
         ],
         "writes": {
           "publication_summary": {
@@ -766,6 +770,8 @@
           }
         },
         "maxVisits": 5,
+        "requiresAcceptance": true,
+        "changesFiles": false,
         "class": "delivery"
       },
       "delivery.resolve_conflicts": {
@@ -800,6 +806,7 @@
             "scope": "cleared"
           }
         },
+        "readOnly": true,
         "class": "delivery"
       },
       "delivery.revise_repairs": {
@@ -826,6 +833,33 @@
         "duration": "5m",
         "class": "delivery",
         "writes": {}
+      },
+      "implementation.criteria": {
+        "kind": "agent",
+        "prompt": "ticket.acceptance",
+        "reads": [
+          "goal",
+          "work",
+          "implementation_plan"
+        ],
+        "writes": {
+          "acceptance": {
+            "scope": "sticky"
+          }
+        },
+        "readOnly": true,
+        "class": "implementation"
+      },
+      "implementation.evidence": {
+        "kind": "command",
+        "run": "evidence:screenshot",
+        "reads": [],
+        "writes": {
+          "evidence.items": {
+            "scope": "per-visit"
+          }
+        },
+        "class": "implementation"
       },
       "implementation.implement": {
         "kind": "agent",
@@ -863,15 +897,20 @@
       },
       "implementation.local_review": {
         "kind": "agent",
-        "prompt": "implementation.local_review",
+        "prompt": "ticket.local_review",
         "reads": [
           "goal",
           "work",
           "implementation_plan",
           "implementation_summary",
-          "verify.result"
+          "verify.result",
+          "evidence.items",
+          "acceptance"
         ],
         "writes": {
+          "acceptance": {
+            "scope": "sticky"
+          },
           "review_findings": {
             "scope": "cleared"
           },
@@ -879,6 +918,7 @@
             "scope": "cleared"
           }
         },
+        "readOnly": true,
         "class": "implementation"
       },
       "implementation.plan": {
@@ -912,6 +952,7 @@
           }
         },
         "maxVisits": 3,
+        "changesFiles": false,
         "class": "implementation"
       },
       "verify.run": {
@@ -933,6 +974,10 @@
       },
       {
         "from": "implementation.plan",
+        "to": "implementation.criteria"
+      },
+      {
+        "from": "implementation.criteria",
         "to": "implementation.implement"
       },
       {
@@ -941,6 +986,10 @@
       },
       {
         "from": "verify.run",
+        "to": "implementation.evidence"
+      },
+      {
+        "from": "implementation.evidence",
         "to": "implementation.local_review"
       },
       {
@@ -1195,7 +1244,8 @@
             "scope": "sticky"
           }
         },
-        "class": "delivery"
+        "class": "delivery",
+        "changesFiles": false
       },
       "delivery.resolve_conflicts": {
         "kind": "agent",
@@ -1229,7 +1279,8 @@
             "scope": "cleared"
           }
         },
-        "class": "delivery"
+        "class": "delivery",
+        "readOnly": true
       },
       "delivery.revise_repairs": {
         "kind": "agent",
@@ -1325,7 +1376,8 @@
             "scope": "cleared"
           }
         },
-        "class": "implementation"
+        "class": "implementation",
+        "readOnly": true
       },
       "implementation.plan": {
         "kind": "agent",
@@ -1357,7 +1409,8 @@
             "scope": "sticky"
           }
         },
-        "class": "implementation"
+        "class": "implementation",
+        "changesFiles": false
       }
     },
     "edges": [

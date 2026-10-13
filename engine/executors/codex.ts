@@ -21,13 +21,14 @@
  * `turn error` carrying codex's own message, gets no repair turn, and when codex says the
  * context window filled (`contextWindowExceeded`) it fails `context-exhausted` instead.
  */
+import { environmentFiles } from "./agent-env";
 import { writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { Executor } from "../run";
 import { JsonlChunkParser } from "../../adapter/parse";
 import { mapCodexEvent, buildCodexApprovalResponse, codexUsage } from "../../adapter/codex";
 import type { TurnUsage } from "../../adapter/events";
-import { buildRepairInstruction, parseOutputs } from "./outputs";
+import { buildRepairInstruction, checkWrites, parseOutputs } from "./outputs";
 import { classifyHarnessExit, compactionNote, contextExhaustedFailure } from "./harness-failure";
 import { AttentionCenter, osNotifier, type Notifier } from "../attention";
 import { readLog } from "../../log/write";
@@ -78,9 +79,14 @@ export function usageDelta(now: TurnUsage | undefined, before: TurnUsage | undef
 }
 
 export function codexExecutor(opts: CodexExecutorOpts): Executor {
-  return async ({ nodeId, def, visit, runId, cwd, log, renderedPrompt, agentConfig }) => {
+  return async ({ nodeId, def, visit, runId, cwd, log, renderedPrompt, agentConfig, reads }) => {
     if (def.kind !== "agent") throw new Error("codexExecutor on non-agent node");
     const writeKeys = Object.keys(def.writes ?? {});
+    const check = (w: Record<string, unknown>) => checkWrites(w, reads ?? {}); // HOW-51
+    // HOW-55: codex has no switch for the operator's own config, so what it reads regardless is
+    // recorded — hashed — on every attempt; a run can say what it ran with even where it cannot choose
+    log.append({ type: "agent-environment", node: nodeId, visit, harness: "codex", setting_sources: null, inherits_user: true,
+      files: environmentFiles("codex", effectiveCwd(log.path, cwd), true) });
     const prompt = renderedPrompt ?? ""; // exactly what rendered_hash covers (system-map 0.1)
 
     const proc = Bun.spawn([opts.binary ?? "codex", "app-server"], {
@@ -275,11 +281,14 @@ export function codexExecutor(opts: CodexExecutorOpts): Executor {
       // !turnError, because for claude any turn error fails the attempt) and the app-server
       // did not fault on us. A mere notice must not skip the repair, or benign startup noise
       // would park a run whose work is already done.
-      if (turnCompleted && turnFailed === undefined && !rpcFault && writeKeys.length && !parseOutputs(finalMessage ?? accumulated, writeKeys).ok) {
-        chunk("text", "\n[outputs object missing — asking for it]");
+      const firstParse = writeKeys.length ? parseOutputs(finalMessage ?? accumulated, writeKeys, check) : { ok: true as const };
+      if (turnCompleted && turnFailed === undefined && !rpcFault && writeKeys.length && !firstParse.ok) {
+        // HOW-51: a value the outputs check refused is named, so the repair fixes THAT
+        const refused = "refused" in firstParse && firstParse.refused ? firstParse.problem : undefined;
+        chunk("text", refused ? `\n[outputs refused — ${refused} — asking again]` : "\n[outputs object missing — asking for it]");
         finalMessage = undefined;
         accumulated = "";
-        await runTurn(buildRepairInstruction(writeKeys));
+        await runTurn(buildRepairInstruction(writeKeys, refused));
       }
     } catch (err) {
       // HOW-38: an app-server WE killed fails whatever it was doing; that is the timeout or the
@@ -339,7 +348,7 @@ export function codexExecutor(opts: CodexExecutorOpts): Executor {
       chunk("text", `\n[turn error: ${why}]`);
       return { status: "failed", writes: {}, reason: `turn error: ${why}` };
     }
-    const parsed = parseOutputs(finalMessage ?? accumulated, writeKeys);
+    const parsed = parseOutputs(finalMessage ?? accumulated, writeKeys, check);
     if (!parsed.ok) {
       chunk("text", `\n[output contract violation: ${parsed.problem}]`);
       return { status: "failed", writes: {}, reason: `output contract violation: ${parsed.problem}` };

@@ -19,7 +19,7 @@ import { Engine, type Executor } from "./run";
 import { claudeExecutor } from "./executors/claude";
 import { codexExecutor } from "./executors/codex";
 import { deriveHandoff } from "./handoff";
-import { HANDOFF_CHARS, handoffBlock, renderedHash } from "../core/template";
+import { HANDOFF_CHARS, SUFFIX_VERSION, handoffBlock, renderedHash } from "../core/template";
 import { reconstructRender } from "../prompts/library";
 import { readLog } from "../log/write";
 import type { LoggedEvent, RunEvent } from "../log/events";
@@ -77,7 +77,7 @@ describe("the handoff over the fake wire", () => {
     // the git steps are still there, after the handoff
     expect(retry.indexOf("### Outputs still owed")).toBeLessThan(retry.indexOf("Get your bearings"));
     const second = renders(readLog(join(dir, "run.jsonl")))[1]!;
-    expect(second).toMatchObject({ suffix_version: 5, reentry_after_visit: 1 });
+    expect(second).toMatchObject({ suffix_version: SUFFIX_VERSION, reentry_after_visit: 1 });
     expect(renderedHash(retry)).toBe(second.rendered_hash);
     expect(reconstructRender(dir, second.rendered_hash)).toMatchObject({ verified: true });
   }, 30000);

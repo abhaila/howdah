@@ -385,6 +385,18 @@ export const REPLY_RULES: Readonly<Record<ParkCode, Rule>> = {
     accept: false,
     message: `this harness cannot restrict tools; change the node's harness or its tools in tuning, then \`resume ${run}\``,
   }),
+  // HOW-48: the agent stopped where the operator asked; a reply (or resume) retries the step,
+  // briefed with the agent's own last words about where it stood
+  "paused-by-operator": retryWithReply,
+  // HOW-54: the repair changed nothing; a reply tells its next attempt what to do differently
+  "no-progress": retryWithReply,
+  // HOW-51: a reply cannot meet a criterion; a waiver (a decision) or a re-review can
+  "acceptance-unmet": ({ run }) => ({
+    accept: false,
+    message:
+      `delivery is held until every acceptance criterion passes or is waived; waive one with ` +
+      `\`waive ${run} <criterion-id> <reason>\` (or in the Acceptance card), or \`jump ${run} implementation.local_review\` to review again`,
+  }),
   "executor-threw": retryWithReply,
   "max-visits": useJump,
   "no-edge": useJump,

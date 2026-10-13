@@ -23,6 +23,15 @@
  * questions." Both halves were probed against the live CLI before this was written.
  * Re-verify on upgrade; the meaning of the payload lives in core/ask.ts.
  *
+ * HOW-47 — steering a running turn, spiked against claude 2.1.296 and pinned in
+ * adapter/fixtures/claude-steer.jsonl. A stream-json user message written to stdin while a tool
+ * call is in flight is delivered at that tool's result boundary — after the `tool_result`, as
+ * its own user message, NOT inside the result — and the agent adopted it in the same turn, which
+ * ended in one `result`. The tool call is not lost (unlike a PreToolUse-hook block). With
+ * `--replay-user-messages` the CLI echoes every consumed stdin message back as
+ * `user { isReplay: true }`, in stream order — so the echo of a steer arrives exactly where it
+ * landed, and is mapped to `user_echo` as the executor's proof of delivery.
+ *
  * HOW-14 — context exhaustion. Read from claude 2.1.283's own strings and SDK types, NOT from
  * a captured turn (unverified-live, like the cursor adapter; capture one into fixtures/ the
  * first time it happens for real):
@@ -48,6 +57,8 @@ export function claudeArgs(opts: {
   disallowedTools?: readonly string[];
   /** HOW-39: a settings JSON (the post-edit diagnostics hook) */
   settings?: string;
+  /** HOW-55: which of the operator's settings load */
+  settingSources?: string;
 }): string[] {
   return [
     "-p",
@@ -56,7 +67,11 @@ export function claudeArgs(opts: {
     "--output-format", "stream-json",
     "--include-partial-messages",
     "--permission-prompt-tool", "stdio",
+    // HOW-47: echo every consumed stdin user message (isReplay) — the proof a steer was delivered
+    "--replay-user-messages",
     "--permission-mode", opts.permissionMode ?? "auto",
+    // HOW-55: which of the operator's settings load — "project,local" unless the workspace opts in
+    ...(opts.settingSources ? ["--setting-sources", opts.settingSources] : []),
     ...(opts.model ? ["--model", opts.model] : []),
     ...(opts.maxTurns ? ["--max-turns", String(opts.maxTurns)] : []),
     ...(opts.effort ? ["--effort", opts.effort] : []),
@@ -84,7 +99,17 @@ export function mapClaudeEvent(raw: unknown): AgentEvent[] {
   switch (e.type) {
     case "system":
       if (e.subtype === "init" && typeof e.session_id === "string")
-        return [{ type: "session_started", session_id: e.session_id }];
+        return [{ type: "session_started", session_id: e.session_id }, { type: "agent_env", ...agentEnvOf(e) }];
+      // HOW-55: a hook ran — SessionStart ones before `init`, others around tool calls
+      if ((e.subtype === "hook_started" || e.subtype === "hook_response") && typeof e.hook_name === "string") {
+        const out = typeof e.output === "string" ? e.output : typeof e.stdout === "string" ? e.stdout : "";
+        const injected = e.subtype === "hook_response" ? injectedContext(out) : undefined;
+        return [{
+          type: "hook", phase: e.subtype === "hook_started" ? "started" : "response", name: e.hook_name,
+          ...(typeof e.exit_code === "number" ? { exit_code: e.exit_code } : {}),
+          ...(injected !== undefined ? { injected } : {}),
+        }];
+      }
       if (e.subtype === "compact_boundary") {
         const meta = e.compact_metadata ?? {};
         return [{
@@ -116,6 +141,11 @@ export function mapClaudeEvent(raw: unknown): AgentEvent[] {
     case "user": {
       const content = e.message?.content;
       if (!Array.isArray(content)) return [];
+      // HOW-47: a replayed stdin message — the echo that proves a mid-turn steer was consumed
+      if (e.isReplay === true) {
+        const text = content.filter((b: any) => b?.type === "text" && typeof b.text === "string").map((b: any) => b.text).join("");
+        return text ? [{ type: "user_echo", text }] : [];
+      }
       return content
         .filter((b: any) => b?.type === "tool_result")
         .map((b: any): AgentEvent => ({
@@ -194,4 +224,34 @@ export function buildClaudeUserTurn(text: string): string {
     type: "user",
     message: { role: "user", content: [{ type: "text", text }] },
   }) + "\n";
+}
+
+/**
+ * HOW-55: what the CLI's `system/init` says this session loaded — the agent's ENVIRONMENT, which
+ * the rendered prompt and its hash do not cover. Names only; nothing here is trusted to have a
+ * shape, so every field degrades to empty rather than throwing.
+ */
+function agentEnvOf(e: Record<string, any>): Omit<Extract<AgentEvent, { type: "agent_env" }>, "type"> {
+  const names = (v: unknown): string[] => (Array.isArray(v) ? v.map((x) => (typeof x === "string" ? x : String((x as { name?: unknown })?.name ?? ""))).filter(Boolean) : []);
+  return {
+    version: typeof e.claude_code_version === "string" ? e.claude_code_version : undefined,
+    model: typeof e.model === "string" ? e.model : undefined,
+    permission_mode: typeof e.permissionMode === "string" ? e.permissionMode : undefined,
+    tools: names(e.tools),
+    ...(Array.isArray(e.skills) ? { skills: names(e.skills) } : {}),
+    plugins: Array.isArray(e.plugins) ? e.plugins.map((p: any) => ({ name: String(p?.name ?? ""), source: String(p?.source ?? "") })).filter((p: { name: string }) => p.name) : [],
+    mcp_servers: Array.isArray(e.mcp_servers) ? e.mcp_servers.map((m: any) => ({ name: String(m?.name ?? ""), source: String(m?.source ?? "") })).filter((m: { name: string }) => m.name) : [],
+    memory_paths: e.memory_paths && typeof e.memory_paths === "object" ? Object.values(e.memory_paths).filter((v): v is string => typeof v === "string") : [],
+  };
+}
+
+/** the `additionalContext` a hook's JSON output injected into the session, if it injected any */
+function injectedContext(output: string): string | undefined {
+  try {
+    const v = JSON.parse(output) as { hookSpecificOutput?: { additionalContext?: unknown } };
+    const ctx = v?.hookSpecificOutput?.additionalContext;
+    return typeof ctx === "string" && ctx ? ctx : undefined;
+  } catch {
+    return undefined;
+  }
 }

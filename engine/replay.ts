@@ -55,9 +55,18 @@ import { decisionAnswers } from "./slice-decision";
  * (only agent nodes render a prompt) is resolveReply's check — it refuses the reply on any
  * other kind, so no renderable-code reply ever lands on a command or worktree node.
  * HOW-14: `context-exhausted` is one — a reply ("skip the docs, just land the migration")
- * is exactly what helps a retry that is re-entering half-done work.
+ * is exactly what helps a retry that is re-entering half-done work. HOW-48's
+ * `paused-by-operator` and HOW-54's `no-progress` are both retried with REPLY_RULES
+ * retryWithReply, so both must render here too — a reply accepted and then never shown to the
+ * agent is the operator's words silently dropped.
  */
-export const RENDERABLE_REPLY_CODES: ReadonlySet<ParkCode> = new Set<ParkCode>(["attempt-failed", "executor-threw", "context-exhausted", "stuck", "turn-timeout"]);
+export const RENDERABLE_REPLY_CODES: ReadonlySet<ParkCode> = new Set<ParkCode>([
+  "attempt-failed", "executor-threw", "context-exhausted", "stuck", "turn-timeout",
+  // HOW-48: the agent stopped where the operator asked; the reply says how to carry on
+  "paused-by-operator",
+  // HOW-54: the repair changed nothing; the reply says what to do differently this time
+  "no-progress",
+]);
 
 /**
  * HOW-38: parks whose REASON is itself a fact the retry needs — the call that kept failing,

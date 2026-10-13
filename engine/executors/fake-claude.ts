@@ -12,6 +12,10 @@
  * that a resolved effort reaches the CLI as `--effort <level>`.
  * FAKE_CLAUDE_DROP_OUTPUTS=1 ends the first turn in prose with no contract.
  * FAKE_CLAUDE_QUESTION asks the OPERATOR a question (HOW-25) — see the block below.
+ * FAKE_CLAUDE_TODO=1 writes a TodoWrite plan twice, the second over 400 chars (HOW-49).
+ * FAKE_CLAUDE_STEER=1 holds a tool call open and delivers a steer after it (HOW-47).
+ * FAKE_CLAUDE_TRY_EDIT / FAKE_CLAUDE_TRY_EXIT_PLAN ask permission the way plan mode does (HOW-53).
+ * FAKE_CLAUDE_INIT=<jsonl> replays a captured startup (hooks + init) (HOW-55).
  * FAKE_CLAUDE_CONTEXT (HOW-14), shapes from claude 2.1.283's SDK types, not a captured turn:
  *   compact  emit a `compact_boundary` mid-turn, then finish normally
  *   exceed   end the first turn with `result { is_error: true, result: "Prompt is too long" }`
@@ -57,11 +61,19 @@ async function nextLine(): Promise<string> {
   }
 }
 
+// FAKE_CAPTURE_ARGV=<file>: the argv this binary was spawned with, one JSON array per spawn
+if (process.env.FAKE_CAPTURE_ARGV) appendFileSync(process.env.FAKE_CAPTURE_ARGV, JSON.stringify(process.argv.slice(2)) + "\n");
+
 const userTurn = JSON.parse(await nextLine()) as { message: { content: Array<{ text: string }> } };
 const promptText = userTurn.message.content[0]?.text ?? "";
 if (process.env.FAKE_CAPTURE) appendFileSync(process.env.FAKE_CAPTURE, JSON.stringify(promptText) + "\n");
 
-out({ type: "system", subtype: "init", session_id: "fake-session-0001" });
+// HOW-55: FAKE_CLAUDE_INIT=<jsonl> replays a CAPTURED startup — hook events and the real `init`
+// (adapter/fixtures/claude-init-*.jsonl) — instead of the minimal init, so the environment the
+// executor records comes from what the CLI actually reports
+if (process.env.FAKE_CLAUDE_INIT)
+  for (const line of readFileSync(process.env.FAKE_CLAUDE_INIT, "utf8").split("\n")) { if (line.trim()) process.stdout.write(line + "\n"); }
+else out({ type: "system", subtype: "init", session_id: "fake-session-0001" });
 out({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: "Working on it — " } } });
 out({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: "doing the thing. 🐘" } } });
 
@@ -89,6 +101,8 @@ if (contextMode === "exceed" || exceedOnce) {
 }
 
 if (process.env.FAKE_CLAUDE_ASK === "1") {
+  // FAKE_CLAUDE_ASK_DELAY_MS: think a while first, so a test can act before the ask arrives
+  if (process.env.FAKE_CLAUDE_ASK_DELAY_MS) await Bun.sleep(Number(process.env.FAKE_CLAUDE_ASK_DELAY_MS));
   out({
     type: "control_request",
     request_id: "req-42",
@@ -232,6 +246,98 @@ if (process.env.FAKE_CLAUDE_EDIT === "1") {
   if (hookContext) out({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: ` The hook told me: ${hookContext.replace(/\n/g, " ")}` } } });
 }
 
+/**
+ * HOW-49: FAKE_CLAUDE_TODO=1 keeps a plan the way the real CLI does — a TodoWrite tool call
+ * carrying the WHOLE list, called twice so "the latest one wins" is observable, the second
+ * long enough (>400 chars) that the executor's normal clipping would cut it mid-JSON.
+ */
+if (process.env.FAKE_CLAUDE_TODO === "1") {
+  const todo = (id: string, todos: Array<{ content: string; status: string; activeForm: string }>) => {
+    out({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id, name: "TodoWrite", input: { todos } }] } });
+    out({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: "Todos have been modified successfully." }] } });
+  };
+  todo("toolu_todo_1", [{ content: "Read the ticket", status: "in_progress", activeForm: "Reading the ticket" }]);
+  const long = "x".repeat(120);
+  todo("toolu_todo_2", [
+    { content: "Read the ticket", status: "completed", activeForm: "Reading the ticket" },
+    { content: `Write the derivation ${long}`, status: "in_progress", activeForm: "Writing the derivation" },
+    { content: `Write the panel ${long}`, status: "pending", activeForm: "Writing the panel" },
+    { content: "Commit", status: "pending", activeForm: "Committing" },
+  ]);
+}
+
+/**
+ * HOW-47: FAKE_CLAUDE_STEER=1 — a turn the operator can steer, in the shape the spike recorded
+ * against claude 2.1.296 (adapter/fixtures/claude-steer.jsonl): a Bash tool call is emitted,
+ * the "tool" runs for up to FAKE_CLAUDE_STEER_WAIT_MS, and a user message that arrives on stdin
+ * meanwhile is delivered AFTER the tool_result — echoed back as `user { isReplay: true }`, as
+ * `--replay-user-messages` does — and adopted in the same turn. FAKE_CAPTURE records it like any
+ * other user turn. The tool finishes early once a steer has arrived.
+ */
+if (process.env.FAKE_CLAUDE_STEER === "1") {
+  const toolId = "toolu_fake_steer_01";
+  out({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: toolId, name: "Bash", input: { command: "sleep 5 && echo built" } }] } });
+  const deadline = Date.now() + Number(process.env.FAKE_CLAUDE_STEER_WAIT_MS ?? 5000);
+  let steer: string | null = null;
+  while (Date.now() < deadline && steer === null) {
+    const line = lines.shift();
+    if (line !== undefined) {
+      const msg = JSON.parse(line) as any;
+      if (msg.type === "user") steer = String(msg.message?.content?.[0]?.text ?? "");
+    } else await Bun.sleep(20);
+  }
+  out({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: toolId, content: "built", is_error: false }] } });
+  if (steer !== null) {
+    if (process.env.FAKE_CAPTURE) appendFileSync(process.env.FAKE_CAPTURE, JSON.stringify(steer) + "\n");
+    out({ type: "user", message: { role: "user", content: [{ type: "text", text: steer }] }, isReplay: true });
+    if (steer.startsWith("[OPERATOR STOP")) {
+      /**
+       * HOW-48: a soft stop. The obedient agent (cwc's observed behaviour) says where it is and
+       * ends its turn with NO outputs object. FAKE_CLAUDE_IGNORE_STOP=1 plays the agent that
+       * keeps calling tools anyway, so the executor's hard-stop guard can be exercised.
+       */
+      if (process.env.FAKE_CLAUDE_IGNORE_STOP === "1") {
+        for (let i = 2; i < 8; i++) {
+          out({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: `toolu_fake_more_${i}`, name: "Bash", input: { command: `echo ${i}` } }] } });
+          out({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: `toolu_fake_more_${i}`, content: String(i) }] } });
+          out({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: ` still going ${i}.` } } });
+          await Bun.sleep(30);
+        }
+      } else {
+        const where = " Stopping here as asked. The derivation is written and committed; the panel is not started yet.";
+        out({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: where } } });
+        out({ type: "result", subtype: "success", is_error: false, usage: { input_tokens: 100, output_tokens: 20 }, total_cost_usd: 0.001, result: where.trim() });
+        process.exit(0);
+      }
+    } else out({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: ` Steered: ${steer.split("\n")[1] ?? steer}.` } } });
+  }
+}
+
+/**
+ * HOW-53: FAKE_CLAUDE_TRY_EDIT=1 — the agent tries to change a file, the way plan mode lets it:
+ * NOT refused by the CLI, but routed to the permission-prompt tool as a `can_use_tool` for Edit
+ * (adapter/fixtures/claude-plan-mode-edit.jsonl). Only an `allow` writes `edited.txt` in the cwd,
+ * so a test can prove the change never happened. FAKE_CLAUDE_TRY_EXIT_PLAN=1 then asks for
+ * ExitPlanMode, as a plan-mode agent does at the end (claude-plan-mode-review.jsonl).
+ */
+async function askPermission(id: string, toolName: string, input: Record<string, unknown>, onAllow: () => void) {
+  const toolUseId = `toolu_fake_${id}`;
+  out({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: toolUseId, name: toolName, input }] } });
+  out({ type: "control_request", request_id: id, request: { subtype: "can_use_tool", tool_name: toolName, display_name: toolName, input, tool_use_id: toolUseId } });
+  for (;;) {
+    const line = JSON.parse(await nextLine()) as any;
+    if (line.type !== "control_response" || line.response?.request_id !== id) continue;
+    const decision = line.response?.response;
+    if (decision?.behavior === "allow") onAllow();
+    out({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: toolUseId, content: decision?.behavior === "allow" ? "done" : String(decision?.message ?? "denied"), is_error: decision?.behavior !== "allow" }] } });
+    return;
+  }
+}
+if (process.env.FAKE_CLAUDE_TRY_EDIT === "1")
+  await askPermission("req-edit", "Edit", { file_path: join(process.cwd(), "edited.txt"), old_string: "a", new_string: "b" }, () => writeFileSync(join(process.cwd(), "edited.txt"), "edited"));
+if (process.env.FAKE_CLAUDE_TRY_EXIT_PLAN === "1")
+  await askPermission("req-exit", "ExitPlanMode", { plan: "# Done\nreviewed" }, () => {});
+
 if (process.env.FAKE_CLAUDE_RATELIMIT === "1")
   out({ type: "rate_limit_event", rate_limit: { status: "allowed", remaining: 0.31, resetsAt: "2026-09-13T18:00:00Z" } });
 
@@ -274,6 +380,10 @@ if (scriptPath) {
   }
 }
 
+// FAKE_CLAUDE_HOLD_MS=<ms> keeps the turn LIVE that long after its work and before its result
+// — a turn someone can watch (HOW-49's panel) or steer (HOW-47) while it is still running
+if (process.env.FAKE_CLAUDE_HOLD_MS) await Bun.sleep(Number(process.env.FAKE_CLAUDE_HOLD_MS));
+
 // total_cost_usd is SESSION-CUMULATIVE on the real CLI (adapter/fixtures/claude-turn-cache.jsonl),
 // so a repair turn's result reports the running total, exactly as claude does
 let sessionCost = 0;
@@ -298,6 +408,20 @@ if (process.env.FAKE_CLAUDE_DROP_OUTPUTS === "1" && keys.length) {
   emitResult(`All done.\n{"outputs": ${JSON.stringify(repaired)}}`);
 } else {
   emitResult(`All done.\n{"outputs": ${JSON.stringify(outputs)}}`);
+  /**
+   * HOW-51: FAKE_CLAUDE_REPAIR_OUTPUTS=<json> — if the executor REFUSES what this turn returned
+   * and asks again on the same session, answer the repair turn with these outputs (the repair
+   * text is captured like any user turn). Without a repair turn the executor closes stdin and
+   * this exits as before.
+   */
+  if (process.env.FAKE_CLAUDE_REPAIR_OUTPUTS) {
+    const next = await Promise.race([nextLine(), Bun.sleep(3000).then(() => null)]);
+    if (next) {
+      const repairText = (JSON.parse(next) as { message: { content: Array<{ text?: string }> } }).message.content[0]?.text ?? "";
+      if (process.env.FAKE_CAPTURE) appendFileSync(process.env.FAKE_CAPTURE, JSON.stringify(repairText) + "\n");
+      emitResult(`Fixed.\n{"outputs": ${JSON.stringify({ ...outputs, ...JSON.parse(process.env.FAKE_CLAUDE_REPAIR_OUTPUTS) })}}`);
+    }
+  }
 }
 process.exit(0);
 

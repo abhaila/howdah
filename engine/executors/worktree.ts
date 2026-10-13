@@ -27,6 +27,7 @@ import { probeGit, ghForgeProbe, type ForgeProbe } from "../reconcile";
 import { isMapBuiltin, mapBuiltinExecutor, type MapBuiltinOpts } from "./map";
 import { isLaunchBuiltin, launchBuiltinExecutor, type LaunchBuiltinOpts } from "./launch";
 import { isVerifyBuiltin, verifyBuiltinExecutor, type VerifyBuiltinOpts } from "./verify";
+import { evidenceBuiltinExecutor, isEvidenceBuiltin, type EvidenceBuiltinOpts } from "./evidence";
 import { runShell } from "./shell";
 
 export { type WorktreeRecord, worktreeRecordPath, readWorktreeRecord, effectiveCwd } from "./worktree-record";
@@ -206,12 +207,15 @@ export interface CommandExecutorOpts {
   launch?: LaunchBuiltinOpts;
   /** HOW-12: which command `verify:run` runs for a repo, and its timeout */
   verify?: VerifyBuiltinOpts;
+  /** HOW-52: which preview `evidence:screenshot` starts for a repo */
+  evidence?: EvidenceBuiltinOpts;
 }
 
 export function commandExecutor(opts: CommandExecutorOpts = {}): Executor {
   const mapBuiltins = mapBuiltinExecutor(opts.map);
   const launchBuiltin = launchBuiltinExecutor(opts.launch);
   const verifyBuiltin = verifyBuiltinExecutor({ defaultTimeoutMs: opts.defaultTimeoutMs, ...opts.verify });
+  const evidenceBuiltin = evidenceBuiltinExecutor(opts.evidence);
   return async (args) => {
     const { nodeId, def, visit, cwd, log, reads } = args;
     if (def.kind !== "command") throw new Error("commandExecutor on non-command node");
@@ -223,6 +227,9 @@ export function commandExecutor(opts: CommandExecutorOpts = {}): Executor {
     // HOW-12: `verify:run` runs the workspace's tests and publishes a verdict — a failing suite
     // is evidence for the reviewer, not a failed attempt, so it cannot share the general path
     if (isVerifyBuiltin(def.run)) return verifyBuiltin(args);
+    // HOW-52: `evidence:screenshot` starts the preview and captures it — same rule as verify:
+    // a preview that will not come up is evidence for the reviewer, not a failed attempt
+    if (isEvidenceBuiltin(def.run)) return evidenceBuiltin(args);
     const workDir = effectiveCwd(log.path, cwd);
     const declared = Object.keys(def.writes ?? {});
     let index = 0;

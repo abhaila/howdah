@@ -46,8 +46,8 @@ describe("versioned suffix builders (system-map 0.1)", () => {
     expect(v1.outputContract([])).toBe(V1_SUMMARY_ONLY);
   });
 
-  test("the current version is 5 and buildOutputInstruction is its contract builder", () => {
-    expect(SUFFIX_VERSION).toBe(5);
+  test("the current version is 7 and buildOutputInstruction is its contract builder", () => {
+    expect(SUFFIX_VERSION).toBe(7);
     expect(buildOutputInstruction(["a", "b"])).toBe(V1_CONTRACT);
   });
 
@@ -80,6 +80,55 @@ describe("versioned suffix builders (system-map 0.1)", () => {
       expect(suffixBuilders(v)!.reentryInstruction).toBeUndefined();
       expect(() => assemblePrompt({ body: "x", reentryAfterVisit: 1, skills: [], outputKeys: [], suffixVersion: v }))
         .toThrow(new RegExp(`suffix version ${v} has no re-entry builder`));
+    }
+  });
+
+  test("v6 is v5 plus the carried-steer builder (HOW-47): everything else byte-identical, steer pinned literally", () => {
+    const v5 = suffixBuilders(5)!;
+    const v6 = suffixBuilders(6)!;
+    expect(v6.skillHint(["review"])).toBe(v5.skillHint(["review"]));
+    expect(v6.outputContract(["a"])).toBe(v5.outputContract(["a"]));
+    expect(v6.replyInstruction!("x")).toBe(v5.replyInstruction!("x"));
+    expect(v6.refusalInstruction!("x")).toBe(v5.refusalInstruction!("x"));
+    expect(v6.reentryInstruction!(2)).toBe(v5.reentryInstruction!(2));
+    expect(v6.steerInstruction!(["use the helper in core/"])).toBe(
+      "\n\n## Operator steering\nWhile an earlier step was running, the operator sent this instruction. " +
+        "It did not reach that step before it finished, so take it into account here:\n- use the helper in core/",
+    );
+    expect(v6.steerInstruction!(["one", "two\nlines"])).toBe(
+      "\n\n## Operator steering\nWhile an earlier step was running, the operator sent these instructions. " +
+        "They did not reach that step before it finished, so take them into account here:\n- one\n- two\n  lines",
+    );
+    for (const v of [1, 2, 3, 4, 5]) {
+      expect(suffixBuilders(v)!.steerInstruction).toBeUndefined();
+      expect(() => assemblePrompt({ body: "x", steerMessages: ["s"], skills: [], outputKeys: [], suffixVersion: v }))
+        .toThrow(new RegExp(`suffix version ${v} has no steer builder`));
+    }
+    // an empty list renders nothing, under any version — "no steers" is not a suffix
+    expect(assemblePrompt({ body: "x", steerMessages: [], skills: [], outputKeys: [], suffixVersion: 1 })).toBe(
+      assemblePrompt({ body: "x", skills: [], outputKeys: [], suffixVersion: 1 }),
+    );
+  });
+
+  test("v7 is v6 plus the stop-resume builder (HOW-48): everything else byte-identical, briefing pinned literally", () => {
+    const v6 = suffixBuilders(6)!;
+    const v7 = suffixBuilders(7)!;
+    expect(v7.skillHint(["review"])).toBe(v6.skillHint(["review"]));
+    expect(v7.outputContract(["a"])).toBe(v6.outputContract(["a"]));
+    expect(v7.replyInstruction!("x")).toBe(v6.replyInstruction!("x"));
+    expect(v7.refusalInstruction!("x")).toBe(v6.refusalInstruction!("x"));
+    expect(v7.reentryInstruction!(2)).toBe(v6.reentryInstruction!(2));
+    expect(v7.steerInstruction!(["s"])).toBe(v6.steerInstruction!(["s"]));
+    expect(v7.stopResumeInstruction!("Tests pass.\nNext: the panel.")).toBe(
+      "\n\n## Resuming after an operator stop\n" +
+        "The operator stopped the previous visit of this step at a tool boundary, and it ended its turn there. " +
+        "Its last message said where the work stood:\n> Tests pass.\n> Next: the panel.\n" +
+        "Pick up from there: check `git status` and `git log --oneline -10` against that account, then continue rather than starting over.",
+    );
+    for (const v of [1, 2, 3, 4, 5, 6]) {
+      expect(suffixBuilders(v)!.stopResumeInstruction).toBeUndefined();
+      expect(() => assemblePrompt({ body: "x", stopResumeMessage: "m", skills: [], outputKeys: [], suffixVersion: v }))
+        .toThrow(new RegExp(`suffix version ${v} has no stop-resume builder`));
     }
   });
 

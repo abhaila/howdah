@@ -136,7 +136,7 @@ describe("engine: a context-exhausted attempt parks, never hops, and the retry r
     const [first, second] = renders(events, "implement");
     expect(first).not.toHaveProperty("reentry_after_visit");
     expect(second).toMatchObject({ visit: 2, reentry_after_visit: 1, suffix_version: SUFFIX_VERSION });
-    expect(SUFFIX_VERSION).toBe(5);
+    expect(SUFFIX_VERSION).toBeGreaterThanOrEqual(4); // the briefing is v4; later versions keep it
     expect(renderedHash(retry)).toBe(second!.rendered_hash);
 
     const rebuilt = reconstructRender(dir, second!.rendered_hash);

@@ -37,11 +37,18 @@
  * The port compared against is the BOUND one (server.port), so port 0 works and a port
  * change cannot lock the UI out of its own writes.
  */
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { readLog } from "../log/write";
 import { deriveDetail, deriveSummary, deriveTimeline, runDigest, snapshotIndex, sortRuns, type RunSummary, type SnapshotIndex } from "./derive";
+import { LiveGitHub, liveTargetOf } from "./live-git";
+import { softStop, steer } from "../engine/steer";
+import { SOFT_STOP_ESCALATE_MS } from "../core/steer";
+import { isEvidencePath } from "../core/evidence";
+import { waiveCriterion } from "../engine/acceptance-decision";
+import { replayState } from "../engine/replay";
+import { BoardCache, boardRow } from "./board";
 import { currentProposal } from "../engine/slice-decision";
 import { loadSnapshot } from "../engine/slice-map";
 import { MapStore, defaultStoreDir } from "../map/store";
@@ -120,6 +127,8 @@ export interface ServerOpts {
    * interactive `claude auth login`, which a test run must never do to the machine running it.
    */
   openTerminal?: (argv: string[]) => void;
+  /** HOW-49: how often a watched live step's worktree is probed; small in tests */
+  liveGitIntervalMs?: number;
 }
 
 /** A prompt id as the library names files (`prompts/<id>.md`) — no separators, no traversal. */
@@ -200,6 +209,22 @@ export function createHowdahServer(opts: ServerOpts) {
       Bun.spawn(["bun", join(import.meta.dir, "..", "cli", "main.ts"), "resume", id], {
         stdout: "ignore", stderr: "ignore", env: { ...process.env },
       }).unref());
+  /**
+   * HOW-49: the live worktree probe. Only a run with a step in flight AND a proven runner is a
+   * target — a dead run's worktree is not "live", and the rail's reconciler reading already
+   * covers it. Subscribers are the run's SSE streams, so nobody watching means no git spawns.
+   */
+  const liveGit = new LiveGitHub({
+    intervalMs: opts.liveGitIntervalMs,
+    target: (rid) => {
+      const p = logPath(opts.runsDir, rid);
+      if (!existsSync(p) || !runnerAlive(join(opts.runsDir, rid))) return null;
+      const events = readLog(p);
+      const started = events.find((e) => e.type === "run-started");
+      return liveTargetOf(events, effectiveCwd(p, started?.type === "run-started" ? started.cwd : undefined));
+    },
+  });
+  const board = new BoardCache();
   const launchTerminal =
     opts.openTerminal ??
     ((argv: string[]) => Bun.spawn(argv, { stdout: "ignore", stderr: "ignore" }).unref());
@@ -598,6 +623,43 @@ export function createHowdahServer(opts: ServerOpts) {
           folders: Object.entries(c.folders).map(([name, f]) => ({ name, ...f })),
         });
       }
+      /**
+       * HOW-50: ONE stream for the whole board, not a poll per row. It watches each run log's
+       * SIZE (a stat, no read) and says which runs changed; the client refetches the board,
+       * whose incremental fold then reads only the appended bytes. A runner dying writes
+       * nothing, so liveness is not visible here — the client keeps a slow safety refresh.
+       */
+      if (url.pathname === "/api/board/events") {
+        let timer: ReturnType<typeof setInterval>;
+        const sizes = new Map<string, number>();
+        const scan = (): string[] => {
+          const changed: string[] = [];
+          const seen = new Set<string>();
+          for (const rid of listRunIds(opts.runsDir)) {
+            seen.add(rid);
+            let size = -1;
+            try { size = statSync(logPath(opts.runsDir, rid)).size; } catch { /* removed mid-scan */ }
+            if (sizes.get(rid) !== size) { sizes.set(rid, size); changed.push(rid); }
+          }
+          for (const rid of [...sizes.keys()]) if (!seen.has(rid)) { sizes.delete(rid); changed.push(rid); }
+          return changed;
+        };
+        const stream = new ReadableStream({
+          start(controller) {
+            controller.enqueue(": connected\n\n");
+            scan(); // the baseline: the client already has the board it just fetched
+            timer = setInterval(() => {
+              try {
+                const changed = scan();
+                if (changed.length) controller.enqueue(`data: ${JSON.stringify({ changed })}\n\n`);
+              } catch { /* the runs dir is mid-change: the next tick sees it */ }
+            }, pollMs * 2);
+          },
+          cancel() { clearInterval(timer); },
+        });
+        return new Response(stream, { headers: { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" } });
+      }
+
       if (url.pathname === "/api/runs" && req.method === "POST") {
         // launch: hand off to the CLI, detached — the viewer never owns an engine loop
         const body = (await req.json()) as LaunchBody;
@@ -617,6 +679,44 @@ export function createHowdahServer(opts: ServerOpts) {
         return json({ id: runId }, 202);
       }
 
+      /**
+       * HOW-51: waive an acceptance criterion — a human decision, appended under the log lock
+       * (engine/acceptance-decision.ts). When it was the last one holding delivery and the run
+       * is parked on the gate, the runner is resumed, as a slice decision resumes it: the waiver
+       * alone answers that park. 409 with the refusal's own words otherwise.
+       */
+      const aw = url.pathname.match(/^\/api\/runs\/([^/]+)\/acceptance\/waive$/);
+      if (aw && req.method === "POST") {
+        const runId = aw[1]!;
+        const runDir = join(opts.runsDir, runId);
+        const body = (await req.json().catch(() => ({}))) as { criterion?: unknown; reason?: unknown };
+        const r = waiveCriterion(runDir, String(body.criterion ?? ""), String(body.reason ?? ""));
+        if (!r.ok) return json({ error: r.message }, 409);
+        const parked = replayState(readLog(join(runDir, "run.jsonl"))).parked;
+        const resumed = r.remaining === 0 && parked?.code === "acceptance-unmet" && !runnerAlive(runDir);
+        if (resumed) launchResume(runId);
+        return json({ ok: true, appended: r.appended, remaining: r.remaining, resumed }, 202);
+      }
+
+      /**
+       * HOW-52: a run's evidence files (screenshots, console.txt, preview.log). Only paths that
+       * core/evidence.ts isEvidencePath accepts — under evidence/, no `..`, an allowed extension —
+       * and only once the resolved file is still inside that run's evidence folder, so a crafted
+       * path or a symlink cannot read anything else off the disk.
+       */
+      const ef = url.pathname.match(/^\/api\/runs\/([^/]+)\/file\/(evidence\/.+)$/);
+      if (ef && req.method === "GET") {
+        const rel = decodeURIComponent(ef[2]!);
+        if (!isEvidencePath(rel)) return json({ error: "not an evidence file" }, 400);
+        const root = join(opts.runsDir, ef[1]!, "evidence");
+        const target = join(opts.runsDir, ef[1]!, rel);
+        let real: string;
+        try { real = realpathSync(target); } catch { return json({ error: "no such evidence file" }, 404); }
+        if (!real.startsWith(realpathSync(root) + sep)) return json({ error: "not an evidence file" }, 400);
+        const type = rel.endsWith(".png") ? "image/png" : "text/plain; charset=utf-8";
+        return new Response(Bun.file(real), { headers: { "content-type": type, "cache-control": "no-cache" } });
+      }
+
       // the rendered prompt for one turn, rebuilt from the pinned template and proven by
       // re-hashing (T21) — the log stores the hash, never the text, so this is the only
       // honest way to show what the agent actually read (R3.1)
@@ -627,7 +727,7 @@ export function createHowdahServer(opts: ServerOpts) {
         return render ? json(render) : json({ error: "no such render, or its pinned prompt is gone" }, 404);
       }
 
-      const m = url.pathname.match(/^\/api\/runs(?:\/([^/]+)(?:\/(events|reply|open-ide|open-run-folder|harness-login|resume|pause|abort|jump|ask|comments|approval|redesign|effects))?)?$/);
+      const m = url.pathname.match(/^\/api\/runs(?:\/([^/]+)(?:\/(events|reply|open-ide|open-run-folder|harness-login|resume|pause|abort|jump|steer|soft-stop|ask|comments|approval|redesign|effects))?)?$/);
       if (!m) {
         // static: /public assets by name, everything else → the app shell.
         // no-cache: this is a local app whose bundle changes constantly — the browser must
@@ -641,9 +741,20 @@ export function createHowdahServer(opts: ServerOpts) {
       const [, id, sub] = m;
 
       if (!id) {
-        const runs = listRunIds(opts.runsDir).map((rid) => {
-          const events = readLog(logPath(opts.runsDir, rid));
-          return withRunnerLiveness(deriveSummary(rid, events), events, join(opts.runsDir, rid));
+        // HOW-50: the board. Each run's log is folded incrementally (web/board.ts) — a tick
+        // re-reads only what was appended — so hundreds of runs stay cheap on every refresh.
+        const ids = listRunIds(opts.runsDir);
+        board.retain(ids.map((rid) => logPath(opts.runsDir, rid)));
+        const runs = ids.map((rid) => {
+          const p = logPath(opts.runsDir, rid);
+          const fold = board.fold(p);
+          const started = fold.events.find((e) => e.type === "run-started");
+          return boardRow(rid, fold, {
+            // the run's own repo: a removed worktree's commits still live in its object store
+            cwd: started?.type === "run-started" ? started.cwd : undefined,
+            commits: (cwd, base, head) => board.commitsBetween(cwd, base, head),
+            liveness: (summary, events) => withRunnerLiveness(summary, events, join(opts.runsDir, rid)),
+          });
         });
         return json(sortRuns(runs));
       }
@@ -829,6 +940,30 @@ export function createHowdahServer(opts: ServerOpts) {
         return json({ ok: true }, 202);
       }
 
+      /**
+       * HOW-47: steer a running agent. Not spawned — appending the steer IS the whole write, and
+       * the runner's executor delivers it — so the refusal (not running, parked, paused, dead
+       * runner, no steer channel on this harness) comes straight back from the one precheck the
+       * CLI shares. 409: the request is fine, the run is not in a state that can take it.
+       */
+      if (sub === "steer" && req.method === "POST") {
+        const body = (await req.json().catch(() => ({}))) as { text?: unknown };
+        const sent = steer(join(opts.runsDir, id), typeof body.text === "string" ? body.text : "");
+        if (!sent.ok) return json({ error: sent.message }, 409);
+        return json({ ok: true, seq: sent.seq, node: sent.node, visit: sent.visit }, 202);
+      }
+
+      /**
+       * HOW-48: "stop at the next tool call" — the soft pause. Like a steer it is only a log
+       * append (the runner's executor delivers it), so it is answered in-process with the shared
+       * precheck's words. Asking twice for one turn is idempotent.
+       */
+      if (sub === "soft-stop" && req.method === "POST") {
+        const sent = softStop(join(opts.runsDir, id));
+        if (!sent.ok) return json({ error: sent.message }, 409);
+        return json({ ok: true, node: sent.node, visit: sent.visit, already: sent.already }, 202);
+      }
+
       if (sub === "ask" && req.method === "POST") {
         const body = (await req.json().catch(() => ({}))) as { question?: string };
         const question = (body.question ?? "").trim();
@@ -874,9 +1009,13 @@ export function createHowdahServer(opts: ServerOpts) {
       if (sub === "events") {
         let since = Number(url.searchParams.get("since") ?? 0);
         let timer: ReturnType<typeof setInterval>;
+        let unwatch: () => void = () => {};
         const stream = new ReadableStream({
           start(controller) {
             controller.enqueue(": connected\n\n"); // flush headers so clients resolve immediately
+            // HOW-49: a NAMED event, so the client's log-event handler never mistakes it for
+            // a run event — and it is never written anywhere, only sent to who is watching
+            unwatch = liveGit.subscribe(id, (g) => controller.enqueue(`event: git-live\ndata: ${JSON.stringify(g)}\n\n`));
             const push = () => {
               try {
                 for (const e of readLog(path).filter((e) => e.seq > since)) {
@@ -892,6 +1031,7 @@ export function createHowdahServer(opts: ServerOpts) {
           },
           cancel() {
             clearInterval(timer);
+            unwatch();
           },
         });
         return new Response(stream, {
@@ -910,22 +1050,26 @@ export function createHowdahServer(opts: ServerOpts) {
       } catch {
         /* a graph with conflicting scopes throws; the rest of the run view still renders */
       }
-      const detail = deriveDetail(id, events, declarations, { snapshot: baseIndex(join(opts.runsDir, id), events) });
-      detail.summary = withRunnerLiveness(detail.summary, events, join(opts.runsDir, id));
-      const target = effectiveCwd(path, detail.identity.cwd ?? undefined);
       const runDir = join(opts.runsDir, id);
+      // probed ONCE: the rail's "runner alive" and the turn states (HOW-46) must read the same answer
+      const alive = runnerAlive(runDir);
+      const detail = deriveDetail(id, events, declarations, { snapshot: baseIndex(runDir, events), runnerAlive: alive });
+      detail.summary = withRunnerLiveness(detail.summary, events, runDir);
+      const target = effectiveCwd(path, detail.identity.cwd ?? undefined);
       const wt = readWorktreeRecord(runDir);
       detail.persistence = {
         home,
         run_dir: runDir,
         log_path: path,
         worktree_path: wt?.path ?? null,
-        runner_alive: runnerAlive(runDir),
+        runner_alive: alive,
       };
       return json({
         ...detail,
         cwd_exists: target ? existsSync(target) : false,
         editor_configured: Boolean(loadConfig().editorCommand),
+        // HOW-48: when the header offers to escalate a soft stop that has not taken effect
+        soft_stop_escalate_ms: loadConfig().softStopEscalateMs ?? SOFT_STOP_ESCALATE_MS,
       });
     },
   });

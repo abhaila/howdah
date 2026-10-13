@@ -899,6 +899,9 @@ main { flex: 1; min-width: 0; min-height: 0; overflow: hidden; display: flex; fl
 .act-prompt-id { color: var(--fg); }
 .act-prompt-read { color: var(--fg-faint); font-size: var(--type-xs); }
 .act-note { font-size: var(--type-xs); color: var(--status-failed-recoverable); }
+/* HOW-46: a turn streaming on a live runner — activity, not alarm; amber once it goes quiet */
+.act-live { display: flex; align-items: center; gap: 6px; font-size: var(--type-xs); color: var(--status-running); }
+.act-live.quiet { color: var(--attention); }
 .act-note-quiet { font-size: var(--type-xs); color: var(--fg-faint); font-style: italic; }
 
 /* one line, opening to the whole thing */
@@ -992,3 +995,138 @@ main { flex: 1; min-width: 0; min-height: 0; overflow: hidden; display: flex; fl
   mask-image: linear-gradient(to bottom, black 70%, transparent);
 }
 .doc-reader { max-height: 72vh; overflow-y: auto; padding-right: 6px; font-size: var(--type-body); color: var(--fg); }
+
+/* HOW-49: the live progress panel — what is done, what is next, what landed on disk. Pinned
+   at the top of Chat and repeated as a rail section while the newest step's turn is live. */
+.progress-panel { display: flex; flex-direction: column; gap: 10px; font-size: var(--type-sm); }
+.progress-panel[data-variant="pinned"] {
+  margin: 0 0 12px; padding: 10px 12px; border: 1px solid var(--border);
+  border-radius: var(--radius-sm); background: var(--bg-inset);
+}
+.pp-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.pp-step { font-family: var(--font-mono); color: var(--fg); }
+.pp-live { font-size: var(--type-xs); color: var(--status-running); }
+.pp-live[data-quiet="true"] { color: var(--attention); }
+.pp-block { display: flex; flex-direction: column; gap: 5px; }
+.pp-label { display: flex; align-items: center; gap: 6px; font-size: var(--type-xs); color: var(--fg-faint); text-transform: uppercase; letter-spacing: 0.08em; }
+.pp-plan, .pp-commits { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
+.pp-item { display: flex; align-items: flex-start; gap: 7px; color: var(--fg-muted); line-height: 1.4; }
+.pp-item svg { flex: none; margin-top: 3px; }
+.pp-item span { min-width: 0; overflow-wrap: anywhere; }
+/* pinned above the transcript, a 20-item plan must not push the conversation off screen */
+.progress-panel[data-variant="pinned"] .pp-plan { max-height: 9.5em; overflow-y: auto; }
+.pp-item[data-status="completed"] { color: var(--fg-faint); text-decoration: line-through; }
+.pp-item[data-status="in_progress"] { color: var(--fg); font-weight: 600; }
+.pp-git { display: flex; flex-wrap: wrap; gap: 4px 14px; color: var(--fg-muted); }
+.pp-commit { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 8px; font-size: var(--type-xs); color: var(--fg-muted); }
+.pp-subject { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pp-age { color: var(--fg-faint); }
+.pp-empty { font-size: var(--type-xs); color: var(--fg-faint); font-style: italic; }
+
+/* HOW-50: the runs board. The name is the column that gives; the vital signs keep fixed
+   widths so a long run name can never squeeze them. Narrow: vitals drop under the name. */
+.board-group { margin-bottom: 18px; }
+.board-group-head {
+  display: flex; align-items: baseline; gap: 8px; margin: 0 0 4px; padding: 0 10px;
+  font-size: var(--type-xs); letter-spacing: 0.09em; text-transform: uppercase; color: var(--fg-faint);
+}
+.board-group-head[data-group="needs-you"] { color: var(--attention); }
+.run-row.board-row {
+  display: grid; grid-template-columns: 130px minmax(0, 1fr) auto; column-gap: 12px;
+  height: auto; min-height: 30px; padding: 3px 10px;
+}
+.board-vitals { display: flex; align-items: center; gap: 12px; font-size: var(--type-sm); color: var(--fg-muted); }
+.board-vitals > span { flex: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bv-step { width: 250px; }
+.bv-step-text { display: block; overflow: hidden; text-overflow: ellipsis; }
+.bv-node { font-family: var(--font-mono); font-size: var(--type-xs); color: var(--fg); }
+.bv-activity { width: 104px; }
+.bv-activity[data-quiet="true"] { color: var(--attention); }
+.bv-cost { width: 64px; text-align: right; font-variant-numeric: tabular-nums; }
+.bv-commits { width: 78px; }
+.bv-pr { width: 86px; }
+.bv-faint { color: var(--fg-faint); }
+.home-strip-note { color: var(--fg-muted); }
+@media (max-width: 1100px) {
+  .run-row.board-row { grid-template-columns: 130px minmax(0, 1fr); }
+  .board-vitals { grid-column: 2; flex-wrap: wrap; row-gap: 2px; }
+  .bv-step { width: auto; max-width: 100%; }
+}
+
+/* HOW-47: steering. The composer's mode is EXPLICIT (HOW-27: a box never silently changes
+   target) — a two-option switch that exists only while a turn is live, and steer mode recolours
+   the box and its send control so which target it has is visible before Enter is pressed. */
+.chat-mode { display: inline-flex; gap: 2px; padding: 2px; border-radius: 999px; background: var(--bg-inset); }
+.chat-mode-option { border-radius: 999px; }
+.chat-mode-option[aria-pressed="true"] { background: var(--bg-raised); color: var(--fg); }
+.chat-input[data-mode="steer"] { border-color: var(--attention); }
+.chat-send[data-mode="steer"] { background: var(--attention); color: var(--bg); }
+.chat-steer-error { margin-top: 6px; }
+/* the operator's own words to the agent, where they landed */
+.cv-steer {
+  display: flex; align-items: flex-start; gap: 7px; margin: 8px 0 8px 48px;
+  padding: 7px 10px; border-radius: var(--radius-sm); font-size: var(--type-sm); line-height: 1.5;
+  background: var(--attention-bg); border: 1px solid var(--border);
+}
+.cv-steer svg { flex: none; margin-top: 4px; color: var(--attention); }
+.cv-steer-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.cv-steer-label { font-size: var(--type-xs); color: var(--fg-faint); text-transform: uppercase; letter-spacing: 0.08em; }
+.cv-steer-text { color: var(--fg); white-space: pre-wrap; overflow-wrap: anywhere; }
+.cv-steer-state { font-size: var(--type-xs); color: var(--fg-muted); }
+.cv-steer[data-state="pending"] .cv-steer-state { color: var(--attention); }
+.cv-steer[data-state="carried"] { background: var(--bg-inset); }
+
+/* HOW-48: the soft stop is the primary action on a live turn; the hard one sits in a menu with
+   a line saying how they differ, and an overdue soft stop offers it inline */
+.run-soft-stop { font-weight: 600; }
+.run-menu-wrap { position: relative; display: inline-flex; }
+.run-menu {
+  position: absolute; top: calc(100% + 4px); left: 0; z-index: 20; width: 300px;
+  display: flex; flex-direction: column; gap: 6px; padding: 8px;
+  background: var(--bg-raised); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  border-color: var(--border-strong);
+}
+.run-menu-item { justify-content: flex-start; }
+.run-menu-note { margin: 0; font-size: var(--type-xs); line-height: 1.5; color: var(--fg-muted); }
+.run-escalate { display: inline-flex; align-items: center; gap: 8px; font-size: var(--type-xs); color: var(--attention); }
+
+/* HOW-52: the Evidence strip — what the harness saw of the change, per step */
+.ev-strip { margin: 10px 0; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-raised); }
+.ev-strip[data-outcome="failed"], .ev-strip[data-outcome="not-checked"] { background: var(--bg-inset); }
+.ev-head { display: flex; align-items: center; gap: 7px; font-size: var(--type-sm); color: var(--fg-muted); }
+.ev-count { margin-left: auto; font-size: var(--type-xs); color: var(--fg-faint); }
+.ev-reason { margin-top: 4px; font-size: var(--type-xs); color: var(--fg-muted); }
+.ev-thumbs { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+.ev-thumb { position: relative; display: flex; flex-direction: column; align-items: stretch; gap: 3px; width: 168px; height: auto; padding: 4px; white-space: normal; }
+.ev-thumb img { width: 160px; height: 100px; object-fit: cover; object-position: top left; border: 1px solid var(--border); border-radius: var(--radius-xs); }
+.ev-thumb-path { font-family: var(--font-mono); font-size: var(--type-xs); color: var(--fg-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
+.ev-thumb-errors { position: absolute; top: 8px; right: 8px; display: inline-flex; align-items: center; gap: 3px; padding: 1px 5px; border-radius: 999px; font-size: var(--type-xs); background: var(--status-failed-recoverable); color: var(--bg); }
+.ev-lightbox { width: min(1100px, 92vw); }
+.ev-lightbox-body { display: flex; flex-direction: column; gap: 6px; }
+.ev-lightbox-body img { width: 100%; border: 1px solid var(--border); border-radius: var(--radius-xs); }
+.ev-console { margin: 0; padding: 8px; max-height: 160px; overflow: auto; font-size: var(--type-xs); background: var(--bg-inset); border-radius: var(--radius-xs); white-space: pre-wrap; }
+.pp-evidence { width: 100%; max-width: 280px; border: 1px solid var(--border); border-radius: var(--radius-xs); }
+
+/* HOW-51: the Acceptance card — red until evidence, green with it, waived on the record,
+   superseded struck through but kept */
+.ac-card { margin: 0 0 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-raised); }
+.ac-card[data-met="false"] { border-color: var(--status-failed-recoverable); }
+.ac-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: var(--type-sm); }
+.ac-title { font-weight: 600; color: var(--fg); }
+.ac-score { color: var(--fg-muted); }
+.ac-by { margin-left: auto; font-size: var(--type-xs); color: var(--fg-faint); }
+.ac-rows { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.ac-row { display: flex; align-items: flex-start; gap: 8px; font-size: var(--type-sm); }
+.ac-row svg { flex: none; margin-top: 3px; }
+.ac-row[data-state="pass"] svg { color: var(--status-running); }
+.ac-row[data-state="fail"] svg { color: var(--status-failed-recoverable); }
+.ac-row[data-state="waived"] svg { color: var(--attention); }
+.ac-row[data-state="superseded"] { color: var(--fg-faint); }
+.ac-row[data-state="superseded"] .ac-text { text-decoration: line-through; }
+.ac-row-body { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.ac-text { color: var(--fg); overflow-wrap: anywhere; }
+.ac-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: var(--type-xs); color: var(--fg-muted); }
+.ac-evidence { overflow-wrap: anywhere; }
+.ac-waived { color: var(--attention); }
+.ac-waive { display: flex; align-items: center; gap: 6px; }
+.ac-waive-open { align-self: flex-start; }
