@@ -663,6 +663,28 @@ describe("a worktree step's reads (HOW-57)", () => {
   });
 });
 
+/** HOW-57 (G5): a wait step's back-off. */
+describe("a wait step's back-off (HOW-57)", () => {
+  const withWait = (backoff?: string[]): GraphSpec => ({
+    ...minimal({ entry: "nap" }),
+    nodes: [{ id: "nap", kind: "wait", duration: "5m", ...(backoff ? { backoff } : {}) }, ...minimal().nodes],
+    edges: [{ from: "nap", to: "draft" }, ...minimal().edges],
+  });
+
+  test("it round-trips through parseGraphSpec and compiles onto the node", () => {
+    const spec = withWait(["15m", "30m"]);
+    const parsed = parseGraphSpec(JSON.parse(JSON.stringify(spec)));
+    expect(parsed.ok && parsed.spec).toEqual(spec);
+    expect(buildGraph(spec).def.nodes.nap).toEqual({ kind: "wait", duration: "5m", backoff: ["15m", "30m"] });
+    expect("backoff" in buildGraph(withWait()).def.nodes.nap!).toBe(false);
+  });
+
+  test("an entry that is not a duration is a problem on that step", () => {
+    const problems = specProblems(withWait(["15m", "later"]));
+    expect(problems.map((p) => [p.node, p.message])).toContainEqual(["nap", expect.stringContaining("back-off that is not a list of durations")]);
+  });
+});
+
 /**
  * HOW-24. A canvas whose steps spring back to an auto-layout on reload is not a canvas, so the
  * arrangement is part of the artifact. It has to be two things at once: carried faithfully by

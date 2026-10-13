@@ -37,9 +37,24 @@ export function parseDuration(spec: string): number {
   return { ms: n, s: n * 1000, m: n * 60_000, h: n * 3_600_000 }[m[2] as "ms" | "s" | "m" | "h"]!;
 }
 
-export const waitExecutor: Executor = async ({ def }) => {
+/**
+ * HOW-57 (G5): the duration a wait sleeps — `[duration, ...backoff]` at the streak of polls
+ * that changed nothing (engine/run.ts waitStreak), capped at the last entry.
+ */
+export function waitDuration(def: { duration: string; backoff?: string[] }, streak = 0): string {
+  const seq = [def.duration, ...(def.backoff ?? [])];
+  return seq[Math.min(Math.max(0, streak), seq.length - 1)]!;
+}
+
+export const waitExecutor: Executor = async ({ def, nodeId, visit, log, waitStreak }) => {
   if (def.kind !== "wait") throw new Error("waitExecutor on non-wait node");
-  await new Promise((r) => setTimeout(r, parseDuration(def.duration)));
+  const chosen = waitDuration(def, waitStreak);
+  if (def.backoff?.length)
+    log.append({
+      type: "chunk", node: nodeId, visit, turn: 1, index: 0, kind: "text",
+      content: `waiting ${chosen}${waitStreak ? ` (nothing changed for ${waitStreak} poll${waitStreak === 1 ? "" : "s"} in a row)` : ""}\n`,
+    });
+  await new Promise((r) => setTimeout(r, parseDuration(chosen)));
   return { status: "succeeded", writes: {} };
 };
 

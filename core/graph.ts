@@ -302,7 +302,17 @@ export type NodeDef<C extends object> =
       writes?: Partial<Record<Keys<C>, OutputSpec>>;
       class?: string;
     }
-  | { kind: "wait"; duration: string; class?: string }
+  | {
+      kind: "wait";
+      duration: string;
+      /**
+       * HOW-57 (G5): longer waits while nothing changes — the sleep is `[duration, ...backoff]`
+       * indexed by how many polls in a row the predecessor reported the same thing (capped at
+       * the last). Absent: every wait is `duration`, exactly as before.
+       */
+      backoff?: string[];
+      class?: string;
+    }
   | ApprovalNodeDef<C>
   | { kind: "terminal"; outcome: "success" | "failed" | "aborted"; label?: string };
 
@@ -470,6 +480,10 @@ export class Graph<C extends object> {
         continue;
       }
       if (outs.length === 0) structural.push(`non-terminal node "${id}" has no outgoing edge (dead end)`);
+      // HOW-57: a back-off entry the wait executor cannot parse would throw mid-run, days in
+      if (node.kind === "wait")
+        for (const d of node.backoff ?? [])
+          if (!/^\d+\s*(ms|s|m|h)$/.test(d)) structural.push(`wait node "${id}" has a back-off entry "${d}" that is not a duration (e.g. "15m")`);
       // no-fallback is legal: all-conditions-fail parks the run as needs-attention
       const fallback = outs.filter((e) => !e.condition);
       if (fallback.length > 1) structural.push(`node "${id}" has ${fallback.length} unconditional edges (ambiguous fallback)`);

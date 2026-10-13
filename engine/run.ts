@@ -114,6 +114,11 @@ export interface ExecArgs {
   /** agent nodes: resolved execution config (run override → node → graph default) */
   agentConfig?: AgentConfig;
   effects: EffectsHandle;
+  /**
+   * wait nodes with a `backoff` (HOW-57, G5): how many polls in a row the node that led here
+   * reported nothing new — derived from the log by waitStreak(), so a resume backs off the same
+   */
+  waitStreak?: number;
 }
 
 export interface AttemptResult {
@@ -243,6 +248,49 @@ export function resolveAgentConfig(
   // HOW-39: and a read-only node never gets the post-edit hook — it makes no edits to check
   const { tools, diagnostics: _diagnostics, ...rest } = resolved;
   return { ...rest, permissionMode: "plan", ...(tools?.deny?.length ? { tools: { deny: tools.deny } } : {}) };
+}
+
+/**
+ * HOW-57 (G5): how many times in a row a wait node has been reached after its predecessor
+ * reported EXACTLY what it reported the time before — 0 when the latest report is new. The
+ * predecessor is whatever routed here last (`edge-taken`), and only its succeeded finishes
+ * that were followed by a visit of this wait count as "in a row": anything else in between,
+ * or a change in what it published, starts the streak again. Read from the log alone.
+ */
+export function waitStreak(events: readonly LoggedEvent[], waitNode: string): number {
+  const entered = events.findLast((e) => e.type === "edge-taken" && e.to === waitNode);
+  if (entered?.type !== "edge-taken") return 0;
+  const from = entered.from;
+  const finishes = events.filter((e) => e.type === "node-finished" && (e.node === from || e.node === waitNode));
+  // newest first: from, wait, from, wait, … — the newest `from` is the report being waited on
+  let streak = -1;
+  let latest: string | undefined;
+  let expectFrom = true;
+  for (let i = finishes.length - 1; i >= 0; i--) {
+    const e = finishes[i]!;
+    if (e.type !== "node-finished") continue;
+    if (expectFrom) {
+      if (e.node !== from || e.status !== "succeeded") break;
+      const writes = stableJson(e.writes);
+      if (latest === undefined) latest = writes;
+      else if (writes !== latest) break;
+      streak++;
+      expectFrom = false;
+    } else {
+      if (e.node !== waitNode) break;
+      expectFrom = true;
+    }
+  }
+  return Math.max(0, streak);
+}
+
+/** JSON with object keys sorted, so two equal reports compare equal whatever their key order. */
+function stableJson(v: unknown): string {
+  return JSON.stringify(v, (_k, x: unknown) =>
+    x && typeof x === "object" && !Array.isArray(x)
+      ? Object.fromEntries(Object.entries(x as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
+      : x,
+  );
 }
 
 /** did the run arrive at `node`'s current visit through an operator-jump (not graph routing)? */
@@ -441,9 +489,17 @@ export class Engine {
   private async loop(startAt: string): Promise<RunState> {
     let current = startAt;
     const maxSteps = this.opts.maxSteps ?? 1000;
-    for (let step = 0; step < maxSteps; step++) {
+    // HOW-57 (G5): a WAIT is time passing, not work — counting it would park a stack that waits
+    // days on a reviewer (1000 steps at 5m is ~41h). Every other node still counts, so a
+    // loop of real work (or a poll, whose command step is real) still stops at maxSteps.
+    let steps = 0;
+    for (;;) {
       const def = this.graph.def.nodes[current];
       if (!def) throw new EngineError(`unknown node: ${current}`);
+      if (def.kind !== "wait") {
+        if (steps >= maxSteps) break;
+        steps++;
+      }
 
       const command = this.opts.control?.() ?? null;
       if (command === "abort") {
@@ -612,6 +668,7 @@ export class Engine {
       runId: basename(this.opts.dir),
       log: this.log,
       reads, renderedPrompt, agentConfig, effects,
+      ...(def.kind === "wait" && def.backoff?.length ? { waitStreak: waitStreak(this.log.read(), nodeId) } : {}),
     });
   }
 

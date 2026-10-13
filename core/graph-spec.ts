@@ -225,7 +225,12 @@ export type NodeSpec =
       /** HOW-57: the stack base a create starts from (`deps.base`, `deps.base_tip`); absent = none */
       reads?: string[];
     })
-  | (NodeBase & { kind: "wait"; duration: string })
+  | (NodeBase & {
+      kind: "wait";
+      duration: string;
+      /** HOW-57 (G5): longer waits while nothing changes (core/graph.ts wait `backoff`) */
+      backoff?: string[];
+    })
   | (NodeBase & { kind: "approval"; proposal: string; base: string; decision: string; feedback: string; redesignTo: string })
   | (NodeBase & { kind: "terminal"; outcome: "success" | "failed" | "aborted"; label?: string });
 
@@ -458,7 +463,7 @@ function compileNode(n: NodeSpec, scopes: Record<string, Scope>, fields: FieldSp
         writes: writesOf(n.writes, scopes, fields), ...cls,
       };
     case "wait":
-      return { kind: "wait", duration: n.duration, ...cls };
+      return { kind: "wait", duration: n.duration, ...(n.backoff?.length ? { backoff: [...n.backoff] } : {}), ...cls };
     case "approval":
       return { kind: "approval", proposal: n.proposal, base: n.base, decision: n.decision, feedback: n.feedback, redesignTo: n.redesignTo, ...cls };
     case "terminal":
@@ -718,6 +723,8 @@ export function specProblems(spec: GraphSpec, opts: { knownPrompts?: readonly st
     if (n.kind === "command" && !n.run.trim()) problems.push({ node: n.id, where: "steps", message: `${who} has no command to run.` });
     if (n.kind === "wait" && !/^\d+\s*(ms|s|m|h)$/.test(n.duration))
       problems.push({ node: n.id, where: "steps", message: `${who} needs a duration like "30 s" or "2 m".` });
+    if (n.kind === "wait" && n.backoff?.some((d) => !/^\d+\s*(ms|s|m|h)$/.test(d)))
+      problems.push({ node: n.id, where: "steps", message: `${who} has a back-off that is not a list of durations like "15m" or "30m".` });
     if (n.kind === "approval" && n.decision === n.feedback)
       problems.push({ node: n.id, where: "steps", message: `${who} uses one field for both the decision and the comments. Give them separate fields.` });
   }
@@ -1088,7 +1095,8 @@ function parseNode(v: unknown): NodeSpec | undefined {
     }
     case "wait": {
       const duration = str(v.duration);
-      return duration === undefined ? undefined : { ...base, kind: "wait", duration };
+      if (duration === undefined) return undefined;
+      return { ...base, kind: "wait", duration, ...(Array.isArray(v.backoff) ? { backoff: strArray(v.backoff) } : {}) };
     }
     case "approval": {
       const [proposal, snapshot, decision, feedback, redesignTo] = [str(v.proposal), str(v.base), str(v.decision), str(v.feedback), str(v.redesignTo)];
