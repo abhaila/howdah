@@ -73,7 +73,7 @@ export type ParkCode =
   /**
    * HOW-48: the operator asked the agent to stop at its next tool call, and it did — it ended
    * its turn where it was. Not a failure and never a contract violation: the agent obeyed. A
-   * reply or resume retries the step, briefed with the agent's own last words (suffix v6).
+   * reply or resume retries the step, briefed with the agent's own last words (suffix v7).
    */
   | "paused-by-operator"
   /**
@@ -205,13 +205,13 @@ export type RunEvent =
       context_sources?: Record<string, string>;
       /**
        * HOW-47: the `operator-steered` events (by seq) this render carries because they never
-       * reached the turn they were sent to (suffix v5+). A suffix INPUT, logged so
+       * reached the turn they were sent to (suffix v6+). A suffix INPUT, logged so
        * reconstruction reads the same texts rather than guessing which steers were pending.
        */
       steers_carried?: number[];
       /**
        * HOW-48: the seq of the `soft-stop-honored` this render briefs the step to resume from
-       * (suffix v6+) — logged so reconstruction reads the same last message.
+       * (suffix v7+) — logged so reconstruction reads the same last message.
        */
       resumed_after_stop?: number;
     }
@@ -618,7 +618,7 @@ export type RunEvent =
       /**
        * HOW-48: the turn ENDED after the stop reached it. `last_message` is the agent's own final
        * words about where it is — the park quotes them, and the step's next visit is rendered
-       * with them (suffix v6 stopResumeInstruction), which is why they are logged here rather
+       * with them (suffix v7 stopResumeInstruction), which is why they are logged here rather
        * than re-read from chunks: reconstruction needs one exact source.
        */
       type: "soft-stop-honored";

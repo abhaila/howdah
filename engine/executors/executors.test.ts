@@ -654,7 +654,7 @@ describe("the prompt proof covers what is sent (system-map 0.1)", () => {
       sent.forEach((text, i) => expect(renderedHash(text)).toBe(renders[i]!.rendered_hash));
       // the contract is inside the proof, not bolted on afterwards
       expect(sent[0]).toContain(buildOutputInstruction(["doc_summary"]));
-      expect(renders[0]).toMatchObject({ output_keys: ["doc_summary"], suffix_version: 6, harness });
+      expect(renders[0]).toMatchObject({ output_keys: ["doc_summary"], suffix_version: 7, harness });
     }, 15000);
   }
 

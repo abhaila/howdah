@@ -460,8 +460,8 @@ Break one of these and the design stops working, so check them before changing t
   a log event (engine/steer.ts, one precheck for route and CLI). The claude executor writes it
   to stdin only while a tool call is in flight, proves delivery by the CLI's
   `--replay-user-messages` echo, and carries an undelivered steer into the next render (suffix
-  v5). A turn that ends after a delivered stop is `paused-by-operator`, never a contract
-  violation; its last words brief the next visit (suffix v6). docs/designs/steer.md has the spike.
+  v6). A turn that ends after a delivered stop is `paused-by-operator`, never a contract
+  violation; its last words brief the next visit (suffix v7). docs/designs/steer.md has the spike.
 - **"Done" is a contract, not prose (HOW-51).** `acceptance` rows start failing; only a READ-ONLY
   node may write them (validate), a flip must cite evidence real in this run (outputs check,
   core/acceptance.ts), and `requiresAcceptance` holds delivery until every live row passes or an

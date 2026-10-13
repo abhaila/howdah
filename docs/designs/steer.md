@@ -48,7 +48,7 @@ from the engine to a hook.
   steer arrives, the executor appends `steer-delivered` with `after_tool_id`, the tool call it
   rode in after. The transcript draws the steer exactly there.
 - **The race.** If the turn ends before another tool call, the steer was never written. The
-  engine carries it into the run's next agent render (suffix v5 `steerInstruction`), logs the
+  engine carries it into the run's next agent render (suffix v6 `steerInstruction`), logs the
   seqs as `prompt-rendered.steers_carried`, and reconstruction reads the same texts, so the
   render stays VERIFIED. If a steer was written but never echoed (a millisecond-wide window
   where the tool finished just as it was written), the executor kills the CLI rather than let

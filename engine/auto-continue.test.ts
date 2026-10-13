@@ -10,6 +10,7 @@ import { cpSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { defineGraph } from "../core/graph";
+import { SUFFIX_VERSION } from "../core/template";
 import { Engine, contextRetriesUsed, type AttemptResult, type EngineOpts, type Executor } from "./run";
 import { claudeExecutor } from "./executors/claude";
 import { contextExhaustedFailure } from "./executors/harness-failure";
@@ -69,7 +70,7 @@ describe("auto-continue after context exhaustion (HOW-43)", () => {
     expect(started(events)).toEqual([1, 2]);
     expect(continued(events)).toEqual([expect.objectContaining({ node: "implement", visit: 1, retry: 1, budget: 1 })]);
     const second = events.find((e) => e.type === "prompt-rendered" && e.visit === 2);
-    expect(second).toMatchObject({ reentry_after_visit: 1, suffix_version: 5 });
+    expect(second).toMatchObject({ reentry_after_visit: 1, suffix_version: SUFFIX_VERSION });
     const rebuilt = reconstructRender(dir, second!.type === "prompt-rendered" ? second!.rendered_hash : "")!;
     expect(rebuilt).toMatchObject({ verified: true });
     expect(rebuilt.text).toContain("### Files modified\n- src/parser.ts");
