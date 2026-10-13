@@ -23,6 +23,9 @@ marked pending until it is MEASURED rather than assumed better.
 Unchanged: goal, work, implementation_plan, implementation_summary, verify.result,
 evidence.items, acceptance — every one already declared by implement-ticket's
 `implementation.local_review`, so the accept guard's undeclared-read check passes.
+`verify.result` arrives, as in v2, through the shared `{{> review._verify_result }}` partial
+(HOW-40) rather than an inline copy, placed at step 3; the proposal records
+`base_includes: {"review._verify_result":1}` so it goes stale if that partial moves.
 
 ## How it is to be judged (open)
 

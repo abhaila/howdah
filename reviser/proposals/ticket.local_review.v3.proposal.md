@@ -2,6 +2,7 @@
 id: ticket.local_review
 base_version: 2
 proposed_version: 3
+base_includes: {"review._verify_result":1}
 status: pending
 created: 2026-10-12T23:59:00.000Z
 ---
@@ -33,9 +34,7 @@ Inspect the complete branch diff against its target, including uncommitted chang
 
 ## 3. What the harness observed: the evidence
 
-The workspace's tests, run by the harness against this code (deterministic — `verify:run`, not an agent). `outcome` is `pass`, `fail` or `not-checked` (nothing was run; `reason` says why); `commit` and `dirty` say what it ran against; `output_tail` is the end of the output:
-
-{{ context.verify.result }}
+{{> review._verify_result }}
 
 Screenshots, captured by the harness from this worktree's own preview:
 

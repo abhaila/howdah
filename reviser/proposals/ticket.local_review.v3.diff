@@ -11,7 +11,7 @@
  User supplied goal:
  
  {{ inputs.goal }}
-@@ -12,56 +16,50 @@
+@@ -12,52 +16,48 @@
  
  {{ context.implementation_plan }}
  
@@ -21,50 +21,45 @@
 -{{ context.implementation_summary }}
 +{{ context.acceptance }}
  
+-{{> review._verify_result }}
 +## 2. What changed: the diff
-+
-+Inspect the complete branch diff against its target, including uncommitted changes, affected code and relevant tests. Read the code; do not infer behaviour from file names or commit messages.
-+
-+## 3. What the harness observed: the evidence
-+
- The workspace's tests, run by the harness against this code (deterministic — `verify:run`, not an agent). `outcome` is `pass`, `fail` or `not-checked` (nothing was run; `reason` says why); `commit` and `dirty` say what it ran against; `output_tail` is the end of the output:
- 
- {{ context.verify.result }}
- 
--A `fail` is a blocking finding: reject, quoting the failing tests from `output_tail`, unless you have verified in the code that every failure predates this change and is outside the work scope. A `not-checked` is never a pass: the code was not run.
-+Screenshots, captured by the harness from this worktree's own preview:
  
 -Screenshot evidence, captured by the harness from this worktree's own preview (it is the harness's record, not the builder's account):
--
- {{ context.evidence.items }}
++Inspect the complete branch diff against its target, including uncommitted changes, affected code and relevant tests. Read the code; do not infer behaviour from file names or commit messages.
+ 
+-{{ context.evidence.items }}
++## 3. What the harness observed: the evidence
  
 -When `outcome` is `captured`, open every item's `abs_path` with the Read tool before you judge anything the change shows on screen. Each item says which path and URL it shows and how many console errors the page logged; `console_abs_path` holds them verbatim. Judge the screens yourself — do not take the implementation summary's word for what they show. A page that logged console errors is a finding unless you have verified the errors predate this change.
-+When `outcome` is `captured`, open every item's `abs_path` with the Read tool before you judge anything the change shows on screen. `console_abs_path` holds the page's console errors verbatim; a page that logged errors is a finding unless you have verified they predate this change.
++{{> review._verify_result }}
  
 -When the change alters what a screen shows and the evidence is `failed` or `not-checked`, or a screen you need is missing or unreadable, that requirement is unverified: reject it as missing evidence, naming the screen and the reason given. A UI change cannot pass on code inspection alone.
-+## 4. Last: the builder's claims, to be checked
++Screenshots, captured by the harness from this worktree's own preview:
  
 -Review the current change against the work scope, goal, plan and applicable repository instructions. Inspect the complete branch diff against its target, including uncommitted changes, affected code and relevant tests.
-+Implementation summary:
++{{ context.evidence.items }}
  
 -Review only requirements and defects that can be verified through automated checks or code inspection. For each rejection, identify the requirement, concrete evidence, required correction and machine-checkable completion condition.
-+{{ context.implementation_summary }}
++When `outcome` is `captured`, open every item's `abs_path` with the Read tool before you judge anything the change shows on screen. `console_abs_path` holds the page's console errors verbatim; a page that logged errors is a finding unless you have verified they predate this change.
  
 -Use the work scope, plan and summary as context. Verify their claims against the code and available evidence.
-+Treat every sentence of it as a claim to verify against steps 2 and 3, not as evidence. Plausibility is not correctness: a summary that says the tests pass, the screen works or the edge case is handled is not evidence that it does. A claim with nothing behind it is a finding.
++## 4. Last: the builder's claims, to be checked
  
 -Reject unmet requirements, correctness or security defects, violations of mandatory repository rules, missing verification of required behaviour and changes made which are outside the work scope. Treat preferences as non-blocking unless repository instructions require them.
-+## Your verdict
++Implementation summary:
  
 -Human reviews, manual acceptance, visual approval and user sign-off are non-blocking. Report them as outstanding without requiring their completion to pass.
-+Return the whole acceptance list as `acceptance`, with every row it already has — same ids, same text:
++{{ context.implementation_summary }}
  
 -Compare each finding with previous reviews and attempted corrections. If the same finding returns without new evidence or a materially different actionable correction, recognise that the review is looping. Do not reject again for that finding. Report the unresolved concern and explain why another repair pass would not advance it
--
++Treat every sentence of it as a claim to verify against steps 2 and 3, not as evidence. Plausibility is not correctness: a summary that says the tests pass, the screen works or the edge case is handled is not evidence that it does. A claim with nothing behind it is a finding.
+ 
 -For each blocking finding, identify the requirement or defect, supporting evidence and the correction needed.
--
++## Your verdict
+ 
 -This step is read-only. Leave files, commits, branches, pull requests and tracker records unchanged.
--
++Return the whole acceptance list as `acceptance`, with every row it already has — same ids, same text:
+ 
 -## The acceptance contract
 -
 -Every criterion below started failing, and stays failing until YOU have evidence it is met:

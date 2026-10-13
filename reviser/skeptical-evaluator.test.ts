@@ -35,7 +35,8 @@ describe("ticket.local_review v3 (the skeptical evaluator)", () => {
   test("reads in cwc's order: ticket + contract, diff, evidence, and the summary LAST as a claim", () => {
     const at = (s: string) => p.body.indexOf(s);
     expect(at("{{ context.acceptance }}")).toBeLessThan(at("## 2. What changed"));
-    expect(at("## 2. What changed")).toBeLessThan(at("{{ context.verify.result }}"));
+    expect(at("## 2. What changed")).toBeLessThan(at("{{> review._verify_result }}"));
+    expect(at("{{> review._verify_result }}")).toBeLessThan(at("{{ context.implementation_summary }}"));
     expect(at("{{ context.evidence.items }}")).toBeLessThan(at("{{ context.implementation_summary }}"));
     expect(p.body).toContain("Plausibility is not correctness");
     expect(p.body).toContain("Missing evidence for any criterion is NEEDS_WORK");
