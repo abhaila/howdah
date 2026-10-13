@@ -185,8 +185,10 @@ main { flex: 1; min-width: 0; min-height: 0; overflow: hidden; display: flex; fl
 }
 .send-state { color: var(--fg-muted); font-size: var(--type-sm); }
 
-/* rail sections — one continuous inspector, not cards */
-.rail section { padding: 18px 0; border-bottom: 1px solid var(--border); }
+/* rail sections — one continuous inspector, not cards. Direct children only (HOW-58): the
+   Acceptance card and the progress panel are <section>s of their own nested in a rail section,
+   and a descendant selector out-specified `.ac-card`, zeroing its inline padding in the rail. */
+.rail > section { padding: 18px 0; border-bottom: 1px solid var(--border); }
 .rail h2 { display: flex; align-items: center; gap: 7px; font-size: var(--type-xs); letter-spacing: 0.09em; color: var(--fg-faint); margin: 0 0 13px; text-transform: uppercase; }
 .tl-row { display: flex; align-items: center; gap: 9px; padding: 4px 0; font-size: var(--type-sm); }
 .tl-node { width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1012,6 +1014,12 @@ main { flex: 1; min-width: 0; min-height: 0; overflow: hidden; display: flex; fl
   border-radius: var(--radius-sm); background: var(--bg-inset);
 }
 .pp-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+/* HOW-58: the pinned panel's head is its disclosure; collapsed, the head line is all there is */
+.progress-panel[data-variant="pinned"] .pp-head { align-items: center; }
+.pp-toggle { height: auto; padding: 2px 4px; margin-left: -4px; gap: 6px; color: var(--fg-muted); }
+.pp-summary { flex: 1; min-width: 0; font-size: var(--type-xs); color: var(--fg-muted); }
+.progress-panel[data-collapsed="true"] { padding-block: 6px; }
+.pp-body { display: flex; flex-direction: column; gap: 10px; }
 .pp-step { font-family: var(--font-mono); color: var(--fg); }
 .pp-live { font-size: var(--type-xs); color: var(--status-running); }
 .pp-live[data-quiet="true"] { color: var(--attention); }
@@ -1117,24 +1125,30 @@ main { flex: 1; min-width: 0; min-height: 0; overflow: hidden; display: flex; fl
 
 /* HOW-51: the Acceptance card — red until evidence, green with it, waived on the record,
    superseded struck through but kept */
-.ac-card { margin: 0 0 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-raised); }
+.ac-card { margin: 0 0 12px; padding: 14px 16px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-raised); }
 .ac-card[data-met="false"] { border-color: var(--status-failed-recoverable); }
-.ac-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: var(--type-sm); }
+/* HOW-58: "judged by" takes its own line, so a long node id wraps inside the 344px rail
+   rather than being pushed past the card's edge by an auto margin */
+.ac-head { display: flex; align-items: center; gap: 4px 8px; flex-wrap: wrap; font-size: var(--type-sm); }
 .ac-title { font-weight: 600; color: var(--fg); }
 .ac-score { color: var(--fg-muted); }
-.ac-by { margin-left: auto; font-size: var(--type-xs); color: var(--fg-faint); }
-.ac-rows { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
-.ac-row { display: flex; align-items: flex-start; gap: 8px; font-size: var(--type-sm); }
+.ac-by { flex-basis: 100%; font-size: var(--type-xs); color: var(--fg-faint); overflow-wrap: anywhere; }
+.ac-rows { list-style: none; margin: 12px 0 0; padding: 0; display: flex; flex-direction: column; }
+.ac-row { display: flex; align-items: flex-start; gap: 10px; padding: 10px 0; font-size: var(--type-sm); }
+.ac-row + .ac-row { border-top: 1px solid var(--border); }
+.ac-row:last-child { padding-bottom: 0; }
 .ac-row svg { flex: none; margin-top: 3px; }
 .ac-row[data-state="pass"] svg { color: var(--status-running); }
 .ac-row[data-state="fail"] svg { color: var(--status-failed-recoverable); }
 .ac-row[data-state="waived"] svg { color: var(--attention); }
 .ac-row[data-state="superseded"] { color: var(--fg-faint); }
 .ac-row[data-state="superseded"] .ac-text { text-decoration: line-through; }
-.ac-row-body { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
-.ac-text { color: var(--fg); overflow-wrap: anywhere; }
-.ac-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: var(--type-xs); color: var(--fg-muted); }
+.ac-row-body { flex: 1; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.ac-text { color: var(--fg); line-height: 1.45; overflow-wrap: anywhere; }
+.ac-meta { display: flex; align-items: center; gap: 4px 8px; flex-wrap: wrap; margin-top: 2px; font-size: var(--type-xs); color: var(--fg-muted); }
 .ac-evidence { overflow-wrap: anywhere; }
 .ac-waived { color: var(--attention); }
-.ac-waive { display: flex; align-items: center; gap: 6px; }
-.ac-waive-open { align-self: flex-start; }
+.ac-waive { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.ac-waive > :first-child { flex: 1 1 160px; min-width: 0; }
+/* no inline padding: the label lines up with the criterion text above it */
+.ac-waive-open { align-self: flex-start; height: auto; margin-top: 2px; padding: 2px 0; }

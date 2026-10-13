@@ -406,7 +406,8 @@ export function RunChat({ runId, detail, ask, onPickStep, onResolved, liveGit = 
             )}
           </div>
           {/* HOW-49: pinned above the transcript while the newest step is live — "where is it
-              at?" answered without scrolling a hundred tool calls. Renders nothing otherwise. */}
+              at?" answered without scrolling a hundred tool calls. Renders nothing otherwise.
+              HOW-58: it collapses to one line, so it never has to block the stream it heads. */}
           <div className="chat-col">
             <ProgressPanel detail={detail} liveGit={liveGit} runId={runId} />
             {/* HOW-57: a stacked run says what it is waiting on, in the await step's own words */}
