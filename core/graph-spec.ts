@@ -49,6 +49,7 @@ import { defaultHarness, harnessSpec, isHarness, toolBaseName } from "./harnesse
 import type { Scope } from "./context";
 import type { Violation } from "./validate";
 import { VERIFY_BUILTIN, VERIFY_PRODUCES } from "./verify";
+import { AWAIT_BUILTIN, AWAIT_PRODUCES, AWAIT_PROBE_PRODUCES, AWAIT_READS } from "./stack";
 import { EVIDENCE_BUILTIN, EVIDENCE_PRODUCES } from "./evidence";
 
 export const SPEC_VERSION = 1;
@@ -282,6 +283,8 @@ export const COMMAND_BUILTINS: Array<{ run: string; label: string; produces: str
   { run: "runs:launch", label: "Launch one run per approved slice", produces: ["launched"], reads: ["plan.slices", "tickets"] },
   { run: VERIFY_BUILTIN, label: "Run the workspace's tests", produces: [...VERIFY_PRODUCES] },
   { run: EVIDENCE_BUILTIN, label: "Screenshot the workspace's preview", produces: [...EVIDENCE_PRODUCES] },
+  // HOW-57: one row, both modes — the executor refuses a step that mixes them (await.ts precheck)
+  { run: AWAIT_BUILTIN, label: "Wait for the slices this one depends on", produces: [...AWAIT_PRODUCES, ...AWAIT_PROBE_PRODUCES], reads: [...AWAIT_READS] },
 ];
 
 /** A worktree CLEAN-UP step emits these two facts and no others (engine/executors/worktree.ts). */

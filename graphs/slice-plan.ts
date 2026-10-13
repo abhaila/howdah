@@ -37,6 +37,8 @@
  *     e.g. the backend's OpenAPI package is published for the frontend to consume.
  */
 
+import { DEP_UNTIL, type DepUntil } from "../core/stack";
+
 export interface Slice {
   /** kebab id, unique in the plan; becomes part of the child run id */
   id: string;
@@ -54,9 +56,7 @@ export interface Slice {
   depends_on: SliceDep[];
 }
 
-/** How far a dependency must get before the dependent slice starts (HOW-57, decision 2A + G10). */
-export type DepUntil = "published" | "merged" | "package";
-export const DEP_UNTIL: readonly DepUntil[] = ["published", "merged", "package"];
+export { DEP_UNTIL, type DepUntil };
 
 export interface SliceDep {
   /** the id of a slice in this plan */

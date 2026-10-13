@@ -561,12 +561,33 @@ export type RunEvent =
       visit: number;
       /** the child's run id (`<parent>--<slice id>`, deterministic so a retry cannot double-launch) */
       child: string;
-      /** the graph the child runs — `implement-ticket` today, named so it stays readable if that changes */
+      /** the graph the child runs — `implement-ticket`, or `implement-stacked` for a slice with dependencies (HOW-57) */
       graph: string;
       slice_id: string;
       /** the tracker identifier the slice was raised as, when there is one */
       ticket?: string;
       workspace?: string;
+    }
+  | {
+      /**
+       * HOW-57: `git:restack` replayed this run's branch from one base onto another — the
+       * stack base MOVED (an unapproved PR follows it) or MERGED (the branch is replayed onto
+       * the default branch, so a squash merge leaves only this run's commits). Appended after
+       * the force-with-lease push succeeded, inside the step's exactly-once effect.
+       *
+       * `from.sha` is the tip the branch was stacked on before; `to.sha` the one it is stacked
+       * on now — the next restack's "recorded tip" (`git rebase --onto <to> <from.sha>`), which
+       * is why this is an event and not a value an agent could write.
+       */
+      type: "base-restacked";
+      node: string;
+      visit: number;
+      from: { branch: string; sha: string };
+      to: { branch: string; sha: string };
+      /** the branch's new head after the replay */
+      head: string;
+      /** this run's PR, when it was retargeted onto `to.branch` */
+      pr?: string;
     }
   | {
       /**

@@ -562,6 +562,11 @@ export interface LogRow {
   merged: number;
 }
 
+/** HOW-57: "restacked onto fe-1 @ abc123456789 (was def…)" — one sentence for the log and the transcript */
+export function restackSummary(e: Pick<Extract<LoggedEvent, { type: "base-restacked" }>, "from" | "to" | "pr">): string {
+  return `restacked ${e.from.branch} @ ${e.from.sha.slice(0, 12)} → ${e.to.branch} @ ${e.to.sha.slice(0, 12)}${e.pr ? ` · ${e.pr} retargeted` : ""}`;
+}
+
 type Chunky = Extract<LoggedEvent, { type: "chunk" }>;
 const isChunk = (e: LoggedEvent): e is Chunky => e.type === "chunk";
 /** a streaming delta — the kinds that arrive in pieces and mean nothing one piece at a time */
@@ -675,6 +680,8 @@ export function deriveLogRows(events: LoggedEvent[]): LogRow[] {
       case "run-spawned":
         return { ...base, ...at(e.node, e.visit), kind: "engine", depth: 0,
           summary: `launched ${e.graph} run ${e.child} for slice ${e.slice_id}${e.ticket ? ` (${e.ticket})` : ""}${e.workspace ? ` in ${e.workspace}` : ""}` };
+      case "base-restacked":
+        return { ...base, ...at(e.node, e.visit), kind: "engine", depth: 0, summary: restackSummary(e) };
       case "map-progress":
         return { ...base, ...at(e.node, e.visit), kind: "engine", depth: 1, summary: `extracting ${e.done}/${e.total} (skipped ${e.skipped})` };
       case "drift-detected": {

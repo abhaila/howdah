@@ -28,8 +28,8 @@
  * built-in `probe:pr` routes through the reconciler: gh is the source, forge-unreachable
  * THROWS (parks the run) rather than reading as "no PR". The map built-ins (map:extract,
  * map:reextract, map:drift — system-map 1c, engine/executors/map.ts) dispatch from here too,
- * as does `runs:launch` (HOW-23, engine/executors/launch.ts) and `verify:run` (HOW-12,
- * engine/executors/verify.ts). The spawn/stream/timeout half lives in ./shell.ts, shared with
+ * as does `runs:launch` (HOW-23, engine/executors/launch.ts), `verify:run` (HOW-12,
+ * engine/executors/verify.ts) and HOW-57's `runs:await` / `git:restack` (await.ts, restack.ts). The spawn/stream/timeout half lives in ./shell.ts, shared with
  * verify:run.
  */
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
@@ -42,6 +42,7 @@ import { isLaunchBuiltin, launchBuiltinExecutor, type LaunchBuiltinOpts } from "
 import { isVerifyBuiltin, verifyBuiltinExecutor, type VerifyBuiltinOpts } from "./verify";
 import { evidenceBuiltinExecutor, isEvidenceBuiltin, type EvidenceBuiltinOpts } from "./evidence";
 import { runShell } from "./shell";
+import { awaitBuiltinExecutor, isAwaitBuiltin, type AwaitBuiltinOpts } from "./await";
 
 export { type WorktreeRecord, worktreeRecordPath, readWorktreeRecord, effectiveCwd } from "./worktree-record";
 
@@ -335,6 +336,8 @@ export interface CommandExecutorOpts {
   verify?: VerifyBuiltinOpts;
   /** HOW-52: which preview `evidence:screenshot` starts for a repo */
   evidence?: EvidenceBuiltinOpts;
+  /** HOW-57: where `runs:await` reads dependency runs from, and the package check it runs */
+  await?: AwaitBuiltinOpts;
 }
 
 export function commandExecutor(opts: CommandExecutorOpts = {}): Executor {
@@ -342,6 +345,7 @@ export function commandExecutor(opts: CommandExecutorOpts = {}): Executor {
   const launchBuiltin = launchBuiltinExecutor(opts.launch);
   const verifyBuiltin = verifyBuiltinExecutor({ defaultTimeoutMs: opts.defaultTimeoutMs, ...opts.verify });
   const evidenceBuiltin = evidenceBuiltinExecutor(opts.evidence);
+  const awaitBuiltin = awaitBuiltinExecutor(opts.await);
   return async (args) => {
     const { nodeId, def, visit, cwd, log, reads } = args;
     if (def.kind !== "command") throw new Error("commandExecutor on non-command node");
@@ -356,6 +360,8 @@ export function commandExecutor(opts: CommandExecutorOpts = {}): Executor {
     // HOW-52: `evidence:screenshot` starts the preview and captures it — same rule as verify:
     // a preview that will not come up is evidence for the reviewer, not a failed attempt
     if (isEvidenceBuiltin(def.run)) return evidenceBuiltin(args);
+    // HOW-57: `runs:await` reads OTHER runs' logs — a stacked run waits on its dependencies
+    if (isAwaitBuiltin(def.run)) return awaitBuiltin(args);
     const workDir = effectiveCwd(log.path, cwd);
     const declared = Object.keys(def.writes ?? {});
     let index = 0;
