@@ -54,7 +54,7 @@
  * rewrites and is unchanged.
  */
 import { useMemo, useState } from "react";
-import { FileOutput, UserRound, HelpCircle, ChevronsDownUp, ChevronsUpDown, ArrowUp, ArrowDown, ArrowUpRight, Hourglass, CircleX, GitCompare, Navigation } from "lucide-react";
+import { FileOutput, UserRound, HelpCircle, ChevronsDownUp, ChevronsUpDown, ArrowUp, ArrowDown, ArrowUpRight, Hourglass, CircleX, GitBranch, GitCompare, Navigation } from "lucide-react";
 import { submitOnEnter } from "@/lib/keys";
 import type { RunDetail, TurnState } from "../../derive";
 import { citeParts } from "../../cite";
@@ -116,7 +116,9 @@ export type ChatMessage =
   | { kind: "evidence"; key: string; entry: RunDetail["evidence"][number] }
   | { kind: "asked"; key: string; reason: string }
   | { kind: "answered"; key: string; text: string }
-  | { kind: "wrote"; key: string; keys: string[] };
+  | { kind: "wrote"; key: string; keys: string[] }
+  /** HOW-57: `git:restack` replayed the branch onto a moved or merged base */
+  | { kind: "restacked"; key: string; text: string };
 
 /** one exchange with the read-only question route — the operator's own side-conversation */
 type AskTurn = { q: string; a: string | null; error?: string; cost?: number };
@@ -176,6 +178,7 @@ export function conversation(detail: RunDetail): ChatMessage[] {
       if (r.node !== row.node || r.visit !== row.visit) continue;
       if (r.type === "attention-raised") out.push({ kind: "asked", key: `ask:${r.seq}`, reason: r.summary });
       else if (r.type === "attention-resolved") out.push({ kind: "answered", key: `ans:${r.seq}`, text: r.summary });
+      else if (r.type === "base-restacked") out.push({ kind: "restacked", key: `restack:${r.seq}`, text: r.summary });
     }
 
     const wrote = detail.context
@@ -243,6 +246,13 @@ function Row({ m, onPickStep, lastActivityAt, runId }: { m: ChatMessage; onPickS
       return (
         <div className="cv-answered">
           <UserRound size={12} aria-hidden />
+          <span>{m.text}</span>
+        </div>
+      );
+    case "restacked":
+      return (
+        <div className="cv-restacked">
+          <GitBranch size={12} aria-hidden />
           <span>{m.text}</span>
         </div>
       );
@@ -399,6 +409,13 @@ export function RunChat({ runId, detail, ask, onPickStep, onResolved, liveGit = 
               at?" answered without scrolling a hundred tool calls. Renders nothing otherwise. */}
           <div className="chat-col">
             <ProgressPanel detail={detail} liveGit={liveGit} runId={runId} />
+            {/* HOW-57: a stacked run says what it is waiting on, in the await step's own words */}
+            {detail.waiting && (
+              <div className="cv-waiting" role="status">
+                <Hourglass size={12} aria-hidden />
+                <span>{detail.waiting}</span>
+              </div>
+            )}
             {/* HOW-51: a finished run's story LEADS with its contract, and so does a run held
                 at the delivery gate — the prose underneath is the account, this is the verdict */}
             {(detail.summary.outcome !== null || detail.ask?.code === "acceptance-unmet") && (

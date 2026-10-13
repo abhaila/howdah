@@ -175,6 +175,13 @@ export interface RunDetail {
    */
   evidence: Array<{ node: string; visit: number; at: string; result: EvidenceResult }>;
   /**
+   * HOW-57: what a stacked run is WAITING on, in `runs:await`'s own words — "waiting on fe-1 ·
+   * published (parked: needs you)" — while it is still waiting; null once its dependencies are
+   * ready, when it finished, and for every run that is not stacked. Never re-derived from the
+   * dependencies here: the viewer reads this run's log, and the await step already read theirs.
+   */
+  waiting: string | null;
+  /**
    * HOW-51: the acceptance contract as it stands — the latest list any node wrote, each row with
    * its waiver (a decision event) when an operator waived it, plus every earlier version's rows
    * that the latest list no longer carries live (superseded rows stay, by the contract's rules).
@@ -502,6 +509,7 @@ export function deriveDetail(
       const result = asEvidenceResult(e.writes[EVIDENCE_KEY]);
       return result ? [{ node: e.node, visit: e.visit, at: e.ts, result }] : [];
     }),
+    waiting: summary.status === "done" || summary.status === "failed-terminal" ? null : latestWaiting(events),
     last_agent_event_at: lastAgent?.ts ?? null,
     renders,
     outcomes: [...outcomesByHash(events).values()],
@@ -560,6 +568,13 @@ export interface LogRow {
    * what says the row stands for more than itself.
    */
   merged: number;
+}
+
+/** HOW-57: the latest `deps.waiting` a step published, when it is non-empty (`""` means ready) */
+export function latestWaiting(events: readonly LoggedEvent[]): string | null {
+  const e = events.findLast((x) => x.type === "node-finished" && x.status === "succeeded" && "deps.waiting" in x.writes);
+  const v = e?.type === "node-finished" ? e.writes["deps.waiting"] : undefined;
+  return typeof v === "string" && v.trim() !== "" ? v : null;
 }
 
 /** HOW-57: "restacked onto fe-1 @ abc123456789 (was def…)" — one sentence for the log and the transcript */

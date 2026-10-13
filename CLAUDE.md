@@ -84,8 +84,9 @@ bun cli/main.ts stop <run-id>                # HOW-48: soft pause — the agent 
 bun cli/main.ts waive <run-id> <criterion> <reason>   # HOW-51: accept an unmet acceptance criterion, on the record
 bun cli/main.ts jump <run-id> <node> [msg]   # move a dead run to a node, injecting an instruction
 bun cli/main.ts up                           # supervisor: heartbeat + resume dead runs
-bun cli/main.ts workspace add|add-github|remove|list|verify|preview|user-settings
+bun cli/main.ts workspace add|add-github|remove|list|verify|preview|user-settings|package-check
                                              # preview <name> "<cmd>" --paths /,/x [--ready-when "<js>"] (HOW-52)
+                                             # package-check <name> "<cmd>": exits 0 once this repo's package is out (HOW-57)
                                              # user-settings <name> on|off: agents load YOUR hooks/plugins/CLAUDE.md (HOW-55)
 bun cli/main.ts new-graph <name> --kind doc|research|code|custom   # writes to $HOWDAH_HOME/graphs
 bun cli/main.ts resume <run-id> --force      # break a runner lock whose holder is NOT this run's runner
@@ -410,8 +411,8 @@ Break one of these and the design stops working, so check them before changing t
   `--force`. `readOnly: true` is applied last and beats everything, the fallback included:
   `plan` for Claude, a read-only sandbox for Codex, no auto-approve flag for cursor.
 - **A parent launches children exactly-once; it never supervises them (HOW-23).** The
-  `runs:launch` built-in fans a `plan-feature` decomposition out into one `implement-ticket`
-  run per approved slice, and then the parent FINISHES. A child is an ordinary independent run
+  `runs:launch` built-in fans a `plan-feature` decomposition out into one run per approved
+  slice — ALL at once — and then the parent FINISHES. A child is an ordinary independent run
   — own worktree, own branch, own PR, own park — and `run-spawned` + `run-started.parent` are
   lineage, not control: nothing routes on them and no cached status of a child is ever stored,
   because the child's own log is the authority on what it did. Launching is the most expensive
@@ -475,18 +476,43 @@ Break one of these and the design stops working, so check them before changing t
 - **A loop that changes nothing parks (HOW-54).** Progress-checked steps (on a cycle, not
   readOnly, not `changesFiles: false`) record `node-finished.tree`, the worktree's content tree
   id; a visit whose tree equals its previous visit's parks `no-progress`.
+- **The child waits; the parent still never supervises (HOW-57).** A slice's `depends_on` is
+  `[{ slice, until: published | merged | package }]` (a bare id means `merged`; at most one
+  `published`, same workspace — it is the stack base). A slice with dependencies is launched as
+  `implement-stacked` (`stackedFrom(implement-ticket)`, a pure spec transform pinned by a drift
+  test) with a `deps` input, and its own first step, `runs:await`, reads each dependency's LOG
+  (`<parent>--<slice>`): a missing dir is "not yet" only while the parent logged `run-spawned`
+  for it, a parked dependency is still waited on, and only a non-success END (failed, aborted,
+  PR closed) parks the dependent. Waits are not steps (`maxSteps` counts every other node) and a
+  wait may `backoff` while its predecessor reports nothing new — derived from the log.
+- **Every worktree branches from what origin has (HOW-57).** `create` fetches and starts from
+  `deps.base` (at `deps.base_tip`) or `origin/<default>`, records the base, its sha and local
+  HEAD, says "your local main is N commits ahead; not used", and with no remote or a failed
+  fetch uses HEAD AS BEFORE and says why (regression-tested). It used to branch from whatever
+  the operator's clone had checked out.
+- **A restack is an exactly-once effect, and an approved PR is not re-pushed because its base
+  moved (HOW-57).** `git:restack` replays `<recorded tip>..HEAD` with `rebase --onto` (the
+  recorded tip is the latest `base-restacked`, else the worktree's base — an event, because an
+  agent cannot write one), pushes this run's branch only, `--force-with-lease`, and retargets
+  the PR. A base that MERGED always restacks onto the default branch; one that MOVED restacks
+  only while this PR is unapproved (`deps.restack`, the one routing fact, outranks CONFLICTS).
+  A conflict aborts and hands the exact `--onto` command to `stacked.resolve_restack`; a
+  teammate's commit on the branch parks rather than being overwritten. Every agent step of a
+  stacked run carries the STACKED briefing (suffix v8, `stacked_on` logged): judge only
+  `<tip>..HEAD`. A stacked publish must name its own PRs as an object, and probe:pr ignores
+  `deps.prs`, or the run would finish when its BASE merged.
 
 ### Module map
 
 | Path | Role |
 |---|---|
-| `core/` | graph schema (`graph.ts`), path validator (`validate.ts`), context store, template/render contract (`template.ts`) + its node-free reference grammar (`template-refs.ts`), the graph-as-data model the builder writes (`graph-spec.ts`), the harness table (`harnesses.ts`), the ask-the-human model (`ask.ts`, HOW-25), generated `prompt-ids.ts` |
-| `graphs/` | the runnable graphs + `index.ts` registry, `local.ts` (the operator's own, from `$HOWDAH_HOME`), `registry.ts` (merged catalog), `typecheck.ts` (tsc gate), `builder.ts` (HOW-22: renders a GraphSpec into a module and saves it transactionally over the graph AND its prompts); `implement-ticket`, `implement-slice` (design on the map → approve → build → drift), `plan-feature` (HOW-23: decompose → approve → ticket each → launch a run each) with its pure `slice-plan.ts` contract, `improve-codebase`, `review-teammate-pr`, `write-doc`, `research`, `quick-task`; `delivery.ts` shared publish/repair half |
+| `core/` | graph schema (`graph.ts`), path validator (`validate.ts`), context store, template/render contract (`template.ts`) + its node-free reference grammar (`template-refs.ts`), the graph-as-data model the builder writes (`graph-spec.ts`), the harness table (`harnesses.ts`), the ask-the-human model (`ask.ts`, HOW-25), the stacked-slice contract (`stack.ts`, HOW-57: the `deps` input and the two built-ins' keys), generated `prompt-ids.ts` |
+| `graphs/` | the runnable graphs + `index.ts` registry, `local.ts` (the operator's own, from `$HOWDAH_HOME`), `registry.ts` (merged catalog), `typecheck.ts` (tsc gate), `builder.ts` (HOW-22: renders a GraphSpec into a module and saves it transactionally over the graph AND its prompts); `implement-ticket`, `implement-slice` (design on the map → approve → build → drift), `plan-feature` (HOW-23: decompose → approve → ticket each → launch a run each) with its pure `slice-plan.ts` contract, `implement-stacked` (HOW-57: `stackedFrom(implement-ticket)` for a slice with dependencies), `improve-codebase`, `review-teammate-pr`, `write-doc`, `research`, `quick-task`; `delivery.ts` shared publish/repair half |
 | `map/` | the code-derived system map (syntactic tier): tree-sitter extraction (`extract.ts`, `facts.ts`, `adapters.ts` + `queries/`), content-addressed store, `assemble.ts` (identity keys, MountResolver), `ghosts.ts` (GhostSet validator), `drift.ts`, `neighbourhood.ts` |
 | `prompts/` | one `.md` per prompt (front-matter `id`/`version`), codegen, `store.ts` (load/list/accept with stale-base + undeclared-read guards), `proposals.ts` (lifecycle + review view), `library.ts` (read model: consumers, feedback, outcome join, render reconstruction) |
 | `log/` | event union (`events.ts`), durable JSONL writer, view-time `coalesce.ts` |
 | `adapter/` | pure harness → `AgentEvent` mappers (`claude.ts`, `codex.ts`, `cursor.ts`, `opencode.ts`), chunk-safe `parse.ts`, `capabilities.ts` matrix |
-| `engine/` | `run.ts` (loop, routing, pinning, effects, attribution), `replay.ts`, `reconcile.ts` (git probes + worktree fingerprint), `attention.ts`, `control.ts` (replies, decisions, runner lock), `slice-decision.ts`, `slice-map.ts`, `executors/` |
+| `engine/` | `run.ts` (loop, routing, pinning, effects, attribution), `replay.ts`, `reconcile.ts` (git probes + worktree fingerprint), `attention.ts`, `control.ts` (replies, decisions, runner lock), `slice-decision.ts`, `slice-map.ts`, `executors/` (HOW-57 adds `await.ts` `runs:await`, `restack.ts` `git:restack` and the leaf `git.ts`) |
 | `cli/` | `main.ts` verbs, `new-graph.ts` scaffolder (writes into `$HOWDAH_HOME`) |
 | `config/` | `config.json` workspaces + settings, `tuning.json` overlay, GitHub repo registration |
 | `web/` | Bun server (read model + reply/launch/control writes, SSE), `derive.ts` read model, React app in `app/`: `main.tsx` is the shell/nav/router only, screens in `app/screens/`, run-detail panes in `app/run/` (Chat is the default: `run/chat.tsx` folds the run into one conversation and carries the standing ask inline, HOW-25; HOW-27 made it ONE scrolling transcript with the composer permanently at its foot — the Transcript/Ask tab split is gone, not moved, and the composer asks the read-only route and never replies to the agent, because one box that silently changes target on whether the run is parked is a box that sends the wrong one), builder in `app/builder/` (HOW-24: `canvas.tsx` + `node-card.tsx` + `edge.tsx` + `palette.tsx` + `properties.tsx`, with `step-form.tsx`/`branching.tsx`/`fields.tsx` as the panel bodies), primitives in `app/components/ui/`, helpers in `app/lib/` |
@@ -518,7 +544,8 @@ the contract, the claude and codex executors ask ONCE more on the same session/t
 from decision events; agent nodes may declare `requires: { approvalOf }` (a pre-start gate
 that also re-checks the live worktree fingerprint) and `readOnly: true` (plan mode that no
 override can raise). Command built-ins beside `probe:pr`: `map:extract`, `map:reextract`,
-`map:drift` (`engine/executors/map.ts`), `runs:launch` (`engine/executors/launch.ts`) and
+`map:drift` (`engine/executors/map.ts`), `runs:launch` (`engine/executors/launch.ts`),
+`runs:await` and `git:restack` (HOW-57, `engine/executors/await.ts` / `restack.ts`) and
 `verify:run` (HOW-12, `engine/executors/verify.ts`), which runs the repo workspace's
 `verifyCommand` (config.json; `workspace add … --verify "<cmd>"` / `workspace verify <name>
 <cmd>`) in the worktree and publishes `verify.result` — `pass`, `fail` (the attempt still
