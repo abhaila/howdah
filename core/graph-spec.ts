@@ -49,7 +49,7 @@ import { defaultHarness, harnessSpec, isHarness, toolBaseName } from "./harnesse
 import type { Scope } from "./context";
 import type { Violation } from "./validate";
 import { VERIFY_BUILTIN, VERIFY_PRODUCES } from "./verify";
-import { AWAIT_BUILTIN, AWAIT_PRODUCES, AWAIT_PROBE_PRODUCES, AWAIT_READS } from "./stack";
+import { AWAIT_BUILTIN, AWAIT_PRODUCES, AWAIT_PROBE_PRODUCES, AWAIT_READS, RESTACK_BUILTIN, RESTACK_PRODUCES, RESTACK_READS } from "./stack";
 import { EVIDENCE_BUILTIN, EVIDENCE_PRODUCES } from "./evidence";
 
 export const SPEC_VERSION = 1;
@@ -276,7 +276,7 @@ export interface GraphSpec {
  * repeated, since core/ may import core/.
  */
 export const COMMAND_BUILTINS: Array<{ run: string; label: string; produces: string[]; reads?: string[] }> = [
-  { run: "probe:pr", label: "Check the pull request", produces: ["pr.state"] },
+  { run: "probe:pr", label: "Check the pull request", produces: ["pr.state", "pr.approved"] },
   { run: "map:extract", label: "Extract the system map", produces: ["map.base", "map.neighbourhood", "slice.drift", "review_findings"] },
   { run: "map:reextract", label: "Re-extract the system map", produces: ["map.after"] },
   { run: "map:drift", label: "Compare the map against the approved design", produces: ["slice.drift"] },
@@ -285,6 +285,7 @@ export const COMMAND_BUILTINS: Array<{ run: string; label: string; produces: str
   { run: EVIDENCE_BUILTIN, label: "Screenshot the workspace's preview", produces: [...EVIDENCE_PRODUCES] },
   // HOW-57: one row, both modes — the executor refuses a step that mixes them (await.ts precheck)
   { run: AWAIT_BUILTIN, label: "Wait for the slices this one depends on", produces: [...AWAIT_PRODUCES, ...AWAIT_PROBE_PRODUCES], reads: [...AWAIT_READS] },
+  { run: RESTACK_BUILTIN, label: "Restack onto the moved or merged base", produces: [...RESTACK_PRODUCES], reads: [...RESTACK_READS] },
 ];
 
 /** A worktree CLEAN-UP step emits these two facts and no others (engine/executors/worktree.ts). */

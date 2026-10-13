@@ -422,8 +422,14 @@ describe("builtinReads — the other half of a built-in's contract", () => {
     expect(missingBuiltinReads(launch(["plan.slices", "tickets", "goal"]))).toEqual([]);
   });
 
+  // HOW-57: runs:await and git:restack read other runs and this run's stack BY NAME, like launch
+  test("runs:await and git:restack name their reads too", () => {
+    expect(builtinReads({ id: "c", kind: "command", run: "runs:await", reads: [], writes: [] })).toEqual(["deps"]);
+    expect(builtinReads({ id: "c", kind: "command", run: "git:restack", reads: [], writes: [] })).toEqual(["deps.base", "deps.base_merged", "pr.approved"]);
+  });
+
   test("every other built-in works from its cwd, so its reads are the operator's own business", () => {
-    for (const b of COMMAND_BUILTINS.filter((x) => x.run !== "runs:launch"))
+    for (const b of COMMAND_BUILTINS.filter((x) => !["runs:launch", "runs:await", "git:restack"].includes(x.run)))
       expect(builtinReads({ id: "c", kind: "command", run: b.run, reads: [], writes: [] }), b.run).toBeUndefined();
     expect(builtinReads({ id: "c", kind: "command", run: "./ci.sh", reads: [], writes: [] })).toBeUndefined();
     expect(builtinReads({ id: "a", kind: "agent", prompt: "x.a", reads: [], writes: [] })).toBeUndefined();

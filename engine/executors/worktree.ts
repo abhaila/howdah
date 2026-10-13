@@ -42,26 +42,18 @@ import { isLaunchBuiltin, launchBuiltinExecutor, type LaunchBuiltinOpts } from "
 import { isVerifyBuiltin, verifyBuiltinExecutor, type VerifyBuiltinOpts } from "./verify";
 import { evidenceBuiltinExecutor, isEvidenceBuiltin, type EvidenceBuiltinOpts } from "./evidence";
 import { runShell } from "./shell";
+import { remoteDefaultBranch, revParse, sh } from "./git";
 import { awaitBuiltinExecutor, isAwaitBuiltin, type AwaitBuiltinOpts } from "./await";
+import { isRestackBuiltin, restackBuiltinExecutor, type RestackBuiltinOpts } from "./restack";
 
 export { type WorktreeRecord, worktreeRecordPath, readWorktreeRecord, effectiveCwd } from "./worktree-record";
-
-function sh(cmd: string[], cwd?: string, timeoutMs?: number): { code: number; stdout: string; stderr: string } {
-  const r = Bun.spawnSync(cmd, {
-    cwd, stdout: "pipe", stderr: "pipe",
-    // never let git sit on a credential prompt nobody can answer
-    env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
-    ...(timeoutMs ? { timeout: timeoutMs } : {}),
-  });
-  return { code: r.exitCode ?? 1, stdout: new TextDecoder().decode(r.stdout), stderr: new TextDecoder().decode(r.stderr) };
-}
 
 /** How long a worktree create waits on `git fetch` before branching from HEAD instead. */
 export const FETCH_TIMEOUT_MS = 60_000;
 
 /** The ref and sha a new worktree branch starts from, and what the operator should be told. */
 export interface WorktreeBase {
-  /** what was passed to `git worktree add` as the start point */
+  /** what the branch starts from, by name: `origin/main`, the stack base's branch, or `HEAD` */
   ref: string;
   sha: string;
   /** the clone's HEAD at the time — recorded beside the base, never used as it */
@@ -71,11 +63,6 @@ export interface WorktreeBase {
   /** thread lines: which base, and why when it is not the one asked for */
   notes: string[];
 }
-
-const revParse = (repo: string, ref: string): string | null => {
-  const r = sh(["git", "rev-parse", "--verify", "--quiet", `${ref}^{commit}`], repo);
-  return r.code === 0 ? r.stdout.trim() || null : null;
-};
 
 /**
  * Decide where a new worktree branch starts (HOW-57, decision C). Throws only for a stack base
@@ -113,7 +100,7 @@ export function resolveWorktreeBase(repo: string, opts: { stackBase?: string; st
       if (!sha) continue;
       const shown = ref.replace(/^refs\/remotes\//, "").replace(/^refs\/heads\//, "");
       notes.push(`worktree base: stacked on ${branch} @ ${sha.slice(0, 12)} (from ${shown}${ref === opts.stackTip ? ", the tip the dependency published" : ""})`);
-      return { ref: sha, sha, localHead, notes };
+      return { ref: branch, sha, localHead, notes };
     }
     throw new Error(
       `base branch "${branch}" not found on origin${fetched ? "" : " (and the fetch did not succeed)"} or in this clone` +
@@ -122,15 +109,9 @@ export function resolveWorktreeBase(repo: string, opts: { stackBase?: string; st
   }
 
   if (!hasOrigin) return head("no `origin` remote");
-  const candidates = [
-    ...(opts.defaultBranch ? [opts.defaultBranch] : []),
-    sh(["git", "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"], repo).stdout.trim().replace(/^origin\//, ""),
-    "main",
-    "master",
-  ].filter((b) => b !== "");
-  for (const b of candidates) {
-    const sha = revParse(repo, `refs/remotes/origin/${b}`);
-    if (!sha) continue;
+  const remote = remoteDefaultBranch(repo, opts.defaultBranch);
+  if (remote) {
+    const { branch: b, sha } = remote;
     const ref = `origin/${b}`;
     const ahead = localHead ? Number(sh(["git", "rev-list", "--count", `${sha}..${localHead}`], repo).stdout.trim()) || 0 : 0;
     notes.push(`worktree base: ${ref} @ ${sha.slice(0, 12)}${fetched ? "" : " (not refreshed: the fetch failed)"}`);
@@ -313,7 +294,7 @@ function requiredChecksFailed(cwd: string, prRef: string): boolean | null {
 }
 
 /** gh probe with the fields routing needs; unreachable THROWS — absence of evidence parks */
-export const ghPrProbe = (cwd: string, prRef: string): { state: PrState; url: string } | null => {
+export const ghPrProbe = (cwd: string, prRef: string): { state: PrState; url: string; approved?: boolean } | null => {
   const r = sh(["gh", "pr", "view", prRef, "--json", "state,url,mergeable,reviewDecision,statusCheckRollup"], cwd);
   if (r.code !== 0) {
     if (/no pull requests? found/i.test(r.stderr + r.stdout)) return null;
@@ -321,7 +302,7 @@ export const ghPrProbe = (cwd: string, prRef: string): { state: PrState; url: st
   }
   const j = JSON.parse(r.stdout) as { state: string; url: string; mergeable?: string; reviewDecision?: string; statusCheckRollup?: Array<{ conclusion?: string; state?: string }> };
   const failedChecks = requiredChecksFailed(cwd, j.url) ?? (j.statusCheckRollup ?? []).some(isFailedCheck);
-  return { state: derivePrState({ ...j, failedChecks }), url: j.url };
+  return { state: derivePrState({ ...j, failedChecks }), url: j.url, approved: j.reviewDecision === "APPROVED" };
 };
 
 export interface CommandExecutorOpts {
@@ -338,6 +319,8 @@ export interface CommandExecutorOpts {
   evidence?: EvidenceBuiltinOpts;
   /** HOW-57: where `runs:await` reads dependency runs from, and the package check it runs */
   await?: AwaitBuiltinOpts;
+  /** HOW-57: the forge seams and default branch `git:restack` uses */
+  restack?: RestackBuiltinOpts;
 }
 
 export function commandExecutor(opts: CommandExecutorOpts = {}): Executor {
@@ -346,6 +329,7 @@ export function commandExecutor(opts: CommandExecutorOpts = {}): Executor {
   const verifyBuiltin = verifyBuiltinExecutor({ defaultTimeoutMs: opts.defaultTimeoutMs, ...opts.verify });
   const evidenceBuiltin = evidenceBuiltinExecutor(opts.evidence);
   const awaitBuiltin = awaitBuiltinExecutor(opts.await);
+  const restackBuiltin = restackBuiltinExecutor(opts.restack);
   return async (args) => {
     const { nodeId, def, visit, cwd, log, reads } = args;
     if (def.kind !== "command") throw new Error("commandExecutor on non-command node");
@@ -362,6 +346,8 @@ export function commandExecutor(opts: CommandExecutorOpts = {}): Executor {
     if (isEvidenceBuiltin(def.run)) return evidenceBuiltin(args);
     // HOW-57: `runs:await` reads OTHER runs' logs — a stacked run waits on its dependencies
     if (isAwaitBuiltin(def.run)) return awaitBuiltin(args);
+    // HOW-57: `git:restack` rewrites and force-pushes this run's branch — an exactly-once effect
+    if (isRestackBuiltin(def.run)) return restackBuiltin(args);
     const workDir = effectiveCwd(log.path, cwd);
     const declared = Object.keys(def.writes ?? {});
     let index = 0;
@@ -374,7 +360,11 @@ export function commandExecutor(opts: CommandExecutorOpts = {}): Executor {
       const record = readWorktreeRecord(dirname(log.path));
       const branch = record?.branch ?? probeGit(workDir).branch;
       if (!branch) throw new Error("probe:pr: no branch to probe");
-      const refs = publicationPrRefs(reads.publication_summary);
+      // HOW-57 (G2): a stacked run's summary may cite the PRs it is stacked on — they are its
+      // dependencies' to watch, never its own, or it would finish when its base merged
+      const foreign = new Set(Array.isArray(reads["deps.prs"]) ? (reads["deps.prs"] as unknown[]).filter((u): u is string => typeof u === "string") : []);
+      const refs = publicationPrRefs(reads.publication_summary).filter((r) => !foreign.has(r));
+      if (foreign.size) chunk("text", `ignoring ${foreign.size} dependency PR${foreign.size === 1 ? "" : "s"} (deps.prs)`);
       const prRefs = refs.length > 0 ? refs : [branch];
       const probe = opts.prProbe ?? ghPrProbe;
       const prs = prRefs.map((prRef) => {
@@ -394,7 +384,14 @@ export function commandExecutor(opts: CommandExecutorOpts = {}): Executor {
         forge: { kind: "pr", state, url: decider.url },
         disagreements: [],
       });
-      return { status: "succeeded", writes: declared.includes("pr.state") ? { "pr.state": state } : {} };
+      return {
+        status: "succeeded",
+        writes: {
+          ...(declared.includes("pr.state") ? { "pr.state": state } : {}),
+          // HOW-57: every PR of this run approved — what decides whether a moved base restacks it
+          ...(declared.includes("pr.approved") ? { "pr.approved": prs.every((p) => p.approved === true) } : {}),
+        },
+      };
     }
 
     // general command: bash -c, stream stdout, facts from the FINAL JSON line

@@ -331,6 +331,48 @@ describe("probe:pr", () => {
     expect(rec.forge).toEqual({ kind: "pr", state: "CI_FAILED", url: "https://github.com/areeb/x/pull/2" });
   });
 
+  test("HOW-57 G2: a dependency PR cited FIRST is ignored — the run watches only its own", async () => {
+    const repoDir = repo();
+    const runDir = mkdtempSync(join(tmpdir(), "howdah-pr-"));
+    const log = new EventLog(join(runDir, "run.jsonl"));
+    const base = "https://github.com/areeb/x/pull/1";
+    const own = "https://github.com/areeb/x/pull/2";
+    const probed: string[] = [];
+    const exec = commandExecutor({
+      prProbe: (_cwd, ref) => {
+        probed.push(ref);
+        return { state: ref === base ? "MERGED" : "OPEN", url: ref };
+      },
+    });
+    // prose that names the base PR first: without the filter, publicationPrRefs takes it as ours
+    const r = await exec(args({
+      def: { ...prDef, reads: ["publication_summary", "deps.prs"] },
+      log, cwd: repoDir,
+      reads: { publication_summary: { pr_urls: [base, own], primary_pr_url: own }, "deps.prs": [base] },
+    }));
+    expect(probed).toEqual([own]);
+    expect(r.writes).toEqual({ "pr.state": "OPEN" });
+    // and a prose summary whose only link is the base falls back to the run's own branch
+    probed.length = 0;
+    await exec(args({ def: { ...prDef, reads: ["publication_summary", "deps.prs"] }, log, cwd: repoDir, reads: { publication_summary: `stacked on ${base}`, "deps.prs": [base] } }));
+    expect(probed).not.toContain(base);
+  });
+
+  test("HOW-57: pr.approved, when declared, is true only when every PR of the run is approved", async () => {
+    const repoDir = repo();
+    const runDir = mkdtempSync(join(tmpdir(), "howdah-pr-"));
+    const log = new EventLog(join(runDir, "run.jsonl"));
+    const approvals: Record<string, boolean> = { "https://github.com/areeb/x/pull/1": true, "https://github.com/areeb/x/pull/2": false };
+    const exec = commandExecutor({ prProbe: (_cwd, ref) => ({ state: "OPEN", url: ref, approved: approvals[ref] }) });
+    const def = { ...prDef, reads: ["publication_summary"], writes: { ...prDef.writes, "pr.approved": { scope: "per-visit" as const } } };
+    const summary = { pr_urls: Object.keys(approvals) };
+    expect((await exec(args({ def, log, cwd: repoDir, reads: { publication_summary: summary } }))).writes).toEqual({ "pr.state": "OPEN", "pr.approved": false });
+    approvals["https://github.com/areeb/x/pull/2"] = true;
+    expect((await exec(args({ def, log, cwd: repoDir, reads: { publication_summary: summary } }))).writes).toEqual({ "pr.state": "OPEN", "pr.approved": true });
+    // undeclared: not published, exactly as before
+    expect((await exec(args({ def: { ...prDef, reads: ["publication_summary"] }, log, cwd: repoDir, reads: { publication_summary: summary } }))).writes).toEqual({ "pr.state": "OPEN" });
+  });
+
   test("a stack PR that does not exist parks naming it", async () => {
     const repoDir = repo();
     const runDir = mkdtempSync(join(tmpdir(), "howdah-pr-"));
@@ -387,6 +429,7 @@ exit 1
       expect(ghPrProbe(repoDir, "https://github.com/areeb/x/pull/7")).toEqual({
         state: "OPEN",
         url: "https://github.com/areeb/x/pull/7",
+        approved: false, // HOW-57: REVIEW_REQUIRED is not an approval
       });
     } finally {
       process.env.PATH = priorPath;

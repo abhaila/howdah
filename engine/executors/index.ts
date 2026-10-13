@@ -134,6 +134,7 @@ export function liveExecutors(deps: LiveExecutorDeps): EngineOpts["executors"] {
         runsDir: deps.runsDir ?? join(deps.attentionDir, "..", "runs"),
         ...(deps.packageCheckFor ? { packageCheckFor: deps.packageCheckFor } : {}),
       },
+      ...(deps.defaultBranchFor ? { restack: { defaultBranchFor: deps.defaultBranchFor } } : {}),
     }),
     worktree: worktreeExecutor({
       reposDir: deps.reposDir ?? join(deps.attentionDir, "..", "repos"),
