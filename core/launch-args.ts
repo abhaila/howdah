@@ -3,7 +3,8 @@
  *
  * Two callers start runs and neither of them owns an engine loop: the viewer's launch route
  * (`POST /api/runs`) and the `runs:launch` built-in, which fans a `plan-feature` decomposition
- * out into one `implement-ticket` run per approved slice. They were one route and one
+ * out into one run per approved slice (implement-ticket, or implement-stacked for a slice with
+ * dependencies — HOW-57). They were one route and one
  * executor away from each other's flags — so a `--harness` the operator chose would have
  * reached the viewer's runs and silently not the fan-out's.
  *

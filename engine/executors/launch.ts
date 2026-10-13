@@ -1,6 +1,8 @@
 /**
- * `runs:launch` — HOW-23's fan-out built-in: one detached `implement-ticket` run per approved
- * slice of a `plan-feature` decomposition, each with its own worktree, branch, PR and ticket.
+ * `runs:launch` — HOW-23's fan-out built-in: one detached run per approved slice of a
+ * `plan-feature` decomposition, each with its own worktree, branch, PR and ticket. A slice with
+ * no dependencies runs `implement-ticket`; one WITH dependencies runs `implement-stacked`
+ * (HOW-57, G11), handed its dependencies as a `deps` input.
  *
  * It runs IN-PROCESS behind the command executor, beside the map built-ins and `probe:pr`, for
  * the same reasons: a shell command cannot read the node's declared reads, cannot append typed
@@ -9,11 +11,14 @@
  * so the whole point of doing it here is that the engine's intent-before / proof-after record
  * covers it.
  *
- * THE PARENT NEVER SUPERVISES ITS CHILDREN. It launches them and finishes. A child is an
- * ordinary independent run: it parks for its own operator, fails on its own terms and merges
- * its own PR, and nothing in this file waits for any of that. `depends_on` is advisory — it
- * orders the launches and is written into the ticket body as prose. (Wave-gating a dependent
- * slice on its prerequisite's merge is a follow-up, not this ticket.)
+ * THE PARENT NEVER SUPERVISES ITS CHILDREN. It launches them — ALL of them, at once — and
+ * finishes. A child is an ordinary independent run: it parks for its own operator, fails on its
+ * own terms and merges its own PR, and nothing in this file waits for any of that.
+ * `depends_on` is a gate the CHILD keeps (HOW-57, decision 1A): a dependent slice is launched as
+ * `implement-stacked`, whose first step (`runs:await`) reads each dependency's own log until it
+ * has got as far as its `until` — published (and then it stacks on that PR), merged, or merged
+ * with its package out. The parent still only orders the launches, writes the dependencies into
+ * the ticket body, and records which graph each child runs on its `run-spawned`.
  *
  * Exactly-once, three guards deep, because a half-finished fan-out is the failure that costs
  * real money:
@@ -51,14 +56,32 @@ import { launchArgs, type LaunchRequest } from "../../core/launch-args";
 import { normalizeRunName } from "../../core/run-name";
 // the slice-plan contract (the plan, its tickets, and what a launch publishes) is pure data
 // and lives with the graph that declares those keys — no graph imports an executor
+import type { DepRef } from "../../core/stack";
 import { describeDep, validateSlicePlan, type LaunchResult, type Slice, type SlicePlan, type SliceTicket } from "../../graphs/slice-plan";
 
 export type { LaunchResult, SliceTicket };
 
 export const LAUNCH_BUILTIN = "runs:launch";
 
-/** The graph every child runs. Named here rather than inlined: the log records it per child. */
+/** The graph a slice with no dependencies runs. Named here rather than inlined: the log records it per child. */
 export const CHILD_GRAPH = "implement-ticket";
+/** HOW-57: the graph a slice WITH dependencies runs — it waits for them, then stacks or builds. */
+export const STACKED_CHILD_GRAPH = "implement-stacked";
+
+/** The graph `slice` is launched as (G11): the one place the choice is made. */
+export function childGraph(slice: Pick<Slice, "depends_on">): string {
+  return slice.depends_on.length > 0 ? STACKED_CHILD_GRAPH : CHILD_GRAPH;
+}
+
+/**
+ * HOW-57: the `deps` input of a stacked child — each dependency's run id (deterministic, so the
+ * child can find it before it exists) and the workspace it is built in. A JSON STRING, because a
+ * run input travels as argv text (`-i deps=<json>`); core/stack.ts parseDeps reads it back.
+ */
+export function childDeps(slice: Slice, parentRunId: string, workspaceOf: (sliceId: string) => string): string {
+  const deps: DepRef[] = slice.depends_on.map((d) => ({ slice: d.slice, until: d.until, run_id: childRunId(parentRunId, d.slice), workspace: workspaceOf(d.slice) }));
+  return JSON.stringify(deps);
+}
 
 /**
  * The context keys this built-in reads, by NAME — the map built-ins name `map.base` and
@@ -151,11 +174,12 @@ export function launchBuiltinExecutor(opts: LaunchBuiltinOpts = {}): Executor {
         });
         continue;
       }
-      spawn(launchArgs(childRequest(slice, ticket, workspace, checked.plan, runId, overrides), child));
+      const workspaceOf = (id: string) => checked.targets.find((t) => t.slice.id === id)?.workspace ?? workspace;
+      spawn(launchArgs(childRequest(slice, ticket, workspace, checked.plan, runId, overrides, workspaceOf), child));
       effects.done(effect, { child, workspace, ticket: ticket.identifier });
       log.append({
         type: "run-spawned", node: nodeId, visit,
-        child, graph: CHILD_GRAPH, slice_id: slice.id, ticket: ticket.identifier, workspace,
+        child, graph: childGraph(slice), slice_id: slice.id, ticket: ticket.identifier, workspace,
       });
       result.launched.push({ slice_id: slice.id, ticket: ticket.identifier, run_id: child, workspace });
     }
@@ -245,7 +269,7 @@ function precheck(
     if (!workspaces.repoNames().includes(workspace))
       return failed(
         `slice "${slice.id}" would be built in workspace "${workspace}", which is not a registered REPO workspace — ` +
-          `${CHILD_GRAPH} needs one to make a worktree in (registered: ${workspaces.repoNames().join(", ") || "none"})`,
+          `${childGraph(slice)} needs one to make a worktree in (registered: ${workspaces.repoNames().join(", ") || "none"})`,
       );
     targets.push({ slice, ticket, workspace });
   }
@@ -299,10 +323,16 @@ function childRequest(
   plan: SlicePlan,
   parentRunId: string,
   parentOverrides: ParentOverrides,
+  workspaceOf: (sliceId: string) => string,
 ): LaunchRequest {
   const request: LaunchRequest = {
-    graph: CHILD_GRAPH,
-    inputs: { goal: childGoal(slice, plan), work: childWork(slice, ticket, plan) },
+    graph: childGraph(slice),
+    inputs: {
+      goal: childGoal(slice, plan),
+      work: childWork(slice, ticket, plan),
+      // HOW-57: only a stacked child declares `deps` — implement-ticket's inputs are unchanged
+      ...(slice.depends_on.length ? { deps: childDeps(slice, parentRunId, workspaceOf) } : {}),
+    },
     workspace,
     parent: parentRunId,
   };
