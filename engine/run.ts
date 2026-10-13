@@ -1208,10 +1208,13 @@ export class Engine {
       (key) => (key in reads ? reads[key] : this.ctx.get(key, { node: nodeId, visit })),
       { version: RENDER_VERSION, cap: contextCap, exempt: new Set(this.graph.def.inputs), sourceOf: (key) => this.valueSource(priorEvents, key) },
     );
+    // HOW-57 (G8): a stacked run's every agent step judges only its own range
+    const stackedOn = this.stackedOn(nodeId, visit);
     // system-map 0.1: every suffix goes in BEFORE hashing, so the hash covers what is sent
     const skills = skillsForHarness(config?.harness, config?.skills);
     const finalRendered = assemblePrompt({
       body: rendered,
+      ...(stackedOn ? { stackedOn } : {}),
       jumpMessage,
       replyMessage,
       refusalMessage,
@@ -1249,8 +1252,27 @@ export class Engine {
       ...(Object.keys(elided).length ? { context_sources: elided } : {}),
       ...(carried.length ? { steers_carried: carried.map((c) => c.seq) } : {}),
       ...(stopResume ? { resumed_after_stop: stopResume.seq } : {}),
+      ...(stackedOn ? { stacked_on: stackedOn } : {}),
     });
     return finalRendered;
+  }
+
+  /**
+   * HOW-57 (G8): what this run's branch is stacked on — `deps.base` @ `deps.base_tip`, when the
+   * graph publishes them and both are non-empty. A graph that never writes them (every graph but
+   * implement-stacked) is never stacked; neither is a run whose base merged and was replayed
+   * onto the default branch (`git:restack` publishes "" then).
+   */
+  private stackedOn(nodeId: string, visit: number): { branch: string; sha: string } | undefined {
+    const reader = { node: `${nodeId}(stacked)`, visit };
+    try {
+      if (!this.ctx.has("deps.base") || !this.ctx.has("deps.base_tip")) return undefined;
+      const branch = this.ctx.get("deps.base", reader);
+      const sha = this.ctx.get("deps.base_tip", reader);
+      return typeof branch === "string" && branch !== "" && typeof sha === "string" && sha !== "" ? { branch, sha } : undefined;
+    } catch {
+      return undefined; // unreadable here (veiled mid-attempt): not stacked, rather than a crash
+    }
   }
 
   /**

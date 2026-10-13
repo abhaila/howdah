@@ -22,9 +22,11 @@
  *     G7, falling back to its worktree branch) and `deps.prs` (every dependency PR, which
  *     probe:pr then ignores — G2).
  *
- *   PROBE (`deps.base_moved`, `deps.base_merged`) — in the delivery loop. Re-reads the stack
- *     base's primary PR: merged, or its head moved off the tip this branch is stacked on (the
- *     latest `base-restacked`, else the worktree's recorded base).
+ *   PROBE (`deps.base_moved`, `deps.base_merged`, `deps.restack`) — in the delivery loop.
+ *     Re-reads the stack base's primary PR: merged, or its head moved off the tip this branch is
+ *     stacked on (the latest `base-restacked`, else the worktree's recorded base). `deps.restack`
+ *     is what the graph routes on: merged, or moved while THIS run's own PR is not approved
+ *     (decision B) — so it reads this run's PR too, and an approval it cannot read is not one.
  *
  * A forge that cannot be reached is NOT "no PR" (reconcile's rule) — but it is not a park here
  * either: waiting is the safe action, so the run keeps waiting and says the forge is unreachable.
@@ -277,28 +279,55 @@ async function probe(
   events: readonly LoggedEvent[],
 ): Promise<AttemptResult> {
   const { def, reads, log } = args;
-  const produced = (moved: boolean, merged: boolean) => ({ status: "succeeded" as const, writes: declaredWrites(AWAIT_BUILTIN, def, { "deps.base_moved": moved, "deps.base_merged": merged }) });
+  const produced = (moved: boolean, merged: boolean, restack: boolean) => ({
+    status: "succeeded" as const,
+    writes: declaredWrites(AWAIT_BUILTIN, def, { "deps.base_moved": moved, "deps.base_merged": merged, "deps.restack": restack }),
+  });
   const base = stackBaseDep(deps);
   // `deps.base` is "" once a merged base was restacked away: this run is not stacked any more
   const current = typeof reads["deps.base"] === "string" ? (reads["deps.base"] as string) : undefined;
   if (!base || current === "") {
     note(base ? "the stack base already merged and this branch was replayed onto the default branch" : "no stack base");
-    return produced(false, false);
+    return produced(false, false, false);
   }
   const state = await readDependency({ ...base, until: "published" }, ctx);
   const pr = state.primary;
   if (!pr) {
     note(`stack base ${base.slice}: ${state.line}`);
-    return produced(false, false);
+    return produced(false, false, false);
+  }
+  // this run's own PR: a merged or closed one is not restacked, and an approved one only when
+  // its base merged (decision B) — an approval that cannot be read is not one
+  const own = ownPr(args, ctx.prView, note);
+  if (own && own.state !== "OPEN") {
+    note(`this run's PR is ${own.state} — nothing to restack`);
+    return produced(false, pr.state === "MERGED", false);
   }
   if (pr.state === "MERGED") {
     note(`stack base ${base.slice} MERGED (${pr.url})`);
-    return produced(false, true);
+    return produced(false, true, true);
   }
   const recorded = recordedBaseTip(events, dirname(log.path));
   const moved = recorded !== null && pr.headRefOid !== "" && pr.headRefOid !== recorded;
-  note(`stack base ${base.slice} @ ${pr.headRefOid.slice(0, 12)}${moved ? ` — MOVED from ${recorded!.slice(0, 12)}` : " — unchanged"}`);
-  return produced(moved, false);
+  const approved = own?.approved === true;
+  note(
+    `stack base ${base.slice} @ ${pr.headRefOid.slice(0, 12)}${moved ? ` — MOVED from ${recorded!.slice(0, 12)}` : " — unchanged"}` +
+      (moved && approved ? "; this PR is approved, so it is not restacked until the base merges" : ""),
+  );
+  return produced(moved, false, moved && !approved);
+}
+
+/** This run's own primary PR, from its publication (else its branch); null when unreadable. */
+function ownPr(args: ExecArgs, prView: PrView, note: (s: string) => void): PrHead | null {
+  const record = readWorktreeRecord(dirname(args.log.path));
+  if (!record) return null;
+  const ref = publishedPrs(args.reads.publication_summary).primary ?? record.branch;
+  try {
+    return prView(record.repo, ref);
+  } catch (err) {
+    note(`could not read this run's PR (${err instanceof Error ? err.message : String(err)}) — treating it as not approved is unsafe, so a moved base waits`);
+    return { state: "OPEN", url: ref, headRefName: record.branch, headRefOid: "", approved: true };
+  }
 }
 
 /** The mode the node's declaration asks for, or the refusal — before anything is read. */

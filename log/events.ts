@@ -214,6 +214,12 @@ export type RunEvent =
        * (suffix v7+) — logged so reconstruction reads the same last message.
        */
       resumed_after_stop?: number;
+      /**
+       * HOW-57: what this run's branch was stacked on when it rendered (`deps.base` @
+       * `deps.base_tip`, suffix v8+) — the STACKED briefing's input, logged so reconstruction
+       * words the same range even after a restack moved the base.
+       */
+      stacked_on?: { branch: string; sha: string };
     }
   | {
       type: "chunk";

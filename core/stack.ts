@@ -64,8 +64,12 @@ export const AWAIT_BUILTIN = "runs:await";
 export const DEPS_KEY = "deps";
 /** await mode: are the dependencies there yet, and what the run stacks on */
 export const AWAIT_PRODUCES = ["deps.ready", "deps.waiting", "deps.base", "deps.base_tip", "deps.prs"] as const;
-/** probe mode (in the delivery loop): did the stack base move or merge under this PR */
-export const AWAIT_PROBE_PRODUCES = ["deps.base_moved", "deps.base_merged"] as const;
+/**
+ * probe mode (in the delivery loop): did the stack base move or merge under this PR — and
+ * `deps.restack`, the ONE routing fact: merged, or moved while this run's own PR is not approved
+ * (decision B). It is one key because a route tests one key.
+ */
+export const AWAIT_PROBE_PRODUCES = ["deps.base_moved", "deps.base_merged", "deps.restack"] as const;
 export const AWAIT_READS = [DEPS_KEY] as const;
 
 // ---- git:restack --------------------------------------------------------------------------

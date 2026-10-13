@@ -34,6 +34,13 @@
  *           (implementation.local_review, delivery.review_repairs) is `readOnly`.
  *   HOW-54  implement-ticket, implement-slice, improve-codebase: the steps that plan or publish
  *           (implementation.plan_review, delivery.publish) declare `changesFiles: false`.
+ *
+ * ONE ENTRY WAS ADDED BY HAND, 2026-10-13 (HOW-57, decision G9): `implement-stacked` is a NEW
+ * graph, not a conversion, so it has no pre-conversion shape to be faithful to. Its entry was
+ * written from `shapeOf` at the commit that introduced it, inserted in key order, and every
+ * existing entry was left byte-identical (the commit's diff of the fixture is insertions only).
+ * From here on it is pinned like any other: a change to implement-stacked — including one that
+ * arrives through `stackedFrom(implement-ticket)` — moves its entry deliberately or fails here.
  */
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";

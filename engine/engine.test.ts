@@ -623,7 +623,7 @@ describe("render proof covers every suffix (system-map 0.1)", () => {
       expect(handed.startsWith("Implement per g. Prior: p\n")).toBe(true);
       expect(handed.endsWith(buildOutputInstruction(["summary"]))).toBe(true);
       expect(handed.includes("/review")).toBe(harness !== "codex");
-      expect(render).toMatchObject({ skills: harness === "codex" ? [] : ["review"], output_keys: ["summary"], suffix_version: 7 });
+      expect(render).toMatchObject({ skills: harness === "codex" ? [] : ["review"], output_keys: ["summary"], suffix_version: 8 });
     });
   }
 });

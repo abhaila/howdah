@@ -50,7 +50,7 @@ const forge = (...prs: PrHead[]): PrView => (_cwd, ref) => prs.find((p) => p.url
 const dep = (slice: string, until: DepRef["until"]): DepRef => ({ slice, until, run_id: `${PARENT}--${slice}`, workspace: "web" });
 
 const AWAIT_WRITES = { "deps.ready": { scope: "per-visit" }, "deps.waiting": { scope: "per-visit" }, "deps.base": { scope: "sticky" }, "deps.base_tip": { scope: "sticky" }, "deps.prs": { scope: "sticky" } } as const;
-const PROBE_WRITES = { "deps.base_moved": { scope: "per-visit" }, "deps.base_merged": { scope: "per-visit" } } as const;
+const PROBE_WRITES = { "deps.base_moved": { scope: "per-visit" }, "deps.base_merged": { scope: "per-visit" }, "deps.restack": { scope: "per-visit" } } as const;
 
 /** run the built-in as `<parent>--fe-2`, waiting on `deps` */
 async function awaitAs(
@@ -228,7 +228,7 @@ describe("runs:await — refusals before anything is read", () => {
     const h = home();
     const r = await awaitAs(h, [], { writes: { ...AWAIT_WRITES, "deps.base_moved": { scope: "per-visit" } } });
     expect(r.result.status).toBe("failed");
-    expect(r.result.reason).toContain("in probe mode publishes only deps.base_moved, deps.base_merged");
+    expect(r.result.reason).toContain("in probe mode publishes only deps.base_moved, deps.base_merged, deps.restack");
   });
 
   test("unreadable deps fail the attempt with the reason", async () => {
@@ -241,36 +241,55 @@ describe("runs:await — refusals before anything is read", () => {
 });
 
 describe("runs:await probe mode — did the base move or merge?", () => {
-  const setup = (basePr: PrHead, selfEvents: RunEvent[] = []) => {
+  const OWN = "https://github.com/acme/web/pull/2";
+  const setup = (basePr: PrHead, selfEvents: RunEvent[] = [], own?: Partial<PrHead>) => {
     const h = home();
     h.run(`${PARENT}--fe-1`, [started(), ...published({ primary_pr_url: PR1 })]);
     const self = h.run(`${PARENT}--fe-2`, [started({ graph: "implement-stacked" }), ...selfEvents], { branch: "howdah/plan-1--fe-2", base_sha: "a".repeat(40) });
-    return { h, self, prView: forge(basePr) };
+    const mine = own ? [pr({ url: OWN, headRefName: "howdah/plan-1--fe-2", headRefOid: "f".repeat(40), ...own })] : [];
+    return { h, self, prView: forge(basePr, ...mine) };
   };
   const probe = (s: ReturnType<typeof setup>, reads: Record<string, unknown> = { "deps.base": "howdah/plan-1--fe-1" }) =>
     awaitAs(s.h, [dep("fe-1", "published")], { prView: s.prView, self: s.self, writes: PROBE_WRITES, reads });
 
   test("unchanged: the base head is the recorded tip", async () => {
-    expect((await probe(setup(pr()))).writes).toEqual({ "deps.base_moved": false, "deps.base_merged": false });
+    expect((await probe(setup(pr()))).writes).toEqual({ "deps.base_moved": false, "deps.base_merged": false, "deps.restack": false });
   });
 
-  test("moved: the base head differs from the worktree's recorded base", async () => {
-    const { writes, notes } = await probe(setup(pr({ headRefOid: "b".repeat(40) })));
-    expect(writes).toEqual({ "deps.base_moved": true, "deps.base_merged": false });
+  test("moved, and this run's PR is not approved → restack", async () => {
+    const { writes, notes } = await probe(setup(pr({ headRefOid: "b".repeat(40) }), [], { approved: false }));
+    expect(writes).toEqual({ "deps.base_moved": true, "deps.base_merged": false, "deps.restack": true });
     expect(notes).toContain(`MOVED from ${"a".repeat(12)}`);
+  });
+
+  test("B: moved, but this run's PR is approved → moved is reported, and NOT routed to a restack", async () => {
+    const { writes, notes } = await probe(setup(pr({ headRefOid: "b".repeat(40) }), [], { approved: true }));
+    expect(writes).toEqual({ "deps.base_moved": true, "deps.base_merged": false, "deps.restack": false });
+    expect(notes).toContain("this PR is approved, so it is not restacked until the base merges");
+  });
+
+  test("an own PR that cannot be read is treated as approved — a moved base waits rather than force-pushing", async () => {
+    const s = setup(pr({ headRefOid: "b".repeat(40) }));
+    const flaky: PrView = (cwd, ref) => (ref === PR1 || ref === "howdah/plan-1--fe-1" ? s.prView(cwd, ref) : (() => { throw new Error("forge unreachable: offline"); })());
+    const r = await awaitAs(s.h, [dep("fe-1", "published")], { prView: flaky, self: s.self, writes: PROBE_WRITES, reads: { "deps.base": "howdah/plan-1--fe-1" } });
+    expect(r.writes["deps.restack"]).toBe(false);
+  });
+
+  test("this run's own PR already merged or closed → never restacked", async () => {
+    expect((await probe(setup(pr({ state: "MERGED" }), [], { state: "MERGED" }))).writes["deps.restack"]).toBe(false);
   });
 
   test("the latest base-restacked is the recorded tip, not the worktree's original base", async () => {
     const restacked: RunEvent = { type: "base-restacked", node: "restack", visit: 1, from: { branch: "x", sha: "a".repeat(40) }, to: { branch: "x", sha: "b".repeat(40) }, head: "c".repeat(40) };
-    expect((await probe(setup(pr({ headRefOid: "b".repeat(40) }), [restacked]))).writes["deps.base_moved"]).toBe(false);
+    expect((await probe(setup(pr({ headRefOid: "b".repeat(40) }), [restacked]))).writes).toMatchObject({ "deps.base_moved": false, "deps.restack": false });
   });
 
-  test("merged", async () => {
-    expect((await probe(setup(pr({ state: "MERGED", headRefOid: "b".repeat(40) })))).writes).toEqual({ "deps.base_moved": false, "deps.base_merged": true });
+  test("merged → restack, approved or not (the merge is what changes what lands)", async () => {
+    expect((await probe(setup(pr({ state: "MERGED", headRefOid: "b".repeat(40) }), [], { approved: true }))).writes).toEqual({ "deps.base_moved": false, "deps.base_merged": true, "deps.restack": true });
   });
 
   test("after the merge was restacked away (deps.base is \"\") nothing is stacked any more", async () => {
-    expect((await probe(setup(pr({ state: "MERGED" })), { "deps.base": "" })).writes).toEqual({ "deps.base_moved": false, "deps.base_merged": false });
+    expect((await probe(setup(pr({ state: "MERGED" })), { "deps.base": "" })).writes).toEqual({ "deps.base_moved": false, "deps.base_merged": false, "deps.restack": false });
   });
 });
 

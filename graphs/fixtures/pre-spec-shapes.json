@@ -640,6 +640,682 @@
       }
     ]
   },
+  "implement-stacked": {
+    "name": "implement-stacked",
+    "description": "Deliver one ticket stacked on the slices it depends on: wait for them, branch from the base, restack as it moves",
+    "defaults": {
+      "permissionMode": "auto"
+    },
+    "entry": "deps.await",
+    "inputs": [
+      "deps",
+      "goal",
+      "work"
+    ],
+    "nodes": {
+      "cleanup_closed": {
+        "kind": "worktree",
+        "action": "remove",
+        "writes": {
+          "worktree.clean": {
+            "scope": "per-visit"
+          }
+        }
+      },
+      "cleanup_merged": {
+        "kind": "worktree",
+        "action": "remove",
+        "writes": {
+          "worktree.clean": {
+            "scope": "per-visit"
+          }
+        }
+      },
+      "cleanup_pending": {
+        "kind": "terminal",
+        "outcome": "failed",
+        "label": "Worktree retained to preserve local work",
+        "writes": {}
+      },
+      "closed": {
+        "kind": "terminal",
+        "outcome": "aborted",
+        "writes": {}
+      },
+      "complete": {
+        "kind": "terminal",
+        "outcome": "success",
+        "writes": {}
+      },
+      "complete_ticket": {
+        "kind": "agent",
+        "prompt": "complete_ticket",
+        "reads": [
+          "goal",
+          "work",
+          "publication_summary"
+        ],
+        "writes": {
+          "completion_summary": {
+            "scope": "sticky"
+          }
+        }
+      },
+      "create_worktree": {
+        "kind": "worktree",
+        "action": "create",
+        "reads": [
+          "deps.base",
+          "deps.base_tip"
+        ],
+        "writes": {
+          "worktree.verify_command": {
+            "scope": "sticky"
+          }
+        }
+      },
+      "delivery.address_reviews": {
+        "kind": "agent",
+        "prompt": "delivery.address_reviews",
+        "reads": [
+          "goal",
+          "work",
+          "publication_summary",
+          "review_verdict",
+          "review_findings"
+        ],
+        "writes": {
+          "repair_summary": {
+            "scope": "sticky"
+          }
+        },
+        "class": "delivery"
+      },
+      "delivery.fix_ci": {
+        "kind": "agent",
+        "prompt": "delivery.fix_ci",
+        "reads": [
+          "goal",
+          "work",
+          "publication_summary",
+          "review_verdict",
+          "review_findings"
+        ],
+        "writes": {
+          "repair_summary": {
+            "scope": "sticky"
+          }
+        },
+        "class": "delivery"
+      },
+      "delivery.probe_pr": {
+        "kind": "command",
+        "run": "probe:pr",
+        "reads": [
+          "publication_summary",
+          "deps.prs"
+        ],
+        "writes": {
+          "pr.approved": {
+            "scope": "per-visit"
+          },
+          "pr.state": {
+            "scope": "per-visit"
+          }
+        },
+        "class": "delivery"
+      },
+      "delivery.publish": {
+        "kind": "agent",
+        "prompt": "stacked.publish",
+        "reads": [
+          "goal",
+          "work",
+          "acceptance",
+          "deps.base",
+          "deps.prs"
+        ],
+        "writes": {
+          "publication_summary": {
+            "scope": "sticky"
+          }
+        },
+        "maxVisits": 5,
+        "requiresAcceptance": true,
+        "changesFiles": false,
+        "class": "delivery"
+      },
+      "delivery.resolve_conflicts": {
+        "kind": "agent",
+        "prompt": "delivery.resolve_conflicts",
+        "reads": [
+          "goal",
+          "work",
+          "publication_summary"
+        ],
+        "writes": {
+          "repair_summary": {
+            "scope": "sticky"
+          }
+        },
+        "class": "delivery"
+      },
+      "delivery.resolve_restack": {
+        "kind": "agent",
+        "prompt": "stacked.resolve_restack",
+        "reads": [
+          "goal",
+          "work",
+          "publication_summary",
+          "restack.conflict"
+        ],
+        "writes": {
+          "repair_summary": {
+            "scope": "sticky"
+          }
+        },
+        "maxVisits": 3,
+        "class": "delivery"
+      },
+      "delivery.restack": {
+        "kind": "command",
+        "run": "git:restack",
+        "reads": [
+          "deps.base",
+          "deps.base_merged",
+          "pr.approved",
+          "publication_summary"
+        ],
+        "writes": {
+          "deps.base": {
+            "scope": "sticky",
+            "description": "the branch this run is stacked on (\"\" when it is not)"
+          },
+          "deps.base_tip": {
+            "scope": "sticky",
+            "description": "the commit this run's work starts after"
+          },
+          "restack.conflict": {
+            "scope": "per-visit",
+            "description": "the exact git rebase --onto command, when a restack conflicted"
+          }
+        },
+        "class": "delivery"
+      },
+      "delivery.review_repairs": {
+        "kind": "agent",
+        "prompt": "delivery.review_repairs",
+        "reads": [
+          "goal",
+          "work",
+          "publication_summary",
+          "repair_summary"
+        ],
+        "writes": {
+          "review_findings": {
+            "scope": "cleared"
+          },
+          "review_verdict": {
+            "scope": "cleared"
+          }
+        },
+        "readOnly": true,
+        "class": "delivery"
+      },
+      "delivery.revise_repairs": {
+        "kind": "agent",
+        "prompt": "delivery.revise_repairs",
+        "reads": [
+          "goal",
+          "work",
+          "publication_summary",
+          "repair_summary",
+          "review_verdict",
+          "review_findings"
+        ],
+        "writes": {
+          "repair_summary": {
+            "scope": "sticky"
+          }
+        },
+        "maxVisits": 3,
+        "class": "delivery"
+      },
+      "delivery.wait": {
+        "kind": "wait",
+        "duration": "5m",
+        "class": "delivery",
+        "writes": {}
+      },
+      "deps.await": {
+        "kind": "command",
+        "run": "runs:await",
+        "reads": [
+          "deps"
+        ],
+        "writes": {
+          "deps.base": {
+            "scope": "sticky",
+            "description": "the branch this run is stacked on (\"\" when it is not)"
+          },
+          "deps.base_tip": {
+            "scope": "sticky",
+            "description": "the commit this run's work starts after"
+          },
+          "deps.prs": {
+            "scope": "sticky",
+            "description": "every PR of the slices this one depends on — never this run's"
+          },
+          "deps.ready": {
+            "scope": "per-visit"
+          },
+          "deps.waiting": {
+            "scope": "per-visit",
+            "description": "what this run is waiting on, in words"
+          }
+        },
+        "class": "deps"
+      },
+      "deps.probe": {
+        "kind": "command",
+        "run": "runs:await",
+        "reads": [
+          "deps",
+          "deps.base",
+          "publication_summary"
+        ],
+        "writes": {
+          "deps.base_merged": {
+            "scope": "per-visit"
+          },
+          "deps.base_moved": {
+            "scope": "per-visit"
+          },
+          "deps.restack": {
+            "scope": "per-visit",
+            "description": "the base merged, or moved while this PR is unapproved"
+          }
+        },
+        "class": "delivery"
+      },
+      "deps.wait": {
+        "kind": "wait",
+        "duration": "5m",
+        "backoff": [
+          "15m",
+          "30m"
+        ],
+        "class": "deps",
+        "writes": {}
+      },
+      "implementation.criteria": {
+        "kind": "agent",
+        "prompt": "ticket.acceptance",
+        "reads": [
+          "goal",
+          "work",
+          "implementation_plan"
+        ],
+        "writes": {
+          "acceptance": {
+            "scope": "sticky"
+          }
+        },
+        "readOnly": true,
+        "class": "implementation"
+      },
+      "implementation.evidence": {
+        "kind": "command",
+        "run": "evidence:screenshot",
+        "reads": [],
+        "writes": {
+          "evidence.items": {
+            "scope": "per-visit"
+          }
+        },
+        "class": "implementation"
+      },
+      "implementation.implement": {
+        "kind": "agent",
+        "prompt": "implementation.implement",
+        "reads": [
+          "goal",
+          "work",
+          "implementation_plan",
+          "worktree.verify_command"
+        ],
+        "writes": {
+          "implementation_summary": {
+            "scope": "sticky"
+          }
+        },
+        "class": "implementation"
+      },
+      "implementation.implement_review": {
+        "kind": "agent",
+        "prompt": "implementation.implement_review",
+        "reads": [
+          "goal",
+          "work",
+          "implementation_plan",
+          "implementation_summary",
+          "review_verdict",
+          "review_findings"
+        ],
+        "writes": {
+          "implementation_summary": {
+            "scope": "sticky"
+          }
+        },
+        "class": "implementation"
+      },
+      "implementation.local_review": {
+        "kind": "agent",
+        "prompt": "ticket.local_review",
+        "reads": [
+          "goal",
+          "work",
+          "implementation_plan",
+          "implementation_summary",
+          "verify.result",
+          "evidence.items",
+          "acceptance"
+        ],
+        "writes": {
+          "acceptance": {
+            "scope": "sticky"
+          },
+          "review_findings": {
+            "scope": "cleared"
+          },
+          "review_verdict": {
+            "scope": "cleared"
+          }
+        },
+        "readOnly": true,
+        "class": "implementation"
+      },
+      "implementation.plan": {
+        "kind": "agent",
+        "prompt": "implementation.plan",
+        "reads": [
+          "goal",
+          "work"
+        ],
+        "writes": {
+          "implementation_plan": {
+            "scope": "sticky"
+          }
+        },
+        "class": "implementation"
+      },
+      "implementation.plan_review": {
+        "kind": "agent",
+        "prompt": "implementation.plan_review",
+        "reads": [
+          "goal",
+          "work",
+          "implementation_plan",
+          "implementation_summary",
+          "review_verdict",
+          "review_findings"
+        ],
+        "writes": {
+          "implementation_plan": {
+            "scope": "sticky"
+          }
+        },
+        "maxVisits": 3,
+        "changesFiles": false,
+        "class": "implementation"
+      },
+      "verify.run": {
+        "kind": "command",
+        "run": "verify:run",
+        "reads": [],
+        "writes": {
+          "verify.result": {
+            "scope": "per-visit"
+          }
+        },
+        "class": "implementation"
+      }
+    },
+    "edges": [
+      {
+        "from": "deps.await",
+        "to": "create_worktree",
+        "label": "deps.ready == true",
+        "reads": [
+          "deps.ready"
+        ],
+        "rank": 0,
+        "beatsFallback": true
+      },
+      {
+        "from": "deps.await",
+        "to": "deps.wait"
+      },
+      {
+        "from": "deps.wait",
+        "to": "deps.await"
+      },
+      {
+        "from": "create_worktree",
+        "to": "implementation.plan"
+      },
+      {
+        "from": "implementation.plan",
+        "to": "implementation.criteria"
+      },
+      {
+        "from": "implementation.criteria",
+        "to": "implementation.implement"
+      },
+      {
+        "from": "implementation.implement",
+        "to": "verify.run"
+      },
+      {
+        "from": "verify.run",
+        "to": "implementation.evidence"
+      },
+      {
+        "from": "implementation.evidence",
+        "to": "implementation.local_review"
+      },
+      {
+        "from": "implementation.local_review",
+        "to": "implementation.plan_review",
+        "label": "review_verdict == 'reject'",
+        "reads": [
+          "review_verdict"
+        ],
+        "rank": 0,
+        "beatsFallback": true
+      },
+      {
+        "from": "implementation.local_review",
+        "to": "delivery.publish",
+        "label": "review_verdict == 'pass'",
+        "reads": [
+          "review_verdict"
+        ],
+        "rank": 1,
+        "beatsFallback": true
+      },
+      {
+        "from": "implementation.plan_review",
+        "to": "implementation.implement_review"
+      },
+      {
+        "from": "implementation.implement_review",
+        "to": "verify.run"
+      },
+      {
+        "from": "delivery.probe_pr",
+        "to": "delivery.restack",
+        "label": "deps.restack == true",
+        "reads": [
+          "deps.restack"
+        ],
+        "rank": 0,
+        "beatsFallback": true
+      },
+      {
+        "from": "delivery.probe_pr",
+        "to": "complete_ticket",
+        "label": "pr.state == 'MERGED'",
+        "reads": [
+          "pr.state"
+        ],
+        "rank": 1,
+        "beatsFallback": true
+      },
+      {
+        "from": "delivery.probe_pr",
+        "to": "cleanup_closed",
+        "label": "pr.state == 'CLOSED'",
+        "reads": [
+          "pr.state"
+        ],
+        "rank": 2,
+        "beatsFallback": true
+      },
+      {
+        "from": "delivery.probe_pr",
+        "to": "delivery.resolve_conflicts",
+        "label": "pr.state == 'CONFLICTS'",
+        "reads": [
+          "pr.state"
+        ],
+        "rank": 3,
+        "beatsFallback": true
+      },
+      {
+        "from": "delivery.probe_pr",
+        "to": "delivery.address_reviews",
+        "label": "pr.state == 'CHANGES_REQUIRED'",
+        "reads": [
+          "pr.state"
+        ],
+        "rank": 4,
+        "beatsFallback": true
+      },
+      {
+        "from": "delivery.probe_pr",
+        "to": "delivery.fix_ci",
+        "label": "pr.state == 'CI_FAILED'",
+        "reads": [
+          "pr.state"
+        ],
+        "rank": 5,
+        "beatsFallback": true
+      },
+      {
+        "from": "delivery.probe_pr",
+        "to": "delivery.wait"
+      },
+      {
+        "from": "delivery.address_reviews",
+        "to": "delivery.review_repairs"
+      },
+      {
+        "from": "delivery.fix_ci",
+        "to": "delivery.review_repairs"
+      },
+      {
+        "from": "delivery.resolve_conflicts",
+        "to": "delivery.review_repairs"
+      },
+      {
+        "from": "delivery.review_repairs",
+        "to": "delivery.revise_repairs",
+        "label": "review_verdict == 'reject'",
+        "reads": [
+          "review_verdict"
+        ],
+        "rank": 0,
+        "beatsFallback": true
+      },
+      {
+        "from": "delivery.review_repairs",
+        "to": "delivery.publish",
+        "label": "review_verdict == 'pass'",
+        "reads": [
+          "review_verdict"
+        ],
+        "rank": 1,
+        "beatsFallback": true
+      },
+      {
+        "from": "delivery.revise_repairs",
+        "to": "delivery.publish"
+      },
+      {
+        "from": "complete_ticket",
+        "to": "cleanup_merged"
+      },
+      {
+        "from": "cleanup_merged",
+        "to": "complete",
+        "label": "worktree.clean == true",
+        "reads": [
+          "worktree.clean"
+        ],
+        "rank": 0,
+        "beatsFallback": true
+      },
+      {
+        "from": "cleanup_merged",
+        "to": "cleanup_pending"
+      },
+      {
+        "from": "cleanup_closed",
+        "to": "closed",
+        "label": "worktree.clean == true",
+        "reads": [
+          "worktree.clean"
+        ],
+        "rank": 0,
+        "beatsFallback": true
+      },
+      {
+        "from": "cleanup_closed",
+        "to": "cleanup_pending"
+      },
+      {
+        "from": "delivery.publish",
+        "to": "deps.probe"
+      },
+      {
+        "from": "delivery.wait",
+        "to": "deps.probe"
+      },
+      {
+        "from": "deps.probe",
+        "to": "delivery.probe_pr"
+      },
+      {
+        "from": "delivery.restack",
+        "to": "delivery.resolve_restack",
+        "label": "restack.conflict is set",
+        "reads": [
+          "restack.conflict"
+        ],
+        "rank": 0,
+        "beatsFallback": true
+      },
+      {
+        "from": "delivery.restack",
+        "to": "delivery.wait"
+      },
+      {
+        "from": "delivery.resolve_restack",
+        "to": "delivery.review_repairs"
+      }
+    ]
+  },
   "implement-ticket": {
     "name": "implement-ticket",
     "description": "Deliver one ticket through reviewed implementation and a merged PR",

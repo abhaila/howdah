@@ -46,9 +46,37 @@ describe("versioned suffix builders (system-map 0.1)", () => {
     expect(v1.outputContract([])).toBe(V1_SUMMARY_ONLY);
   });
 
-  test("the current version is 7 and buildOutputInstruction is its contract builder", () => {
-    expect(SUFFIX_VERSION).toBe(7);
+  test("the current version is 8 and buildOutputInstruction is its contract builder", () => {
+    expect(SUFFIX_VERSION).toBe(8);
     expect(buildOutputInstruction(["a", "b"])).toBe(V1_CONTRACT);
+  });
+
+  test("v8 (HOW-57) is v7 plus the STACKED briefing: everything else byte-identical, the briefing pinned literally", () => {
+    const v7 = suffixBuilders(7)!;
+    const v8 = suffixBuilders(8)!;
+    expect(v7.stackedInstruction).toBeUndefined();
+    expect(v8.outputContract(["a"])).toBe(v7.outputContract(["a"]));
+    expect(v8.skillHint(["review"])).toBe(v7.skillHint(["review"]));
+    expect(v8.reentryInstruction!(2)).toBe(v7.reentryInstruction!(2));
+    expect(v8.stopResumeInstruction!("x")).toBe(v7.stopResumeInstruction!("x"));
+    const sha = "0123456789abcdef0123456789abcdef01234567";
+    expect(v8.stackedInstruction!({ branch: "howdah/p--fe-1", sha })).toBe(
+      "\n\n## Stacked change\n" +
+        "This change is stacked on howdah/p--fe-1@0123456789ab — another slice's branch, with its own PR. " +
+        "Your change is `0123456789ab..HEAD`: plan, build and judge only that range, and do not modify or review the base's commits. " +
+        "Use `git diff 0123456789ab..HEAD` and `git log 0123456789ab..HEAD` to see it.",
+    );
+  });
+
+  test("v8: the briefing sits right after the body, before every other suffix; a v7 render refuses one", () => {
+    const parts = { body: "BODY", skills: [], outputKeys: ["a"], jumpMessage: "JUMP", stackedOn: { branch: "b", sha: "s".repeat(40) } };
+    const text = assemblePrompt({ ...parts, suffixVersion: 8 });
+    expect(text.startsWith("BODY\n\n## Stacked change\n")).toBe(true);
+    expect(text.indexOf("## Stacked change")).toBeLessThan(text.indexOf("## Operator instruction"));
+    expect(() => assemblePrompt({ ...parts, suffixVersion: 7 })).toThrow("suffix version 7 has no stacked builder");
+    // without stackedOn, v8 is v7 byte for byte
+    const { stackedOn: _s, ...plain } = parts;
+    expect(assemblePrompt({ ...plain, suffixVersion: 8 })).toBe(assemblePrompt({ ...plain, suffixVersion: 7 }));
   });
 
   test("v3 is v2 plus the refusal builder (system-map 1c): everything else byte-identical, refusal pinned literally", () => {
