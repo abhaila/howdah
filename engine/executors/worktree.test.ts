@@ -6,6 +6,7 @@ import { execSync } from "node:child_process";
 import { worktreeExecutor, commandExecutor, effectiveCwd, readWorktreeRecord, derivePrState, ghPrProbe, stackPrState, publicationPrRefs, type PrState } from "./worktree";
 import { EventLog } from "../../log/write";
 import type { ExecArgs } from "../run";
+import { commit, git, lonelyRepo, originFixture, sha } from "./git-testkit";
 
 function repo(): string {
   const dir = mkdtempSync(join(tmpdir(), "howdah-wt-repo-"));
@@ -88,6 +89,134 @@ describe("worktree executor (real git)", () => {
     expect(clean.writes).toEqual({ "worktree.clean": true, outcome: "removed" });
     expect(existsSync(record.path)).toBe(false);
     expect(readWorktreeRecord(runDir)).toBeNull();
+  });
+});
+
+describe("HOW-57: where a worktree branch starts (decision C)", () => {
+  const create = { kind: "worktree" as const, action: "create" as const };
+  const stacked = { ...create, reads: ["deps.base", "deps.base_tip"] };
+  const run = () => {
+    const runDir = mkdtempSync(join(tmpdir(), "howdah-wt-run-"));
+    return { runDir, log: new EventLog(join(runDir, "run.jsonl")), reposDir: join(runDir, "repos") };
+  };
+  const notes = (log: EventLog) => log.read().flatMap((e) => (e.type === "chunk" ? [e.content] : [])).join("");
+  const doneResult = (log: EventLog) => {
+    const done = log.read().find((e) => e.type === "side-effect-done" && e.effect === "worktree-create");
+    return done?.type === "side-effect-done" ? done.result : undefined;
+  };
+  /** args whose effects really log, so the effect's recorded result can be asserted */
+  const logged = (partial: Partial<ExecArgs> & { def: ExecArgs["def"]; log: EventLog }): ExecArgs =>
+    args({
+      ...partial,
+      effects: {
+        claim: () => false,
+        done: (effect, result) => void partial.log.append({ type: "side-effect-done", node: "n", visit: 1, attempt_id: "n#1", effect, result }),
+      },
+    });
+
+  test("REGRESSION (critical): a repo with no remote branches from HEAD, as before, and says why", async () => {
+    const repoDir = lonelyRepo();
+    git(repoDir, "checkout", "-q", "-b", "feature");
+    const head = commit(repoDir, "f.txt", "feature work\n");
+    const { runDir, log, reposDir } = run();
+    const r = await worktreeExecutor({ reposDir })(logged({ def: create, log, cwd: repoDir }));
+    expect(r.status).toBe("succeeded");
+    const record = readWorktreeRecord(runDir)!;
+    expect(sha(record.path, "HEAD")).toBe(head);
+    expect(record).toMatchObject({ base: "HEAD", base_sha: head });
+    expect(notes(log)).toContain("no `origin` remote — branching from HEAD (feature @");
+    expect(doneResult(log)).toMatchObject({ base: "HEAD", base_sha: head, local_head: head });
+  });
+
+  test("the default base is origin/main after a fetch, even when the clone is behind", async () => {
+    const { clone, other } = originFixture();
+    const tip = commit(other, "teammate.txt", "landed upstream\n");
+    git(other, "push", "-q", "origin", "main");
+    const { runDir, log, reposDir } = run();
+    await worktreeExecutor({ reposDir })(logged({ def: create, log, cwd: clone }));
+    const record = readWorktreeRecord(runDir)!;
+    expect(sha(record.path, "HEAD")).toBe(tip);
+    expect(record.base).toBe("origin/main");
+    expect(notes(log)).toContain(`worktree base: origin/main @ ${tip.slice(0, 12)}`);
+    expect(notes(log)).not.toContain("ahead");
+  });
+
+  test("local commits origin lacks are reported and NOT used", async () => {
+    const { clone } = originFixture();
+    const upstream = sha(clone, "origin/main");
+    const local = commit(clone, "experiment.txt", "unpushed\n");
+    const { runDir, log, reposDir } = run();
+    await worktreeExecutor({ reposDir })(logged({ def: create, log, cwd: clone }));
+    const record = readWorktreeRecord(runDir)!;
+    expect(sha(record.path, "HEAD")).toBe(upstream);
+    expect(existsSync(join(record.path, "experiment.txt"))).toBe(false);
+    expect(notes(log)).toContain("your local main is 1 commit ahead of origin/main; not used");
+    expect(doneResult(log)).toMatchObject({ base: "origin/main", base_sha: upstream, local_head: local, ahead: 1 });
+  });
+
+  test("config defaultBranch wins over origin's HEAD", async () => {
+    const { clone, other } = originFixture();
+    git(other, "checkout", "-q", "-b", "develop");
+    const dev = commit(other, "dev.txt", "develop\n");
+    git(other, "push", "-q", "origin", "develop");
+    const { runDir, log, reposDir } = run();
+    await worktreeExecutor({ reposDir, defaultBranchFor: (p) => (p === clone ? "develop" : undefined) })(logged({ def: create, log, cwd: clone }));
+    expect(sha(readWorktreeRecord(runDir)!.path, "HEAD")).toBe(dev);
+  });
+
+  test("a stack base starts the branch at the dependency's published tip", async () => {
+    const { clone, other } = originFixture();
+    git(other, "checkout", "-q", "-b", "howdah/p--fe-1");
+    const tip = commit(other, "fe1.txt", "fe-1\n");
+    git(other, "push", "-q", "origin", "howdah/p--fe-1");
+    const { runDir, log, reposDir } = run();
+    await worktreeExecutor({ reposDir })(logged({ def: stacked, log, cwd: clone, reads: { "deps.base": "howdah/p--fe-1", "deps.base_tip": tip } }));
+    const record = readWorktreeRecord(runDir)!;
+    expect(sha(record.path, "HEAD")).toBe(tip);
+    expect(record.base_sha).toBe(tip);
+    expect(notes(log)).toContain(`stacked on howdah/p--fe-1 @ ${tip.slice(0, 12)}`);
+  });
+
+  test("a stack base with no tip starts from origin/<base>", async () => {
+    const { clone, other } = originFixture();
+    git(other, "checkout", "-q", "-b", "be-stack");
+    const tip = commit(other, "be.txt", "be\n");
+    git(other, "push", "-q", "origin", "be-stack");
+    const { runDir, log, reposDir } = run();
+    await worktreeExecutor({ reposDir })(logged({ def: stacked, log, cwd: clone, reads: { "deps.base": "be-stack", "deps.base_tip": "" } }));
+    expect(sha(readWorktreeRecord(runDir)!.path, "HEAD")).toBe(tip);
+  });
+
+  test("an unknown stack base parks with the reason — it never falls back to main", async () => {
+    const { clone } = originFixture();
+    const { runDir, log, reposDir } = run();
+    const exec = worktreeExecutor({ reposDir });
+    await expect(exec(logged({ def: stacked, log, cwd: clone, reads: { "deps.base": "nope", "deps.base_tip": "" } }))).rejects.toThrow('base branch "nope" not found on origin');
+    expect(readWorktreeRecord(runDir)).toBeNull();
+  });
+
+  test("a failed fetch (origin is unreachable) still branches, from HEAD, and says so", async () => {
+    const { clone } = originFixture();
+    git(clone, "remote", "set-url", "origin", join(tmpdir(), "howdah-no-such-origin-" + Date.now()));
+    // forget the remote-tracking refs too, so there is no stale origin/main to fall back on
+    git(clone, "update-ref", "-d", "refs/remotes/origin/main");
+    try { git(clone, "remote", "set-head", "origin", "-d"); } catch { /* none */ }
+    const head = sha(clone, "HEAD");
+    const { runDir, log, reposDir } = run();
+    await worktreeExecutor({ reposDir })(logged({ def: create, log, cwd: clone }));
+    expect(sha(readWorktreeRecord(runDir)!.path, "HEAD")).toBe(head);
+    expect(notes(log)).toContain("git fetch origin failed");
+    expect(notes(log)).toContain("branching from HEAD");
+  });
+
+  test("a failed fetch with a stale origin/main uses it and says it was not refreshed", async () => {
+    const { clone } = originFixture();
+    const stale = sha(clone, "origin/main");
+    git(clone, "remote", "set-url", "origin", join(tmpdir(), "howdah-no-such-origin-" + Date.now()));
+    const { runDir, log, reposDir } = run();
+    await worktreeExecutor({ reposDir })(logged({ def: create, log, cwd: clone }));
+    expect(sha(readWorktreeRecord(runDir)!.path, "HEAD")).toBe(stale);
+    expect(notes(log)).toContain("(not refreshed: the fetch failed)");
   });
 });
 

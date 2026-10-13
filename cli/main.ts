@@ -41,7 +41,7 @@ import { harnessNames, harnessSpec, isHarness } from "../core/harnesses";
 import { GRAPHS, graphCatalog } from "../graphs/index";
 import { loadRegistry, catalogOf } from "../graphs/registry";
 import { promptSearchPath } from "../graphs/local";
-import { howdahHome, loadConfig, saveConfig, resolveWorkspace, repoNameFor, workspaceNameFor, verifyCommandFor, setVerifyCommand, stuckThresholds, diagnosticsCommandFor, setDiagnosticsCommand, diagnosticsCommandProblem, previewFor, setPreview, inheritsUserSettings, setInheritUserSettings, ensureHowdahHome } from "../config/config";
+import { howdahHome, loadConfig, saveConfig, resolveWorkspace, repoNameFor, workspaceNameFor, verifyCommandFor, defaultBranchFor, setVerifyCommand, stuckThresholds, diagnosticsCommandFor, setDiagnosticsCommand, diagnosticsCommandProblem, previewFor, setPreview, inheritsUserSettings, setInheritUserSettings, ensureHowdahHome } from "../config/config";
 import { loadTuning } from "../config/tuning";
 import { normalizeRunName } from "../core/run-name";
 import {
@@ -74,6 +74,8 @@ function executors() {
         // HOW-12: read lazily for the same reason — an edited verify command applies to the
         // next verify:run, not the next runner
         verifyCommandFor: (repoPath) => verifyCommandFor(loadConfig(base), repoPath),
+        // HOW-57: the branch a new worktree starts from (after a fetch) when the workspace names one
+        defaultBranchFor: (repoPath) => defaultBranchFor(loadConfig(base), repoPath),
         // HOW-38: read once per runner — thresholds are not something a run changes mid-flight
         stuck: stuckThresholds(loadConfig(base)),
         // HOW-52: likewise the preview `evidence:screenshot` starts

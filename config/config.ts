@@ -150,6 +150,12 @@ export function verifyCommandFor(config: HowdahConfig, repoPath: string): string
   return cmd ? cmd : undefined;
 }
 
+/** HOW-57: the registered default branch for a repo path (blank = unset) — what a worktree starts from */
+export function defaultBranchFor(config: HowdahConfig, repoPath: string): string | undefined {
+  const b = Object.values(config.repos).find((r) => r.path === repoPath)?.defaultBranch?.trim();
+  return b ? b : undefined;
+}
+
 /**
  * HOW-55: does the workspace at this path load the operator's user-level settings? Matched by
  * path like verifyCommandFor, over repos AND plain folders. Default no: an agent is configured by

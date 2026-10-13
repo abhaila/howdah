@@ -294,6 +294,11 @@ export type NodeDef<C extends object> =
   | {
       kind: "worktree";
       action: "create" | "remove";
+      /**
+       * HOW-57: a `create` may read `deps.base` / `deps.base_tip` (implement-stacked) — the
+       * branch and commit it starts from instead of origin's default. Proven like any read.
+       */
+      reads?: Keys<C>[];
       writes?: Partial<Record<Keys<C>, OutputSpec>>;
       class?: string;
     }

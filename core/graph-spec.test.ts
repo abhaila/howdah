@@ -634,6 +634,35 @@ describe("parseGraphSpec refuses what it cannot vouch for", () => {
   });
 });
 
+/** HOW-57: a worktree create may read the stack base it starts from. */
+describe("a worktree step's reads (HOW-57)", () => {
+  const withWorktree = (reads?: string[]): GraphSpec => ({
+    ...minimal({
+      fields: [...minimal().fields, { key: "deps.base", kind: "text", scope: "sticky" }],
+      entry: "wt",
+    }),
+    nodes: [{ id: "wt", kind: "worktree", action: "create", writes: [], ...(reads ? { reads } : {}) }, ...minimal().nodes],
+    edges: [{ from: "wt", to: "draft" }, ...minimal().edges],
+  });
+
+  test("reads round-trip through parseGraphSpec and compile onto the node", () => {
+    const spec = withWorktree(["deps.base"]);
+    const parsed = parseGraphSpec(JSON.parse(JSON.stringify(spec)));
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) expect(parsed.spec).toEqual(spec);
+    expect(buildGraph(spec).def.nodes.wt).toEqual({ kind: "worktree", action: "create", reads: ["deps.base"], writes: {} });
+  });
+
+  test("absent reads compile to NO reads key — every existing graph is unchanged", () => {
+    expect("reads" in buildGraph(withWorktree()).def.nodes.wt!).toBe(false);
+    expect("reads" in buildGraph(withWorktree([])).def.nodes.wt!).toBe(false);
+  });
+
+  test("a read with no writer is still refused, like any other read", () => {
+    expect(buildGraph(withWorktree(["deps.base"])).validate().paths).toEqual([{ node: "wt", key: "deps.base", witness: ["wt"] }]);
+  });
+});
+
 /**
  * HOW-24. A canvas whose steps spring back to an auto-layout on reload is not a canvas, so the
  * arrangement is part of the artifact. It has to be two things at once: carried faithfully by

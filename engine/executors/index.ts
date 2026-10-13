@@ -70,6 +70,8 @@ export interface LiveExecutorDeps {
   workspaces?: WorkspaceLookup;
   /** HOW-12: the workspace's verify command for a repo path — what `verify:run` runs */
   verifyCommandFor?: (repoPath: string) => string | undefined;
+  /** HOW-57: the workspace's default branch for a repo path — what a new worktree starts from */
+  defaultBranchFor?: (repoPath: string) => string | undefined;
   /** HOW-52: the workspace's preview contract for a repo path — what `evidence:screenshot` starts */
   previewFor?: (repoPath: string) => PreviewContract | undefined;
   /** HOW-55: does the workspace at this path load the operator's user-level settings? */
@@ -116,6 +118,7 @@ export function liveExecutors(deps: LiveExecutorDeps): EngineOpts["executors"] {
       reposDir: deps.reposDir ?? join(deps.attentionDir, "..", "repos"),
       repoName: deps.repoName,
       ...(deps.verifyCommandFor ? { verifyCommandFor: deps.verifyCommandFor } : {}),
+      ...(deps.defaultBranchFor ? { defaultBranchFor: deps.defaultBranchFor } : {}),
     }),
   };
 }

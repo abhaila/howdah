@@ -12,6 +12,13 @@ export interface WorktreeRecord {
   path: string;
   branch: string;
   repo: string;
+  /**
+   * HOW-57 (decision C): the ref the branch was started from (`origin/main`, `origin/<stack
+   * base>`, or `HEAD` when there is no remote) and its sha — the first "recorded tip" a
+   * `git:restack` replays from. Absent on a record written before HOW-57.
+   */
+  base?: string;
+  base_sha?: string;
 }
 
 export function worktreeRecordPath(runDir: string): string {

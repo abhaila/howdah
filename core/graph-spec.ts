@@ -218,7 +218,13 @@ export type NodeSpec =
       config?: AgentConfig;
     })
   | (NodeBase & { kind: "command"; run: string; reads: string[]; writes: string[]; timeoutMs?: number; maxVisits?: number })
-  | (NodeBase & { kind: "worktree"; action: "create" | "remove"; writes: string[] })
+  | (NodeBase & {
+      kind: "worktree";
+      action: "create" | "remove";
+      writes: string[];
+      /** HOW-57: the stack base a create starts from (`deps.base`, `deps.base_tip`); absent = none */
+      reads?: string[];
+    })
   | (NodeBase & { kind: "wait"; duration: string })
   | (NodeBase & { kind: "approval"; proposal: string; base: string; decision: string; feedback: string; redesignTo: string })
   | (NodeBase & { kind: "terminal"; outcome: "success" | "failed" | "aborted"; label?: string });
@@ -332,7 +338,8 @@ export function builtinReads(n: NodeSpec): readonly string[] | undefined {
 export function missingBuiltinReads(n: NodeSpec): string[] {
   const needed = builtinReads(n);
   if (!needed || !("reads" in n)) return [];
-  return needed.filter((k) => !n.reads.includes(k));
+  const reads = n.reads ?? [];
+  return needed.filter((k) => !reads.includes(k));
 }
 
 /** The keys a step declares that its executor could never publish. */
@@ -444,7 +451,12 @@ function compileNode(n: NodeSpec, scopes: Record<string, Scope>, fields: FieldSp
         ...cls,
       };
     case "worktree":
-      return { kind: "worktree", action: n.action, writes: writesOf(n.writes, scopes, fields), ...cls };
+      return {
+        kind: "worktree", action: n.action,
+        // absent stays absent, so every pre-HOW-57 graph compiles to the identical Graph
+        ...(n.reads?.length ? { reads: [...n.reads] } : {}),
+        writes: writesOf(n.writes, scopes, fields), ...cls,
+      };
     case "wait":
       return { kind: "wait", duration: n.duration, ...cls };
     case "approval":
@@ -654,7 +666,7 @@ export function specProblems(spec: GraphSpec, opts: { knownPrompts?: readonly st
             message: `${who} still asks for \`${key}\` in its instructions, but \`${key}\` is no longer a field. Take it out of the instructions, or add the field back.`,
           });
     const declared = [
-      ...(n.kind !== "agent" && "reads" in n ? n.reads : []),
+      ...(n.kind !== "agent" && "reads" in n ? n.reads ?? [] : []),
       ...("writes" in n ? n.writes : []),
       ...(n.kind === "approval" ? [n.proposal, n.base, n.decision, n.feedback] : []),
     ];
@@ -1070,7 +1082,9 @@ function parseNode(v: unknown): NodeSpec | undefined {
     }
     case "worktree": {
       const action = oneOf(v.action, ["create", "remove"] as const);
-      return action ? { ...base, kind: "worktree", action, writes: strArray(v.writes) } : undefined;
+      if (!action) return undefined;
+      const reads = strArray(v.reads);
+      return { ...base, kind: "worktree", action, writes: strArray(v.writes), ...(Array.isArray(v.reads) ? { reads } : {}) };
     }
     case "wait": {
       const duration = str(v.duration);
