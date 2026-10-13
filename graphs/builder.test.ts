@@ -15,6 +15,9 @@ import { COMMAND_BUILTINS, WORKTREE_FACTS, coerceOperand, isBlocking, keepPath, 
 import { LAUNCH_BUILTIN, LAUNCH_PRODUCES, LAUNCH_READS } from "../engine/executors/launch";
 import { MAP_BUILTINS } from "../engine/executors/map";
 import { VERIFY_BUILTIN, VERIFY_PRODUCES } from "../engine/executors/verify";
+import { AWAIT_BUILTIN } from "../engine/executors/await";
+import { RESTACK_BUILTIN } from "../engine/executors/restack";
+import { AWAIT_PRODUCES, AWAIT_PROBE_PRODUCES, AWAIT_READS, RESTACK_PRODUCES, RESTACK_READS } from "../core/stack";
 import { EVIDENCE_BUILTIN } from "../engine/executors/evidence";
 // the reducer is plain data over core/ — no React, no DOM — so the browser's verdict can be
 // driven from here and compared against this file's gate, which is the whole point below
@@ -376,7 +379,32 @@ describe("what an executor can emit — the table checked against the executors 
    * returns undefined, which MEANS "anything the operator declares is legal".
    */
   test("every built-in the command executor dispatches is in the table", () => {
-    expect([...MAP_BUILTINS, LAUNCH_BUILTIN, VERIFY_BUILTIN, EVIDENCE_BUILTIN, "probe:pr"].sort()).toEqual(COMMAND_BUILTINS.map((b) => b.run).sort());
+    expect([...MAP_BUILTINS, LAUNCH_BUILTIN, VERIFY_BUILTIN, EVIDENCE_BUILTIN, AWAIT_BUILTIN, RESTACK_BUILTIN, "probe:pr"].sort()).toEqual(COMMAND_BUILTINS.map((b) => b.run).sort());
+  });
+
+  // HOW-57. runs:await reads core/stack.ts like verify reads core/verify.ts; what is pinned is
+  // that the executor hands declaredWrites exactly those keys, in both modes, and is dispatched.
+  test("runs:await publishes — and works from — exactly what the table claims", () => {
+    const row = COMMAND_BUILTINS.find((b) => b.run === AWAIT_BUILTIN)!;
+    expect(row.produces).toEqual([...AWAIT_PRODUCES, ...AWAIT_PROBE_PRODUCES]);
+    expect(row.reads).toEqual([...AWAIT_READS]);
+    const src = executor("await.ts");
+    const calls = [...src.matchAll(/declaredWrites\(\s*AWAIT_BUILTIN\s*,\s*def\s*,\s*\{([^}]*)\}/g)];
+    expect(calls).toHaveLength(2);
+    const keysOf = (body: string) => [...body.matchAll(/"([^"]+)"\s*:/g)].map((k) => k[1]!).sort();
+    const byMode = calls.map((c) => keysOf(c[1]!)).sort((a, b) => a.length - b.length);
+    expect(byMode).toEqual([[...AWAIT_PROBE_PRODUCES].sort(), [...AWAIT_PRODUCES].sort()]);
+    expect(executor("worktree.ts")).toContain("if (isAwaitBuiltin(def.run)) return awaitBuiltin(args);");
+  });
+
+  test("git:restack publishes — and works from — exactly what the table claims", () => {
+    const row = COMMAND_BUILTINS.find((b) => b.run === RESTACK_BUILTIN)!;
+    expect(row.produces).toEqual([...RESTACK_PRODUCES]);
+    expect(row.reads).toEqual([...RESTACK_READS]);
+    const m = executor("restack.ts").match(/declaredWrites\(\s*RESTACK_BUILTIN\s*,\s*def\s*,\s*\{([^}]*)\}/);
+    expect(m, "no declaredWrites(RESTACK_BUILTIN, def, { … }) call found").not.toBeNull();
+    expect([...m![1]!.matchAll(/"([^"]+)"\s*:/g)].map((k) => k[1]!).sort()).toEqual([...RESTACK_PRODUCES].sort());
+    expect(executor("worktree.ts")).toContain("if (isRestackBuiltin(def.run)) return restackBuiltin(args);");
   });
 
   // HOW-12. The row reads core/verify.ts rather than repeating it, so what is pinned here is

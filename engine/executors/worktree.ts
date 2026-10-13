@@ -10,13 +10,26 @@
  * refuses to die (Orbital's cleanup semantics: preserve local work; the graph's
  * cleanup_pending edge handles it).
  *
+ * THE BRANCH STARTS FROM WHAT ORIGIN HAS, NOT FROM WHAT THE CLONE HAPPENS TO HAVE CHECKED OUT
+ * (HOW-57, decision C). Before HOW-57 `git worktree add` had no start point, so every run
+ * branched from the operator's clone's current HEAD — a feature branch, a stale main, unpushed
+ * experiments. Now `create` fetches and branches from:
+ *   1. `deps.base` when the node reads it (implement-stacked: the dependency's PR head), at
+ *      `deps.base_tip` when that commit is present — refused, never guessed, when it is nowhere;
+ *   2. otherwise `origin/<default>` (config `defaultBranch`, else origin's HEAD, else
+ *      main/master), saying so when local HEAD has commits origin lacks ("not used");
+ *   3. otherwise — no `origin`, a failed fetch, no remote default — HEAD, exactly as before,
+ *      and the thread says why. A repo with no remote must keep working (regression-tested).
+ * The chosen base, its sha and local HEAD are recorded on the effect and in worktree.json:
+ * the log is the record, and the base sha is the first tip a restack replays from.
+ *
  * COMMAND: `bash -c <script>` with a 10-minute default timeout (Orbital parity), stdout
  * streamed as chunks, and declared facts read from THE FINAL JSON LINE of stdout. The
  * built-in `probe:pr` routes through the reconciler: gh is the source, forge-unreachable
  * THROWS (parks the run) rather than reading as "no PR". The map built-ins (map:extract,
  * map:reextract, map:drift — system-map 1c, engine/executors/map.ts) dispatch from here too,
- * as does `runs:launch` (HOW-23, engine/executors/launch.ts) and `verify:run` (HOW-12,
- * engine/executors/verify.ts). The spawn/stream/timeout half lives in ./shell.ts, shared with
+ * as does `runs:launch` (HOW-23, engine/executors/launch.ts), `verify:run` (HOW-12,
+ * engine/executors/verify.ts) and HOW-57's `runs:await` / `git:restack` (await.ts, restack.ts). The spawn/stream/timeout half lives in ./shell.ts, shared with
  * verify:run.
  */
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
@@ -29,12 +42,83 @@ import { isLaunchBuiltin, launchBuiltinExecutor, type LaunchBuiltinOpts } from "
 import { isVerifyBuiltin, verifyBuiltinExecutor, type VerifyBuiltinOpts } from "./verify";
 import { evidenceBuiltinExecutor, isEvidenceBuiltin, type EvidenceBuiltinOpts } from "./evidence";
 import { runShell } from "./shell";
+import { remoteDefaultBranch, revParse, sh } from "./git";
+import { awaitBuiltinExecutor, isAwaitBuiltin, type AwaitBuiltinOpts } from "./await";
+import { isRestackBuiltin, restackBuiltinExecutor, type RestackBuiltinOpts } from "./restack";
 
 export { type WorktreeRecord, worktreeRecordPath, readWorktreeRecord, effectiveCwd } from "./worktree-record";
 
-function sh(cmd: string[], cwd?: string): { code: number; stdout: string; stderr: string } {
-  const r = Bun.spawnSync(cmd, { cwd, stdout: "pipe", stderr: "pipe", env: { ...process.env } });
-  return { code: r.exitCode ?? 1, stdout: new TextDecoder().decode(r.stdout), stderr: new TextDecoder().decode(r.stderr) };
+/** How long a worktree create waits on `git fetch` before branching from HEAD instead. */
+export const FETCH_TIMEOUT_MS = 60_000;
+
+/** The ref and sha a new worktree branch starts from, and what the operator should be told. */
+export interface WorktreeBase {
+  /** what the branch starts from, by name: `origin/main`, the stack base's branch, or `HEAD` */
+  ref: string;
+  sha: string;
+  /** the clone's HEAD at the time — recorded beside the base, never used as it */
+  localHead: string | null;
+  /** commits HEAD has that the default base lacks (default-branch path only) */
+  ahead?: number;
+  /** thread lines: which base, and why when it is not the one asked for */
+  notes: string[];
+}
+
+/**
+ * Decide where a new worktree branch starts (HOW-57, decision C). Throws only for a stack base
+ * that cannot be found anywhere — branching a stacked slice from main instead would build it on
+ * the wrong code and nobody would notice until review.
+ */
+export function resolveWorktreeBase(repo: string, opts: { stackBase?: string; stackTip?: string; defaultBranch?: string } = {}): WorktreeBase {
+  const notes: string[] = [];
+  const localHead = revParse(repo, "HEAD");
+  const headLabel = sh(["git", "rev-parse", "--abbrev-ref", "HEAD"], repo).stdout.trim() || "HEAD";
+  const hasOrigin = sh(["git", "remote", "get-url", "origin"], repo).code === 0;
+  let fetched = false;
+  if (hasOrigin) {
+    const f = sh(["git", "fetch", "--quiet", "--prune", "origin"], repo, FETCH_TIMEOUT_MS);
+    fetched = f.code === 0;
+    if (!fetched) notes.push(`git fetch origin failed (${(f.stderr.trim() || `exit ${f.code}`).slice(0, 200)}); using what this clone already has`);
+  }
+
+  const head = (why: string): WorktreeBase => {
+    if (!localHead) throw new Error("worktree create: this repository has no commits to branch from");
+    notes.push(`${why} — branching from HEAD (${headLabel} @ ${localHead.slice(0, 12)}), as before`);
+    return { ref: "HEAD", sha: localHead, localHead, notes };
+  };
+
+  if (opts.stackBase) {
+    const branch = opts.stackBase;
+    // the exact commit the dependency published, when this clone has it; else its branch
+    const candidates = [
+      ...(opts.stackTip ? [opts.stackTip] : []),
+      `refs/remotes/origin/${branch}`,
+      `refs/heads/${branch}`,
+    ];
+    for (const ref of candidates) {
+      const sha = revParse(repo, ref);
+      if (!sha) continue;
+      const shown = ref.replace(/^refs\/remotes\//, "").replace(/^refs\/heads\//, "");
+      notes.push(`worktree base: stacked on ${branch} @ ${sha.slice(0, 12)} (from ${shown}${ref === opts.stackTip ? ", the tip the dependency published" : ""})`);
+      return { ref: branch, sha, localHead, notes };
+    }
+    throw new Error(
+      `base branch "${branch}" not found on origin${fetched ? "" : " (and the fetch did not succeed)"} or in this clone` +
+        `${opts.stackTip ? `, nor its tip ${opts.stackTip.slice(0, 12)}` : ""} — the dependency's branch must be pushed before this slice can stack on it`,
+    );
+  }
+
+  if (!hasOrigin) return head("no `origin` remote");
+  const remote = remoteDefaultBranch(repo, opts.defaultBranch);
+  if (remote) {
+    const { branch: b, sha } = remote;
+    const ref = `origin/${b}`;
+    const ahead = localHead ? Number(sh(["git", "rev-list", "--count", `${sha}..${localHead}`], repo).stdout.trim()) || 0 : 0;
+    notes.push(`worktree base: ${ref} @ ${sha.slice(0, 12)}${fetched ? "" : " (not refreshed: the fetch failed)"}`);
+    if (ahead > 0) notes.push(`your local ${headLabel} is ${ahead} commit${ahead === 1 ? "" : "s"} ahead of ${ref}; not used`);
+    return { ref, sha, localHead, ahead, notes };
+  }
+  return head(fetched ? "origin has no default branch this clone can see" : "the fetch failed and origin has no default branch in this clone");
 }
 
 export interface WorktreeExecutorOpts {
@@ -44,12 +128,18 @@ export interface WorktreeExecutorOpts {
   repoName?: (repoPath: string) => string;
   /** HOW-44: the workspace's verify command for a repo path — published as worktree.verify_command */
   verifyCommandFor?: (repoPath: string) => string | undefined;
+  /** HOW-57: config.json `defaultBranch` for a repo path — the branch a new worktree starts from */
+  defaultBranchFor?: (repoPath: string) => string | undefined;
 }
 
+const nonEmpty = (v: unknown): string | undefined => (typeof v === "string" && v.trim() !== "" ? v.trim() : undefined);
+
 export function worktreeExecutor(opts: WorktreeExecutorOpts): Executor {
-  return async ({ def, runId, cwd, log, effects }) => {
+  return async ({ def, nodeId, visit, runId, cwd, log, reads, effects }) => {
     if (def.kind !== "worktree") throw new Error("worktreeExecutor on non-worktree node");
     const runDir = dirname(log.path);
+    let index = 0;
+    const note = (content: string) => log.append({ type: "chunk", node: nodeId, visit, turn: 1, index: index++, kind: "text", content: `${content}\n` });
 
     if (def.action === "create") {
       // HOW-44: the verify command, when the step declares it — "" (never absent) when the
@@ -65,13 +155,31 @@ export function worktreeExecutor(opts: WorktreeExecutorOpts): Executor {
       // matches one directory instead of a flat pile shared with every other repo
       const worktreesDir = join(opts.reposDir, (opts.repoName ?? basename)(cwd), "worktrees");
       const path = join(worktreesDir, runId);
+      let record: WorktreeRecord = { path, branch, repo: cwd };
       if (!effects.claim("worktree-create")) {
         mkdirSync(worktreesDir, { recursive: true });
-        const r = sh(["git", "worktree", "add", "-b", branch, path], cwd);
+        // HOW-57 (decision C): a deliberate start point, never the clone's checked-out HEAD
+        const base = resolveWorktreeBase(cwd, {
+          stackBase: nonEmpty(reads["deps.base"]),
+          stackTip: nonEmpty(reads["deps.base_tip"]),
+          defaultBranch: opts.defaultBranchFor?.(cwd),
+        });
+        for (const line of base.notes) note(line);
+        const r = sh(["git", "worktree", "add", "-b", branch, path, base.sha], cwd);
         if (r.code !== 0) throw new Error(`git worktree add failed: ${r.stderr.trim().slice(0, 300)}`);
-        effects.done("worktree-create", { path, branch });
+        record = { ...record, base: base.ref, base_sha: base.sha };
+        effects.done("worktree-create", {
+          path, branch, base: base.ref, base_sha: base.sha, local_head: base.localHead,
+          ...(base.ahead !== undefined ? { ahead: base.ahead } : {}),
+        });
+      } else {
+        // proven done on an earlier attempt that died before writing the record: the effect's
+        // own result is where the base was written down
+        const done = log.read().findLast((e) => e.type === "side-effect-done" && e.node === nodeId && e.effect === "worktree-create");
+        const result = done?.type === "side-effect-done" && done.result && typeof done.result === "object" ? (done.result as Record<string, unknown>) : {};
+        if (typeof result.base === "string" && typeof result.base_sha === "string") record = { ...record, base: result.base, base_sha: result.base_sha };
       }
-      writeFileSync(worktreeRecordPath(runDir), JSON.stringify({ path, branch, repo: cwd } satisfies WorktreeRecord, null, 2));
+      writeFileSync(worktreeRecordPath(runDir), JSON.stringify(record satisfies WorktreeRecord, null, 2));
       return { status: "succeeded", writes };
     }
 
@@ -186,7 +294,7 @@ function requiredChecksFailed(cwd: string, prRef: string): boolean | null {
 }
 
 /** gh probe with the fields routing needs; unreachable THROWS — absence of evidence parks */
-export const ghPrProbe = (cwd: string, prRef: string): { state: PrState; url: string } | null => {
+export const ghPrProbe = (cwd: string, prRef: string): { state: PrState; url: string; approved?: boolean } | null => {
   const r = sh(["gh", "pr", "view", prRef, "--json", "state,url,mergeable,reviewDecision,statusCheckRollup"], cwd);
   if (r.code !== 0) {
     if (/no pull requests? found/i.test(r.stderr + r.stdout)) return null;
@@ -194,7 +302,7 @@ export const ghPrProbe = (cwd: string, prRef: string): { state: PrState; url: st
   }
   const j = JSON.parse(r.stdout) as { state: string; url: string; mergeable?: string; reviewDecision?: string; statusCheckRollup?: Array<{ conclusion?: string; state?: string }> };
   const failedChecks = requiredChecksFailed(cwd, j.url) ?? (j.statusCheckRollup ?? []).some(isFailedCheck);
-  return { state: derivePrState({ ...j, failedChecks }), url: j.url };
+  return { state: derivePrState({ ...j, failedChecks }), url: j.url, approved: j.reviewDecision === "APPROVED" };
 };
 
 export interface CommandExecutorOpts {
@@ -209,6 +317,10 @@ export interface CommandExecutorOpts {
   verify?: VerifyBuiltinOpts;
   /** HOW-52: which preview `evidence:screenshot` starts for a repo */
   evidence?: EvidenceBuiltinOpts;
+  /** HOW-57: where `runs:await` reads dependency runs from, and the package check it runs */
+  await?: AwaitBuiltinOpts;
+  /** HOW-57: the forge seams and default branch `git:restack` uses */
+  restack?: RestackBuiltinOpts;
 }
 
 export function commandExecutor(opts: CommandExecutorOpts = {}): Executor {
@@ -216,6 +328,8 @@ export function commandExecutor(opts: CommandExecutorOpts = {}): Executor {
   const launchBuiltin = launchBuiltinExecutor(opts.launch);
   const verifyBuiltin = verifyBuiltinExecutor({ defaultTimeoutMs: opts.defaultTimeoutMs, ...opts.verify });
   const evidenceBuiltin = evidenceBuiltinExecutor(opts.evidence);
+  const awaitBuiltin = awaitBuiltinExecutor(opts.await);
+  const restackBuiltin = restackBuiltinExecutor(opts.restack);
   return async (args) => {
     const { nodeId, def, visit, cwd, log, reads } = args;
     if (def.kind !== "command") throw new Error("commandExecutor on non-command node");
@@ -230,6 +344,10 @@ export function commandExecutor(opts: CommandExecutorOpts = {}): Executor {
     // HOW-52: `evidence:screenshot` starts the preview and captures it — same rule as verify:
     // a preview that will not come up is evidence for the reviewer, not a failed attempt
     if (isEvidenceBuiltin(def.run)) return evidenceBuiltin(args);
+    // HOW-57: `runs:await` reads OTHER runs' logs — a stacked run waits on its dependencies
+    if (isAwaitBuiltin(def.run)) return awaitBuiltin(args);
+    // HOW-57: `git:restack` rewrites and force-pushes this run's branch — an exactly-once effect
+    if (isRestackBuiltin(def.run)) return restackBuiltin(args);
     const workDir = effectiveCwd(log.path, cwd);
     const declared = Object.keys(def.writes ?? {});
     let index = 0;
@@ -242,7 +360,11 @@ export function commandExecutor(opts: CommandExecutorOpts = {}): Executor {
       const record = readWorktreeRecord(dirname(log.path));
       const branch = record?.branch ?? probeGit(workDir).branch;
       if (!branch) throw new Error("probe:pr: no branch to probe");
-      const refs = publicationPrRefs(reads.publication_summary);
+      // HOW-57 (G2): a stacked run's summary may cite the PRs it is stacked on — they are its
+      // dependencies' to watch, never its own, or it would finish when its base merged
+      const foreign = new Set(Array.isArray(reads["deps.prs"]) ? (reads["deps.prs"] as unknown[]).filter((u): u is string => typeof u === "string") : []);
+      const refs = publicationPrRefs(reads.publication_summary).filter((r) => !foreign.has(r));
+      if (foreign.size) chunk("text", `ignoring ${foreign.size} dependency PR${foreign.size === 1 ? "" : "s"} (deps.prs)`);
       const prRefs = refs.length > 0 ? refs : [branch];
       const probe = opts.prProbe ?? ghPrProbe;
       const prs = prRefs.map((prRef) => {
@@ -262,7 +384,14 @@ export function commandExecutor(opts: CommandExecutorOpts = {}): Executor {
         forge: { kind: "pr", state, url: decider.url },
         disagreements: [],
       });
-      return { status: "succeeded", writes: declared.includes("pr.state") ? { "pr.state": state } : {} };
+      return {
+        status: "succeeded",
+        writes: {
+          ...(declared.includes("pr.state") ? { "pr.state": state } : {}),
+          // HOW-57: every PR of this run approved — what decides whether a moved base restacks it
+          ...(declared.includes("pr.approved") ? { "pr.approved": prs.every((p) => p.approved === true) } : {}),
+        },
+      };
     }
 
     // general command: bash -c, stream stdout, facts from the FINAL JSON line

@@ -49,6 +49,7 @@ import { defaultHarness, harnessSpec, isHarness, toolBaseName } from "./harnesse
 import type { Scope } from "./context";
 import type { Violation } from "./validate";
 import { VERIFY_BUILTIN, VERIFY_PRODUCES } from "./verify";
+import { AWAIT_BUILTIN, AWAIT_PRODUCES, AWAIT_PROBE_PRODUCES, AWAIT_READS, RESTACK_BUILTIN, RESTACK_PRODUCES, RESTACK_READS } from "./stack";
 import { EVIDENCE_BUILTIN, EVIDENCE_PRODUCES } from "./evidence";
 
 export const SPEC_VERSION = 1;
@@ -218,8 +219,19 @@ export type NodeSpec =
       config?: AgentConfig;
     })
   | (NodeBase & { kind: "command"; run: string; reads: string[]; writes: string[]; timeoutMs?: number; maxVisits?: number })
-  | (NodeBase & { kind: "worktree"; action: "create" | "remove"; writes: string[] })
-  | (NodeBase & { kind: "wait"; duration: string })
+  | (NodeBase & {
+      kind: "worktree";
+      action: "create" | "remove";
+      writes: string[];
+      /** HOW-57: the stack base a create starts from (`deps.base`, `deps.base_tip`); absent = none */
+      reads?: string[];
+    })
+  | (NodeBase & {
+      kind: "wait";
+      duration: string;
+      /** HOW-57 (G5): longer waits while nothing changes (core/graph.ts wait `backoff`) */
+      backoff?: string[];
+    })
   | (NodeBase & { kind: "approval"; proposal: string; base: string; decision: string; feedback: string; redesignTo: string })
   | (NodeBase & { kind: "terminal"; outcome: "success" | "failed" | "aborted"; label?: string });
 
@@ -264,13 +276,16 @@ export interface GraphSpec {
  * repeated, since core/ may import core/.
  */
 export const COMMAND_BUILTINS: Array<{ run: string; label: string; produces: string[]; reads?: string[] }> = [
-  { run: "probe:pr", label: "Check the pull request", produces: ["pr.state"] },
+  { run: "probe:pr", label: "Check the pull request", produces: ["pr.state", "pr.approved"] },
   { run: "map:extract", label: "Extract the system map", produces: ["map.base", "map.neighbourhood", "slice.drift", "review_findings"] },
   { run: "map:reextract", label: "Re-extract the system map", produces: ["map.after"] },
   { run: "map:drift", label: "Compare the map against the approved design", produces: ["slice.drift"] },
   { run: "runs:launch", label: "Launch one run per approved slice", produces: ["launched"], reads: ["plan.slices", "tickets"] },
   { run: VERIFY_BUILTIN, label: "Run the workspace's tests", produces: [...VERIFY_PRODUCES] },
   { run: EVIDENCE_BUILTIN, label: "Screenshot the workspace's preview", produces: [...EVIDENCE_PRODUCES] },
+  // HOW-57: one row, both modes — the executor refuses a step that mixes them (await.ts precheck)
+  { run: AWAIT_BUILTIN, label: "Wait for the slices this one depends on", produces: [...AWAIT_PRODUCES, ...AWAIT_PROBE_PRODUCES], reads: [...AWAIT_READS] },
+  { run: RESTACK_BUILTIN, label: "Restack onto the moved or merged base", produces: [...RESTACK_PRODUCES], reads: [...RESTACK_READS] },
 ];
 
 /** A worktree CLEAN-UP step emits these two facts and no others (engine/executors/worktree.ts). */
@@ -332,7 +347,8 @@ export function builtinReads(n: NodeSpec): readonly string[] | undefined {
 export function missingBuiltinReads(n: NodeSpec): string[] {
   const needed = builtinReads(n);
   if (!needed || !("reads" in n)) return [];
-  return needed.filter((k) => !n.reads.includes(k));
+  const reads = n.reads ?? [];
+  return needed.filter((k) => !reads.includes(k));
 }
 
 /** The keys a step declares that its executor could never publish. */
@@ -444,9 +460,14 @@ function compileNode(n: NodeSpec, scopes: Record<string, Scope>, fields: FieldSp
         ...cls,
       };
     case "worktree":
-      return { kind: "worktree", action: n.action, writes: writesOf(n.writes, scopes, fields), ...cls };
+      return {
+        kind: "worktree", action: n.action,
+        // absent stays absent, so every pre-HOW-57 graph compiles to the identical Graph
+        ...(n.reads?.length ? { reads: [...n.reads] } : {}),
+        writes: writesOf(n.writes, scopes, fields), ...cls,
+      };
     case "wait":
-      return { kind: "wait", duration: n.duration, ...cls };
+      return { kind: "wait", duration: n.duration, ...(n.backoff?.length ? { backoff: [...n.backoff] } : {}), ...cls };
     case "approval":
       return { kind: "approval", proposal: n.proposal, base: n.base, decision: n.decision, feedback: n.feedback, redesignTo: n.redesignTo, ...cls };
     case "terminal":
@@ -654,7 +675,7 @@ export function specProblems(spec: GraphSpec, opts: { knownPrompts?: readonly st
             message: `${who} still asks for \`${key}\` in its instructions, but \`${key}\` is no longer a field. Take it out of the instructions, or add the field back.`,
           });
     const declared = [
-      ...(n.kind !== "agent" && "reads" in n ? n.reads : []),
+      ...(n.kind !== "agent" && "reads" in n ? n.reads ?? [] : []),
       ...("writes" in n ? n.writes : []),
       ...(n.kind === "approval" ? [n.proposal, n.base, n.decision, n.feedback] : []),
     ];
@@ -706,6 +727,8 @@ export function specProblems(spec: GraphSpec, opts: { knownPrompts?: readonly st
     if (n.kind === "command" && !n.run.trim()) problems.push({ node: n.id, where: "steps", message: `${who} has no command to run.` });
     if (n.kind === "wait" && !/^\d+\s*(ms|s|m|h)$/.test(n.duration))
       problems.push({ node: n.id, where: "steps", message: `${who} needs a duration like "30 s" or "2 m".` });
+    if (n.kind === "wait" && n.backoff?.some((d) => !/^\d+\s*(ms|s|m|h)$/.test(d)))
+      problems.push({ node: n.id, where: "steps", message: `${who} has a back-off that is not a list of durations like "15m" or "30m".` });
     if (n.kind === "approval" && n.decision === n.feedback)
       problems.push({ node: n.id, where: "steps", message: `${who} uses one field for both the decision and the comments. Give them separate fields.` });
   }
@@ -1070,11 +1093,14 @@ function parseNode(v: unknown): NodeSpec | undefined {
     }
     case "worktree": {
       const action = oneOf(v.action, ["create", "remove"] as const);
-      return action ? { ...base, kind: "worktree", action, writes: strArray(v.writes) } : undefined;
+      if (!action) return undefined;
+      const reads = strArray(v.reads);
+      return { ...base, kind: "worktree", action, writes: strArray(v.writes), ...(Array.isArray(v.reads) ? { reads } : {}) };
     }
     case "wait": {
       const duration = str(v.duration);
-      return duration === undefined ? undefined : { ...base, kind: "wait", duration };
+      if (duration === undefined) return undefined;
+      return { ...base, kind: "wait", duration, ...(Array.isArray(v.backoff) ? { backoff: strArray(v.backoff) } : {}) };
     }
     case "approval": {
       const [proposal, snapshot, decision, feedback, redesignTo] = [str(v.proposal), str(v.base), str(v.decision), str(v.feedback), str(v.redesignTo)];

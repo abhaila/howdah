@@ -61,7 +61,7 @@ export function planV1() {
     feature: "let users delete their account",
     slices: [
       { id: "api-route", title: "DELETE /api/users/{id}", goal: "the route exists", work: "add the route", verify: "curl it", depends_on: [] },
-      { id: "web-client", title: "Call it from the web", workspace: "web", goal: "the client can delete", work: "add deleteUser", verify: "click delete", depends_on: ["api-route"] },
+      { id: "web-client", title: "Call it from the web", workspace: "web", goal: "the client can delete", work: "add deleteUser", verify: "click delete", depends_on: [{ slice: "api-route", until: "package" }] },
     ],
     out_of_scope: ["the admin UI"],
     risks: ["the delete is not reversible"],

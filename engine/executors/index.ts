@@ -37,9 +37,24 @@ export function parseDuration(spec: string): number {
   return { ms: n, s: n * 1000, m: n * 60_000, h: n * 3_600_000 }[m[2] as "ms" | "s" | "m" | "h"]!;
 }
 
-export const waitExecutor: Executor = async ({ def }) => {
+/**
+ * HOW-57 (G5): the duration a wait sleeps — `[duration, ...backoff]` at the streak of polls
+ * that changed nothing (engine/run.ts waitStreak), capped at the last entry.
+ */
+export function waitDuration(def: { duration: string; backoff?: string[] }, streak = 0): string {
+  const seq = [def.duration, ...(def.backoff ?? [])];
+  return seq[Math.min(Math.max(0, streak), seq.length - 1)]!;
+}
+
+export const waitExecutor: Executor = async ({ def, nodeId, visit, log, waitStreak }) => {
   if (def.kind !== "wait") throw new Error("waitExecutor on non-wait node");
-  await new Promise((r) => setTimeout(r, parseDuration(def.duration)));
+  const chosen = waitDuration(def, waitStreak);
+  if (def.backoff?.length)
+    log.append({
+      type: "chunk", node: nodeId, visit, turn: 1, index: 0, kind: "text",
+      content: `waiting ${chosen}${waitStreak ? ` (nothing changed for ${waitStreak} poll${waitStreak === 1 ? "" : "s"} in a row)` : ""}\n`,
+    });
+  await new Promise((r) => setTimeout(r, parseDuration(chosen)));
   return { status: "succeeded", writes: {} };
 };
 
@@ -70,6 +85,10 @@ export interface LiveExecutorDeps {
   workspaces?: WorkspaceLookup;
   /** HOW-12: the workspace's verify command for a repo path — what `verify:run` runs */
   verifyCommandFor?: (repoPath: string) => string | undefined;
+  /** HOW-57: the workspace's default branch for a repo path — what a new worktree starts from */
+  defaultBranchFor?: (repoPath: string) => string | undefined;
+  /** HOW-57 (G10): the workspace's package check for a repo path — what `until: package` waits on */
+  packageCheckFor?: (repoPath: string) => string | undefined;
   /** HOW-52: the workspace's preview contract for a repo path — what `evidence:screenshot` starts */
   previewFor?: (repoPath: string) => PreviewContract | undefined;
   /** HOW-55: does the workspace at this path load the operator's user-level settings? */
@@ -111,11 +130,17 @@ export function liveExecutors(deps: LiveExecutorDeps): EngineOpts["executors"] {
       },
       ...(deps.verifyCommandFor ? { verify: { commandFor: deps.verifyCommandFor } } : {}),
       ...(deps.previewFor ? { evidence: { previewFor: deps.previewFor } } : {}),
+      await: {
+        runsDir: deps.runsDir ?? join(deps.attentionDir, "..", "runs"),
+        ...(deps.packageCheckFor ? { packageCheckFor: deps.packageCheckFor } : {}),
+      },
+      ...(deps.defaultBranchFor ? { restack: { defaultBranchFor: deps.defaultBranchFor } } : {}),
     }),
     worktree: worktreeExecutor({
       reposDir: deps.reposDir ?? join(deps.attentionDir, "..", "repos"),
       repoName: deps.repoName,
       ...(deps.verifyCommandFor ? { verifyCommandFor: deps.verifyCommandFor } : {}),
+      ...(deps.defaultBranchFor ? { defaultBranchFor: deps.defaultBranchFor } : {}),
     }),
   };
 }

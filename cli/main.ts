@@ -41,7 +41,7 @@ import { harnessNames, harnessSpec, isHarness } from "../core/harnesses";
 import { GRAPHS, graphCatalog } from "../graphs/index";
 import { loadRegistry, catalogOf } from "../graphs/registry";
 import { promptSearchPath } from "../graphs/local";
-import { howdahHome, loadConfig, saveConfig, resolveWorkspace, repoNameFor, workspaceNameFor, verifyCommandFor, setVerifyCommand, stuckThresholds, diagnosticsCommandFor, setDiagnosticsCommand, diagnosticsCommandProblem, previewFor, setPreview, inheritsUserSettings, setInheritUserSettings, ensureHowdahHome } from "../config/config";
+import { howdahHome, loadConfig, saveConfig, resolveWorkspace, repoNameFor, workspaceNameFor, verifyCommandFor, defaultBranchFor, packageCheckFor, setPackageCheck, setVerifyCommand, stuckThresholds, diagnosticsCommandFor, setDiagnosticsCommand, diagnosticsCommandProblem, previewFor, setPreview, inheritsUserSettings, setInheritUserSettings, ensureHowdahHome } from "../config/config";
 import { loadTuning } from "../config/tuning";
 import { normalizeRunName } from "../core/run-name";
 import {
@@ -74,6 +74,10 @@ function executors() {
         // HOW-12: read lazily for the same reason — an edited verify command applies to the
         // next verify:run, not the next runner
         verifyCommandFor: (repoPath) => verifyCommandFor(loadConfig(base), repoPath),
+        // HOW-57: the branch a new worktree starts from (after a fetch) when the workspace names one
+        defaultBranchFor: (repoPath) => defaultBranchFor(loadConfig(base), repoPath),
+        // HOW-57 (G10): read per poll, so registering a package check unblocks a waiting slice
+        packageCheckFor: (repoPath) => packageCheckFor(loadConfig(base), repoPath),
         // HOW-38: read once per runner — thresholds are not something a run changes mid-flight
         stuck: stuckThresholds(loadConfig(base)),
         // HOW-52: likewise the preview `evidence:screenshot` starts
@@ -682,6 +686,12 @@ if (import.meta.main) {
         saveConfig(config, base);
         const now = config.repos[name]?.verifyCommand;
         console.log(now ? `verify command for "${name}": ${now}` : `cleared the verify command for "${name}" — verify:run will report not-checked`);
+      } else if (action === "package-check" && name) {
+        // HOW-57 (G10): set (or, with no command, clear) what `until: "package"` waits on
+        setPackageCheck(config, name, positional.slice(2).join(" "));
+        saveConfig(config, base);
+        const now = config.repos[name]?.packageCheck;
+        console.log(now ? `package check for "${name}": ${now}` : `cleared the package check for "${name}" — a merge will count as the package being published`);
       } else if (action === "diagnostics" && name) {
         // HOW-39: set (or, with no command, clear) an existing repo's post-edit diagnostics command
         setDiagnosticsCommand(config, name, positional.slice(2).join(" "));
@@ -722,7 +732,7 @@ if (import.meta.main) {
         console.log(`removed "${name}"`);
       } else if (action === "list" || action === undefined) {
         console.log(JSON.stringify({ repos: config.repos, folders: config.folders }, null, 2));
-      } else throw new Error('usage: howdah workspace add <name> <path> [--verify "<cmd>"] | verify <name> [<cmd>] | diagnostics <name> [<cmd>] | preview <name> [<cmd> --paths /,/x --ready-when "<js>"] | user-settings <name> on|off | add-github <owner/name> | remove <name> | list');
+      } else throw new Error('usage: howdah workspace add <name> <path> [--verify "<cmd>"] | verify <name> [<cmd>] | diagnostics <name> [<cmd>] | package-check <name> [<cmd>] | preview <name> [<cmd> --paths /,/x --ready-when "<js>"] | user-settings <name> on|off | add-github <owner/name> | remove <name> | list');
     }
     else if (verb === "new-graph") {
       const { newGraph } = await import("./new-graph");

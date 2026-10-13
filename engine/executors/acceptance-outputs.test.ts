@@ -9,6 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Engine } from "../run";
 import { claudeExecutor } from "./claude";
+import { checkWrites, stackedPublicationProblem } from "./outputs";
 import { defineGraph } from "../../core/graph";
 import { readLog } from "../../log/write";
 
@@ -77,4 +78,35 @@ describe("the outputs check on acceptance", () => {
     const res = await engine.start({ goal: "fix login" });
     expect((res as { reason: string }).reason).toContain('criterion "ac-1" was reworded');
   }, 20_000);
+});
+
+describe("HOW-57 (G2): a stacked publish names only its own PRs, as an object", () => {
+  const base = "https://github.com/acme/web/pull/1";
+  const own = "https://github.com/acme/web/pull/2";
+  const reads = { "deps.base": "howdah/p--fe-1", "deps.prs": [base] };
+
+  test("an object naming this run's PR is accepted", () => {
+    expect(checkWrites({ publication_summary: { pr_urls: [own], primary_pr_url: own } }, reads)).toBeNull();
+  });
+
+  test("prose is refused, saying what shape to use", () => {
+    expect(stackedPublicationProblem({ publication_summary: `opened ${own} on top of ${base}` }, reads)).toBe(
+      `publication_summary must be an object for a stacked change — { "pr_urls": [<this run's PR URLs>], "primary_pr_url": <its tip> } — not prose`,
+    );
+  });
+
+  test("an object with no PR, or one listing the base's PR, is refused", () => {
+    expect(stackedPublicationProblem({ publication_summary: { note: "pushed" } }, reads)).toContain("names no PR of this run");
+    expect(stackedPublicationProblem({ publication_summary: { pr_urls: [base, own], primary_pr_url: own } }, reads)).toBe(
+      `publication_summary lists ${base}, which belongs to a slice this one depends on — list only this run's own PRs`,
+    );
+  });
+
+  test("a publish that did not read deps.base (implement-ticket's) is untouched — prose stays legal there", () => {
+    expect(checkWrites({ publication_summary: `opened ${own}` }, { goal: "g" })).toBeNull();
+  });
+
+  test("once the base merged away (deps.base read, but empty) the rule still holds, and own PRs pass", () => {
+    expect(stackedPublicationProblem({ publication_summary: { pr_urls: [own] } }, { "deps.base": "", "deps.prs": [base] })).toBeNull();
+  });
 });

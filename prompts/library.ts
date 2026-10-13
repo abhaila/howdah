@@ -579,7 +579,9 @@ export function reconstructRender(runDir: string, renderedHashWanted: string): R
     // a carried steer this code cannot word, or one whose event is gone, is not reconstructable
     (carriedSteers.length === 0 || (builders.steerInstruction && carriedSteers.every((t) => t !== null))) &&
     // a stop-resume briefing whose event is gone, or that this version cannot word, is not either
-    (render.resumed_after_stop === undefined || (builders.stopResumeInstruction && typeof stopResumeText === "string"))
+    (render.resumed_after_stop === undefined || (builders.stopResumeInstruction && typeof stopResumeText === "string")) &&
+    // a stacked briefing this version cannot word is not reconstructable
+    (render.stacked_on === undefined || builders.stackedInstruction)
   ) {
     const suffixVersion = render.suffix_version;
     const assemble = (jumpMessage?: string, replyMessage?: string, refusalMessage?: string) =>
@@ -593,6 +595,8 @@ export function reconstructRender(runDir: string, renderedHashWanted: string): R
         steerMessages: carriedSteers.filter((t): t is string => t !== null),
         // HOW-48: likewise the stop-resume briefing — its text is the named event's last_message
         stopResumeMessage: stopResumeText ?? undefined,
+        // HOW-57: the stacked briefing's input is logged, like reentry_after_visit
+        ...(render.stacked_on ? { stackedOn: render.stacked_on } : {}),
         skills: render.skills ?? [], outputKeys: render.output_keys ?? [], suffixVersion,
       });
     // [plain, ...jumps, ...replies] — never both: a jump clears any pending reply (replay.ts),

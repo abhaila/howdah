@@ -3,7 +3,8 @@ import { mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { defineGraph } from "../core/graph";
-import { Engine, type Executor, type AttemptResult, type EngineOpts } from "./run";
+import { Engine, waitStreak, type Executor, type AttemptResult, type EngineOpts } from "./run";
+import { parseDuration, waitDuration } from "./executors/index";
 import { replayState } from "./replay";
 import { resolveEffect, supervisorShouldResume } from "./control";
 import { PromptStore } from "../prompts/store";
@@ -622,7 +623,7 @@ describe("render proof covers every suffix (system-map 0.1)", () => {
       expect(handed.startsWith("Implement per g. Prior: p\n")).toBe(true);
       expect(handed.endsWith(buildOutputInstruction(["summary"]))).toBe(true);
       expect(handed.includes("/review")).toBe(harness !== "codex");
-      expect(render).toMatchObject({ skills: harness === "codex" ? [] : ["review"], output_keys: ["summary"], suffix_version: 7 });
+      expect(render).toMatchObject({ skills: harness === "codex" ? [] : ["review"], output_keys: ["summary"], suffix_version: 8 });
     });
   }
 });
@@ -697,6 +698,110 @@ describe("resume-by-replay (R7)", () => {
     expect(s.visits).toEqual({ a: 1, b: 1 });
     expect(s.finishes).toHaveLength(1);
     expect(s.parked).toBeNull();
+  });
+});
+
+/**
+ * HOW-57 (G5): a stacked slice waits on another run — and on human reviewers — for days. A wait
+ * is time passing, not work, so it is not charged to maxSteps; and while nothing changes the
+ * wait backs off 5m → 15m → 30m. The poll's own command step still counts.
+ */
+describe("waits are time, not steps (HOW-57 G5)", () => {
+  interface PollCtx { "deps.ready": boolean; "deps.waiting": string; summary: string }
+  const pollGraph = () =>
+    defineGraph<PollCtx>({
+      name: "poll-wait",
+      entry: "poll",
+      inputs: [],
+      nodes: {
+        poll: { kind: "command", run: "runs:await", writes: { "deps.ready": { scope: "per-visit" }, "deps.waiting": { scope: "per-visit" } } },
+        wait: { kind: "wait", duration: "5m", backoff: ["15m", "30m"] },
+        work: { kind: "command", run: "work", writes: { summary: { scope: "sticky" } } },
+        done: { kind: "terminal", outcome: "success" },
+      },
+      edges: [
+        { from: "poll", to: "work", condition: { reads: ["deps.ready"], test: (v) => v["deps.ready"] === true, label: "deps.ready == true" }, weight: 1 },
+        { from: "poll", to: "wait" },
+        { from: "wait", to: "poll" },
+        { from: "work", to: "done" },
+      ],
+    });
+
+  /** a simulated clock: the wait executor advances it by what it chose instead of sleeping */
+  const simulate = (readyAfterMs: number, waiting: (elapsedMs: number) => string = () => "waiting on fe-1 · published") => {
+    let elapsed = 0;
+    const slept: string[] = [];
+    const executors: EngineOpts["executors"] = {
+      command: async ({ def }) => {
+        if (def.kind === "command" && def.run === "work") return ok({ summary: "built" });
+        return ok({ "deps.ready": elapsed >= readyAfterMs, "deps.waiting": waiting(elapsed) });
+      },
+      wait: async ({ def, waitStreak: streak }) => {
+        if (def.kind !== "wait") throw new Error("not a wait");
+        const d = waitDuration(def, streak);
+        slept.push(d);
+        elapsed += parseDuration(d);
+        return ok();
+      },
+    };
+    return { executors, slept, elapsed: () => elapsed };
+  };
+  const DAY = 24 * 3_600_000;
+
+  test("a simulated 5-day await does not park on maxSteps, then normal work continues to the end", async () => {
+    const sim = simulate(5 * DAY);
+    // 300 steps: counting the waits too, this await would need ~490 and park on max-steps
+    const engine = new Engine(pollGraph(), { dir: mkdtempSync(join(tmpdir(), "howdah-run-")), promptsDir: promptFixtures(), executors: sim.executors, maxSteps: 300 });
+    expect(await engine.start({})).toEqual({ state: "finished", outcome: "success" });
+    expect(sim.elapsed()).toBeGreaterThanOrEqual(5 * DAY);
+    expect(sim.slept.slice(0, 4)).toEqual(["5m", "15m", "30m", "30m"]);
+    expect(sim.slept.length).toBeGreaterThan(150);
+    const events = engine.log.read();
+    expect(events.filter((e) => e.type === "node-finished" && e.node === "work")).toHaveLength(1);
+    expect(events.some((e) => e.type === "attention-raised")).toBe(false);
+  }, 60_000);
+
+  test("the back-off resets when the report changes", async () => {
+    // the report changes once, 50 minutes in (after 5m + 15m + 30m)
+    const sim = simulate(2 * 3_600_000, (t) => (t < 50 * 60_000 ? "waiting on fe-1 · published" : "waiting on be-1 · package"));
+    const engine = new Engine(pollGraph(), { dir: mkdtempSync(join(tmpdir(), "howdah-run-")), promptsDir: promptFixtures(), executors: sim.executors });
+    expect(await engine.start({})).toEqual({ state: "finished", outcome: "success" });
+    expect(sim.slept.slice(0, 6)).toEqual(["5m", "15m", "30m", "5m", "15m", "30m"]);
+  });
+
+  test("a loop of real work still parks at maxSteps", async () => {
+    const sim = simulate(Infinity);
+    const engine = new Engine(pollGraph(), { dir: mkdtempSync(join(tmpdir(), "howdah-run-")), promptsDir: promptFixtures(), executors: sim.executors, maxSteps: 10 });
+    expect(await engine.start({})).toMatchObject({ state: "parked", code: "max-steps", reason: "maxSteps reached (10)" });
+    // ten polls ran; the ten waits between them were not charged
+    expect(engine.log.read().filter((e) => e.type === "node-finished" && e.node === "poll")).toHaveLength(10);
+  });
+
+  test("waitStreak is read from the log alone: a fresh process backs off the same", async () => {
+    const sim = simulate(Infinity);
+    const engine = new Engine(pollGraph(), { dir: mkdtempSync(join(tmpdir(), "howdah-run-")), promptsDir: promptFixtures(), executors: sim.executors, maxSteps: 4 });
+    await engine.start({});
+    // as the engine sees it when the 4th wait starts: 4 identical polls, so 3 in a row unchanged
+    const events = engine.log.read();
+    const lastWaitStart = events.findLastIndex((e) => e.type === "node-started" && e.node === "wait");
+    expect(waitStreak(events.slice(0, lastWaitStart), "wait")).toBe(3);
+    expect(sim.slept).toEqual(["5m", "15m", "30m", "30m"]);
+    expect(waitStreak([], "wait")).toBe(0);
+  });
+
+  test("no backoff: the wait is its duration every time, exactly as before", () => {
+    expect(waitDuration({ duration: "5m" }, 7)).toBe("5m");
+    expect(waitDuration({ duration: "5m", backoff: ["15m", "30m"] }, 0)).toBe("5m");
+    expect(waitDuration({ duration: "5m", backoff: ["15m", "30m"] }, 99)).toBe("30m");
+  });
+
+  test("a back-off entry that is not a duration is refused at validate()", () => {
+    const g = defineGraph<PollCtx>({
+      name: "bad-backoff", entry: "wait", inputs: [],
+      nodes: { wait: { kind: "wait", duration: "5m", backoff: ["soon"] }, done: { kind: "terminal", outcome: "success" } },
+      edges: [{ from: "wait", to: "done" }],
+    });
+    expect(g.validate().structural).toContain('wait node "wait" has a back-off entry "soon" that is not a duration (e.g. "15m")');
   });
 });
 

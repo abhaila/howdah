@@ -55,6 +55,8 @@ export interface ParsedOutputs {
  * verify result, the captured screenshots). Null when every value may be accepted.
  */
 export function checkWrites(writes: Record<string, unknown>, reads: Record<string, unknown>): string | null {
+  const stacked = stackedPublicationProblem(writes, reads);
+  if (stacked) return stacked;
   if (ACCEPTANCE_KEY in writes) {
     const evidence = asEvidenceResult(reads[EVIDENCE_KEY]);
     return acceptanceProblem(writes[ACCEPTANCE_KEY], {
@@ -63,6 +65,28 @@ export function checkWrites(writes: Record<string, unknown>, reads: Record<strin
       evidenceFiles: evidence?.items.map((i) => i.file) ?? [],
     });
   }
+  return null;
+}
+
+/**
+ * HOW-57 (G2): a STACKED publish — one that read `deps.base` — must name its own PRs as an
+ * object, and none of the dependency PRs it was told about (`deps.prs`). A prose summary, or one
+ * that lists the base's PR, would have probe:pr watch the wrong PR and finish when the BASE
+ * merged. Not a stacked publish (no `deps.base` read): no rule.
+ */
+export function stackedPublicationProblem(writes: Record<string, unknown>, reads: Record<string, unknown>): string | null {
+  if (!("publication_summary" in writes) || !("deps.base" in reads)) return null;
+  const summary = writes.publication_summary;
+  const isPr = (v: unknown): v is string => typeof v === "string" && v.includes("/pull/");
+  if (typeof summary !== "object" || summary === null || Array.isArray(summary))
+    return `publication_summary must be an object for a stacked change — { "pr_urls": [<this run's PR URLs>], "primary_pr_url": <its tip> } — not ${typeof summary === "string" ? "prose" : JSON.stringify(summary)}`;
+  const o = summary as Record<string, unknown>;
+  const own = [...(Array.isArray(o.pr_urls) ? o.pr_urls.filter(isPr) : []), ...(isPr(o.primary_pr_url) ? [o.primary_pr_url] : [])];
+  if (own.length === 0) return `publication_summary names no PR of this run — list them in "pr_urls" and name the tip as "primary_pr_url"`;
+  const foreign = new Set(Array.isArray(reads["deps.prs"]) ? (reads["deps.prs"] as unknown[]).filter(isPr) : []);
+  const borrowed = own.filter((u) => foreign.has(u));
+  if (borrowed.length)
+    return `publication_summary lists ${borrowed.join(", ")}, which belong${borrowed.length === 1 ? "s" : ""} to a slice this one depends on — list only this run's own PRs`;
   return null;
 }
 

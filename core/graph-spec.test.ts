@@ -422,8 +422,14 @@ describe("builtinReads — the other half of a built-in's contract", () => {
     expect(missingBuiltinReads(launch(["plan.slices", "tickets", "goal"]))).toEqual([]);
   });
 
+  // HOW-57: runs:await and git:restack read other runs and this run's stack BY NAME, like launch
+  test("runs:await and git:restack name their reads too", () => {
+    expect(builtinReads({ id: "c", kind: "command", run: "runs:await", reads: [], writes: [] })).toEqual(["deps"]);
+    expect(builtinReads({ id: "c", kind: "command", run: "git:restack", reads: [], writes: [] })).toEqual(["deps.base", "deps.base_merged", "pr.approved"]);
+  });
+
   test("every other built-in works from its cwd, so its reads are the operator's own business", () => {
-    for (const b of COMMAND_BUILTINS.filter((x) => x.run !== "runs:launch"))
+    for (const b of COMMAND_BUILTINS.filter((x) => !["runs:launch", "runs:await", "git:restack"].includes(x.run)))
       expect(builtinReads({ id: "c", kind: "command", run: b.run, reads: [], writes: [] }), b.run).toBeUndefined();
     expect(builtinReads({ id: "c", kind: "command", run: "./ci.sh", reads: [], writes: [] })).toBeUndefined();
     expect(builtinReads({ id: "a", kind: "agent", prompt: "x.a", reads: [], writes: [] })).toBeUndefined();
@@ -631,6 +637,57 @@ describe("parseGraphSpec refuses what it cannot vouch for", () => {
     const parsed = parseGraphSpec({ ...minimal(), defaults: { harness: "sudo", model: "claude-opus-5" } });
     expect(parsed.ok).toBe(true);
     if (parsed.ok) expect(parsed.spec.defaults).toEqual({ model: "claude-opus-5" });
+  });
+});
+
+/** HOW-57: a worktree create may read the stack base it starts from. */
+describe("a worktree step's reads (HOW-57)", () => {
+  const withWorktree = (reads?: string[]): GraphSpec => ({
+    ...minimal({
+      fields: [...minimal().fields, { key: "deps.base", kind: "text", scope: "sticky" }],
+      entry: "wt",
+    }),
+    nodes: [{ id: "wt", kind: "worktree", action: "create", writes: [], ...(reads ? { reads } : {}) }, ...minimal().nodes],
+    edges: [{ from: "wt", to: "draft" }, ...minimal().edges],
+  });
+
+  test("reads round-trip through parseGraphSpec and compile onto the node", () => {
+    const spec = withWorktree(["deps.base"]);
+    const parsed = parseGraphSpec(JSON.parse(JSON.stringify(spec)));
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) expect(parsed.spec).toEqual(spec);
+    expect(buildGraph(spec).def.nodes.wt).toEqual({ kind: "worktree", action: "create", reads: ["deps.base"], writes: {} });
+  });
+
+  test("absent reads compile to NO reads key — every existing graph is unchanged", () => {
+    expect("reads" in buildGraph(withWorktree()).def.nodes.wt!).toBe(false);
+    expect("reads" in buildGraph(withWorktree([])).def.nodes.wt!).toBe(false);
+  });
+
+  test("a read with no writer is still refused, like any other read", () => {
+    expect(buildGraph(withWorktree(["deps.base"])).validate().paths).toEqual([{ node: "wt", key: "deps.base", witness: ["wt"] }]);
+  });
+});
+
+/** HOW-57 (G5): a wait step's back-off. */
+describe("a wait step's back-off (HOW-57)", () => {
+  const withWait = (backoff?: string[]): GraphSpec => ({
+    ...minimal({ entry: "nap" }),
+    nodes: [{ id: "nap", kind: "wait", duration: "5m", ...(backoff ? { backoff } : {}) }, ...minimal().nodes],
+    edges: [{ from: "nap", to: "draft" }, ...minimal().edges],
+  });
+
+  test("it round-trips through parseGraphSpec and compiles onto the node", () => {
+    const spec = withWait(["15m", "30m"]);
+    const parsed = parseGraphSpec(JSON.parse(JSON.stringify(spec)));
+    expect(parsed.ok && parsed.spec).toEqual(spec);
+    expect(buildGraph(spec).def.nodes.nap).toEqual({ kind: "wait", duration: "5m", backoff: ["15m", "30m"] });
+    expect("backoff" in buildGraph(withWait()).def.nodes.nap!).toBe(false);
+  });
+
+  test("an entry that is not a duration is a problem on that step", () => {
+    const problems = specProblems(withWait(["15m", "later"]));
+    expect(problems.map((p) => [p.node, p.message])).toContainEqual(["nap", expect.stringContaining("back-off that is not a list of durations")]);
   });
 });
 

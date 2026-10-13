@@ -36,6 +36,13 @@ export interface RepoWorkspace {
   preview?: PreviewContract;
   /** HOW-55: agents in this workspace load the operator's USER-level settings too (default: project only) */
   inheritUserSettings?: true;
+  /**
+   * HOW-57 (G10): exits 0 once this repo's merged work is PUBLISHED as a package another repo
+   * consumes (e.g. `npm view @acme/api-client@$(jq -r .version openapi/package.json)`). A
+   * slice that depends on one of this repo's slices `until: "package"` waits for it. Run in the
+   * registered repo path. Unset: merged counts as published, and the waiting run says so.
+   */
+  packageCheck?: string;
 }
 
 export interface PlainWorkspace {
@@ -148,6 +155,30 @@ export function repoNameFor(config: HowdahConfig, repoPath: string): string {
 export function verifyCommandFor(config: HowdahConfig, repoPath: string): string | undefined {
   const cmd = Object.values(config.repos).find((r) => r.path === repoPath)?.verifyCommand?.trim();
   return cmd ? cmd : undefined;
+}
+
+/** HOW-57 (G10): the package check registered for a repo path, or undefined (blank = unset) */
+export function packageCheckFor(config: HowdahConfig, repoPath: string): string | undefined {
+  const cmd = Object.values(config.repos).find((r) => r.path === repoPath)?.packageCheck?.trim();
+  return cmd ? cmd : undefined;
+}
+
+/** HOW-57: set (or, with no command, clear) a repo workspace's package check */
+export function setPackageCheck(config: HowdahConfig, name: string, command: string | undefined): void {
+  const repo = config.repos[name];
+  if (!repo) {
+    if (config.folders[name]) throw new Error(`"${name}" is a Plain folder — only a repo workspace publishes packages other slices wait on`);
+    throw new Error(`unknown repo workspace "${name}"`);
+  }
+  const cmd = command?.trim();
+  if (cmd) repo.packageCheck = cmd;
+  else delete repo.packageCheck;
+}
+
+/** HOW-57: the registered default branch for a repo path (blank = unset) — what a worktree starts from */
+export function defaultBranchFor(config: HowdahConfig, repoPath: string): string | undefined {
+  const b = Object.values(config.repos).find((r) => r.path === repoPath)?.defaultBranch?.trim();
+  return b ? b : undefined;
 }
 
 /**

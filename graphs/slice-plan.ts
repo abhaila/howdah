@@ -24,10 +24,20 @@
  *     A feature bigger than the cap is not refused as "too big" — it is asked for as a smaller
  *     first tranche, which is the decomposition working rather than failing.
  *
- * `depends_on` is ADVISORY: it orders the launches and is recorded in the ticket body as prose.
- * Nothing waits on it. The parent does not supervise its children (see CLAUDE.md, the
- * multi-graph fan-out invariant) — wave-gating is a follow-up, not this ticket.
+ * `depends_on` IS A GATE THE CHILD KEEPS (HOW-57, docs/designs/stacked-fullstack-slices.md).
+ * Every slice is still launched at once, and the parent still never supervises (CLAUDE.md, the
+ * multi-graph fan-out invariant): a slice WITH dependencies is launched as `implement-stacked`,
+ * whose first step waits (`runs:await`) until each dependency reaches its `until`:
+ *
+ *   - `published` — the dependency has an open (or merged) PR. This slice STACKS on it: its
+ *     worktree branches from that PR's head and its PR targets that branch. At most ONE per
+ *     slice, and only in the same workspace — a stack cannot cross repositories.
+ *   - `merged`    — the dependency's PR merged. The old string form (`"be-1"`) means this.
+ *   - `package`   — merged AND the dependency workspace's `packageCheck` (config.json) passes,
+ *     e.g. the backend's OpenAPI package is published for the frontend to consume.
  */
+
+import { DEP_UNTIL, type DepUntil } from "../core/stack";
 
 export interface Slice {
   /** kebab id, unique in the plan; becomes part of the child run id */
@@ -42,8 +52,26 @@ export interface Slice {
   work: string;
   /** how a human confirms it works */
   verify: string;
-  /** ids of slices in this plan that should land first — ordering only, never a gate */
-  depends_on: string[];
+  /** slices of this plan this one waits for, and how far each must get (HOW-57) */
+  depends_on: SliceDep[];
+}
+
+export { DEP_UNTIL, type DepUntil };
+
+export interface SliceDep {
+  /** the id of a slice in this plan */
+  slice: string;
+  until: DepUntil;
+}
+
+/** The ONE dependency this slice stacks on — its `published` one — or undefined. */
+export function stackBase(slice: Pick<Slice, "depends_on">): SliceDep | undefined {
+  return slice.depends_on.find((d) => d.until === "published");
+}
+
+/** "be-1 (until merged)" — how a dependency reads in a ticket body and a launch note. */
+export function describeDep(dep: SliceDep): string {
+  return `${dep.slice} (until ${dep.until})`;
 }
 
 export interface SlicePlan {
@@ -84,6 +112,12 @@ export type SlicePlanValidation = { ok: true; plan: SlicePlan } | { ok: false; e
 export interface SlicePlanOptions {
   /** the repo workspaces registered in config.json — a slice may only name one of these */
   knownWorkspaces: string[];
+  /**
+   * the workspace the planning run itself is in — what a slice with no `workspace` builds in.
+   * Used only to compare a stack base's workspace with its dependent's; unknown (absent),
+   * an omitted workspace is only known to equal another omitted one.
+   */
+  parentWorkspace?: string | null;
 }
 
 /**
@@ -163,14 +197,7 @@ export function validateSlicePlan(plan: unknown, opts: SlicePlanOptions): SliceP
         );
     }
 
-    const dependsOn = raw.depends_on;
-    let deps: string[] = [];
-    if (dependsOn !== undefined && dependsOn !== null) {
-      if (!Array.isArray(dependsOn) || !dependsOn.every((d): d is string => typeof d === "string"))
-        errors.push(`${where}: "depends_on" is ${describe(dependsOn)} — it must be an array of slice ids from this plan (use [] for none)`);
-      else deps = dependsOn;
-    }
-
+    const deps = readDeps(raw.depends_on, where, errors);
     if (named !== null)
       slices.push({
         id: named,
@@ -184,15 +211,37 @@ export function validateSlicePlan(plan: unknown, opts: SlicePlanOptions): SliceP
   });
 
   // dependencies: only once every id in the plan is known, so a forward reference is fine
-  for (const s of slices)
+  const byId = new Map(slices.map((s) => [s.id, s]));
+  const own = "this run's own workspace";
+  const workspaceOf = (s: Slice): string | null => s.workspace ?? opts.parentWorkspace ?? null;
+  for (const s of slices) {
     for (const dep of s.depends_on) {
-      if (dep === s.id) errors.push(`slice "${s.id}": depends_on names itself`);
-      else if (!seen.has(dep))
+      if (dep.slice === s.id) errors.push(`slice "${s.id}": depends_on names itself`);
+      else if (!seen.has(dep.slice))
         errors.push(
-          `slice "${s.id}": depends_on "${dep}", which is not a slice in this plan — ` +
-            `depends_on orders the slices of THIS plan (have: ${[...seen].join(", ")})`,
+          `slice "${s.id}": depends_on "${dep.slice}", which is not a slice in this plan — ` +
+            `depends_on names the slices of THIS plan (have: ${[...seen].join(", ")})`,
         );
     }
+    const published = s.depends_on.filter((d) => d.until === "published");
+    if (published.length > 1)
+      errors.push(
+        `slice "${s.id}": ${published.map((d) => `"${d.slice}"`).join(" and ")} are both "until": "published" — ` +
+          `at most one published dependency, which is the stack base this slice's branch is built on; make the others "merged" or "package"`,
+      );
+    const base = published[0];
+    const other = base ? byId.get(base.slice) : undefined;
+    if (base && other && other.id !== s.id) {
+      const mine = workspaceOf(s);
+      const theirs = workspaceOf(other);
+      const same = mine !== null && theirs !== null ? mine === theirs : s.workspace === other.workspace;
+      if (!same)
+        errors.push(
+          `slice "${s.id}" (${s.workspace ?? own}) stacks on "${other.id}" (${other.workspace ?? own}) with "until": "published" — ` +
+            `a stack base must be in the same workspace; use "merged" or "package" across repos`,
+        );
+    }
+  }
   for (const cycle of dependencyCycles(slices))
     errors.push(`the slices depend on each other in a cycle (${cycle.join(" → ")}) — no slice in it could ever ship first, so break it`);
 
@@ -217,6 +266,44 @@ const FIELD_IS = {
 
 const text = (v: unknown): string => (typeof v === "string" ? v.trim() : "");
 
+/**
+ * A slice's `depends_on`, normalised to `{ slice, until }`. A bare string is the pre-HOW-57
+ * form and means `merged` — an old plan keeps working, and now actually waits. Absent or null
+ * is no dependencies. Refusals are pushed onto `errors`, each naming the slice.
+ */
+function readDeps(v: unknown, where: string, errors: string[]): SliceDep[] {
+  if (v === undefined || v === null) return [];
+  if (!Array.isArray(v)) {
+    errors.push(
+      `${where}: "depends_on" is ${describe(v)} — it must be an array of { "slice": <id>, "until": "published" | "merged" | "package" } ` +
+        `(use [] for none)`,
+    );
+    return [];
+  }
+  const deps: SliceDep[] = [];
+  v.forEach((entry, i) => {
+    const at = `${where}: depends_on[${i}]`;
+    let dep: SliceDep | null = null;
+    if (typeof entry === "string") dep = { slice: entry, until: "merged" };
+    else if (isRecord(entry) && typeof entry.slice === "string") {
+      const until = entry.until === undefined || entry.until === null ? "merged" : entry.until;
+      if (typeof until !== "string" || !(DEP_UNTIL as readonly string[]).includes(until))
+        return void errors.push(
+          `${at}: "until" is ${typeof until === "string" ? `"${until}"` : describe(until)} — it must be "published" (stack on its open PR, same repo), ` +
+            `"merged" (wait for its PR to merge) or "package" (merged, and its package published)`,
+        );
+      dep = { slice: entry.slice, until: until as DepUntil };
+    } else
+      return void errors.push(
+        `${at} is ${describe(entry)} — each dependency is { "slice": <id of a slice in this plan>, "until": "published" | "merged" | "package" }`,
+      );
+    if (deps.some((d) => d.slice === dep!.slice))
+      return void errors.push(`${at}: "${dep.slice}" is listed twice — name each dependency once, with the furthest "until" it needs`);
+    deps.push(dep);
+  });
+  return deps;
+}
+
 /** What a value IS, for a refusal that tells the proposer what it sent rather than what it lacked. */
 function describe(v: unknown): string {
   if (v === undefined) return "missing";
@@ -233,7 +320,7 @@ function describe(v: unknown): string {
  */
 export function dependencyCycles(slices: readonly Slice[]): string[][] {
   const ids = new Set(slices.map((s) => s.id));
-  const edges = new Map(slices.map((s) => [s.id, s.depends_on.filter((d) => ids.has(d) && d !== s.id)]));
+  const edges = new Map(slices.map((s) => [s.id, s.depends_on.map((d) => d.slice).filter((d) => ids.has(d) && d !== s.id)]));
   const state = new Map<string, "open" | "done">();
   const cycles: string[][] = [];
   const found = new Set<string>();

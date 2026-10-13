@@ -599,3 +599,55 @@ describe("model output stays untrusted input", () => {
     expect([...el.querySelectorAll(".chat-cite")].map((c) => c.textContent)).toContain("do@1");
   });
 });
+
+/**
+ * HOW-57 — a stacked run says what it is waiting on (in `runs:await`'s own words), and a
+ * restack is part of the story: the transcript shows it where it happened.
+ */
+describe("a stacked run in the conversation (HOW-57)", () => {
+  function stackedLog(waiting: string): FakeLog {
+    const log = new FakeLog();
+    log.add({ type: "run-started", graph: "implement-stacked", inputs: { goal: "g", work: "w", deps: "[]" }, pinned_prompts: {} });
+    log.add({ type: "node-started", node: "deps.await", visit: 1, attempt_id: "deps.await#1" });
+    log.add({ type: "node-finished", node: "deps.await", visit: 1, status: "succeeded", writes: { "deps.ready": waiting === "", "deps.waiting": waiting } });
+    log.add({ type: "edge-taken", from: "deps.await", to: "deps.wait" });
+    return log;
+  }
+
+  test("while it waits, the head says on what — the dependency, its until, and its state", () => {
+    const el = render(stackedLog("waiting on fe-1 · published (parked: needs you)"));
+    const line = el.querySelector(".cv-waiting");
+    expect(line?.getAttribute("role")).toBe("status");
+    expect(line?.textContent).toBe("waiting on fe-1 · published (parked: needs you)");
+  });
+
+  test("once its dependencies are ready, the line is gone", () => {
+    expect(render(stackedLog("")).querySelector(".cv-waiting")).toBeNull();
+    expect(deriveDetail("r1", stackedLog("").events).waiting).toBeNull();
+  });
+
+  test("a finished run is not waiting on anything, whatever it last published", () => {
+    const log = stackedLog("waiting on be-1 · package (running)");
+    log.add({ type: "run-finished", outcome: "aborted" });
+    expect(deriveDetail("r1", log.events).waiting).toBeNull();
+  });
+
+  test("base-restacked is a row in the transcript, under the step that did it, from → to", () => {
+    const log = stackedLog("");
+    log.add({ type: "node-started", node: "delivery.restack", visit: 1, attempt_id: "delivery.restack#1" });
+    log.add({
+      type: "base-restacked", node: "delivery.restack", visit: 1,
+      from: { branch: "howdah/p--fe-1", sha: "a".repeat(40) }, to: { branch: "main", sha: "b".repeat(40) }, head: "c".repeat(40),
+      pr: "https://github.com/acme/web/pull/2",
+    });
+    log.add({ type: "node-finished", node: "delivery.restack", visit: 1, status: "succeeded", writes: { "restack.conflict": "" } });
+    const detail = deriveDetail("r1", log.events);
+    const rows = conversation(detail);
+    const at = rows.findIndex((m) => m.kind === "step" && m.node === "delivery.restack");
+    expect(rows[at + 1]).toEqual({
+      kind: "restacked", key: expect.stringMatching(/^restack:/),
+      text: `restacked howdah/p--fe-1 @ ${"a".repeat(12)} → main @ ${"b".repeat(12)} · https://github.com/acme/web/pull/2 retargeted`,
+    });
+    expect(render(log).querySelector(".cv-restacked")?.textContent).toContain("→ main @ bbbbbbbbbbbb");
+  });
+});

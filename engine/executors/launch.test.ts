@@ -14,7 +14,9 @@ import { join } from "node:path";
 import { EventLog } from "../../log/write";
 import type { LoggedEvent } from "../../log/events";
 import { commandExecutor } from "./worktree";
-import { childRunId, isLaunchBuiltin, launchOrder, LAUNCH_PRODUCES, LAUNCH_READS, type LaunchResult, type WorkspaceLookup } from "./launch";
+import { childGraph, childRunId, isLaunchBuiltin, launchOrder, LAUNCH_PRODUCES, LAUNCH_READS, type LaunchResult, type WorkspaceLookup } from "./launch";
+import { parseRunArgs } from "../../cli/main";
+import { parseDeps } from "../../core/stack";
 import type { AttemptResult } from "../run";
 import type { NodeDef } from "../../core/graph";
 
@@ -176,15 +178,65 @@ describe("the argv a child is launched with", () => {
     expect(h.spawned.map((a) => flag(a, "--workspace"))).toEqual(["api", "web"]);
   });
 
-  test("a dependency is recorded in the ticket body as prose — nothing waits on it", async () => {
+  test("a dependency is recorded in the ticket body with its until — the child waits on it (HOW-57)", async () => {
     const h = harness();
     await h.run({
       "plan.slices": { feature: "f", slices: [slice({ id: "base" }), slice({ id: "on-top", depends_on: ["base"] })], out_of_scope: ["the admin UI"] },
       tickets: { tickets: [ticket({ slice_id: "base" }), ticket({ slice_id: "on-top", identifier: "HOW-32" })] },
     });
     const work = input(h.spawned[1]!, "work")!;
-    expect(work).toContain("Depends on other slices of this feature (each has its own ticket and PR): base");
+    expect(work).toContain("Depends on other slices of this feature (each has its own ticket and PR; this run waits for them): base (until merged)");
     expect(work).toContain("Out of scope for the whole feature: the admin UI");
+  });
+
+  // HOW-57 (G11): the graph is chosen per slice, everywhere CHILD_GRAPH used to be
+  test("a slice with dependencies runs implement-stacked, with its deps; one without runs implement-ticket, unchanged", async () => {
+    const h = harness();
+    await h.run({
+      "plan.slices": {
+        feature: "f",
+        slices: [
+          slice({ id: "be-1" }),
+          slice({ id: "fe-1", workspace: "web", depends_on: [{ slice: "be-1", until: "package" }] }),
+          slice({ id: "fe-2", workspace: "web", depends_on: [{ slice: "fe-1", until: "published" }, "be-1"] }),
+        ],
+      },
+      tickets: { tickets: [ticket({ slice_id: "be-1" }), ticket({ slice_id: "fe-1", identifier: "HOW-32" }), ticket({ slice_id: "fe-2", identifier: "HOW-33" })] },
+    });
+    expect(h.spawned.map((a) => [flag(a, "--id"), a[1]])).toEqual([
+      ["plan-feature-abc--be-1", "implement-ticket"],
+      ["plan-feature-abc--fe-1", "implement-stacked"],
+      ["plan-feature-abc--fe-2", "implement-stacked"],
+    ]);
+    // implement-ticket's inputs are exactly what they were
+    expect(input(h.spawned[0]!, "deps")).toBeUndefined();
+    expect(JSON.parse(input(h.spawned[2]!, "deps")!)).toEqual([
+      { slice: "fe-1", until: "published", run_id: "plan-feature-abc--fe-1", workspace: "web" },
+      { slice: "be-1", until: "merged", run_id: "plan-feature-abc--be-1", workspace: "api" },
+    ]);
+    // the log records which graph each child runs
+    expect(h.events().filter((e) => e.type === "run-spawned").map((e) => (e.type === "run-spawned" ? [e.slice_id, e.graph] : []))).toEqual([
+      ["be-1", "implement-ticket"], ["fe-1", "implement-stacked"], ["fe-2", "implement-stacked"],
+    ]);
+    expect(childGraph({ depends_on: [] })).toBe("implement-ticket");
+  });
+
+  test("the deps input survives the argv round trip through the CLI's own parser — '=' and quotes included", async () => {
+    const h = harness();
+    await h.run({
+      "plan.slices": { feature: "f", slices: [slice({ id: "base" }), slice({ id: "top", depends_on: [{ slice: "base", until: "published" }] })] },
+      tickets: { tickets: [ticket({ slice_id: "base" }), ticket({ slice_id: "top", identifier: "HOW-32" })] },
+    });
+    const argv = h.spawned[1]!;
+    const parsed = parseRunArgs(argv.slice(1)); // argv[0] is the "run" verb
+    expect(parsed.graphName).toBe("implement-stacked");
+    expect(parsed.inputs.deps).toBe(input(argv, "deps"));
+    const deps = parseDeps(parsed.inputs.deps);
+    expect(deps).toEqual({ ok: true, deps: [{ slice: "base", until: "published", run_id: "plan-feature-abc--base", workspace: "api" }] });
+    // a value with '=' in it is split at the FIRST '=' only
+    expect(parseRunArgs(["g", "-i", `deps=${JSON.stringify([{ slice: "a", note: "x=y \"q\"" }])}`]).inputs.deps).toBe(JSON.stringify([{ slice: "a", note: "x=y \"q\"" }]));
+    // and the child ids are unchanged by any of this
+    expect(flag(argv, "--id")).toBe(childRunId("plan-feature-abc", "top"));
   });
 
   test("dependencies launch first, whatever order the plan listed them in", async () => {
@@ -449,7 +501,7 @@ describe("nothing is launched until everything checks out", () => {
 });
 
 describe("launchOrder", () => {
-  const s = (id: string, depends_on: string[] = []) => ({ id, title: "t", goal: "g", work: "w", verify: "v", depends_on });
+  const s = (id: string, deps: string[] = []) => ({ id, title: "t", goal: "g", work: "w", verify: "v", depends_on: deps.map((slice) => ({ slice, until: "merged" as const })) });
 
   test("a plan with no dependencies launches exactly as it was written", () => {
     expect(launchOrder([s("a"), s("b"), s("c")]).map((x) => x.id)).toEqual(["a", "b", "c"]);

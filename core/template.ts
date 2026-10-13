@@ -199,7 +199,7 @@ export function operatorInstructionSuffix(message: string): string {
 // ---- suffixes (system-map 0.1) ---------------------------------------------------
 
 /** The suffix wording new renders use. Bump it — and add a builder set — to reword. */
-export const SUFFIX_VERSION = 7;
+export const SUFFIX_VERSION = 8;
 
 /**
  * HOW-36: what a context-exhausted visit had done, as data — derived by engine/handoff.ts from
@@ -255,6 +255,17 @@ export interface SuffixBuilders {
    * agent's own last message says where it was. Absent from versions that predate it (v1–v6).
    */
   stopResumeInstruction?(lastMessage: string): string;
+  /**
+   * HOW-57 (G8): this run's branch is stacked on another run's — plan, build and review only
+   * `<sha>..HEAD`. Absent from versions that predate it (v1–v7).
+   */
+  stackedInstruction?(base: StackedOn): string;
+}
+
+/** HOW-57: the branch and commit a stacked run's work sits on (`deps.base` / `deps.base_tip`). */
+export interface StackedOn {
+  branch: string;
+  sha: string;
 }
 
 /**
@@ -387,9 +398,23 @@ const V7: SuffixBuilders = {
     `\nPick up from there: check \`git status\` and \`git log --oneline -10\` against that account, then continue rather than starting over.`,
 };
 
-const SUFFIX_BUILDERS: Readonly<Record<number, SuffixBuilders>> = { 1: V1, 2: V2, 3: V3, 4: V4, 5: V5, 6: V6, 7: V7 };
+/**
+ * v8 (HOW-57, G8) = v7 + the STACKED briefing for a run whose branch sits on another run's PR.
+ * Without it a planner re-plans the base's work and a reviewer reviews it, because the base's
+ * commits are in the worktree too. NEVER edit a published version.
+ */
+const V8: SuffixBuilders = {
+  ...V7,
+  stackedInstruction: ({ branch, sha }) =>
+    `\n\n## Stacked change\n` +
+    `This change is stacked on ${branch}@${sha.slice(0, 12)} — another slice's branch, with its own PR. ` +
+    `Your change is \`${sha.slice(0, 12)}..HEAD\`: plan, build and judge only that range, and do not modify or review the base's commits. ` +
+    `Use \`git diff ${sha.slice(0, 12)}..HEAD\` and \`git log ${sha.slice(0, 12)}..HEAD\` to see it.`,
+};
+
+const SUFFIX_BUILDERS: Readonly<Record<number, SuffixBuilders>> = { 1: V1, 2: V2, 3: V3, 4: V4, 5: V5, 6: V6, 7: V7, 8: V8 };
 /** the builders new renders use; bump together with SUFFIX_VERSION */
-const CURRENT: SuffixBuilders = V7;
+const CURRENT: SuffixBuilders = V8;
 
 /** The builders a logged `suffix_version` pins, or undefined for a version this code never had. */
 export function suffixBuilders(version: number): SuffixBuilders | undefined {
@@ -439,6 +464,8 @@ export interface PromptParts {
   steerMessages?: readonly string[];
   /** HOW-48: the agent's last message from a visit the operator soft-stopped */
   stopResumeMessage?: string;
+  /** HOW-57 (v8): what this run's branch is stacked on — renders the STACKED briefing */
+  stackedOn?: StackedOn;
   /** skills named in the hint — already filtered by skillsForHarness */
   skills: readonly string[];
   /** the node's declared write keys, in declaration order */
@@ -448,7 +475,7 @@ export interface PromptParts {
 
 /**
  * The ONE assembly of a prompt as sent. Fixed order:
- *   template body → operator jump → operator reply (0.2) → proposal refusal (1c)
+ *   template body → stacked briefing (HOW-57) → operator jump → operator reply (0.2) → proposal refusal (1c)
  *   → context re-entry (HOW-14) → resume after operator stop (HOW-48) → carried operator steers
  *   (HOW-47) → skill hint → outputs contract.
  * Throws on a suffix version with no builders — the engine only ever passes SUFFIX_VERSION,
@@ -458,6 +485,11 @@ export interface PromptParts {
 export function assemblePrompt(parts: PromptParts): string {
   const builders = suffixBuilders(parts.suffixVersion);
   if (!builders) throw new Error(`no builders for suffix version ${parts.suffixVersion}`);
+  let stacked = "";
+  if (parts.stackedOn !== undefined) {
+    if (!builders.stackedInstruction) throw new Error(`suffix version ${parts.suffixVersion} has no stacked builder`);
+    stacked = builders.stackedInstruction(parts.stackedOn);
+  }
   let reply = "";
   if (parts.replyMessage !== undefined) {
     if (!builders.replyInstruction) throw new Error(`suffix version ${parts.suffixVersion} has no reply builder`);
@@ -485,6 +517,7 @@ export function assemblePrompt(parts: PromptParts): string {
   }
   return (
     parts.body +
+    stacked +
     (parts.jumpMessage !== undefined ? operatorInstructionSuffix(parts.jumpMessage) : "") +
     reply +
     refusal +

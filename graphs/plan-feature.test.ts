@@ -163,7 +163,9 @@ describe("the approved path: one ticket per slice, one run per ticket", () => {
     expect(events.find((e) => e.type === "run-finished")).toMatchObject({ outcome: "success" });
 
     expect(run.spawned.map((a) => flag(a, "--id"))).toEqual(["plan-run--api-delete", "plan-run--web-delete"]);
-    expect(run.spawned.every((a) => a[1] === "implement-ticket" && flag(a, "--parent") === "plan-run")).toBe(true);
+    // HOW-57: web-delete depends on api-delete, so it is launched as implement-stacked
+    expect(run.spawned.map((a) => a[1])).toEqual(["implement-ticket", "implement-stacked"]);
+    expect(run.spawned.every((a) => flag(a, "--parent") === "plan-run")).toBe(true);
     expect(events.filter((e) => e.type === "run-spawned")).toMatchObject([
       { child: "plan-run--api-delete", slice_id: "api-delete", ticket: "HOW-31", graph: "implement-ticket" },
       { child: "plan-run--web-delete", slice_id: "web-delete", ticket: "HOW-32" },

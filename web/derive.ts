@@ -175,6 +175,13 @@ export interface RunDetail {
    */
   evidence: Array<{ node: string; visit: number; at: string; result: EvidenceResult }>;
   /**
+   * HOW-57: what a stacked run is WAITING on, in `runs:await`'s own words — "waiting on fe-1 ·
+   * published (parked: needs you)" — while it is still waiting; null once its dependencies are
+   * ready, when it finished, and for every run that is not stacked. Never re-derived from the
+   * dependencies here: the viewer reads this run's log, and the await step already read theirs.
+   */
+  waiting: string | null;
+  /**
    * HOW-51: the acceptance contract as it stands — the latest list any node wrote, each row with
    * its waiver (a decision event) when an operator waived it, plus every earlier version's rows
    * that the latest list no longer carries live (superseded rows stay, by the contract's rules).
@@ -502,6 +509,7 @@ export function deriveDetail(
       const result = asEvidenceResult(e.writes[EVIDENCE_KEY]);
       return result ? [{ node: e.node, visit: e.visit, at: e.ts, result }] : [];
     }),
+    waiting: summary.status === "done" || summary.status === "failed-terminal" ? null : latestWaiting(events),
     last_agent_event_at: lastAgent?.ts ?? null,
     renders,
     outcomes: [...outcomesByHash(events).values()],
@@ -560,6 +568,18 @@ export interface LogRow {
    * what says the row stands for more than itself.
    */
   merged: number;
+}
+
+/** HOW-57: the latest `deps.waiting` a step published, when it is non-empty (`""` means ready) */
+export function latestWaiting(events: readonly LoggedEvent[]): string | null {
+  const e = events.findLast((x) => x.type === "node-finished" && x.status === "succeeded" && "deps.waiting" in x.writes);
+  const v = e?.type === "node-finished" ? e.writes["deps.waiting"] : undefined;
+  return typeof v === "string" && v.trim() !== "" ? v : null;
+}
+
+/** HOW-57: "restacked onto fe-1 @ abc123456789 (was def…)" — one sentence for the log and the transcript */
+export function restackSummary(e: Pick<Extract<LoggedEvent, { type: "base-restacked" }>, "from" | "to" | "pr">): string {
+  return `restacked ${e.from.branch} @ ${e.from.sha.slice(0, 12)} → ${e.to.branch} @ ${e.to.sha.slice(0, 12)}${e.pr ? ` · ${e.pr} retargeted` : ""}`;
 }
 
 type Chunky = Extract<LoggedEvent, { type: "chunk" }>;
@@ -675,6 +695,8 @@ export function deriveLogRows(events: LoggedEvent[]): LogRow[] {
       case "run-spawned":
         return { ...base, ...at(e.node, e.visit), kind: "engine", depth: 0,
           summary: `launched ${e.graph} run ${e.child} for slice ${e.slice_id}${e.ticket ? ` (${e.ticket})` : ""}${e.workspace ? ` in ${e.workspace}` : ""}` };
+      case "base-restacked":
+        return { ...base, ...at(e.node, e.visit), kind: "engine", depth: 0, summary: restackSummary(e) };
       case "map-progress":
         return { ...base, ...at(e.node, e.visit), kind: "engine", depth: 1, summary: `extracting ${e.done}/${e.total} (skipped ${e.skipped})` };
       case "drift-detected": {
@@ -1057,9 +1079,27 @@ export function asGhostSet(v: unknown): GhostSet | null {
  */
 export interface SlicePlanView {
   feature: string;
-  slices: Array<{ id: string; title: string; goal: string; workspace: string | null; verify: string; work: string; depends_on: string[] }>;
+  slices: Array<{ id: string; title: string; goal: string; workspace: string | null; verify: string; work: string; depends_on: SliceDepView[] }>;
   out_of_scope: string[];
   risks: string[];
+}
+
+/** HOW-57: one dependency and how far it must get — the bare-string form reads as `merged`. */
+export interface SliceDepView {
+  slice: string;
+  until: "published" | "merged" | "package";
+}
+
+const UNTILS = ["published", "merged", "package"] as const;
+
+export function asSliceDeps(v: unknown): SliceDepView[] {
+  if (!Array.isArray(v)) return [];
+  return v.flatMap((d): SliceDepView[] => {
+    if (typeof d === "string") return [{ slice: d, until: "merged" }];
+    if (!isRecord(d) || typeof d.slice !== "string") return [];
+    const until = (UNTILS as readonly unknown[]).includes(d.until) ? (d.until as SliceDepView["until"]) : "merged";
+    return [{ slice: d.slice, until }];
+  });
 }
 
 export function asSlicePlan(v: unknown): SlicePlanView | null {
@@ -1075,7 +1115,7 @@ export function asSlicePlan(v: unknown): SlicePlanView | null {
           workspace: str(s.workspace) ? s.workspace : null,
           verify: text(s.verify),
           work: text(s.work),
-          depends_on: Array.isArray(s.depends_on) ? s.depends_on.filter(str) : [],
+          depends_on: asSliceDeps(s.depends_on),
         }]
       : [],
   );

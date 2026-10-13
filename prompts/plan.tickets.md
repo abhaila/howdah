@@ -1,8 +1,8 @@
 ---
 id: plan.tickets
-version: 1
+version: 2
 tags: [plan-feature]
-provenance: HOW-23 — raise one ticket per approved slice, through the tracker's own workflow
+provenance: HOW-23 — raise one ticket per approved slice, through the tracker's own workflow; v2 records depends_on with its until, now enforced (HOW-57)
 ---
 Discover and use relevant installed skills for creating and organising tickets.
 
@@ -31,7 +31,7 @@ Create one ticket per slice in the approved plan, using the tracker's own workfl
 For each slice:
 
 - **Title**: the slice's `title`.
-- **Body**: the slice's `work`, then how a human verifies it (`verify`), then the slice's place in the feature — name the feature and, when `depends_on` is non-empty, say which other slices should land first and that each of them has its own ticket. Record `depends_on` as prose: nothing enforces it, so the person and the agent who build the slice need to read it.
+- **Body**: the slice's `work`, then how a human verifies it (`verify`), then the slice's place in the feature — name the feature and, when `depends_on` is non-empty, say which other slices it waits for, how far each must get (its `until`: published, merged or package) and that each of them has its own ticket. The run that builds the slice enforces `depends_on` itself — it waits before it starts — so the ticket records it for the people who review it.
 - Leave the ticket in the tracker's normal starting state. Do not assign, estimate or schedule it unless the work scope asks for that.
 
 **Do not create a duplicate.** Search the project for an existing ticket with the same title before creating one. If a slice already has a ticket — because this step ran before, or because the operator raised it by hand — REUSE it: return its identifier and url, and update its body only if it does not yet describe the approved slice. Creating a second ticket for one slice is worse than creating none, because the next step launches a run against every ticket it is given.

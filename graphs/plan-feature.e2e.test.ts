@@ -203,7 +203,8 @@ describe("plan-feature E2E (fake-claude, real map, real worktree, real decisions
     expect(run.spawned.map((a) => flag(a, "--id"))).toEqual([
       `${RUN_ID}--api-route`, `${RUN_ID}--api-handler`, `${RUN_ID}--web-client`,
     ]);
-    expect(run.spawned.map((a) => a[1])).toEqual(["implement-ticket", "implement-ticket", "implement-ticket"]);
+    // HOW-57: api-handler depends on api-route, so it runs implement-stacked and waits for it
+    expect(run.spawned.map((a) => a[1])).toEqual(["implement-ticket", "implement-stacked", "implement-ticket"]);
     expect(run.spawned.map((a) => flag(a, "--parent"))).toEqual([RUN_ID, RUN_ID, RUN_ID]);
     // the slice that named its own workspace goes there; the other two inherit this run's
     expect(run.spawned.map((a) => flag(a, "--workspace"))).toEqual(["api", "api", "web"]);
@@ -212,7 +213,7 @@ describe("plan-feature E2E (fake-claude, real map, real worktree, real decisions
     // each child is handed its own ticket as `work` — it never sees the plan
     const handler = run.spawned[1]!;
     expect(inputOf(handler, "work")).toContain("HOW-41: Slice api-handler");
-    expect(inputOf(handler, "work")).toContain("Depends on other slices of this feature (each has its own ticket and PR): api-route");
+    expect(inputOf(handler, "work")).toContain("Depends on other slices of this feature (each has its own ticket and PR; this run waits for them): api-route (until merged)");
     expect(inputOf(handler, "goal")).toContain("one vertical slice of: let users delete their account");
 
     expect(events.filter((e) => e.type === "run-spawned").map((e) => e.type === "run-spawned" && e.child)).toEqual([

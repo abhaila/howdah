@@ -100,15 +100,42 @@ GitHub retargets an open PR to `main` when its base branch is deleted after a me
 
 ## Implementation tasks
 
-- [ ] **S1 (P1)** `graphs/slice-plan.ts`: `depends_on` entries `{ slice, until }` (string form = merged), the published-base rules, and the `package` state. `plan.propose.md`: how to choose `until`. Tests: both forms, each refusal in the planner's words. [→EVAL] the planner chooses sensible `until`s.
-- [ ] **S2 (P1)** `engine/executors/worktree.ts` (C): fetch, base resolution, the recorded base and SHA beside local HEAD, the "ahead" fact, and the HEAD fallback. Worktree nodes may read `deps.base` (`core/graph-spec.ts`). Tests: given base, default base, local-ahead fact, **REGRESSION (critical): no remote → HEAD, as today**, failed fetch, unknown base refused.
-- [ ] **S3 (P1)** `engine/executors/await.ts` (new) `runs:await` in await and probe modes, plus a `COMMAND_BUILTINS` row and a `graphs/builder.test.ts` pin (1A, G1, G6, G7, G10). Config: `packageCheck` per workspace. Tests: every dependency state, the spawn race, a torn line, a missing dir with and without a spawn record, a parked dependency, primary-PR base, a package check with and without a command.
-- [ ] **S4 (P1)** `engine/run.ts` (G5): wait steps excluded from `maxSteps`; the await back-off. Test: a simulated 5-day await, then normal work.
-- [ ] **S5 (P1)** `engine/executors/restack.ts` (new) `git:restack` (A, B): effects-wrapped, `base-restacked` in `log/events.ts`, retarget, conflict handed to the repair agent with the `--onto` command. Tests: merged, moved-unapproved, moved-approved (no push), conflict, idempotent re-run.
-- [ ] **S6 (P1)** `graphs/implement-stacked.ts` `stackedFrom()` (5A, G3), `prompts/stacked.publish.md` (G3b), the STACKED suffix in `core/template.ts` with a `SUFFIX_VERSION` bump (G8), route weights (G4), and `probe:pr` filtering `deps.prs` (G2). The fixture entry (G9). Tests: the drift test, route order, suffix reconstruction VERIFIED, wrong-PR filtering.
-- [ ] **S7 (P1)** `engine/executors/launch.ts` (G11): graph per slice, `deps` input, an updated HOW-23 header (the child waits; the parent still never supervises). Tests: graph choice, argv round trip, ids unchanged.
-- [ ] **S8 (P1)** E2E with a local bare origin (8A): be-1 / fe-1 / fe-2 launched together. fe-2 waits, then branches from fe-1's PR head and targets it. A review fix on unapproved fe-1 restacks fe-2, and an approved fe-2 is left alone. A squash merge of fe-1 restacks fe-2 onto main, and fe-2's diff is fe-2 only. be-1 merging with no package yet keeps fe-1 waiting.
-- [ ] **S9 (P2)** Viewer: "waiting on fe-1 · published (parked: needs you)", and `base-restacked` shown in the transcript. `CLAUDE.md` invariants: the child waits and the parent never supervises; worktree base; restack is an exactly-once effect.
+- [x] **S1 (P1)** `graphs/slice-plan.ts`: `depends_on` entries `{ slice, until }` (string form = merged), the published-base rules, and the `package` state. `plan.propose.md`: how to choose `until`. Tests: both forms, each refusal in the planner's words. [→EVAL] the planner chooses sensible `until`s.
+- [x] **S2 (P1)** `engine/executors/worktree.ts` (C): fetch, base resolution, the recorded base and SHA beside local HEAD, the "ahead" fact, and the HEAD fallback. Worktree nodes may read `deps.base` (`core/graph-spec.ts`). Tests: given base, default base, local-ahead fact, **REGRESSION (critical): no remote → HEAD, as today**, failed fetch, unknown base refused.
+- [x] **S3 (P1)** `engine/executors/await.ts` (new) `runs:await` in await and probe modes, plus a `COMMAND_BUILTINS` row and a `graphs/builder.test.ts` pin (1A, G1, G6, G7, G10). Config: `packageCheck` per workspace. Tests: every dependency state, the spawn race, a torn line, a missing dir with and without a spawn record, a parked dependency, primary-PR base, a package check with and without a command.
+- [x] **S4 (P1)** `engine/run.ts` (G5): wait steps excluded from `maxSteps`; the await back-off. Test: a simulated 5-day await, then normal work.
+- [x] **S5 (P1)** `engine/executors/restack.ts` (new) `git:restack` (A, B): effects-wrapped, `base-restacked` in `log/events.ts`, retarget, conflict handed to the repair agent with the `--onto` command. Tests: merged, moved-unapproved, moved-approved (no push), conflict, idempotent re-run.
+- [x] **S6 (P1)** `graphs/implement-stacked.ts` `stackedFrom()` (5A, G3), `prompts/stacked.publish.md` (G3b), the STACKED suffix in `core/template.ts` with a `SUFFIX_VERSION` bump (G8), route weights (G4), and `probe:pr` filtering `deps.prs` (G2). The fixture entry (G9). Tests: the drift test, route order, suffix reconstruction VERIFIED, wrong-PR filtering.
+- [x] **S7 (P1)** `engine/executors/launch.ts` (G11): graph per slice, `deps` input, an updated HOW-23 header (the child waits; the parent still never supervises). Tests: graph choice, argv round trip, ids unchanged.
+- [x] **S8 (P1)** E2E with a local bare origin (8A): be-1 / fe-1 / fe-2 launched together. fe-2 waits, then branches from fe-1's PR head and targets it. A review fix on unapproved fe-1 restacks fe-2, and an approved fe-2 is left alone. A squash merge of fe-1 restacks fe-2 onto main, and fe-2's diff is fe-2 only. be-1 merging with no package yet keeps fe-1 waiting.
+- [x] **S9 (P2)** Viewer: "waiting on fe-1 · published (parked: needs you)", and `base-restacked` shown in the transcript. `CLAUDE.md` invariants: the child waits and the parent never supervises; worktree base; restack is an exactly-once effect.
+
+### As built (2026-10-13)
+
+Where the code changed the plan, within scope:
+
+- **`deps.restack`, one routing fact.** A `GraphSpec` route tests one key, so "base MOVED and this
+  PR not approved" cannot be an edge condition. Probe mode publishes `deps.restack` (merged, or
+  moved while this run's own PR is unapproved — it reads that PR itself; one it cannot read counts
+  as approved, so nothing is force-pushed on a guess). `git:restack` keeps its own approval guard.
+- **`deps.probe` runs after publish as well as after every wait**, so the first PR probe is also
+  preceded by a base check. `REWIRED_EDGES` names the two implement-ticket edges this replaces.
+- **A restack conflict goes to a new agent step, `delivery.resolve_restack`**
+  (`stacked.resolve_restack.md`), which is given `restack.conflict` — `delivery.resolve_conflicts`
+  does not read it and would rebase the wrong way (G4).
+- **`git:restack` publishes `deps.base` / `deps.base_tip`**: after a merge restack the base is
+  `""`, so the STACKED briefing stops and `stacked.publish` targets the default branch.
+- **Exactly-once by observed state too.** The effect key is the target sha plus the remote head
+  it leases against; a branch that already contains the target (an agent resolved a conflict) is
+  recorded without rebasing; origin holding commits the worktree lacks parks before anything is
+  rewritten; a lease refused by a racing push is recorded as not pushed and retried next probe.
+- **An unreachable forge keeps `runs:await` waiting** (with the reason in `deps.waiting`) rather
+  than parking: waiting is the safe action, and it is still distinct from "no PR".
+- **The 5-day await test (S4) uses the back-off.** A poll's command step still counts toward
+  `maxSteps` (only waits are exempt), so 5 days of un-backed-off 5m polls (~1440) would still
+  exceed 1000; with 5m → 15m → 30m it is ~245 polls.
+- **[→EVAL]** `reviser/eval/plan-until.eval.ts` (token-spending, run on demand) scores a BE/FE
+  brief: every web→api dependency `package`, at least one same-repo `published`.
 
 **Order:** S1, S2 and S4 are independent and can run in parallel. S3 needs S1. S5 needs S2. S6 needs S3 and S5. S7 needs S1 and S6. S8 needs S6 and S7. S9 last.
 
