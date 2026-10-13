@@ -72,7 +72,12 @@ describe("the B/C/D proposals", () => {
     for (const f of files) {
       const p = loadProposal(join(PROPOSALS, f));
       expect(p.fork).toBe(true);
-      expect(store.staleness(p.id, p.base_version, p.base_includes)).toBeNull();
+      // once one variant of a prompt is accepted, its siblings are stale by design — the guard
+      // that stops a second accept from silently overwriting the first
+      const winner = files.map((g) => loadProposal(join(PROPOSALS, g))).find((q) => q.id === p.id && q.status === "accepted");
+      if (winner === undefined) expect(store.staleness(p.id, p.base_version, p.base_includes)).toBeNull();
+      else if (p.status === "accepted") expect(store.load(p.id).version).toBe(p.proposed_version);
+      else expect(store.staleness(p.id, p.base_version, p.base_includes)).toContain("stale base");
       expect(readFileSync(join(PROPOSALS, f.replace(".proposal.md", ".reflection.md")), "utf8")).toContain("HOW-44");
       expect(readFileSync(join(PROPOSALS, f.replace(".proposal.md", ".diff")), "utf8")).toContain("+{{> implementation._");
     }

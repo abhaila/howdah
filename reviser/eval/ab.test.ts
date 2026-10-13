@@ -31,7 +31,7 @@ function proposal(dir: string, id = "implementation.implement"): string {
 describe("variants", () => {
   test("a prompt file, a proposal, inline JSON and a JSON file", () => {
     const a = parseVariant(join(ROOT, "prompts", "implementation.implement.md"));
-    expect(a).toMatchObject({ kind: "prompt", id: "implementation.implement", version: 1 });
+    expect(a).toMatchObject({ kind: "prompt", id: "implementation.implement", version: 2 });
     const dir = mkdtempSync(join(tmpdir(), "howdah-ab-v-"));
     expect(parseVariant(proposal(dir))).toMatchObject({ kind: "prompt", id: "implementation.implement", version: 2, label: "implementation.implement v2 (proposal)" });
     expect(parseVariant('{"effort":"high"}')).toMatchObject({ kind: "config", overlay: { defaults: { effort: "high" } } });

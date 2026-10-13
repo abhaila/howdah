@@ -2,7 +2,8 @@
 id: slice.implement
 base_version: 1
 proposed_version: 2
-status: pending
+status: accepted
+accepted_at: 2026-10-13T13:04:24.829Z
 created: 2026-10-12T00:00:00.000Z
 fork: true
 experiment: HOW-44 variant B (verification-aware)

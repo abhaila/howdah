@@ -1,8 +1,9 @@
 ---
 id: implementation.implement
-version: 1
+version: 2
 tags: [implement-ticket]
-provenance: ported from Orbital implement-ticket
+accepted: 2026-10-13T13:04:25.763Z
+provenance: proposal /Users/abhaila001/code/howdah/reviser/proposals/implementation.implement.v2.c-plan-first.proposal.md
 ---
 Discover and use relevant installed skills for implementation and verification.
 
@@ -17,6 +18,8 @@ Work scope:
 Implementation plan:
 
 {{ context.implementation_plan }}
+
+{{> implementation._plan_first }}
 
 Implement the planned change in the prepared worktree. Follow applicable repository instructions and preserve unrelated work.
 

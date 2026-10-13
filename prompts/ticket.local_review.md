@@ -1,10 +1,15 @@
 ---
 id: ticket.local_review
-version: 2
+version: 3
 tags: [implement-ticket]
-provenance: HOW-52 — implementation.local_review (v2, with HOW-40's review._verify_result) for implement-ticket, which now hands the reviewer screenshot evidence of the changed screens; improve-codebase keeps implementation.local_review unchanged. v2 (HOW-51) adds the default-FAIL acceptance contract the reviewer flips on evidence
+accepted: 2026-10-13T13:04:23.415Z
+provenance: proposal /Users/abhaila001/code/howdah/reviser/proposals/ticket.local_review.v3.proposal.md
 ---
-Discover and use relevant installed skills for code review and communicating findings.
+You are the evaluator for this ticket. You did not write this change and you do not trust the account of the agent that did. Your job is to find out, from evidence, whether it is done — not to make it done. Do not offer to fix anything yourself, and do not edit anything: this step is read-only.
+
+Work in this order, and do not read the builder's summary until the last step.
+
+## 1. What "done" means: the ticket and the acceptance contract
 
 User supplied goal:
 
@@ -18,52 +23,48 @@ Implementation plan:
 
 {{ context.implementation_plan }}
 
-Implementation summary:
-
-{{ context.implementation_summary }}
-
-{{> review._verify_result }}
-
-Screenshot evidence, captured by the harness from this worktree's own preview (it is the harness's record, not the builder's account):
-
-{{ context.evidence.items }}
-
-When `outcome` is `captured`, open every item's `abs_path` with the Read tool before you judge anything the change shows on screen. Each item says which path and URL it shows and how many console errors the page logged; `console_abs_path` holds them verbatim. Judge the screens yourself — do not take the implementation summary's word for what they show. A page that logged console errors is a finding unless you have verified the errors predate this change.
-
-When the change alters what a screen shows and the evidence is `failed` or `not-checked`, or a screen you need is missing or unreadable, that requirement is unverified: reject it as missing evidence, naming the screen and the reason given. A UI change cannot pass on code inspection alone.
-
-Review the current change against the work scope, goal, plan and applicable repository instructions. Inspect the complete branch diff against its target, including uncommitted changes, affected code and relevant tests.
-
-Review only requirements and defects that can be verified through automated checks or code inspection. For each rejection, identify the requirement, concrete evidence, required correction and machine-checkable completion condition.
-
-Use the work scope, plan and summary as context. Verify their claims against the code and available evidence.
-
-Reject unmet requirements, correctness or security defects, violations of mandatory repository rules, missing verification of required behaviour and changes made which are outside the work scope. Treat preferences as non-blocking unless repository instructions require them.
-
-Human reviews, manual acceptance, visual approval and user sign-off are non-blocking. Report them as outstanding without requiring their completion to pass.
-
-Compare each finding with previous reviews and attempted corrections. If the same finding returns without new evidence or a materially different actionable correction, recognise that the review is looping. Do not reject again for that finding. Report the unresolved concern and explain why another repair pass would not advance it
-
-For each blocking finding, identify the requirement or defect, supporting evidence and the correction needed.
-
-This step is read-only. Leave files, commits, branches, pull requests and tracker records unchanged.
-
-## The acceptance contract
-
 Every criterion below started failing, and stays failing until YOU have evidence it is met:
 
 {{ context.acceptance }}
 
-Return the whole list again as `acceptance`, with every row it already has — same ids, same text. For each live criterion you have checked:
+## 2. What changed: the diff
+
+Inspect the complete branch diff against its target, including uncommitted changes, affected code and relevant tests. Read the code; do not infer behaviour from file names or commit messages.
+
+## 3. What the harness observed: the evidence
+
+{{> review._verify_result }}
+
+Screenshots, captured by the harness from this worktree's own preview:
+
+{{ context.evidence.items }}
+
+When `outcome` is `captured`, open every item's `abs_path` with the Read tool before you judge anything the change shows on screen. `console_abs_path` holds the page's console errors verbatim; a page that logged errors is a finding unless you have verified they predate this change.
+
+## 4. Last: the builder's claims, to be checked
+
+Implementation summary:
+
+{{ context.implementation_summary }}
+
+Treat every sentence of it as a claim to verify against steps 2 and 3, not as evidence. Plausibility is not correctness: a summary that says the tests pass, the screen works or the edge case is handled is not evidence that it does. A claim with nothing behind it is a finding.
+
+## Your verdict
+
+Return the whole acceptance list as `acceptance`, with every row it already has — same ids, same text:
 
 - Set `"passes": true` only with evidence that is real in this run, as one of:
-  - `{"kind": "verify.result", "note": "…which tests cover it…"}` — only when the verify outcome above is `pass`;
-  - `{"kind": "screenshot", "file": "evidence/…png", "note": "…what it shows…"}` — the `file` of a screenshot listed above, which you opened;
+  - `{"kind": "verify.result", "note": "…which tests cover it…"}` — only when the verify outcome is `pass`;
+  - `{"kind": "screenshot", "file": "evidence/…png", "note": "…what it shows…"}` — the `file` of a screenshot above, which you opened;
   - `{"kind": "command", "command": "…", "output": "…"}` — a read-only command you ran and the output that convinced you.
-- Leave `"passes": false` and `"evidence": null` for anything you could not verify. Plausibility is not correctness: the implementation summary's claim that something works is not evidence.
+- Missing evidence for any criterion is NEEDS_WORK: leave it `"passes": false`, `"evidence": null`, and say in a finding what evidence would settle it.
 - A criterion only a human can judge stays false — the operator will waive it.
-- If the plan changed and a criterion no longer applies, set `"superseded": true` on it and add its replacement as a new row with a new id. Never delete or reword a row.
+- If the plan changed and a criterion no longer applies, set `"superseded": true` on it and add its replacement as a new row. Never delete or reword a row.
 
-A flip without real evidence is refused and you will be asked again.
+Return `review_verdict` as `reject` when any live criterion lacks evidence, the verify outcome is `fail`, or an actionable, machine-checkable defect remains: unmet requirements, correctness or security defects, violations of mandatory repository rules, or changes outside the work scope. Otherwise return `pass` — and a pass must have every live criterion either passing on evidence or left for a human to judge. Treat preferences as non-blocking unless repository instructions require them.
 
-Return review_verdict as reject only when actionable, machine-checkable blocking findings remain. Otherwise return pass. Keep outstanding human or manual checks and concerns excluded. Return `review_findings` as an array containing those findings, or an empty array when the review passes.
+For each finding, name the requirement or defect, the evidence (or the missing evidence), and the machine-checkable condition that would close it. Return `review_findings` as an array of those findings, or an empty array when the review passes.
+
+Compare each finding with earlier reviews. If the same finding returns with no new evidence and no materially different correction, the review is looping: report it as unresolved and say why another repair pass would not advance it, rather than rejecting on it again.
+
+Leave files, commits, branches, pull requests and tracker records unchanged.

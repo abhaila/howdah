@@ -1,8 +1,9 @@
 ---
 id: slice.implement
-version: 1
+version: 2
 tags: [implement-slice]
-provenance: system-map 1c — implementation.implement, bound to an approved ghost set
+accepted: 2026-10-13T13:04:24.829Z
+provenance: proposal /Users/abhaila001/code/howdah/reviser/proposals/slice.implement.v2.b-verify-aware.proposal.md
 ---
 Discover and use relevant installed skills for implementation and verification.
 
@@ -42,6 +43,8 @@ After every implementation the map is re-extracted and compared with the design.
 `null` on the first attempt:
 
 {{ context.review_findings }}
+
+{{> implementation._verify_aware }}
 
 Implement the change in the prepared worktree. Follow applicable repository instructions and preserve unrelated work. Run the relevant checks. Record what each check establishes and any failures or verification gaps. Create or update local commits using the repository's conventions.
 
