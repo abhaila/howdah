@@ -47,6 +47,66 @@ within a week. The job is seeing your work in one place, not storing it twice.
 **Priority:** P2
 **Depends on:** nothing
 
+### HOW-31 phase 2: the draft diff on the canvas, and "make this run reusable"
+
+**What:**
+- Draw a draft's diff against `based_on` on the builder canvas: steps added, removed and
+  changed, plus what a removal cascaded into.
+- A control on a finished run that launches `draft-graph`, seeded with that run's graph and its
+  operator replies and jumps.
+
+**Why:** Phase 1 shows the diff as a list. The CEO plan's goal is reviewing a change where it
+happens, and drafting from a run is the lowest-effort way in, with no prose to compose.
+
+**Context:**
+- Plan: `docs/designs/graph-drafting-eng-plan.md` (decisions A and B; phase 2 section).
+- Builds on phase 1's minimal diff list and `copyOf` prompt references.
+- Do this only after phase 1 drafts have been used for real.
+
+**Effort:** M
+**Priority:** P2
+**Depends on:** HOW-31 phase 1
+
+
+## Engine (graphs)
+
+### Named proposal validators, then convert implement-slice and plan-feature to GraphSpec
+
+**What:**
+- Add a `PROPOSAL_VALIDATORS` table, in the style of `COMMAND_BUILTINS`, so an approval step
+  NAMES its validator (`slice-plan`, `ghost-set`) instead of the graph carrying a function.
+- Then convert the last two built-ins.
+
+**Why:** This finishes the CEO plan's B1. The builder can then open those two graphs, and
+drafts can diff against them.
+
+**Context:**
+- `validateProposal` is a graph-level function (`graphs/plan-feature.ts:96`), and a
+  `GraphSpec` is JSON with no slot for one. That is why these two graphs were skipped.
+- `graphs/fixtures/pre-spec-shapes.json` must NOT be regenerated. A diff there means the
+  conversion changed behaviour.
+
+**Effort:** M
+**Priority:** P3
+**Depends on:** nothing. Only needed once something diffs against these graphs.
+
+### Seed graph drafts from run history
+
+**What:** Give the drafter a summary of how the operator's past runs went: which steps parked,
+what the replies said, and which graphs were reused.
+
+**Why:** The CEO plan's target is the draft you would have drawn yourself (item 2,
+sequenced last by D7).
+
+**Context:**
+- 14 runs over 2 graph shapes is a thin corpus.
+- Measure with the drafter eval (`reviser/eval/cases/graph-draft/`, plan decision 8A) before
+  trusting it.
+
+**Effort:** M
+**Priority:** P3
+**Depends on:** HOW-31 phase 1 shipped, and the drafter eval baseline
+
 
 ## Map
 
