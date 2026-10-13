@@ -39,9 +39,15 @@ export interface AgentConfigDto {
   harness?: string;
   model?: string;
   effort?: string;
+  /** HOW-33: resolved configs only — why the set effort does not reach this harness */
+  effortInert?: string;
   permissionMode?: string;
   maxTurns?: number;
   skills?: string[];
+  /** HOW-41: the node's action space */
+  tools?: { allow?: string[]; deny?: string[] };
+  /** HOW-39: run the workspace's diagnosticsCommand after every edit (claude only) */
+  diagnostics?: boolean;
 }
 
 export interface GraphShapeDto {

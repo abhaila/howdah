@@ -36,6 +36,8 @@ import { buildRepairInstruction, parseOutputs } from "./outputs";
 import { classifyHarnessExit } from "./harness-failure";
 import { harnessSpec } from "../../core/harnesses";
 import { effectiveCwd } from "./worktree";
+import { killGroup } from "./shell";
+import { ToolWatch, TurnCeiling, stuckReason, turnTimeoutReason, type StuckThresholds } from "./stuck";
 
 export interface CursorExecutorOpts {
   binary?: string; // overridable for tests (fake-cursor fixture)
@@ -46,6 +48,8 @@ export interface CursorExecutorOpts {
    * resolveAgentConfig already enforces, exactly like codexExecutor's read-only sandbox.
    */
   readOnly?: boolean;
+  /** HOW-38: config.json `stuck` thresholds */
+  stuck?: StuckThresholds;
 }
 
 /**
@@ -76,8 +80,17 @@ export function cursorExecutor(opts: CursorExecutorOpts = {}): Executor {
     const workdir = effectiveCwd(log.path, cwd) ?? dirname(log.path);
 
     let index = 0;
-    const chunk = (kind: "text" | "thinking" | "tool_call" | "tool_result", content: string, tool?: { id?: string; name?: string }) =>
-      log.append({ type: "chunk", node: nodeId, visit, turn: 1, index: index++, kind, content, tool_id: tool?.id, tool_name: tool?.name });
+    let turnNo = 1; // HOW-34: the outputs-repair spawn is turn 2
+    const chunk = (kind: "text" | "thinking" | "tool_call" | "tool_result", content: string, tool?: { id?: string; name?: string; input_hash?: string; is_error?: boolean }) =>
+      log.append({
+        type: "chunk", node: nodeId, visit, turn: turnNo, index: index++, kind, content, tool_id: tool?.id, tool_name: tool?.name,
+        ...(tool?.input_hash !== undefined ? { input_hash: tool.input_hash } : {}),
+        ...(tool?.is_error !== undefined ? { is_error: tool.is_error } : {}),
+      });
+    // HOW-38: stuck detection (warn + stop, no mid-turn channel) and the ceiling, across both spawns
+    const watch = new ToolWatch({ harness: "cursor", log, node: nodeId, visit, thresholds: opts.stuck, note: (t) => chunk("text", t), enabled: agentConfig?.stuckDetection !== false });
+    let livePid: number | undefined;
+    const ceiling = new TurnCeiling(agentConfig?.turnTimeoutMs, () => { if (livePid !== undefined) killGroup(livePid); });
 
     const stderrChunks: string[] = [];
     let sessionId: string | undefined;
@@ -91,7 +104,10 @@ export function cursorExecutor(opts: CursorExecutorOpts = {}): Executor {
         stdin: "ignore", // the prompt is argv (adapter/cursor.ts cursorArgs), not stdin
         stdout: "pipe",
         stderr: "pipe",
+        detached: true, // HOW-38: a stuck or timed-out turn ends the whole group
       });
+      livePid = proc.pid;
+      ceiling.start();
       const stderrDone = (async () => {
         for await (const c of proc.stderr) stderrChunks.push(new TextDecoder().decode(c));
       })();
@@ -117,17 +133,20 @@ export function cursorExecutor(opts: CursorExecutorOpts = {}): Executor {
               case "thinking_delta":
                 chunk("thinking", ev.text);
                 break;
-              case "tool_call":
-                chunk("tool_call", JSON.stringify(ev.input).slice(0, 400), { id: ev.id, name: ev.name });
+              case "tool_call": {
+                const summary = JSON.stringify(ev.input).slice(0, 400);
+                chunk("tool_call", summary, { id: ev.id, name: ev.name, input_hash: watch.call(ev.id, ev.name, ev.input, summary) });
                 break;
+              }
               case "tool_result":
-                chunk("tool_result", ev.content.slice(0, 400), { id: ev.id });
+                chunk("tool_result", ev.content.slice(0, 400), { id: ev.id, ...(ev.is_error !== undefined ? { is_error: ev.is_error } : {}) });
+                if (watch.result(ev.id, ev.is_error === true, ev.content)?.kind === "stop") killGroup(proc.pid);
                 break;
               case "rate_limit":
                 log.append({ type: "allowance", harness: "cursor", state: ev.state, remaining: ev.remaining, resets_at: ev.resets_at, raw: ev.raw });
                 break;
               case "turn_end":
-                log.append({ type: "turn-finalized", node: nodeId, visit, turn: 1, usage: ev.usage });
+                log.append({ type: "turn-finalized", node: nodeId, visit, turn: turnNo, usage: ev.usage });
                 resultText = ev.result_text ?? accumulated;
                 turnError = ev.error;
                 turnEnded = true;
@@ -146,19 +165,33 @@ export function cursorExecutor(opts: CursorExecutorOpts = {}): Executor {
     };
 
     let turn = await runTurn(prompt);
+    const interrupted = () => ceiling.fired || watch.stopped !== null;
 
     // One repair turn before giving up — the chat still holds the work, so asking for the
     // missing contract costs a short turn instead of re-running the whole node. It can only
     // be asked on a chat we know the id of: without one there is no session to resume, and
     // a fresh spawn would be a re-run of the node, not a repair.
-    if (turn.turnEnded && !turn.turnError && sessionId && writeKeys.length && !parseOutputs(turn.text, writeKeys).ok) {
+    if (!interrupted() && turn.turnEnded && !turn.turnError && sessionId && writeKeys.length && !parseOutputs(turn.text, writeKeys).ok) {
       chunk("text", "\n[outputs object missing — asking for it]");
+      turnNo = 2;
       turn = await runTurn(buildRepairInstruction(writeKeys), sessionId);
     }
 
     if (stderrChunks.length)
       writeFileSync(join(dirname(log.path), `cursor-${nodeId.replace(/[^\w.-]/g, "_")}-v${visit}.stderr.log`), stderrChunks.join(""));
 
+    ceiling.clear();
+    // HOW-38: WE ended it — before the startup check, whose exit reading would be ours
+    if (ceiling.fired) {
+      const reason = turnTimeoutReason(agentConfig!.turnTimeoutMs!);
+      chunk("text", `\n[${reason}]`);
+      return { status: "failed", writes: {}, reason, code: "turn-timeout" };
+    }
+    if (watch.stopped) {
+      const reason = stuckReason(watch.stopped);
+      chunk("text", `\n[${reason}]`);
+      return { status: "failed", writes: {}, reason, code: "stuck" };
+    }
     // a CLI that never spoke the protocol did not start: say WHY (usually "not logged in")
     // instead of falling through to an outputs complaint that blames the model
     const startup = classifyHarnessExit({ harness: binary, exitCode: turn.exitCode, stderr: stderrChunks.join(""), sawOutput: sawEvent });

@@ -35,6 +35,13 @@
  * log (engine/run.ts reentryAfterVisit), logged as `reentry_after_visit`, so reconstruction
  * rebuilds it exactly.
  *
+ * HOW-36: v5 = v4 whose re-entry briefing also carries a STRUCTURED HANDOFF — what the
+ * exhausted visit had done that git cannot show (files read, files edited, commands run and
+ * whether they failed, the agent's last stated intent, the outputs still owed), derived by rule
+ * from that visit's own log events (engine/handoff.ts). Bounded (HANDOFF_CHARS), with stubs
+ * that say how to get elided items back; no recall tool (HOW-32: the paper's clearest negative
+ * result). Reconstruction re-derives it from the same events, so the render stays VERIFIED.
+ *
  * Includes (system-map 1c review): `{{> prompt.id }}` pulls another prompt file's body in AT
  * PIN TIME — expandIncludes() runs when a run pins its prompts, and the pinned file holds the
  * expanded text. Rendering, rendered_hash and reconstruction therefore never see an include:
@@ -43,7 +50,7 @@
  */
 import { createHash } from "node:crypto";
 import { harnessSpec, isHarness } from "./harnesses";
-import { isEngineNamespace, templateRefPattern } from "./template-refs";
+import { TEMPLATE_FILTERS, ifBlockPattern, isEngineNamespace, templateRefPattern } from "./template-refs";
 import type { Harness } from "./graph";
 
 /**
@@ -52,25 +59,119 @@ import type { Harness } from "./graph";
  * Re-exported here because this file is still the one place a caller asks about templates —
  * the split moved the regex, it did not add a second one.
  */
-export { TEMPLATE_REF, templateRefPattern, isEngineNamespace, templateReads } from "./template-refs";
+export { TEMPLATE_REF, TEMPLATE_FILTERS, IF_BLOCK, templateRefPattern, ifBlockPattern, isEngineNamespace, templateReads, templateFilterProblems } from "./template-refs";
+
+// ---- render rules (HOW-37) ---------------------------------------------------------
 
 /**
- * Substitute every ref via `resolve`. Strings interpolate raw, everything else as JSON —
- * the engine's rule, kept here so reconstruction matches it. `resolve` may throw (the
- * engine's ContextStore does, on an unreadable key) and the throw propagates untouched.
+ * The substitution rules new renders use, logged as `render_version` on prompt-rendered.
+ * Absent on an event = v1. Like SUFFIX_VERSION, changing what a value renders as changes
+ * rendered_hash, so the rules are versioned and a past render is rebuilt by ITS rules:
+ *   v1  strings raw, everything else JSON; any `| filter` parsed and ignored
+ *   v2  `| dump` is JSON always (strings included); a value whose rendered text is longer than
+ *       the cap is clipped head and tail around a stub that says how big it was, that what
+ *       surrounds the stub is no longer valid JSON (when it was JSON), and where the whole
+ *       value is — so the agent can go and get it instead of guessing; and (HOW-44) a
+ *       `{{#if context.key}}…{{/if}}` block renders its body only when the value is a
+ *       non-empty string or `true` (v1 never had a block, so no v1 prompt carries one)
+ */
+export const RENDER_VERSION = 2;
+
+/**
+ * HOW-37: the default cap, in UTF-16 code units of a value's RENDERED text. Chosen from real
+ * logs, not guessed: across 494 context reads in 15 runs under ~/.howdah/runs (2026-10-12) the
+ * p50 was 1.3k, p95 29.9k, p99 46.7k and the max 48.5k — and the biggest were legitimate
+ * (`implementation_plan`, `slice.drift`, the run's own `work` scope). 16k (map/neighbourhood's
+ * cap) would have elided real plans, so the default sits above everything observed, with
+ * headroom: it bounds the runaway case (a findings value growing across repair loops) without
+ * touching a normal value. Per graph / node / tuning via AgentConfig.contextCap.
+ */
+export const DEFAULT_CONTEXT_CAP = 64_000;
+
+export interface RenderRules {
+  /** 1 (absent on old events) or 2 */
+  version: number;
+  /** v2: the most characters one value's rendered text may take before it is elided */
+  cap?: number;
+  /** v2: keys never elided (the engine passes the run's inputs: the operator's own words) */
+  exempt?: ReadonlySet<string>;
+  /** v2: where the full value of `key` is, for the stub — "the output of review@3 in …" */
+  sourceOf?: (key: string) => string;
+  /**
+   * v2, reconstruction: elide EXACTLY these keys (the ones the engine logged as elided). The
+   * engine leaves it unset and decides by the cap.
+   */
+  elideOnly?: ReadonlySet<string>;
+}
+
+export class TemplateError extends Error {}
+
+/** the text a value renders as, before any cap */
+function valueText(value: unknown, filter: string | undefined, version: number): string {
+  if (version >= 2 && filter === "dump") return JSON.stringify(value) ?? "null";
+  return typeof value === "string" ? value : JSON.stringify(value);
+}
+
+/**
+ * HOW-37: `text` clipped to about `cap` characters, head and tail kept, the stub between. Cut
+ * at code-point boundaries — a surrogate pair is never split, so the result is always valid
+ * UTF-16 (and therefore valid UTF-8 when encoded).
+ */
+export function elide(key: string, text: string, cap: number, opts: { json: boolean; source?: string }): string {
+  const lines = text.split("\n").length;
+  let headEnd = Math.ceil(cap / 2);
+  let tailStart = text.length - Math.floor(cap / 2);
+  // never end the head on a high surrogate, never start the tail on a low one
+  if (headEnd > 0 && isHigh(text.charCodeAt(headEnd - 1))) headEnd--;
+  if (tailStart < text.length && isLow(text.charCodeAt(tailStart))) tailStart++;
+  const where = opts.source ?? "in this run's log";
+  const stub =
+    `\n[context.${key} elided: ${text.length} chars, ${lines} lines; the middle ${tailStart - headEnd} chars are omitted` +
+    (opts.json ? `, so the text around this note is NOT valid JSON` : "") +
+    `. The full value is ${where} — re-read or re-run its source to get it again.]\n`;
+  return text.slice(0, headEnd) + stub + text.slice(tailStart);
+}
+const isHigh = (c: number) => c >= 0xd800 && c <= 0xdbff;
+const isLow = (c: number) => c >= 0xdc00 && c <= 0xdfff;
+
+/**
+ * Substitute every ref via `resolve`, by the rules of `rules.version` (default v1 — what every
+ * pre-HOW-37 render used). `resolve` may throw (the engine's ContextStore does, on an unreadable
+ * key) and the throw propagates untouched. Returns the text, exactly the context read (FULL
+ * values — the cap is a rendering rule, never a storage one), and under v2 the keys it elided
+ * with the source each stub named.
  */
 export function renderTemplate(
   body: string,
   resolve: (key: string) => unknown,
-): { text: string; read: Record<string, unknown> } {
+  rules: RenderRules = { version: 1 },
+): { text: string; read: Record<string, unknown>; elided: Record<string, string> } {
   const read: Record<string, unknown> = {};
-  const text = body.replace(templateRefPattern(), (whole: string, ns: string, key: string) => {
+  const elided: Record<string, string> = {};
+  // HOW-44 (v2): blocks first, so a reference inside a block that renders nothing is never read
+  if (rules.version >= 2)
+    body = body.replace(ifBlockPattern(), (whole: string, ns: string, key: string, inner: string) => {
+      if (isEngineNamespace(ns, key)) return whole;
+      const value = resolve(key);
+      read[key] = value;
+      return (typeof value === "string" && value !== "") || value === true ? inner : "";
+    });
+  const text = body.replace(templateRefPattern(), (whole: string, ns: string, key: string, rawFilter: string | undefined) => {
     if (isEngineNamespace(ns, key)) return whole;
     const value = resolve(key);
     read[key] = value;
-    return typeof value === "string" ? value : JSON.stringify(value);
+    const filter = rawFilter?.trim() || undefined;
+    if (rules.version >= 2 && filter !== undefined && !(TEMPLATE_FILTERS as readonly string[]).includes(filter))
+      throw new TemplateError(`unknown template filter "${filter}" in ${whole}`);
+    const rendered = valueText(value, filter, rules.version);
+    if (rules.version < 2 || rules.cap === undefined) return rendered;
+    const shouldElide = rules.elideOnly ? rules.elideOnly.has(key) : rendered.length > rules.cap && !rules.exempt?.has(key);
+    if (!shouldElide) return rendered;
+    const source = rules.sourceOf?.(key) ?? "in this run's log";
+    elided[key] = source;
+    return elide(`${key}`, rendered, rules.cap, { json: typeof value !== "string" || filter === "dump", source });
   });
-  return { text, read };
+  return { text, read, elided };
 }
 
 /** The `rendered_hash` join key: first 16 hex of sha256 over the FINAL text as sent — template + every suffix (system-map 0.1). */
@@ -89,7 +190,30 @@ export function operatorInstructionSuffix(message: string): string {
 // ---- suffixes (system-map 0.1) ---------------------------------------------------
 
 /** The suffix wording new renders use. Bump it — and add a builder set — to reword. */
-export const SUFFIX_VERSION = 4;
+export const SUFFIX_VERSION = 5;
+
+/**
+ * HOW-36: what a context-exhausted visit had done, as data — derived by engine/handoff.ts from
+ * the log, worded by the v5 re-entry builder. Lists are whole here; the builder trims them to
+ * the budget so trimming is part of the versioned wording.
+ */
+export interface Handoff {
+  /** the exhausted visit */
+  visit: number;
+  filesRead: readonly string[];
+  filesEdited: readonly string[];
+  /** every shell command it ran, in order; ok: null when the log does not say */
+  commands: ReadonlyArray<{ command: string; ok: boolean | null }>;
+  /** the agent's last words before the window filled (the tail of its last text run), or null */
+  lastText: string | null;
+  /** the node's declared outputs — an exhausted attempt published none of them */
+  outputsOwed: readonly string[];
+  /** it filled its window before calling any tool at all */
+  noToolCalls: boolean;
+}
+
+/** HOW-36: the most characters the handoff block may take, whatever the visit did */
+export const HANDOFF_CHARS = 4000;
 
 /** The versioned builders: what a render's `suffix_version` pins. */
 export interface SuffixBuilders {
@@ -111,7 +235,7 @@ export interface SuffixBuilders {
    * HOW-14: the re-entry briefing after a visit that ran out of context window. Absent from
    * versions that predate it (v1–v3) — such a version cannot have rendered one.
    */
-  reentryInstruction?(previousVisit: number): string;
+  reentryInstruction?(previousVisit: number, handoff?: Handoff): string;
 }
 
 /**
@@ -160,9 +284,72 @@ const V4: SuffixBuilders = {
     `3. Continue from where the work stands rather than starting over, and commit as you go so progress survives if this happens again.`,
 };
 
-const SUFFIX_BUILDERS: Readonly<Record<number, SuffixBuilders>> = { 1: V1, 2: V2, 3: V3, 4: V4 };
+/** a line, clipped to `max` characters with an ellipsis */
+const clipLine = (text: string, max: number) => (text.length <= max ? text : `${text.slice(0, max - 1)}…`);
+
+/**
+ * HOW-36: the handoff block, bounded by HANDOFF_CHARS. It is built at a generous size and the
+ * lists are halved until it fits; every list that lost items says how many and how to get them
+ * back. Deterministic — the same handoff always words the same way, which reconstruction needs.
+ */
+export function handoffBlock(h: Handoff): string {
+  if (h.noToolCalls) {
+    const said = h.lastText ? `\nIts last words were:\n> ${clipLine(h.lastText, 1500).replace(/\n/g, "\n> ")}` : "";
+    return `\n\n## What the previous visit had done\nVisit ${h.visit} exhausted its context before calling any tool, so there is nothing from it to pick up beyond what the task itself says.${said}`;
+  }
+  const build = (limit: number, lineMax: number, textMax: number): string => {
+    const list = (items: readonly string[], more: (n: number) => string) => {
+      if (items.length === 0) return "- (none)";
+      const shown = items.slice(0, limit).map((i) => `- ${clipLine(i, lineMax)}`);
+      if (items.length > limit) shown.push(`- ${more(items.length - limit)}`);
+      return shown.join("\n");
+    };
+    const recent = h.commands.slice(-limit);
+    const earlier = h.commands.length - recent.length;
+    const commands = h.commands.length === 0
+      ? "- (none)"
+      : [
+          ...(earlier > 0 ? [`- +${earlier} earlier command${earlier === 1 ? "" : "s"}; re-run one to see its output again`] : []),
+          ...recent.map((c) => `- \`${clipLine(c.command.replace(/\s+/g, " "), lineMax)}\` — ${c.ok === null ? "status not logged" : c.ok ? "ok" : "FAILED"}`),
+        ].join("\n");
+    const intent = h.lastText ? `> ${clipLine(h.lastText, textMax).replace(/\n/g, "\n> ")}` : "(it said nothing after its last tool call)";
+    return (
+      `\n\n## What the previous visit had done\n` +
+      `Derived from visit ${h.visit}'s own tool calls (inputs were logged clipped, so a long command or path may be cut short). ` +
+      `It is a map of where to look, not a substitute for looking: re-read a file or re-run a command to see it as it is now.\n` +
+      `\n### Files examined\n${list(h.filesRead, (n) => `+${n} more files read; re-read a file to see it again`)}\n` +
+      `\n### Files modified\n${list(h.filesEdited, (n) => `+${n} more files modified; \`git status\` lists them all`)}\n` +
+      `\n### Commands run (most recent last)\n${commands}\n` +
+      `\n### Last stated intent\n${intent}\n` +
+      `\n### Outputs still owed\n${h.outputsOwed.length ? h.outputsOwed.map((k) => `- ${k}`).join("\n") : "- (none: this step publishes nothing)"}`
+    );
+  };
+  for (const [limit, lineMax, textMax] of [[20, 160, 1500], [10, 120, 1000], [5, 100, 600], [3, 80, 300], [1, 60, 160]] as const) {
+    const text = build(limit, lineMax, textMax);
+    if (text.length <= HANDOFF_CHARS) return text;
+  }
+  const last = build(1, 60, 160);
+  return `${last.slice(0, HANDOFF_CHARS - 60)}\n[handoff cut at ${HANDOFF_CHARS} characters]`;
+}
+
+/**
+ * v5 (HOW-36) = v4 + the structured handoff, placed after the "ran out" sentence and before the
+ * git steps, which stay — git is still the truth about the working tree. NEVER edit a
+ * published version.
+ */
+const V5: SuffixBuilders = {
+  ...V4,
+  reentryInstruction: (previousVisit, handoff) => {
+    const v4 = V4.reentryInstruction!(previousVisit);
+    if (!handoff) return v4;
+    const steps = v4.indexOf("Get your bearings");
+    return v4.slice(0, steps).trimEnd() + handoffBlock(handoff) + "\n\n" + v4.slice(steps);
+  },
+};
+
+const SUFFIX_BUILDERS: Readonly<Record<number, SuffixBuilders>> = { 1: V1, 2: V2, 3: V3, 4: V4, 5: V5 };
 /** the builders new renders use; bump together with SUFFIX_VERSION */
-const CURRENT: SuffixBuilders = V4;
+const CURRENT: SuffixBuilders = V5;
 
 /** The builders a logged `suffix_version` pins, or undefined for a version this code never had. */
 export function suffixBuilders(version: number): SuffixBuilders | undefined {
@@ -206,6 +393,8 @@ export interface PromptParts {
   refusalMessage?: string;
   /** HOW-14: the visit of this node whose context window filled — renders the re-entry briefing */
   reentryAfterVisit?: number;
+  /** HOW-36 (v5): what that visit had done — engine/handoff.ts, re-derived by reconstruction */
+  handoff?: Handoff;
   /** skills named in the hint — already filtered by skillsForHarness */
   skills: readonly string[];
   /** the node's declared write keys, in declaration order */
@@ -237,7 +426,7 @@ export function assemblePrompt(parts: PromptParts): string {
   let reentry = "";
   if (parts.reentryAfterVisit !== undefined) {
     if (!builders.reentryInstruction) throw new Error(`suffix version ${parts.suffixVersion} has no re-entry builder`);
-    reentry = builders.reentryInstruction(parts.reentryAfterVisit);
+    reentry = builders.reentryInstruction(parts.reentryAfterVisit, parts.handoff);
   }
   return (
     parts.body +

@@ -15,6 +15,8 @@ const claudeFixture = readFileSync(join(import.meta.dir, "fixtures", "claude-tur
 /** HOW-25: a REAL AskUserQuestion round trip captured from claude 2.1.278 */
 const askFixture = readFileSync(join(import.meta.dir, "fixtures", "claude-ask-user-question.jsonl"));
 const codexFixture = readFileSync(join(import.meta.dir, "fixtures", "codex-turn.jsonl"));
+/** HOW-34: a real two-turn claude 2.1.296 session (haiku), captured 2026-10-12 — cache fields present */
+const cacheFixture = readFileSync(join(import.meta.dir, "fixtures", "claude-turn-cache.jsonl"));
 
 describe("Claude argv", () => {
   test("defaults to auto permission mode", () => {
@@ -121,7 +123,7 @@ describe("claude adapter mapping", () => {
 
   test("turn_end carries usage and cost", () => {
     const t = events.find((e) => e.type === "turn_end")!;
-    expect((t as any).usage).toEqual({ input_tokens: 1200, output_tokens: 340, cost_usd: 0.0213 });
+    expect((t as any).usage).toEqual({ input_tokens: 1200, output_tokens: 340, cost_usd: 0.0213, cost_source: "reported" });
     expect((t as any).error).toBeUndefined();
   });
 
@@ -149,6 +151,41 @@ describe("claude adapter mapping", () => {
     expect(args).toContain("stdio");
     expect(args).toContain("--include-partial-messages");
     expect(claudeArgs({ sessionId: "s1", resume: true })).toContain("--resume");
+  });
+
+  test("HOW-33: a resolved effort is sent as --effort, and none sends no flag", () => {
+    const args = claudeArgs({ sessionId: "s1", effort: "high" });
+    expect(args.slice(args.indexOf("--effort"), args.indexOf("--effort") + 2)).toEqual(["--effort", "high"]);
+    expect(claudeArgs({ sessionId: "s1" })).not.toContain("--effort");
+  });
+});
+
+describe("HOW-34: claude usage against a captured turn with cache tokens", () => {
+  const ends = replay(cacheFixture, 64).flatMap((r) => (r.ok ? mapClaudeEvent(r.value) : [])).filter((e) => e.type === "turn_end");
+
+  test("all three input figures are recorded, separately", () => {
+    expect(ends).toHaveLength(2);
+    expect(ends[0]!.type === "turn_end" && ends[0]!.usage).toEqual({
+      input_tokens: 2, cache_read_input_tokens: 10586, cache_creation_input_tokens: 20047, output_tokens: 3,
+      cost_usd: 0.004116959999999999, cost_source: "reported",
+    });
+  });
+
+  test("the captured cost is SESSION-CUMULATIVE while tokens are per turn — what the executor's delta relies on", () => {
+    const [a, b] = ends.map((e) => (e.type === "turn_end" ? e.usage! : {}));
+    expect(b!.cost_usd!).toBeGreaterThan(a!.cost_usd!);
+    // turn 2 alone costs about what turn 1 did; the report is the running total
+    expect(b!.cost_usd! - a!.cost_usd!).toBeCloseTo(0.00456, 4);
+  });
+
+  test("an old result with no cache fields maps them to absent (unknown), not 0", () => {
+    const [end] = mapClaudeEvent({ type: "result", is_error: false, usage: { input_tokens: 5, output_tokens: 1 }, total_cost_usd: 0.1, result: "x" });
+    expect(end?.type === "turn_end" && end.usage).toEqual({ input_tokens: 5, cache_read_input_tokens: undefined, cache_creation_input_tokens: undefined, output_tokens: 1, cost_usd: 0.1, cost_source: "reported" });
+  });
+
+  test("codex usage moves its cached share across and is unpriced, never 0", () => {
+    const [end] = mapCodexEvent({ method: "turn/completed", params: { usage: { inputTokens: 900, cachedInputTokens: 600, outputTokens: 30 }, turn: { status: "completed" } } });
+    expect(end?.type === "turn_end" && end.usage).toEqual({ input_tokens: 300, cache_read_input_tokens: 600, output_tokens: 30, cost_usd: null, cost_source: "unpriced" });
   });
 });
 
@@ -366,7 +403,7 @@ describe("cursor adapter (shapes documented, not captured)", () => {
 
   test("the result record ends the turn and carries the text the contract is read from", () => {
     expect(mapCursorEvent({ type: "result", subtype: "success", is_error: false, result: 'done\n{"outputs": {}}', usage: { input_tokens: 5 } }))
-      .toEqual([{ type: "turn_end", result_text: 'done\n{"outputs": {}}', error: undefined, usage: { input_tokens: 5, output_tokens: undefined } }]);
+      .toEqual([{ type: "turn_end", result_text: 'done\n{"outputs": {}}', error: undefined, usage: { input_tokens: 5, output_tokens: undefined, cost_usd: null, cost_source: "unpriced" } }]);
     const bad = mapCursorEvent({ type: "result", subtype: "error", is_error: true, result: "it went wrong" });
     expect(bad[0]).toMatchObject({ type: "turn_end", error: "it went wrong" });
   });

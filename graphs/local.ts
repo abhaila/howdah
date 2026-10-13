@@ -26,6 +26,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { Graph } from "../core/graph";
+import { templateFilterProblems } from "../core/template-refs";
 
 /** kebab-case, and nothing that could escape the graphs dir */
 export const LOCAL_NAME = /^[a-z][a-z0-9-]*$/;
@@ -144,6 +145,14 @@ export async function loadLocalGraph(home: string, name: string, repoRoot: strin
     throw new Error(
       missing.map(([node, prompt]) => `node "${node}" names prompt "${prompt}", which has no .md file`).join("; "),
     );
+  // HOW-37: an unknown `| filter` would render as if it were not there — refuse the graph instead
+  const filterProblems = Object.entries(graph.def.nodes)
+    .filter(([, n]) => n.kind === "agent")
+    .flatMap(([node, n]) => {
+      const file = findPromptFile((n as { prompt: string }).prompt, dirs);
+      return file ? templateFilterProblems(readFileSync(file, "utf8")).map((p) => `node "${node}": ${p}`) : [];
+    });
+  if (filterProblems.length) throw new Error(filterProblems.join("; "));
 
   return graph;
 }

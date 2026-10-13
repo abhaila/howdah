@@ -26,6 +26,7 @@ import { commandExecutor, worktreeExecutor } from "./worktree";
 import type { WorkspaceLookup } from "./launch";
 import { approvalExecutor } from "./approval";
 import type { Notifier } from "../attention";
+import type { StuckThresholds } from "./stuck";
 import { join } from "node:path";
 
 export function parseDuration(spec: string): number {
@@ -73,16 +74,19 @@ export interface LiveExecutorDeps {
   claudeBinary?: string;
   codexBinary?: string;
   cursorBinary?: string;
+  /** HOW-38: config.json `stuck` — the warn/stop streak lengths every agent executor uses */
+  stuck?: StuckThresholds;
 }
 
 /** the real registry: agent nodes dispatch on their declared harness (default claude) */
 export function liveExecutors(deps: LiveExecutorDeps): EngineOpts["executors"] {
-  const claude = claudeExecutor({ attentionDir: deps.attentionDir, viewerBase: deps.viewerBase, notifiers: deps.notifiers, binary: deps.claudeBinary });
-  const codexDeps = { attentionDir: deps.attentionDir, viewerBase: deps.viewerBase, notifiers: deps.notifiers, binary: deps.codexBinary };
+  const stuck = deps.stuck;
+  const claude = claudeExecutor({ attentionDir: deps.attentionDir, viewerBase: deps.viewerBase, notifiers: deps.notifiers, binary: deps.claudeBinary, stuck });
+  const codexDeps = { attentionDir: deps.attentionDir, viewerBase: deps.viewerBase, notifiers: deps.notifiers, binary: deps.codexBinary, stuck };
   const codex = codexExecutor(codexDeps);
   const codexReadOnly = codexExecutor({ ...codexDeps, sandbox: "read-only" });
-  const cursor = cursorExecutor({ binary: deps.cursorBinary });
-  const cursorReadOnly = cursorExecutor({ binary: deps.cursorBinary, readOnly: true });
+  const cursor = cursorExecutor({ binary: deps.cursorBinary, stuck });
+  const cursorReadOnly = cursorExecutor({ binary: deps.cursorBinary, readOnly: true, stuck });
   // opencode has no CLI of its own yet: it runs through the claude executor, as it always
   // has (core/harnesses.ts marks it `internal` and points its binary at claude's)
   const byHarness: Record<HarnessName, Executor> = { claude, opencode: claude, codex, cursor };
@@ -105,6 +109,7 @@ export function liveExecutors(deps: LiveExecutorDeps): EngineOpts["executors"] {
     worktree: worktreeExecutor({
       reposDir: deps.reposDir ?? join(deps.attentionDir, "..", "repos"),
       repoName: deps.repoName,
+      ...(deps.verifyCommandFor ? { verifyCommandFor: deps.verifyCommandFor } : {}),
     }),
   };
 }

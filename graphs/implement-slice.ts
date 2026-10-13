@@ -56,6 +56,8 @@ import { validateGhostSet } from "../map/ghosts";
 import type { VerifyResult } from "../core/verify";
 
 export interface ImplementSliceCtx extends VerifiedDeliveryCtx {
+  /** HOW-44: the workspace's verify command ("" when none), published by create_worktree */
+  "worktree.verify_command": string;
   "map.neighbourhood": string;
   "slice.feedback": FeedbackItem[];
   "slice.approval": ApprovalDecision;
@@ -102,7 +104,8 @@ export const implementSlice = defineGraph<ImplementSliceCtx>({
   inputs: ["goal", "work"],
   validateProposal: (proposal, _approval, run) => validateSliceProposal(proposal, run),
   nodes: {
-    create_worktree: { kind: "worktree", action: "create" },
+    // HOW-44: publishes the verify command so a build prompt can say the harness verifies after it
+    create_worktree: { kind: "worktree", action: "create", writes: { "worktree.verify_command": sticky } },
 
     "map.extract": {
       kind: "command",
@@ -138,7 +141,7 @@ export const implementSlice = defineGraph<ImplementSliceCtx>({
       kind: "agent",
       prompt: "slice.implement",
       requires: { approvalOf: "slice.approve" },
-      reads: ["goal", "work", "slice.ghosts", "slice.approval", "slice.drift", "review_findings"],
+      reads: ["goal", "work", "slice.ghosts", "slice.approval", "slice.drift", "review_findings", "worktree.verify_command"],
       writes: { implementation_summary: sticky },
       maxVisits: 3,
       class: "implementation",

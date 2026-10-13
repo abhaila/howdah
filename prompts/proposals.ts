@@ -123,7 +123,7 @@ export interface ProposalView extends Proposal {
   /** graph nodes that run this prompt through an include — accepting changes them too */
   indirect_consumers: Consumer[];
   /** A3.3: per-prompt eval case, authored lazily; absent for most prompts */
-  eval: { case: string | null; score: string | null; verdict: string | null };
+  eval: { case: string | null; score: string | null; verdict: string | null; report: string | null };
   /** A2.1 evidence: the feedback this revision answers */
   feedback: FeedbackEntry[];
 }
@@ -179,6 +179,7 @@ export function viewProposal(dir: string, file: string, store = new PromptStore(
       case: evalCaseFor(p.id, root),
       score: frontMatterField(frontmatter, "eval_score"),
       verdict: frontMatterField(frontmatter, "eval_verdict"),
+      report: frontMatterField(frontmatter, "eval_report"),
     },
     feedback: readFeedback(join(root, "feedback"), p.id),
   };
@@ -202,15 +203,20 @@ export function listProposals(dir = proposalsDir(), store = new PromptStore(), r
   });
 }
 
-/** Stamp an eval result onto a pending proposal (A3.3's accept gate, made visible). */
-export function stampEval(path: string, score: string, verdict: string): void {
+/**
+ * Stamp an eval result onto a pending proposal (A3.3's accept gate, made visible). HOW-42:
+ * `report` is the path of the full A/B report (paired table, cost, trajectory deltas), so the
+ * accept/reject screen can point at the evidence and not only the one-line score.
+ */
+export function stampEval(path: string, score: string, verdict: string, report?: string): void {
   const p = loadProposal(path);
   const fm = p.frontmatter
     .replace(/^eval_score:.*$\n?/m, "")
-    .replace(/^eval_verdict:.*$\n?/m, "");
+    .replace(/^eval_verdict:.*$\n?/m, "")
+    .replace(/^eval_report:.*$\n?/m, "");
   writeFileSync(
     path,
-    `---\n${fm.trimEnd()}\neval_score: ${score}\neval_verdict: ${verdict.replace(/\n/g, " ")}\n---\n${p.body}`,
+    `---\n${fm.trimEnd()}\neval_score: ${score}\neval_verdict: ${verdict.replace(/\n/g, " ")}${report ? `\neval_report: ${report}` : ""}\n---\n${p.body}`,
   );
 }
 

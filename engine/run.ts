@@ -62,11 +62,11 @@
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { nodeReads, resolveAgentConfigLayers, type Graph, type NodeDef, type EdgeDef, type AgentConfig, type ApprovalNodeDef, type Harness } from "../core/graph";
+import { agentConfigOf, hasTools, nodeReads, resolveAgentConfigLayers, type Graph, type NodeDef, type EdgeDef, type AgentConfig, type ApprovalNodeDef, type Harness } from "../core/graph";
 import { basename } from "node:path";
 import { ContextStore, type Scope } from "../core/context";
-import { SUFFIX_VERSION, assemblePrompt, expandIncludes, renderTemplate, renderedHash, skillsForHarness, splitFrontMatter } from "../core/template";
-import { defaultHarness, fallbackChain, harnessNames } from "../core/harnesses";
+import { DEFAULT_CONTEXT_CAP, RENDER_VERSION, SUFFIX_VERSION, assemblePrompt, expandIncludes, renderTemplate, renderedHash, skillsForHarness, splitFrontMatter } from "../core/template";
+import { defaultHarness, fallbackChain, harnessNames, harnessSpec, isHarness } from "../core/harnesses";
 import { EventLog } from "../log/write";
 import type { LoggedEvent, ParkCode } from "../log/events";
 import { replayState, effectKey } from "./replay";
@@ -77,6 +77,7 @@ import { effectiveCwd } from "./executors/worktree-record";
 import { currentProposal, findDecision, isApproved, nextSeq, pendingRedesigns, readBase } from "./slice-decision";
 import { claimRunner, releaseRunner, type RunnerHolder } from "./control";
 import { RATE_LIMIT_TEXT } from "./executors/harness-failure";
+import { deriveHandoff } from "./handoff";
 
 /** thread chunks the engine writes itself sort after an attempt's own output */
 const ENGINE_NOTE_INDEX = 9998;
@@ -158,6 +159,8 @@ export interface EngineOpts {
   beforeNode?: (nodeId: string, def: NodeDef<any>) => Promise<void>;
   /** run-level agent overrides — beat node settings, which beat graph defaults */
   overrides?: AgentConfig;
+  /** HOW-39: the workspace's diagnostics command for a repo path (config.json, read by the caller) */
+  diagnosticsCommandFor?: (repoPath: string) => string | undefined;
   /** UI tuning overlay: per-node beats TS node; graph-level beats TS defaults */
   tuning?: { defaults?: AgentConfig; nodes?: Record<string, AgentConfig> };
   /**
@@ -220,10 +223,7 @@ export function resolveAgentConfig(
   nodeId: string,
   layers: { overrides?: AgentConfig; tuning?: EngineOpts["tuning"]; fallbackHarness?: Harness; defaultHarness?: string } = {},
 ): AgentConfig {
-  const node: AgentConfig = {
-    harness: def.harness, model: def.model, effort: def.effort,
-    permissionMode: def.permissionMode, maxTurns: def.maxTurns, skills: def.skills,
-  };
+  const node: AgentConfig = agentConfigOf(def);
   const resolved = resolveAgentConfigLayers([
     layers.fallbackHarness ? { harness: layers.fallbackHarness } : undefined,
     layers.overrides,
@@ -232,8 +232,13 @@ export function resolveAgentConfig(
     layers.tuning?.defaults,
     graph.def.defaults,
   ], { configuredDefaultHarness: layers.defaultHarness });
-  // system-map 1a (D6/5A): a hard constraint — no layer above the node can raise it
-  return def.readOnly ? { ...resolved, permissionMode: "plan" } : resolved;
+  // system-map 1a (D6/5A): a hard constraint — no layer above the node can raise it. HOW-41: nor
+  // can a tool ALLOWANCE (an allow list pre-approves tools, which would raise a plan-mode node);
+  // a deny list only narrows, so it stays
+  if (!def.readOnly) return resolved;
+  // HOW-39: and a read-only node never gets the post-edit hook — it makes no edits to check
+  const { tools, diagnostics: _diagnostics, ...rest } = resolved;
+  return { ...rest, permissionMode: "plan", ...(tools?.deny?.length ? { tools: { deny: tools.deny } } : {}) };
 }
 
 /** did the run arrive at `node`'s current visit through an operator-jump (not graph routing)? */
@@ -247,6 +252,27 @@ function enteredByJump(events: readonly LoggedEvent[], node: string): boolean {
 }
 
 const INPUTS_NODE = "__inputs__";
+
+/**
+ * Failures that are never evidence of a spent allowance, whatever the transcript says, so
+ * they never hop harnesses and never mark a harness spent (HOW-14, HOW-38).
+ */
+const NO_HOP_CODES: ReadonlySet<string> = new Set(["context-exhausted", "stuck", "turn-timeout"]);
+
+/**
+ * HOW-43: automatic continuations of `node` in the current streak — the context-continued
+ * events since its last SUCCEEDED visit or the operator's last jump. Derived from the log, so
+ * a resume in a fresh process reaches the same budget state.
+ */
+export function contextRetriesUsed(events: readonly LoggedEvent[], node: string): number {
+  let used = 0;
+  for (const e of events) {
+    if (e.type === "context-continued" && e.node === node) used++;
+    else if (e.type === "node-finished" && e.node === node && e.status === "succeeded") used = 0;
+    else if (e.type === "operator-jump") used = 0;
+  }
+  return used;
+}
 
 /** A prompt file's front-matter version (1 when absent — the pre-versioning default). */
 function promptVersion(raw: string): number {
@@ -366,26 +392,9 @@ export class Engine {
       this.ctx.endAttempt(f.status);
     }
 
-    // OV-1: ambiguous executions are probed BEFORE any retry
-    for (const intent of replayed.pendingIntents) {
-      const verdict = this.opts.probe
-        ? await this.opts.probe(intent.node, intent.effect, intent.attempt_id)
-        : ("unknown" as const);
-      if (verdict === "happened") {
-        this.log.append({
-          type: "side-effect-done",
-          node: intent.node,
-          visit: intent.visit,
-          attempt_id: intent.attempt_id,
-          effect: intent.effect,
-          result: { probed: true },
-        });
-        this.completedEffects.add(effectKey(intent.node, intent.effect));
-      } else if (verdict === "unknown") {
-        return this.park(intent.node, intent.visit, "ambiguous-effect", `ambiguous side effect "${intent.effect}" — probe could not decide`);
-      }
-      // not-happened: nothing recorded; the retry will claim() it again
-    }
+    // OV-1: ambiguous executions are probed BEFORE any retry (not-happened: the retry claims it again)
+    const ambiguous = await this.probeIntents(replayed.pendingIntents);
+    if (ambiguous) return ambiguous;
 
     // resume() IS the operator action: a standing park is resolved by resuming. Parks whose
     // cause still holds (maxVisits, exhausted conditions) simply re-park deterministically.
@@ -460,6 +469,10 @@ export class Engine {
       // system-map 1a: pre-start, like maxVisits — a refusal logs no node-started, consumes no visit
       const gate = await this.requiresGate(current, def, visit);
       if (gate) return this.park(current, visit, gate.code, gate.reason);
+      // HOW-41: a tool restriction the resolved harness cannot honour refuses the node — this
+      // also catches a fallback hop onto such a harness, because the hop re-resolves first
+      const tools = this.toolsGate(current, def);
+      if (tools) return this.park(current, visit, "tools-unsupported", tools);
 
       if (this.opts.beforeNode) await this.opts.beforeNode(current, def);
       const attemptId = `${current}#${visit}`;
@@ -508,7 +521,8 @@ export class Engine {
         // HOW-14: a full context window is not an allowance problem, whatever the attempt's
         // text happens to say — hopping would start a fresh harness from nothing and still
         // overflow. Park instead; the retry gets the re-entry briefing.
-        const hop = def.kind === "agent" && result.code !== "context-exhausted" ? this.nextFallbackHarness(current, visit) : undefined;
+        // HOW-38: nor is a stuck call or a hung turn — another harness would not unstick it
+        const hop = def.kind === "agent" && !NO_HOP_CODES.has(result.code ?? "attempt-failed") ? this.nextFallbackHarness(current, visit) : undefined;
         if (hop) {
           this.hoppedAwayFrom.add(hop.from);
           this.pendingFallbackNodes.add(current);
@@ -522,6 +536,11 @@ export class Engine {
             content: `\n[${hop.from} allowance exhausted: retrying this node with ${hop.to}]`,
           });
           continue;
+        }
+        if (def.kind === "agent" && result.code === "context-exhausted") {
+          const decision = await this.continueAfterExhaustion(current, def, visit, result.reason ?? "attempt failed");
+          if (decision.continue) continue;
+          return decision.state;
         }
         return this.park(current, visit, result.code ?? "attempt-failed", result.reason ?? "attempt failed");
       }
@@ -569,6 +588,100 @@ export class Engine {
       log: this.log,
       reads, renderedPrompt, agentConfig, effects,
     });
+  }
+
+  /** HOW-41: why this agent node cannot start on its resolved harness, or null */
+  private toolsGate(nodeId: string, def: NodeDef<any>): string | null {
+    if (def.kind !== "agent") return null;
+    const config = this.resolveAgentConfig(def, nodeId);
+    if (!hasTools(config.tools) || !config.harness || !isHarness(config.harness)) return null;
+    if (harnessSpec(config.harness).toolFlags) return null;
+    const asked = [
+      ...(config.tools.allow?.length ? [`allow ${config.tools.allow.join(", ")}`] : []),
+      ...(config.tools.deny?.length ? [`deny ${config.tools.deny.join(", ")}`] : []),
+    ].join("; ");
+    return `"${nodeId}" restricts its tools (${asked}) but ${config.harness} cannot restrict tools, so it would run unrestricted — ` +
+      `move the node to a harness that can (claude), or remove the restriction in tuning, then resume`;
+  }
+
+  // ---- context exhaustion: continue once before parking (HOW-43) ----------------
+
+  /**
+   * A visit filled its context window. Before HOW-43 that always parked, and the human's only
+   * move was to press resume — adding no information. Now the engine continues the node itself
+   * when every one of these holds, in this order, and parks (saying which one failed) otherwise:
+   *   (a) the operator has not asked to pause or abort — their control wins;
+   *   (b) no side effect of this attempt is ambiguous — it goes through resume()'s probe, the
+   *       same path, so an unknown verdict parks FOR THE EFFECT;
+   *   (c) the node's `contextRetries` budget (default 1) is not spent — counted from the log, so
+   *       a fresh process reaches the same answer;
+   *   (d) a continuation that exhausted again made progress — a new commit or an edited file;
+   *       looping on nothing is worse than asking.
+   * The continuation is a NORMAL visit (charged to maxVisits — the same harness re-attempting
+   * the same work, unlike a fallback hop) rendered with the HOW-36 handoff.
+   */
+  private async continueAfterExhaustion(
+    node: string,
+    def: Extract<NodeDef<any>, { kind: "agent" }>,
+    visit: number,
+    reason: string,
+  ): Promise<{ continue: true } | { continue: false; state: RunState }> {
+    const park = (why = reason) => ({ continue: false as const, state: this.park(node, visit, "context-exhausted", why) });
+    const command = this.opts.control?.() ?? null;
+    if (command === "pause" || command === "abort") return park();
+
+    // (b) the same probe resume() runs, over this node's still-ambiguous intents
+    const pending = replayState(this.log.read()).pendingIntents.filter((i) => i.node === node);
+    const ambiguous = await this.probeIntents(pending);
+    if (ambiguous) return { continue: false, state: ambiguous };
+
+    const events = this.log.read();
+    const budget = this.resolveAgentConfig(def, node).contextRetries ?? 1;
+    const used = contextRetriesUsed(events, node);
+    if (used >= budget)
+      return park(`${reason} — exhausted context ${used + 1} time${used === 0 ? "" : "s"} in a row; consider splitting this step`);
+
+    const head = (await fingerprint(this.workCwd()).catch(() => null))?.head ?? null;
+    const previous = events.findLast((e) => e.type === "context-continued" && e.node === node);
+    if (previous?.type === "context-continued" && previous.visit === visit - 1) {
+      const handoff = deriveHandoff(events, node, visit, []);
+      if (handoff.filesEdited.length === 0 && head === previous.head)
+        return park(`${reason} — the automatic continuation exhausted its context again with no new commit and no edited file, so it is not being continued again; consider splitting this step`);
+    }
+
+    this.log.append({ type: "context-continued", node, visit, retry: used + 1, budget, head });
+    this.log.append({
+      type: "chunk", node, visit, turn: 1, index: ENGINE_NOTE_INDEX + 2, kind: "text",
+      content: `\n[context window filled — continuing automatically (${used + 1} of ${budget}) on a fresh visit, briefed with what this one had done]`,
+    });
+    return { continue: true };
+  }
+
+  /**
+   * OV-1's probe over ambiguous intents — resume()'s and the automatic continuation's one path.
+   * Returns the park for the first intent the probe cannot decide, or null when every one was
+   * settled (a `happened` is recorded as done; a `not-happened` is left for the retry to claim).
+   */
+  private async probeIntents(intents: readonly Extract<LoggedEvent, { type: "side-effect-intent" }>[]): Promise<RunState | null> {
+    for (const intent of intents) {
+      const verdict = this.opts.probe
+        ? await this.opts.probe(intent.node, intent.effect, intent.attempt_id)
+        : ("unknown" as const);
+      if (verdict === "happened") {
+        this.log.append({
+          type: "side-effect-done",
+          node: intent.node,
+          visit: intent.visit,
+          attempt_id: intent.attempt_id,
+          effect: intent.effect,
+          result: { probed: true },
+        });
+        this.completedEffects.add(effectKey(intent.node, intent.effect));
+      } else if (verdict === "unknown") {
+        return this.park(intent.node, intent.visit, "ambiguous-effect", `ambiguous side effect "${intent.effect}" — probe could not decide`);
+      }
+    }
+    return null;
   }
 
   // ---- approval (system-map 1a) -------------------------------------------------
@@ -767,12 +880,18 @@ export class Engine {
   }
 
   private resolveAgentConfig(def: Extract<NodeDef<any>, { kind: "agent" }>, nodeId: string): AgentConfig {
-    return resolveAgentConfig(this.graph, def, nodeId, {
+    const resolved = resolveAgentConfig(this.graph, def, nodeId, {
       overrides: this.opts.overrides,
       tuning: this.opts.tuning,
       fallbackHarness: this.forcedFallbackHarness(),
       defaultHarness: this.opts.harnesses?.default,
     });
+    // HOW-39: the diagnostics hook needs all three — a node that asked, a harness that can, and
+    // a workspace command. Any one missing is no hook and no error.
+    if (!resolved.diagnostics || resolved.permissionMode === "plan" || !resolved.harness || !isHarness(resolved.harness)) return resolved;
+    if (!harnessSpec(resolved.harness).editHooks || !this.opts.cwd) return resolved;
+    const command = this.opts.diagnosticsCommandFor?.(this.opts.cwd);
+    return command ? { ...resolved, diagnosticsCommand: command } : resolved;
   }
 
   /**
@@ -856,8 +975,16 @@ export class Engine {
    * own text may well mention a "rate limit" it was writing code about.
    */
   private contextExhaustedAttempts(events: readonly LoggedEvent[]): Set<string> {
+    // HOW-43: an exhaustion the engine continued itself raised no park, but it is one all the same
+    const out = this.parkedAttempts(events, new Set(["context-exhausted"]));
+    for (const e of events) if (e.type === "context-continued") out.add(`${e.node}\0${e.visit}`);
+    return out;
+  }
+
+  /** the `node\0visit` of every attempt that parked with one of `codes` */
+  private parkedAttempts(events: readonly LoggedEvent[], codes: ReadonlySet<string>): Set<string> {
     return new Set(events
-      .filter((e) => e.type === "attention-raised" && e.code === "context-exhausted")
+      .filter((e) => e.type === "attention-raised" && e.code !== undefined && codes.has(e.code))
       .map((e) => e.type === "attention-raised" ? `${e.node}\0${e.visit}` : ""));
   }
 
@@ -886,6 +1013,8 @@ export class Engine {
     const failed = new Set(events
       .filter((e) => e.type === "node-finished" && e.status === "failed")
       .map((e) => e.type === "node-finished" ? `${e.node}\0${e.visit}` : ""));
+    // HOW-14/HOW-38: an exhausted, stuck or timed-out attempt is never a rate-limit witness
+    for (const k of this.parkedAttempts(events, NO_HOP_CODES)) failed.delete(k);
     for (const k of this.contextExhaustedAttempts(events)) failed.delete(k);
     const out = new Set<Harness>();
     for (const e of events) {
@@ -925,8 +1054,16 @@ export class Engine {
       this.refusalNote = null; // consumed by this attempt (replay: at node-started)
     }
     const reentryAfterVisit = this.reentryAfterVisit(this.log.read(), nodeId, visit);
-    const { text: rendered, read: contextRead } = renderTemplate(body, (key) =>
-      key in reads ? reads[key] : this.ctx.get(key, { node: nodeId, visit }),
+    // HOW-36: what that visit had done, derived from the log — reconstruction re-derives it
+    const handoff = reentryAfterVisit === undefined ? undefined : deriveHandoff(this.log.read(), nodeId, reentryAfterVisit, outputKeys);
+    // HOW-37: render rules v2 — an oversized value is elided around a stub naming where the
+    // whole of it lives; the run's own inputs (the operator's words) are never elided
+    const contextCap = config?.contextCap ?? DEFAULT_CONTEXT_CAP;
+    const priorEvents = this.log.read();
+    const { text: rendered, read: contextRead, elided } = renderTemplate(
+      body,
+      (key) => (key in reads ? reads[key] : this.ctx.get(key, { node: nodeId, visit })),
+      { version: RENDER_VERSION, cap: contextCap, exempt: new Set(this.graph.def.inputs), sourceOf: (key) => this.valueSource(priorEvents, key) },
     );
     // system-map 0.1: every suffix goes in BEFORE hashing, so the hash covers what is sent
     const skills = skillsForHarness(config?.harness, config?.skills);
@@ -936,6 +1073,7 @@ export class Engine {
       replyMessage,
       refusalMessage,
       reentryAfterVisit,
+      ...(handoff ? { handoff } : {}),
       skills,
       outputKeys,
       suffixVersion: SUFFIX_VERSION,
@@ -953,13 +1091,30 @@ export class Engine {
       harness: config?.harness,
       model: config?.model,
       effort: config?.effort,
+      ...(config?.effortInert !== undefined ? { effort_inert: config.effortInert } : {}),
+      ...(hasTools(config?.tools) ? { tools: config!.tools } : {}),
+      ...(config?.diagnosticsCommand !== undefined ? { diagnostics_command: config.diagnosticsCommand } : {}),
       skills,
       output_keys: outputKeys,
       suffix_version: SUFFIX_VERSION,
       ...(this.pinnedIncludes[prompt] ? { includes: this.pinnedIncludes[prompt] } : {}),
       ...(reentryAfterVisit !== undefined ? { reentry_after_visit: reentryAfterVisit } : {}),
+      render_version: RENDER_VERSION,
+      context_cap: contextCap,
+      ...(Object.keys(elided).length ? { context_sources: elided } : {}),
     });
     return finalRendered;
+  }
+
+  /**
+   * HOW-37: where the whole value of `key` is, for an elision stub — the latest SUCCEEDED
+   * attempt that published it, and the log it is recorded in. Derived from the log, so it is
+   * the same sentence however often the node is rendered, and it is logged with the render.
+   */
+  private valueSource(events: readonly LoggedEvent[], key: string): string {
+    const writer = events.findLast((e) => e.type === "node-finished" && e.status === "succeeded" && key in e.writes);
+    const where = writer?.type === "node-finished" ? `the output of ${writer.node}@${writer.visit}` : `the value of ${key}`;
+    return `${where}, recorded in full in ${this.log.path}`;
   }
 
   // ---- attribution (A5.3) ------------------------------------------------------

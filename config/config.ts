@@ -20,6 +20,13 @@ export interface RepoWorkspace {
    * never a pass. HOW-15's environment contract is the wider home for this and may subsume it.
    */
   verifyCommand?: string;
+  /**
+   * HOW-39: a FAST, read-only check (seconds — `bunx tsc --noEmit -p . --incremental`, a
+   * one-file lint) run after every Edit/Write/MultiEdit of a claude node that opts in
+   * (`diagnostics: true`), its output handed to the agent inside its turn. Part of "how to run
+   * this workspace" (HOW-15's environment contract).
+   */
+  diagnosticsCommand?: string;
 }
 
 export interface PlainWorkspace {
@@ -52,6 +59,12 @@ export interface HowdahConfig {
    */
   typesafeApiKey?: string;
   viewerBase?: string;
+  /**
+   * HOW-38: stuck detection's streak lengths — warn (and remind claude) at `warn` identical
+   * calls, stop and park `stuck` at `stop` identical FAILING calls. Default 5 / 8, the
+   * harness-design study's values. Read through stuckThresholds(), which ignores nonsense.
+   */
+  stuck?: { warn?: number; stop?: number };
   theme?: "system" | "dark" | "light";
   chime?: boolean;
 }
@@ -70,6 +83,17 @@ export function loadConfig(base = howdahHome()): HowdahConfig {
   const p = configPath(base);
   if (!existsSync(p)) return structuredClone(DEFAULTS);
   return { ...structuredClone(DEFAULTS), ...(JSON.parse(readFileSync(p, "utf8")) as HowdahConfig) };
+}
+
+/**
+ * HOW-38: config.json `stuck`, cleaned — a missing, non-integer or non-positive value falls
+ * back to its default, and `stop` is never below `warn` (a stop before the warning would park
+ * a run nobody was told was spinning).
+ */
+export function stuckThresholds(config: HowdahConfig): { warn: number; stop: number } {
+  const ok = (v: unknown, d: number) => (typeof v === "number" && Number.isInteger(v) && v > 0 ? v : d);
+  const warn = ok(config.stuck?.warn, 5);
+  return { warn, stop: Math.max(warn, ok(config.stuck?.stop, 8)) };
 }
 
 export function saveConfig(config: HowdahConfig, base = howdahHome()): void {
@@ -126,6 +150,35 @@ export function setVerifyCommand(config: HowdahConfig, name: string, command: st
   const cmd = command?.trim();
   if (cmd) repo.verifyCommand = cmd;
   else delete repo.verifyCommand;
+}
+
+/** HOW-39: the diagnostics command registered for a repo path, or undefined (blank = unset) */
+export function diagnosticsCommandFor(config: HowdahConfig, repoPath: string): string | undefined {
+  const cmd = Object.values(config.repos).find((r) => r.path === repoPath)?.diagnosticsCommand?.trim();
+  return cmd ? cmd : undefined;
+}
+
+/** HOW-39: set (or clear, with a blank one) an existing REPO workspace's diagnostics command */
+export function setDiagnosticsCommand(config: HowdahConfig, name: string, command: string | undefined): void {
+  const repo = config.repos[name];
+  if (!repo) {
+    if (config.folders[name]) throw new Error(`"${name}" is a Plain folder — diagnostics only run in a repo's worktree`);
+    throw new Error(`unknown repo workspace "${name}"`);
+  }
+  const cmd = command?.trim();
+  if (cmd) repo.diagnosticsCommand = cmd;
+  else delete repo.diagnosticsCommand;
+}
+
+/**
+ * HOW-39: what doctor says about a diagnostics command — the binary its first word names must
+ * resolve on PATH (or be a path that exists), or every opted-in edit runs a hook that fails.
+ */
+export function diagnosticsCommandProblem(command: string, which: (bin: string) => string | null, exists: (p: string) => boolean): string | null {
+  const first = command.trim().split(/\s+/)[0] ?? "";
+  if (!first) return "the command is blank";
+  if (first.includes("/")) return exists(first) ? null : `${first} does not exist`;
+  return which(first) ? null : `${first} is not on PATH`;
 }
 
 /**

@@ -38,6 +38,23 @@ describe("worktree executor (real git)", () => {
     expect(readWorktreeRecord(runDir)!.path).toBe(join(reposDir, "acme-api", "worktrees", "wt-run"));
   });
 
+  test("HOW-44: create publishes the workspace's verify command when declared — \"\" when it has none, on both paths", async () => {
+    const repoDir = repo();
+    const runDir = mkdtempSync(join(tmpdir(), "howdah-wt-run-"));
+    const log = new EventLog(join(runDir, "run.jsonl"));
+    const declared = { kind: "worktree" as const, action: "create" as const, writes: { "worktree.verify_command": { scope: "sticky" as const } } };
+    const exec = worktreeExecutor({ reposDir: join(runDir, "repos"), verifyCommandFor: (p) => (p === repoDir ? "bun test" : undefined) });
+    expect((await exec(args({ def: declared, log, cwd: repoDir }))).writes).toEqual({ "worktree.verify_command": "bun test" });
+    // the idempotent re-visit publishes it too
+    expect((await exec(args({ def: declared, log, cwd: repoDir }))).writes).toEqual({ "worktree.verify_command": "bun test" });
+    const none = worktreeExecutor({ reposDir: join(runDir, "repos2") });
+    const run2 = mkdtempSync(join(tmpdir(), "howdah-wt-run-"));
+    expect((await none(args({ def: declared, log: new EventLog(join(run2, "run.jsonl")), cwd: repo() }))).writes).toEqual({ "worktree.verify_command": "" });
+    // not declared: nothing published, exactly as before
+    const run3 = mkdtempSync(join(tmpdir(), "howdah-wt-run-"));
+    expect((await exec(args({ def: { kind: "worktree", action: "create" }, log: new EventLog(join(run3, "run.jsonl")), cwd: repo() }))).writes).toEqual({});
+  });
+
   test("create → work lands in an isolated branch; remove refuses while dirty; clean remove succeeds", async () => {
     const repoDir = repo();
     const runDir = mkdtempSync(join(tmpdir(), "howdah-wt-run-"));

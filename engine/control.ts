@@ -378,6 +378,13 @@ export const REPLY_RULES: Readonly<Record<ParkCode, Rule>> = {
   "attempt-failed": retryWithReply,
   "harness-unauthenticated": loginThenRetry,
   "context-exhausted": retryWithReply, // HOW-14: the retry is briefed to re-enter; a reply steers it
+  "stuck": retryWithReply, // HOW-38: the reply and the stuck call reach the retry's prompt
+  "turn-timeout": retryWithReply, // HOW-38: the retry is a fresh turn; a reply can narrow it
+  // HOW-41: words cannot give a harness a tool flag — change the node's harness or tools, then resume
+  "tools-unsupported": ({ run }) => ({
+    accept: false,
+    message: `this harness cannot restrict tools; change the node's harness or its tools in tuning, then \`resume ${run}\``,
+  }),
   "executor-threw": retryWithReply,
   "max-visits": useJump,
   "no-edge": useJump,

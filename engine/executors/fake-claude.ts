@@ -8,6 +8,8 @@
  * FAKE_CAPTURE=<file> appends the exact prompt text of EVERY user turn received on stdin
  * (one JSON string per line, in order) so tests can prove rendered_hash covers the bytes
  * of the first turn (system-map 0.1); an in-session repair turn lands on a later line.
+ * FAKE_CLAUDE_ARGV=<file> appends this spawn's argv (one JSON array per line) — HOW-33 pins
+ * that a resolved effort reaches the CLI as `--effort <level>`.
  * FAKE_CLAUDE_DROP_OUTPUTS=1 ends the first turn in prose with no contract.
  * FAKE_CLAUDE_QUESTION asks the OPERATOR a question (HOW-25) — see the block below.
  * FAKE_CLAUDE_CONTEXT (HOW-14), shapes from claude 2.1.283's SDK types, not a captured turn:
@@ -28,6 +30,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileS
 import { dirname, join } from "node:path";
 
 const out = (o: unknown) => process.stdout.write(JSON.stringify(o) + "\n");
+if (process.env.FAKE_CLAUDE_ARGV) appendFileSync(process.env.FAKE_CLAUDE_ARGV, JSON.stringify(process.argv.slice(2)) + "\n");
 
 const decoder = new TextDecoder();
 let buffer = "";
@@ -69,6 +72,18 @@ const contextState = process.env.FAKE_CLAUDE_CONTEXT_STATE;
 const exceedOnce = contextMode === "exceed-once" && contextState !== undefined && !existsSync(contextState);
 if (exceedOnce) writeFileSync(contextState!, "exceeded");
 if (contextMode === "exceed" || exceedOnce) {
+  // HOW-36: FAKE_CLAUDE_EXCEED_TOOLS=1 — do some real-looking work first (read, edit, run a
+  // failing test, say what comes next), so the retry's handoff has something to carry
+  if (process.env.FAKE_CLAUDE_EXCEED_TOOLS === "1") {
+    const tool = (id: string, name: string, input: unknown, result: string, isError = false) => {
+      out({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id, name, input }] } });
+      out({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: result, is_error: isError }] } });
+    };
+    tool("toolu_x1", "Read", { file_path: "src/parser.ts" }, "export function parse() {}");
+    tool("toolu_x2", "Edit", { file_path: "src/parser.ts", old_string: "{}", new_string: "{ return null; }" }, "edited");
+    tool("toolu_x3", "Bash", { command: "bun test src/parser.test.ts" }, "1 fail: expected null-safe parse", true);
+    out({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: "Next I will make parse() handle an empty token list." } } });
+  }
   out({ type: "result", subtype: "success", is_error: true, usage: { input_tokens: 200000, output_tokens: 0 }, total_cost_usd: 0, result: "Prompt is too long" });
   process.exit(0);
 }
@@ -149,6 +164,74 @@ if (process.env.FAKE_CLAUDE_QUESTION) {
   }
 }
 
+/**
+ * HOW-38 — stuck detection and the turn ceiling.
+ * FAKE_CLAUDE_REPEAT=<n>       issue n Bash calls with byte-identical arguments, each answered
+ *                              by a tool_result (FAKE_CLAUDE_REPEAT_FAIL=1: every one is_error)
+ * FAKE_CLAUDE_REPEAT_DENY=1    gate every call behind a can_use_tool request and report the
+ *                              operator's deny as the result, the way the real CLI does
+ * FAKE_CLAUDE_HANG=1           start a grandchild (`sleep 300`) and never finish the turn;
+ *                              FAKE_CLAUDE_PIDFILE=<file> receives "<own pid> <child pid>"
+ */
+if (process.env.FAKE_CLAUDE_HANG === "1") {
+  const child = Bun.spawn(["sleep", "300"], { stdout: "ignore", stderr: "ignore" });
+  if (process.env.FAKE_CLAUDE_PIDFILE) writeFileSync(process.env.FAKE_CLAUDE_PIDFILE, `${process.pid} ${child.pid}`);
+  out({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: "toolu_hang", name: "Bash", input: { command: "sleep 300" } }] } });
+  await new Promise(() => {}); // a turn that never ends
+}
+const repeat = Number(process.env.FAKE_CLAUDE_REPEAT ?? 0);
+for (let i = 0; i < repeat; i++) {
+  const id = `toolu_rep_${i}`;
+  const input = { command: "bun test engine/flaky.test.ts", description: "run the failing test" };
+  out({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id, name: "Bash", input }] } });
+  if (process.env.FAKE_CLAUDE_REPEAT_DENY === "1") {
+    out({ type: "control_request", request_id: `req-rep-${i}`, request: { subtype: "can_use_tool", tool_name: "Bash", input, tool_use_id: id } });
+    for (;;) {
+      const line = JSON.parse(await nextLine()) as any;
+      if (line.type === "control_response" && line.response?.request_id === `req-rep-${i}`) {
+        const message = String(line.response?.response?.message ?? "denied");
+        out({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: message, is_error: true }] } });
+        break;
+      }
+    }
+    continue;
+  }
+  const fail = process.env.FAKE_CLAUDE_REPEAT_FAIL === "1";
+  out({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: fail ? "error: expected 2, got 3\n1 fail" : "12 pass", is_error: fail }] } });
+  await Bun.sleep(5);
+}
+
+/**
+ * HOW-39 — FAKE_CLAUDE_EDIT=1 makes one Edit, honouring a `--settings` PostToolUse hook the way
+ * claude 2.1.296 does (adapter/fixtures/claude-posttooluse-hook.jsonl): the hook command runs
+ * with the PostToolUse JSON on stdin and claude's environment, BEFORE the tool_result is
+ * emitted, and its `additionalContext` goes to the model — not to the stream. The fake "model"
+ * repeats it in its final words so a test can prove it got there.
+ */
+let hookContext = "";
+if (process.env.FAKE_CLAUDE_EDIT === "1") {
+  const id = "toolu_edit_1";
+  const input = { file_path: "src/a.ts", old_string: "1", new_string: "2" };
+  out({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id, name: "Edit", input }] } });
+  const argv = process.argv.slice(2);
+  const settingsAt = argv.indexOf("--settings");
+  if (settingsAt >= 0) {
+    const settings = JSON.parse(argv[settingsAt + 1]!) as { hooks?: { PostToolUse?: Array<{ matcher: string; hooks: Array<{ command: string }> }> } };
+    for (const group of settings.hooks?.PostToolUse ?? []) {
+      if (!new RegExp(`^(${group.matcher})$`).test("Edit")) continue;
+      for (const h of group.hooks) {
+        const r = Bun.spawnSync(["bash", "-c", h.command], {
+          stdin: new TextEncoder().encode(JSON.stringify({ hook_event_name: "PostToolUse", tool_name: "Edit", tool_input: input, tool_response: {}, tool_use_id: id, cwd: process.cwd() })),
+          env: process.env, stdout: "pipe", stderr: "pipe",
+        });
+        try { hookContext += (JSON.parse(new TextDecoder().decode(r.stdout)) as any).hookSpecificOutput?.additionalContext ?? ""; } catch {}
+      }
+    }
+  }
+  out({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: "The file src/a.ts has been updated.", is_error: false }] } });
+  if (hookContext) out({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: ` The hook told me: ${hookContext.replace(/\n/g, " ")}` } } });
+}
+
 if (process.env.FAKE_CLAUDE_RATELIMIT === "1")
   out({ type: "rate_limit_event", rate_limit: { status: "allowed", remaining: 0.31, resetsAt: "2026-09-13T18:00:00Z" } });
 
@@ -191,12 +274,17 @@ if (scriptPath) {
   }
 }
 
-const emitResult = (result: string) =>
+// total_cost_usd is SESSION-CUMULATIVE on the real CLI (adapter/fixtures/claude-turn-cache.jsonl),
+// so a repair turn's result reports the running total, exactly as claude does
+let sessionCost = 0;
+const emitResult = (result: string) => {
+  sessionCost = Math.round((sessionCost + 0.0042) * 1e6) / 1e6;
   out({
     type: "result", subtype: "success", is_error: false,
-    usage: { input_tokens: 321, output_tokens: 45 }, total_cost_usd: 0.0042,
+    usage: { input_tokens: 321, cache_read_input_tokens: 1000, cache_creation_input_tokens: 200, output_tokens: 45 }, total_cost_usd: sessionCost,
     result,
   });
+};
 
 // FAKE_CLAUDE_DROP_OUTPUTS=1 reproduces the live failure (6a31486): a long turn ending in
 // prose with no contract. The real CLI stays open for more stdin turns, so the executor's

@@ -177,6 +177,28 @@ describe("engine loop + routing", () => {
     expect(text).toContain("[codex allowance exhausted: retrying this node with cursor]");
   });
 
+  test("HOW-33: a hop re-resolves effort for the new harness — mapped for codex, inert on cursor", async () => {
+    const engine = new Engine(pipelineGraph(), {
+      dir: mkdtempSync(join(tmpdir(), "howdah-run-")),
+      promptsDir: promptFixtures(),
+      overrides: { effort: "max" },
+      executors: {
+        agent: async ({ agentConfig, log }) => {
+          log.append({ type: "allowance", harness: agentConfig!.harness!, state: "exhausted" });
+          return { status: "failed", writes: {} };
+        },
+        command: async () => ok(),
+      },
+    });
+    await engine.start({ goal: "g", summary: "" });
+    const renders = engine.log.read().filter((e: any) => e.type === "prompt-rendered") as any[];
+    expect(renders.map((e) => [e.harness, e.effort, e.effort_inert])).toEqual([
+      ["claude", "max", undefined],
+      ["codex", "xhigh", undefined], // claude's `max` never reaches codex verbatim
+      ["cursor", undefined, "effort max: not supported by cursor"],
+    ]);
+  });
+
   test("the chain is exhausted too: the run parks on the last attempt rather than looping", async () => {
     const engine = new Engine(pipelineGraph(), {
       dir: mkdtempSync(join(tmpdir(), "howdah-run-")),
@@ -600,7 +622,7 @@ describe("render proof covers every suffix (system-map 0.1)", () => {
       expect(handed.startsWith("Implement per g. Prior: p\n")).toBe(true);
       expect(handed.endsWith(buildOutputInstruction(["summary"]))).toBe(true);
       expect(handed.includes("/review")).toBe(harness !== "codex");
-      expect(render).toMatchObject({ skills: harness === "codex" ? [] : ["review"], output_keys: ["summary"], suffix_version: 4 });
+      expect(render).toMatchObject({ skills: harness === "codex" ? [] : ["review"], output_keys: ["summary"], suffix_version: 5 });
     });
   }
 });

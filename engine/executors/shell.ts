@@ -32,12 +32,22 @@ export interface ShellOpts {
   now?: () => number;
 }
 
-function signalGroup(pid: number, signal: NodeJS.Signals): void {
+export function signalGroup(pid: number, signal: NodeJS.Signals): void {
   try {
     process.kill(-pid, signal);
   } catch {
     // the group is already gone
   }
+}
+
+/**
+ * HOW-38: end a whole process group — SIGTERM, then SIGKILL after the grace — so a harness
+ * killed for being stuck or past its ceiling leaves no grandchild (a test runner's workers, a
+ * tool's shell) holding on. The group exists because the harness was spawned `detached`.
+ */
+export function killGroup(pid: number, graceMs = 2000): void {
+  signalGroup(pid, "SIGTERM");
+  setTimeout(() => signalGroup(pid, "SIGKILL"), graceMs).unref?.();
 }
 
 export async function runShell(script: string, opts: ShellOpts): Promise<ShellResult> {

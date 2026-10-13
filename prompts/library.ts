@@ -37,6 +37,7 @@ import {
 } from "../core/template";
 import type { LoggedEvent } from "../log/events";
 import { rendersReply } from "../engine/replay";
+import { deriveHandoff } from "../engine/handoff";
 import { outcomesByHash } from "../log/coalesce";
 import { readLog } from "../log/write";
 import { PromptStore, PromptStoreError } from "./store";
@@ -519,8 +520,16 @@ export function reconstructRender(runDir: string, renderedHashWanted: string): R
   if (!existsSync(pinned)) return null; // the pinned snapshot is the only honest source
   const { body } = splitFrontMatter(readFileSync(pinned, "utf8"));
 
-  // context_read holds exactly the keys the template consumed, so resolution cannot miss
-  const { text: plain } = renderTemplate(body, (key) => render.context_read[key]);
+  // context_read holds exactly the keys the template consumed, so resolution cannot miss.
+  // HOW-37: by the render's OWN rules — v1 (absent) for every pre-HOW-37 render, v2 with the
+  // logged cap, eliding exactly the keys the engine logged as elided, with the same stubs
+  const sources = render.context_sources ?? {};
+  const { text: plain } = renderTemplate(body, (key) => render.context_read[key], {
+    version: render.render_version ?? 1,
+    ...(render.context_cap !== undefined ? { cap: render.context_cap } : {}),
+    elideOnly: new Set(Object.keys(sources)),
+    sourceOf: (key) => sources[key] ?? "in this run's log",
+  });
 
   const jumpMessages = events
     .filter((e) => e.type === "operator-jump" && e.to === render.node && e.seq < render.seq && e.message)
@@ -552,6 +561,9 @@ export function reconstructRender(runDir: string, renderedHashWanted: string): R
 
   let candidates: string[];
   const builders = render.suffix_version === undefined ? undefined : suffixBuilders(render.suffix_version);
+  const handoff = render.reentry_after_visit !== undefined && (render.suffix_version ?? 0) >= 5
+    ? deriveHandoff(events.filter((e) => e.seq < render.seq), render.node, render.reentry_after_visit, render.output_keys ?? [])
+    : undefined;
   if (render.suffix_version === undefined) {
     // pre-0.1 event: the hash never covered the skill hint or outputs contract
     candidates = jumpOptions.map((m) => (m === undefined ? plain : plain + operatorInstructionSuffix(m)));
@@ -562,6 +574,8 @@ export function reconstructRender(runDir: string, renderedHashWanted: string): R
         body: plain, jumpMessage, replyMessage, refusalMessage,
         // HOW-14: LOGGED, not guessed — so it is the same input for every candidate, not another axis
         reentryAfterVisit: render.reentry_after_visit,
+        // HOW-36: re-derived from the very events the engine derived it from (all before the render)
+        ...(handoff ? { handoff } : {}),
         skills: render.skills ?? [], outputKeys: render.output_keys ?? [], suffixVersion,
       });
     // [plain, ...jumps, ...replies] — never both: a jump clears any pending reply (replay.ts),

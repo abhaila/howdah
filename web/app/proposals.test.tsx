@@ -43,7 +43,7 @@ const PROPOSAL: ProposalView = {
   stale: false,
   stale_reason: null,
   indirect_consumers: [],
-  eval: { case: null, score: null, verdict: null },
+  eval: { case: null, score: null, verdict: null, report: null },
   feedback: [],
 };
 

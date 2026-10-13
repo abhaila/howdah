@@ -30,7 +30,8 @@ import {
 } from "../../core/graph-spec";
 import { templateReads } from "../../core/template-refs";
 import {
-  PRESETS, bySeverity, canRenameStep, draftProblems, draftReducer, newStep, nextNodeId, pickPrompts,
+  PRESETS, bySeverity, canRenameStep, draftProblems, draftReducer, fieldRemoval, newStep, nextNodeId, pickPrompts,
+  removalHasCost,
   problemsByPane,
   type Draft, type DraftAction,
 } from "./lib/spec-draft";
@@ -2410,5 +2411,78 @@ describe("advice about a route is advice, not a refusal (HOW-26)", () => {
     const el = await openRoutesOn(draft);
     expect(el.querySelector(".field-error")).not.toBeNull();
     expect(el.querySelector(".field-advice")).toBeNull();
+  });
+});
+
+
+describe("removing a field says what it destroys first (HOW-31 item 7)", () => {
+  // HOW-31: "I was trying to build a new graph for my coding workflow and basically broke
+  // everything." remove-field was one click on a trash icon that deleted every branch testing
+  // the field, left agent instructions still naming it (so the draft went blocking), and had
+  // no undo — while the panel's help text claimed it "removes it from the steps that used it".
+  const reviewDraft = () => PRESETS.find((p) => p.id === "doc")!.build("demo");
+
+  test("a field nothing uses costs nothing, so the removal is not interrupted", () => {
+    const draft = draftReducer(reviewDraft(), { type: "add-field" });
+    const fresh = draft.spec.fields.find((f) => !draft.spec.edges.some((e) => e.when?.key === f.key)
+      && !draft.spec.nodes.some((n) => "writes" in n && n.writes.includes(f.key))
+      && !draft.spec.inputs.includes(f.key));
+    expect(fresh).toBeDefined();
+    const cost = fieldRemoval(draft, fresh!.key);
+    expect(removalHasCost(cost)).toBe(false);
+    expect(cost).toEqual({ branches: [], instructions: [], producers: [], wasInput: false, strandedSteps: [] });
+  });
+
+  test("a field a branch tests reports the routes that go, and the step they strand", () => {
+    const draft = reviewDraft();
+    const branched = draft.spec.edges.find((e) => e.when)?.when?.key;
+    expect(branched).toBeDefined();
+    const cost = fieldRemoval(draft, branched!);
+    expect(removalHasCost(cost)).toBe(true);
+    expect(cost.branches.length).toBeGreaterThan(0);
+    for (const b of cost.branches) {
+      expect(b.from).toBeTruthy();
+      expect(b.to).toBeTruthy();
+      expect(b.label).toContain(branched!);
+    }
+    // the review preset routes a verdict two ways, so losing both strands the step
+    expect(cost.strandedSteps.length).toBeGreaterThan(0);
+  });
+
+  test("a field an agent's instructions still name is reported, because that text is not ours to edit", () => {
+    const draft = reviewDraft();
+    const agent = draft.spec.nodes.find((n) => n.kind === "agent")!;
+    const body = draft.prompts[(agent as { prompt: string }).prompt];
+    expect(body).toBeDefined();
+    const named = templateReads(body!)[0];
+    expect(named).toBeDefined();
+
+    const cost = fieldRemoval(draft, named!);
+    expect(cost.instructions.map((i) => i.prompt)).toContain((agent as { prompt: string }).prompt);
+
+    // and the warning is true: removing it really does leave the draft unsaveable, because
+    // reads are derived from the body (spec-draft.ts withDerivedReads) and specProblems
+    // reports the dangling reference rather than rewriting the operator's text.
+    const after = draftReducer(draft, { type: "remove-field", key: named! });
+    const blocking = draftProblems(after).filter((p) => p.severity !== "advice");
+    expect(blocking.some((p) => p.message.includes(named!))).toBe(true);
+  });
+
+  test("an unopened prompt body is not claimed to be clean", () => {
+    // Only a body the draft actually holds can be checked; specProblems at save is the
+    // authority. The calculator must not imply an absent body is safe.
+    const draft = reviewDraft();
+    const agent = draft.spec.nodes.find((n) => n.kind === "agent")! as { prompt: string };
+    const named = templateReads(draft.prompts[agent.prompt]!)[0]!;
+    const withoutBody = { ...draft, prompts: {} };
+    expect(fieldRemoval(withoutBody, named).instructions).toEqual([]);
+    expect(fieldRemoval(draft, named).instructions.length).toBeGreaterThan(0);
+  });
+
+  test("an input reports that it will stop being asked for at launch", () => {
+    const draft = reviewDraft();
+    const input = draft.spec.inputs[0];
+    expect(input).toBeDefined();
+    expect(fieldRemoval(draft, input!).wasInput).toBe(true);
   });
 });

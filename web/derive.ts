@@ -24,6 +24,8 @@ import { currentProposal, decisionAnswers, decisionKind, findDecision } from "..
 import { replayState } from "../engine/replay";
 import type { Scope } from "../core/context";
 import { coalesce, outcomesByHash, type CoalescedTurn, type JoinedOutcome } from "../log/coalesce";
+import { rollupRun, usageByVisit, type UsageRollup, type VisitUsage } from "../log/usage";
+import { deriveProfile, verifyCommandFromLog, type TrajectoryProfile } from "../log/trajectory";
 import { ghostEdgeId, ghostEntityIds, orphanedComments, OPS, type GhostSet, type GhostTrace, type Op } from "../map/ghosts";
 import { DRIFT_OUTCOMES, type DriftItem, type DriftOutcome } from "../map/drift";
 import { PROBLEM_OUTCOMES, snapshotStamp } from "../engine/slice-map";
@@ -82,6 +84,10 @@ export interface TimelineRow {
    * No new event type: both events already exist.
    */
   waiting_ms: number;
+  /** HOW-34: this attempt's usage (log/usage.ts) — null when it finalized no turn */
+  usage: VisitUsage | null;
+  /** HOW-35: what the agent did (log/trajectory.ts) — null for a step that rendered no prompt */
+  profile: TrajectoryProfile | null;
 }
 
 export interface RunDetail {
@@ -91,7 +97,12 @@ export interface RunDetail {
   /** rendered prompt + context per node@visit — R3.1's home ("Prompt & context") */
   renders: Extract<LoggedEvent, { type: "prompt-rendered" }>[];
   outcomes: JoinedOutcome[];
-  usage: { input_tokens: number; output_tokens: number; cost_usd: number };
+  /**
+   * HOW-34: the run's usage, summed from its visits (log/usage.ts). Figures no turn reported
+   * are null, and `partial` says the cost covers only the priced turns — never a plain total
+   * over a run that fell back to an unpriced harness.
+   */
+  usage: UsageRollup;
   /** latest allowance observation per harness — exhausted/unreachable/unavailable distinct */
   allowance: Extract<LoggedEvent, { type: "allowance" }>[];
   /** the unresolved ask, if any — drives the pinned banner + reply card */
@@ -190,6 +201,19 @@ export function deriveSummary(id: string, events: LoggedEvent[]): RunSummary {
   };
 }
 
+/** HOW-34: one turn-finalized in words — an absent figure reads `unknown`, never 0 */
+function turnUsageSummary(turn: number, u: Extract<LoggedEvent, { type: "turn-finalized" }>["usage"]): string {
+  const n = (v: number | undefined) => (v === undefined ? "unknown" : String(v));
+  if (!u) return `turn ${turn} · usage unknown`;
+  const cache = u.cache_read_input_tokens !== undefined || u.cache_creation_input_tokens !== undefined
+    ? ` · cache read ${n(u.cache_read_input_tokens)} · cache write ${n(u.cache_creation_input_tokens)}`
+    : "";
+  const cost = typeof u.cost_usd === "number" && u.cost_source !== "unpriced"
+    ? ` · $${u.cost_usd.toFixed(4)}`
+    : u.cost_source === "unpriced" || u.cost_usd === null ? " · unpriced" : "";
+  return `turn ${turn} · in ${n(u.input_tokens)}${cache} · out ${n(u.output_tokens)}${cost}`;
+}
+
 export function deriveTimeline(events: LoggedEvent[]): TimelineRow[] {
   const rows: TimelineRow[] = [];
   const open = new Map<string, TimelineRow>();
@@ -202,7 +226,7 @@ export function deriveTimeline(events: LoggedEvent[]): TimelineRow[] {
       }
       open.clear();
       const key = `${e.node}@${e.visit}`;
-      const row: TimelineRow = { node: e.node, visit: e.visit, started_at: e.ts, finished_at: null, status: "running", duration_ms: null, offset_ms: 0, run_span_ms: 0, waiting_ms: 0 };
+      const row: TimelineRow = { node: e.node, visit: e.visit, started_at: e.ts, finished_at: null, status: "running", duration_ms: null, offset_ms: 0, run_span_ms: 0, waiting_ms: 0, usage: null, profile: null };
       rows.push(row);
       open.set(key, row);
     } else if (e.type === "node-finished") {
@@ -217,6 +241,12 @@ export function deriveTimeline(events: LoggedEvent[]): TimelineRow[] {
   }
   // second pass: place every row on one shared axis
   if (rows.length === 0) return rows;
+  const usage = new Map(usageByVisit(events).map((u) => [`${u.node}@${u.visit}`, u]));
+  for (const r of rows) r.usage = usage.get(`${r.node}@${r.visit}`) ?? null;
+  const agentRows = new Set(events.flatMap((e) => (e.type === "prompt-rendered" ? [`${e.node}@${e.visit}`] : [])));
+  const verifyCommand = verifyCommandFromLog(events);
+  for (const r of rows)
+    if (agentRows.has(`${r.node}@${r.visit}`)) r.profile = deriveProfile(events, r.node, r.visit, verifyCommand ? { verifyCommand } : {});
   const origin = new Date(rows[0]!.started_at).getTime();
   const lastEventAt = events.at(-1)?.ts;
   // a run still waiting on a human measures to NOW, not to its last event — otherwise the
@@ -279,17 +309,12 @@ export function deriveDetail(
   opts: { snapshot?: SnapshotIndex | null } = {},
 ): RunDetail {
   const summary = deriveSummary(id, events);
-  const usage = { input_tokens: 0, output_tokens: 0, cost_usd: 0 };
   const allowanceByHarness = new Map<string, Extract<LoggedEvent, { type: "allowance" }>>();
   const renders: RunDetail["renders"] = [];
   let pinned: Record<string, number> = {};
 
   for (const e of events) {
-    if (e.type === "turn-finalized" && e.usage) {
-      usage.input_tokens += e.usage.input_tokens ?? 0;
-      usage.output_tokens += e.usage.output_tokens ?? 0;
-      usage.cost_usd += e.usage.cost_usd ?? 0;
-    } else if (e.type === "allowance") {
+    if (e.type === "allowance") {
       allowanceByHarness.set(e.harness, e); // latest wins — freshness matters
     } else if (e.type === "prompt-rendered") {
       renders.push(e);
@@ -318,7 +343,7 @@ export function deriveDetail(
     timeline: deriveTimeline(events),
     renders,
     outcomes: [...outcomesByHash(events).values()],
-    usage: { ...usage, cost_usd: Math.round(usage.cost_usd * 1e6) / 1e6 },
+    usage: rollupRun(events),
     allowance: [...allowanceByHarness.values()],
     ask,
     ask_questions: askQuestions(ask),
@@ -425,7 +450,7 @@ export function deriveLogRows(events: LoggedEvent[]): LogRow[] {
       }
       case "turn-finalized":
         return { ...base, ...at(e.node, e.visit), kind: "agent", depth: 1,
-          summary: `turn ${e.turn} · in ${e.usage?.input_tokens ?? "—"} · out ${e.usage?.output_tokens ?? "—"}${e.usage?.cost_usd !== undefined ? ` · $${e.usage.cost_usd.toFixed(4)}` : ""}` };
+          summary: turnUsageSummary(e.turn, e.usage) };
       case "prompt-outcome":
         return { ...base, ...at(e.node, e.visit), kind: "agent", depth: 1,
           summary: [e.verdict_downstream, e.terminal_outcome, e.error].filter(Boolean).join(" · ") || e.rendered_hash };
@@ -460,6 +485,15 @@ export function deriveLogRows(events: LoggedEvent[]): LogRow[] {
           summary: `${e.harness} ${e.state}${e.remaining !== undefined ? ` · ${Math.round(e.remaining * 100)}% left` : ""}${e.resets_at ? ` · resets ${e.resets_at}` : ""}` };
       case "run-finished":
         return { ...base, node: null, visit: null, kind: "engine", depth: 0, summary: e.outcome };
+      case "diagnostics-ran":
+        return { ...base, ...at(e.node, e.visit), kind: e.timed_out || (e.exit_code ?? 0) !== 0 ? "attention" : "engine", depth: 1,
+          summary: `diagnostics after ${e.tool_name}${e.file ? ` ${e.file}` : ""} · ${e.timed_out ? "timed out" : `exit ${e.exit_code}`} · ${e.duration_ms}ms · ${e.command}` };
+      case "context-continued":
+        return { ...base, ...at(e.node, e.visit), kind: "engine", depth: 0,
+          summary: `context window filled · continued automatically (${e.retry} of ${e.budget})${e.head ? ` at ${e.head.slice(0, 12)}` : ""}` };
+      case "stuck-warning":
+        return { ...base, ...at(e.node, e.visit), kind: "attention", depth: 1,
+          summary: `stuck? ${e.tool_name} ×${e.count} with identical arguments${e.failing ? ` · failing ×${e.failing}` : ""}${e.reminded ? " · reminded" : ""} · ${e.input_summary.slice(0, 160)}` };
       case "ghost-proposed":
         return { ...base, node: e.node, visit: null, kind: "agent", depth: 0,
           summary: `proposal #${e.proposal_id} for ${e.approval} · ${e.proposal_hash}` };

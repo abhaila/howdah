@@ -1,8 +1,8 @@
 ---
 id: implementation.local_review
-version: 1
+version: 2
 tags: [implement-ticket]
-provenance: ported from Orbital implement-ticket
+provenance: ported from Orbital implement-ticket; v2 (HOW-40) includes review._verify_result, the behavioural verdict from verify.run
 ---
 Discover and use relevant installed skills for code review and communicating findings.
 
@@ -21,6 +21,8 @@ Implementation plan:
 Implementation summary:
 
 {{ context.implementation_summary }}
+
+{{> review._verify_result }}
 
 Review the current change against the work scope, goal, plan and applicable repository instructions. Inspect the complete branch diff against its target, including uncommitted changes, affected code and relevant tests.
 

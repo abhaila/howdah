@@ -38,7 +38,7 @@ import { harnessNames, harnessSpec, isHarness } from "../core/harnesses";
 import { GRAPHS, graphCatalog } from "../graphs/index";
 import { loadRegistry, catalogOf } from "../graphs/registry";
 import { promptSearchPath } from "../graphs/local";
-import { howdahHome, loadConfig, saveConfig, resolveWorkspace, repoNameFor, workspaceNameFor, verifyCommandFor, setVerifyCommand, ensureHowdahHome } from "../config/config";
+import { howdahHome, loadConfig, saveConfig, resolveWorkspace, repoNameFor, workspaceNameFor, verifyCommandFor, setVerifyCommand, stuckThresholds, diagnosticsCommandFor, setDiagnosticsCommand, diagnosticsCommandProblem, ensureHowdahHome } from "../config/config";
 import { loadTuning } from "../config/tuning";
 import { normalizeRunName } from "../core/run-name";
 import {
@@ -71,6 +71,8 @@ function executors() {
         // HOW-12: read lazily for the same reason — an edited verify command applies to the
         // next verify:run, not the next runner
         verifyCommandFor: (repoPath) => verifyCommandFor(loadConfig(base), repoPath),
+        // HOW-38: read once per runner — thresholds are not something a run changes mid-flight
+        stuck: stuckThresholds(loadConfig(base)),
       });
 }
 
@@ -183,6 +185,7 @@ export async function runCommand(argv: string[]): Promise<string> {
   const runDir = join(runsDir, runId);
   const engine: Engine = new Engine(graph, {
     dir: runDir, executors: executors(), cwd, folderKind, name, parent, overrides,
+    diagnosticsCommandFor: (repoPath) => diagnosticsCommandFor(loadConfig(base), repoPath), // HOW-39
     promptsDir: promptSearchPath(base, ROOT),
     tuning: loadTuning(base)[graphName!],
     harnesses: harnessSettings(),
@@ -245,6 +248,7 @@ export async function resumeCommand(runId: string, opts: { force?: boolean } = {
     promptsDir: promptSearchPath(base, ROOT),
     cwd: replayed.started.cwd,
     folderKind: replayed.started.folder_kind,
+    diagnosticsCommandFor: (repoPath) => diagnosticsCommandFor(loadConfig(base), repoPath), // HOW-39
     overrides: (replayed.started.overrides ?? undefined) as any, // the launch overrides survive resume
     tuning: loadTuning(base)[replayed.started.graph],
     harnesses: harnessSettings(),
@@ -378,8 +382,14 @@ export async function doctorCommand(): Promise<boolean> {
   checks.push(["HOWDAH_HOME", true, base]);
   checks.push(["config", existsSync(join(base, "config.json")), join(base, "config.json")]);
   checks.push(["runs dir", existsSync(runsDir), runsDir]);
-  for (const [name, r] of Object.entries(config.repos))
+  for (const [name, r] of Object.entries(config.repos)) {
     checks.push([`repo ${name}`, existsSync(r.path), r.path]);
+    // HOW-39: a diagnostics command whose binary is missing fails after every opted-in edit
+    if (r.diagnosticsCommand) {
+      const problem = diagnosticsCommandProblem(r.diagnosticsCommand, (bin) => Bun.which(bin), existsSync);
+      checks.push([`repo ${name} diagnostics`, problem === null, problem ?? r.diagnosticsCommand]);
+    }
+  }
   for (const [name, f] of Object.entries(config.folders))
     checks.push([`folder ${name}`, existsSync(f.path), f.path]);
   const hb = existsSync(join(base, "heartbeat.json"));
@@ -615,6 +625,12 @@ if (import.meta.main) {
         saveConfig(config, base);
         const now = config.repos[name]?.verifyCommand;
         console.log(now ? `verify command for "${name}": ${now}` : `cleared the verify command for "${name}" — verify:run will report not-checked`);
+      } else if (action === "diagnostics" && name) {
+        // HOW-39: set (or, with no command, clear) an existing repo's post-edit diagnostics command
+        setDiagnosticsCommand(config, name, positional.slice(2).join(" "));
+        saveConfig(config, base);
+        const now = config.repos[name]?.diagnosticsCommand;
+        console.log(now ? `diagnostics command for "${name}": ${now}` : `cleared the diagnostics command for "${name}" — no post-edit hook will run`);
       } else if (action === "remove" && name) {
         delete config.repos[name];
         delete config.folders[name];
@@ -622,7 +638,7 @@ if (import.meta.main) {
         console.log(`removed "${name}"`);
       } else if (action === "list" || action === undefined) {
         console.log(JSON.stringify({ repos: config.repos, folders: config.folders }, null, 2));
-      } else throw new Error('usage: howdah workspace add <name> <path> [--verify "<cmd>"] | verify <name> [<cmd>] | add-github <owner/name> | remove <name> | list');
+      } else throw new Error('usage: howdah workspace add <name> <path> [--verify "<cmd>"] | verify <name> [<cmd>] | diagnostics <name> [<cmd>] | add-github <owner/name> | remove <name> | list');
     }
     else if (verb === "new-graph") {
       const { newGraph } = await import("./new-graph");

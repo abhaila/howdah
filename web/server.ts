@@ -64,7 +64,7 @@ import {
 } from "../engine/control";
 import { resolveAgentConfig } from "../engine/run";
 import { defaultHarness, harnessNames, harnessSpec, isHarness } from "../core/harnesses";
-import type { Graph } from "../core/graph";
+import { agentConfigOf, type Graph } from "../core/graph";
 import { EventLog as ControlLog } from "../log/write";
 import { effectiveCwd, readWorktreeRecord } from "../engine/executors/worktree";
 import { PromptStore } from "../prompts/store";
@@ -408,7 +408,7 @@ export function createHowdahServer(opts: ServerOpts) {
             prompt: n.kind === "agent" ? n.prompt : undefined,
             run: n.kind === "command" ? n.run : undefined,
             baseline: n.kind === "agent"
-              ? { harness: n.harness, model: n.model, effort: n.effort, permissionMode: n.permissionMode, maxTurns: n.maxTurns, skills: n.skills }
+              ? agentConfigOf(n)
               : undefined,
             node_tuning: tuning.nodes?.[id],
             effective: effectiveOf(id, n),

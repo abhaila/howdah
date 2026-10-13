@@ -1,0 +1,11 @@
+--- current
++++ proposed
+@@ -37,6 +37,8 @@
+ 
+ {{ context.review_findings }}
+ 
++{{> implementation._plan_first }}
++
+ Implement the change in the prepared worktree. Follow applicable repository instructions and preserve unrelated work. Run the relevant checks. Record what each check establishes and any failures or verification gaps. Create or update local commits using the repository's conventions.
+ 
+ This step may change repository files, run checks and create local commits. Later steps own publication. The caller owns any tracker updates.

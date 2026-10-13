@@ -94,6 +94,9 @@ bun reviser/revise.ts <_partial> --evidence-from <includer>      # partials need
 bun prompts/proposals.ts accept|reject <path> [reason]   # same guards the UI uses
 bun reviser/eval/delivery-publish.eval.ts --score-only --stamp   # stamp an eval score onto the proposal
 bun reviser/eval/slice-propose.eval.ts --score-only              # proposer eval (spends tokens; no baseline yet)
+bun reviser/eval/ab.ts --cases reviser/eval/cases/implement-ticket --a <variant> --b <variant> [--stamp <proposal>]
+                                             # HOW-42 paired A/B: a variant is a prompt/proposal file or a JSON
+                                             # agent-config overlay; HOWDAH_STUB=1 is a token-free dry run
 ```
 
 Env: `HOWDAH_HOME` (state root, default `~/.howdah`), `HOWDAH_STUB=1` (executors park
@@ -275,6 +278,11 @@ Break one of these and the design stops working, so check them before changing t
 - **Prompt ids are generated, not typed by hand.** `prompts/<id>.md` (front-matter `id` must
   equal the filename) → `bun prompts/codegen.ts` → the `PromptId` union in
   `core/prompt-ids.ts`. Inline prompt text in a graph is a compile error by design.
+- **Render rules are versioned like suffixes (HOW-37).** `prompt-rendered.render_version`
+  (absent = v1) picks the substitution rules; v2 elides a value over `contextCap` (default
+  64000, from real logs) around a stub naming its producer, gives `| dump` one meaning, refuses
+  unknown filters, and adds the one `{{#if context.key}}` block (HOW-44). The cap applies to
+  rendered text only — stored values and edge conditions see the whole value. Never change v1.
 - **The rendered prompt text is never stored — it is reconstructed and proven.**
   `prompt-rendered` carries `rendered_hash` + `context_read`, not the text.
   `reconstructRender()` (`prompts/library.ts`) rebuilds it from the run's pinned template
@@ -326,9 +334,12 @@ Break one of these and the design stops working, so check them before changing t
   (`RATE_LIMIT_TEXT`, `engine/executors/harness-failure.ts`) over the attempt's transcript,
   and an agent writing rate-limiting code says "rate limit". The wording written for this case
   is pinned against that same regex. The node's next attempt is rendered with a re-entry
-  briefing (suffix v4: orient with git, continue rather than restart, commit as you go),
+  briefing (suffix v4: orient with git, continue rather than restart, commit as you go; v5 adds
+  the HOW-36 handoff — files, commands, last intent — derived by `engine/handoff.ts`),
   derived from the log and logged as `reentry_after_visit`, so a resume in a fresh process
-  briefs it identically and reconstruction stays VERIFIED. A mid-turn compaction is only a
+  briefs it identically and reconstruction stays VERIFIED. HOW-43: the engine itself continues
+  once (`contextRetries`, default 1, logged as `context-continued`) before it parks, unless the
+  operator paused, an effect is ambiguous, or the retry made no progress. A mid-turn compaction is only a
   transcript line. A FAILED codex `turn/completed` is a turn error now — it used to read as
   success and blame the model with "output contract violation". Cursor and opencode have no
   verified signal and keep degrading to `attempt-failed` with the CLI's own words.
@@ -375,7 +386,9 @@ Break one of these and the design stops working, so check them before changing t
   fully covered search with no near match; snapshots from different extractor versions or
   uncommitted changes are never judged. Cross-project resolution is left to SCIP (slice 2).
 - **Every per-harness fact lives in `core/harnesses.ts`.** Binary, login verb, auth probe,
-  model family, skill hint, forced permission mode, and whether doctor treats it as `core` /
+  model family, skill hint, forced permission mode, effort levels (HOW-33: an effort a harness
+  cannot take is reported inert, never dropped), tool flags (HOW-41: a restriction the harness
+  cannot honour parks `tools-unsupported`), edit hooks (HOW-39), and whether doctor treats it as `core` /
   `optional` / `internal` — one record per harness (claude, codex, cursor, opencode). It used
   to be a `harness === "codex" ? … : …` ternary repeated in six files, and the one a new
   harness slipped past was silent: it would have inherited claude's skill hint, so the logged
@@ -412,6 +425,14 @@ Break one of these and the design stops working, so check them before changing t
   parks for `resolve-effect` rather than guessing. One argv builder (`core/launch-args.ts`)
   serves both this and the viewer's launch route — they are the only two things that start
   runs, and a flag added to one must not be missing from the other.
+- **Nothing watches a turn burn silently (HOW-38).** `engine/executors/stuck.ts` hashes every
+  tool call's FULL arguments before the 400-char clip; 5 identical calls warn
+  (`stuck-warning`), 8 identical FAILING calls park `stuck`; `turnTimeoutMs` parks
+  `turn-timeout`. Both kill the harness's process group and never hop harnesses.
+- **Usage never turns unknown into zero (HOW-34).** `log/usage.ts` is the one rollup (per
+  node@visit and run): absent figures are unknown, an unpriced harness makes cost `partial`,
+  claude's cumulative `total_cost_usd` is recorded per turn, and the outputs repair is turn 2.
+  `log/trajectory.ts` derives each visit's behavioural profile by rule (HOW-35).
 - **A harness fallback is a new visit, rendered for the harness that runs it.** When a
   harness's allowance is exhausted (or the attempt reads as rate-limited) the engine retries
   the node on the next harness in the fallback chain (claude → codex → cursor by default,

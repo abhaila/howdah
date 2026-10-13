@@ -23,7 +23,7 @@
  * conditional sets over closed choice types are therefore legal and common.
  */
 import { validateGraph, formatViolations, type GraphShape, type Violation } from "./validate";
-import { defaultHarness, harnessNames, harnessSpec, isHarness, type HarnessName } from "./harnesses";
+import { defaultHarness, effortFor, harnessNames, harnessSpec, isHarness, type HarnessName } from "./harnesses";
 import type { Scope } from "./context";
 import type { GraphSpec } from "./graph-spec";
 import type { PromptId } from "./prompt-ids";
@@ -34,7 +34,8 @@ export type PromptRef = PromptId;
 /** HOW-17: the names, and every per-harness fact, live in core/harnesses.ts. */
 export type Harness = HarnessName;
 
-export type Effort = "low" | "medium" | "high" | "xhigh";
+/** HOW-33: `max` is claude's; core/harnesses.ts says what each harness does with each level */
+export type Effort = "low" | "medium" | "high" | "xhigh" | "max";
 export type PermissionMode = "manual" | "acceptEdits" | "auto" | "bypassPermissions" | "dontAsk" | "plan";
 
 /** per-agent execution config — resolution order: run override → node → graph default */
@@ -42,10 +43,87 @@ export interface AgentConfig {
   harness?: Harness;
   model?: string;
   effort?: Effort;
+  /**
+   * HOW-33 — RESOLVED configs only: why the effort some layer set does not reach the harness
+   * ("effort high: not supported by cursor"). Set by resolveAgentConfigLayers, never by a
+   * layer; when it is set `effort` is undefined, so nothing downstream sends a value the
+   * harness would refuse or silently ignore.
+   */
+  effortInert?: string;
   permissionMode?: PermissionMode;
   maxTurns?: number;
   /** skills the node expects available; surfaced to the agent and asserted by doctor */
   skills?: string[];
+  /**
+   * HOW-38: a wall-clock ceiling for one agent turn. When it passes, the harness's whole
+   * process group is killed and the run parks `turn-timeout`. Unset: no ceiling — a default
+   * maxTurns is deliberately NOT set either, because stuck detection plus this ceiling cover
+   * the burn case without truncating legitimately long builds.
+   */
+  turnTimeoutMs?: number;
+  /**
+   * HOW-38: `false` opts a node out of stuck detection (engine/executors/stuck.ts) — for a step
+   * whose whole job is polling the same command. Default on.
+   */
+  stuckDetection?: boolean;
+  /**
+   * HOW-37: the most characters one context value's RENDERED text may take in this node's
+   * prompt before it is elided around a stub (core/template.ts). Default DEFAULT_CONTEXT_CAP.
+   * The stored value is never touched — edge conditions and the log keep the whole thing.
+   */
+  contextCap?: number;
+  /**
+   * HOW-43: how many times in a row a visit that filled its context window is continued
+   * AUTOMATICALLY — a fresh visit, same harness, briefed with the HOW-36 handoff — before the
+   * run parks for a human. Default 1. 0 restores HOW-14's park-every-time.
+   */
+  contextRetries?: number;
+  /**
+   * HOW-41: the node's action space — tool names (or claude patterns like `Bash(git *)`) the
+   * agent may use without asking (`allow`) and may never use (`deny`). Translated per harness
+   * by core/harnesses.ts `toolFlags`; a harness that cannot honour a restriction REFUSES TO
+   * START the node (park `tools-unsupported`), because silently running unrestricted is the
+   * dangerous failure. `readOnly` beats it: a plan-mode node keeps `deny` and loses `allow`.
+   */
+  tools?: AgentTools;
+  /**
+   * HOW-39: run the workspace's `diagnosticsCommand` after every edit, inside the turn (a
+   * claude PostToolUse hook). Opt-in, default off until an A/B result says otherwise;
+   * `readOnly` forces it off. A harness without edit hooks ignores it, and says so.
+   */
+  diagnostics?: boolean;
+  /**
+   * HOW-39 — RESOLVED configs only: the command the hook will actually run, set by the engine
+   * when the node opted in, the harness can, and the workspace has one. Never a setting.
+   */
+  diagnosticsCommand?: string;
+}
+
+export interface AgentTools {
+  allow?: string[];
+  deny?: string[];
+}
+
+/** a tools setting that says nothing (no names on either side) is no setting at all */
+export function hasTools(t: AgentTools | undefined): t is AgentTools {
+  return !!t && ((t.allow?.length ?? 0) > 0 || (t.deny?.length ?? 0) > 0);
+}
+
+/**
+ * Every AgentConfig key a node or layer may set, in one list — what the engine and the
+ * viewer's graph API copy off a node, so a new knob cannot be resolved in one and dropped by
+ * the other. `effortInert` and `diagnosticsCommand` are absent on purpose: they are RESOLUTION
+ * results, never settings.
+ */
+export const AGENT_CONFIG_KEYS = [
+  "harness", "model", "effort", "permissionMode", "maxTurns", "skills", "turnTimeoutMs", "stuckDetection", "contextCap", "contextRetries", "tools", "diagnostics",
+] as const satisfies ReadonlyArray<Exclude<keyof AgentConfig, "effortInert" | "diagnosticsCommand">>;
+
+/** the AgentConfig a node declares, copied key by key (undefined keys omitted) */
+export function agentConfigOf(def: AgentConfig): AgentConfig {
+  const out: Record<string, unknown> = {};
+  for (const k of AGENT_CONFIG_KEYS) if (def[k] !== undefined) out[k] = def[k];
+  return out as AgentConfig;
 }
 
 /**
@@ -103,13 +181,24 @@ export function resolveAgentConfigLayers(
       break;
     }
   }
+  // HOW-33: effort is re-mapped for the harness that RESOLVED — which is what keeps a claude
+  // level from leaking onto the fallback harness — and an effort it cannot take is said to be
+  // inert rather than dropped
+  const effort = effortFor(harness, pick("effort"));
   return {
     harness,
     model,
-    effort: pick("effort"),
+    effort: effort.effort,
+    ...(effort.inert !== undefined ? { effortInert: effort.inert } : {}),
     permissionMode: harnessSpec(harness).forcedPermissionMode ?? pick("permissionMode"),
     maxTurns: pick("maxTurns"),
     skills: pick("skills"),
+    turnTimeoutMs: pick("turnTimeoutMs"),
+    stuckDetection: pick("stuckDetection"),
+    contextCap: pick("contextCap"),
+    contextRetries: pick("contextRetries"),
+    tools: pick("tools"),
+    diagnostics: pick("diagnostics"),
   };
 }
 

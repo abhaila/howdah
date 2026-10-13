@@ -25,13 +25,16 @@ import { writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { Executor } from "../run";
 import { JsonlChunkParser } from "../../adapter/parse";
-import { mapCodexEvent, buildCodexApprovalResponse } from "../../adapter/codex";
+import { mapCodexEvent, buildCodexApprovalResponse, codexUsage } from "../../adapter/codex";
+import type { TurnUsage } from "../../adapter/events";
 import { buildRepairInstruction, parseOutputs } from "./outputs";
 import { classifyHarnessExit, compactionNote, contextExhaustedFailure } from "./harness-failure";
 import { AttentionCenter, osNotifier, type Notifier } from "../attention";
 import { readLog } from "../../log/write";
 import { isAllowReply } from "./reply";
 import { effectiveCwd } from "./worktree";
+import { killGroup } from "./shell";
+import { ToolWatch, TurnCeiling, stuckReason, turnTimeoutReason, type StuckThresholds } from "./stuck";
 
 export interface CodexExecutorOpts {
   attentionDir: string;
@@ -42,6 +45,8 @@ export interface CodexExecutorOpts {
   askPollMs?: number;
   notifiers?: Notifier[];
   viewerBase?: string;
+  /** HOW-38: config.json `stuck` thresholds */
+  stuck?: StuckThresholds;
 }
 
 /**
@@ -53,6 +58,23 @@ export interface CodexExecutorOpts {
 export function codexSandbox(permissionMode: string | undefined, configured?: string): string {
   if (permissionMode === "plan") return "read-only";
   return configured ?? "danger-full-access";
+}
+
+/**
+ * HOW-34: one turn's usage from two thread-total snapshots. A figure either snapshot lacks
+ * stays unknown; the price is always null (codex reports none).
+ */
+export function usageDelta(now: TurnUsage | undefined, before: TurnUsage | undefined): TurnUsage | undefined {
+  if (!now) return undefined;
+  if (!before) return now;
+  const minus = (a?: number, b?: number) => (a === undefined ? undefined : b === undefined ? a : Math.max(0, a - b));
+  return {
+    input_tokens: minus(now.input_tokens, before.input_tokens),
+    ...(now.cache_read_input_tokens !== undefined ? { cache_read_input_tokens: minus(now.cache_read_input_tokens, before.cache_read_input_tokens) } : {}),
+    output_tokens: minus(now.output_tokens, before.output_tokens),
+    cost_usd: null,
+    cost_source: "unpriced",
+  };
 }
 
 export function codexExecutor(opts: CodexExecutorOpts): Executor {
@@ -67,6 +89,7 @@ export function codexExecutor(opts: CodexExecutorOpts): Executor {
       stdin: "pipe",
       stdout: "pipe",
       stderr: "pipe", // verbose traces incl. full system prompts — file only, never UI
+      detached: true, // HOW-38: a stuck or timed-out turn ends the whole group
     });
     const stderrChunks: string[] = [];
     const stderrDone = (async () => {
@@ -86,7 +109,11 @@ export function codexExecutor(opts: CodexExecutorOpts): Executor {
     let accumulated = "";
     let finalMessage: string | undefined;
     let turnDone: () => void = () => {}; // reassigned when the turn begins
-    let usage: { input_tokens?: number; output_tokens?: number } | undefined;
+    /** HOW-34: codex reports THREAD totals; each turn records the delta from the last one */
+    let totals: TurnUsage | undefined;
+    let totalsBefore: TurnUsage | undefined;
+    const turnUsages: Array<TurnUsage | undefined> = [];
+    let turn = 0; // HOW-34: 1 for the attempt's turn, 2 for the outputs repair
     /**
      * Two different things, deliberately NOT one variable (they were, and it made the repair
      * guard below read as a missing check):
@@ -109,8 +136,16 @@ export function codexExecutor(opts: CodexExecutorOpts): Executor {
      * null therefore means it was still alive, which is the normal path.
      */
     let selfExit: number | null = null;
-    const chunk = (kind: "text" | "thinking" | "tool_call" | "tool_result", content: string, tool?: { id?: string; name?: string }) =>
-      log.append({ type: "chunk", node: nodeId, visit, turn: 1, index: index++, kind, content, tool_id: tool?.id, tool_name: tool?.name });
+    const chunk = (kind: "text" | "thinking" | "tool_call" | "tool_result", content: string, tool?: { id?: string; name?: string; input_hash?: string; is_error?: boolean }) =>
+      log.append({
+        type: "chunk", node: nodeId, visit, turn: Math.max(turn, 1), index: index++, kind, content, tool_id: tool?.id, tool_name: tool?.name,
+        ...(tool?.input_hash !== undefined ? { input_hash: tool.input_hash } : {}),
+        ...(tool?.is_error !== undefined ? { is_error: tool.is_error } : {}),
+      });
+    // HOW-38: stuck detection (warn + stop; codex gets no mid-turn reminder) and the ceiling
+    const watch = new ToolWatch({ harness: "codex", log, node: nodeId, visit, thresholds: opts.stuck, note: (t) => chunk("text", t), enabled: agentConfig?.stuckDetection !== false });
+    const ceiling = new TurnCeiling(agentConfig?.turnTimeoutMs, () => killGroup(proc.pid));
+    ceiling.start();
 
     const answerApproval = async (rpcRequestId: string | number, toolName: string, input: unknown) => {
       const center = new AttentionCenter(opts.attentionDir, opts.notifiers ?? [osNotifier], { viewerBase: opts.viewerBase });
@@ -119,6 +154,7 @@ export function codexExecutor(opts: CodexExecutorOpts): Executor {
         reason: `${toolName} needs approval`,
         ask: { kind: "codex_approval", request_id: rpcRequestId, tool_name: toolName, input },
       });
+      ceiling.pause(); // a human's thinking time is not the agent's (HOW-38)
       await center.raise({ run: runId, node: nodeId, visit, reason: `${toolName} needs approval` }).catch(() => {});
       for (;;) {
         await Bun.sleep(opts.askPollMs ?? 400);
@@ -126,6 +162,8 @@ export function codexExecutor(opts: CodexExecutorOpts): Executor {
         if (resolved && resolved.type === "attention-resolved") {
           const reply = (resolved.reply ?? "").trim();
           const allow = isAllowReply(reply);
+          ceiling.start();
+          if (!allow) watch.markDenied(String((input as { id?: unknown } | null)?.id ?? ""));
           proc.stdin.write(buildCodexApprovalResponse(rpcRequestId, allow ? "approved" : "denied"));
           proc.stdin.flush();
           chunk("tool_result", allow ? "approval granted" : `approval denied: ${reply}`, { name: toolName });
@@ -153,7 +191,7 @@ export function codexExecutor(opts: CodexExecutorOpts): Executor {
             finalMessage = String(raw.params.item.text ?? "");
           if (raw.method === "thread/tokenUsage/updated") {
             const t = raw.params?.tokenUsage?.total;
-            if (t) usage = { input_tokens: t.inputTokens ?? t.input_tokens, output_tokens: t.outputTokens ?? t.output_tokens };
+            if (t) totals = codexUsage(t);
           }
           // turn/completed is handled after mapping, where turn_end says whether it FAILED
 
@@ -163,11 +201,14 @@ export function codexExecutor(opts: CodexExecutorOpts): Executor {
                 accumulated += ev.text;
                 chunk("text", ev.text);
                 break;
-              case "tool_call":
-                chunk("tool_call", JSON.stringify(ev.input).slice(0, 400), { id: ev.id, name: ev.name });
+              case "tool_call": {
+                const summary = JSON.stringify(ev.input).slice(0, 400);
+                chunk("tool_call", summary, { id: ev.id, name: ev.name, input_hash: watch.call(ev.id, ev.name, ev.input, summary) });
                 break;
+              }
               case "tool_result":
-                chunk("tool_result", ev.content.slice(0, 400), { id: ev.id });
+                chunk("tool_result", ev.content.slice(0, 400), { id: ev.id, ...(ev.is_error !== undefined ? { is_error: ev.is_error } : {}) });
+                if (watch.result(ev.id, ev.is_error === true, ev.content)?.kind === "stop") killGroup(proc.pid);
                 break;
               case "permission_request":
                 await answerApproval(ev.id, ev.tool_name, ev.input);
@@ -197,6 +238,9 @@ export function codexExecutor(opts: CodexExecutorOpts): Executor {
         }
       }
       turnDone(); // stream closed
+      // a killed app-server (HOW-38) answers nothing more: release every request still waiting
+      for (const resolve of pending.values()) resolve(undefined);
+      pending.clear();
     })();
 
     try {
@@ -211,6 +255,7 @@ export function codexExecutor(opts: CodexExecutorOpts): Executor {
       if (!threadId) throw new Error(`thread/start gave no threadId: ${JSON.stringify(thread).slice(0, 200)}`);
 
       const runTurn = async (text: string): Promise<void> => {
+        turn++;
         const done = new Promise<void>((r) => (turnDone = r));
         await request("turn/start", {
           threadId,
@@ -218,6 +263,8 @@ export function codexExecutor(opts: CodexExecutorOpts): Executor {
           ...((agentConfig?.effort ?? opts.effort) ? { effort: agentConfig?.effort ?? opts.effort } : {}),
         });
         await done;
+        turnUsages[turn - 1] = usageDelta(totals, totalsBefore);
+        totalsBefore = totals;
       };
 
       await runTurn(prompt);
@@ -234,7 +281,12 @@ export function codexExecutor(opts: CodexExecutorOpts): Executor {
         accumulated = "";
         await runTurn(buildRepairInstruction(writeKeys));
       }
+    } catch (err) {
+      // HOW-38: an app-server WE killed fails whatever it was doing; that is the timeout or the
+      // stuck streak speaking, reported below — anything else is a real fault
+      if (!ceiling.fired && !watch.stopped) throw err;
     } finally {
+      ceiling.clear();
       selfExit = proc.exitCode; // non-null here = it died before we asked it to
       proc.kill();
       await proc.exited.catch(() => {});
@@ -244,7 +296,21 @@ export function codexExecutor(opts: CodexExecutorOpts): Executor {
         writeFileSync(join(dirname(log.path), `codex-${nodeId.replace(/[^\w.-]/g, "_")}-v${visit}.stderr.log`), stderrChunks.join(""));
     }
 
-    log.append({ type: "turn-finalized", node: nodeId, visit, turn: 1, usage });
+    // one turn-finalized per turn started (at least one: a thread that died before its first
+    // turn still finalizes, with whatever codex had reported — or nothing, which reads unknown)
+    for (let t = 1; t <= Math.max(turn, 1); t++)
+      log.append({ type: "turn-finalized", node: nodeId, visit, turn: t, usage: turnUsages[t - 1] ?? (t === Math.max(turn, 1) ? usageDelta(totals, totalsBefore) : undefined) });
+    // HOW-38: WE ended it — before the startup check, whose exit reading would be ours
+    if (ceiling.fired) {
+      const reason = turnTimeoutReason(agentConfig!.turnTimeoutMs!);
+      chunk("text", `\n[${reason}]`);
+      return { status: "failed", writes: {}, reason, code: "turn-timeout" };
+    }
+    if (watch.stopped) {
+      const reason = stuckReason(watch.stopped);
+      chunk("text", `\n[${reason}]`);
+      return { status: "failed", writes: {}, reason, code: "stuck" };
+    }
     // an app-server that died without ever answering us did not start: name the cause
     // (usually "not logged in") rather than reporting a stream that ended
     const startup = classifyHarnessExit({

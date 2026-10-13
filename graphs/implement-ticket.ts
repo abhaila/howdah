@@ -5,9 +5,9 @@
  * one prompt. Here the graph references `delivery.publish` by id and gets whatever version
  * the prompt store holds — currently v2, the first accepted reviser proposal.
  *
- *   create_worktree → plan → implement → local_review ─┬─reject─▶ plan_review → implement_review ─┐
- *            ▲                              ▲          └─pass───▶ publish → probe_pr ─┬─ MERGED ─▶ complete_ticket → cleanup_merged ─▶ complete
- *            │                              └──────────────────────────────┘(loop)    ├─ CLOSED ─▶ cleanup_closed ─▶ closed
+ *   create_worktree → plan → implement → verify.run → local_review ─┬─reject─▶ plan_review → implement_review ─┐
+ *            ▲                                ▲                     └─pass───▶ publish → probe_pr ─┬─ MERGED ─▶ complete_ticket → cleanup_merged ─▶ complete
+ *            │                                └────────────────────────────────────────────────────┘(loop)    ├─ CLOSED ─▶ cleanup_closed ─▶ closed
  *                                                                                      ├─ CONFLICTS/CI/CHANGES ─▶ repairs → review_repairs ─┬─pass─▶ publish
  *                                                                                      │                                      └─reject─▶ revise ─▶ publish
  *                                                                                      └─ (fallback) wait 5m ─▶ probe_pr
@@ -31,12 +31,21 @@
  * builds from it, and `improve-codebase` already carried its own copy of the same shape.
  * Operator decision, 2026-10-11: accept the duplication rather than add codegen.
  *
+ * HOW-40: `verify.run` runs the workspace's verifyCommand after every implementation pass —
+ * the first one and every implement_review repair — so local_review judges behavioural
+ * evidence (`verify.result`, read through the shared `review._verify_result` partial) rather
+ * than only the agent's own claims about which checks it ran. A failing suite still SUCCEEDS
+ * the node (core/verify.ts): a red result is evidence for the reviewer, not a park. This is a
+ * behaviour change, not a conversion, so `fixtures/pre-spec-shapes.json`'s implement-ticket
+ * entry was updated on purpose (see spec-equivalence.test.ts).
+ *
  * `worktree.clean` IS NOW STRICT, as in improve-codebase: the hand-written edges tested
  * truthiness, `is-true` tests `=== true`. Every write site in `engine/executors/worktree.ts`
  * publishes a literal boolean, so they cannot disagree on a value the engine produces.
  */
 import { buildGraph, type GraphSpec } from "../core/graph-spec";
 import type { PrState } from "./delivery";
+import type { VerifyResult } from "../core/verify";
 
 export type { PrState };
 
@@ -52,6 +61,9 @@ export interface ImplementTicketCtx {
   completion_summary: string;
   "pr.state": PrState;
   "worktree.clean": boolean;
+  "verify.result": VerifyResult;
+  /** HOW-44: the workspace's verify command ("" when none), published by create_worktree */
+  "worktree.verify_command": string;
 }
 
 const impl = "implementation";
@@ -82,13 +94,18 @@ export const spec: GraphSpec = {
       choices: ["OPEN", "MERGED", "CLOSED", "CONFLICTS", "CI_FAILED", "CHANGES_REQUIRED"],
     },
     { key: "worktree.clean", kind: "boolean", scope: "per-visit" },
+    { key: "verify.result", kind: "json", scope: "per-visit" },
+    { key: "worktree.verify_command", kind: "text", scope: "sticky" },
   ],
   nodes: [
-    { id: "create_worktree", kind: "worktree", action: "create", writes: [] },
+    // HOW-44: publishes the verify command so the build prompt can say the harness verifies after it
+    { id: "create_worktree", kind: "worktree", action: "create", writes: ["worktree.verify_command"] },
 
     { id: "implementation.plan", kind: "agent", prompt: "implementation.plan", reads: ["goal", "work"], writes: ["implementation_plan"], class: impl },
-    { id: "implementation.implement", kind: "agent", prompt: "implementation.implement", reads: ["goal", "work", "implementation_plan"], writes: ["implementation_summary"], class: impl },
-    { id: "implementation.local_review", kind: "agent", prompt: "implementation.local_review", reads: ["goal", "work", "implementation_plan", "implementation_summary"], writes: ["review_verdict", "review_findings"], class: impl },
+    { id: "implementation.implement", kind: "agent", prompt: "implementation.implement", reads: ["goal", "work", "implementation_plan", "worktree.verify_command"], writes: ["implementation_summary"], class: impl },
+    // HOW-40: the workspace's verifyCommand, run in the worktree (`not-checked` with a reason when none)
+    { id: "verify.run", kind: "command", run: "verify:run", reads: [], writes: ["verify.result"], class: impl },
+    { id: "implementation.local_review", kind: "agent", prompt: "implementation.local_review", reads: ["goal", "work", "implementation_plan", "implementation_summary", "verify.result"], writes: ["review_verdict", "review_findings"], class: impl },
     // bounds local_review → plan_review → implement_review
     { id: "implementation.plan_review", kind: "agent", prompt: "implementation.plan_review", reads: ["goal", "work", "implementation_plan", "implementation_summary", "review_verdict", "review_findings"], writes: ["implementation_plan"], maxVisits: 3, class: impl },
     { id: "implementation.implement_review", kind: "agent", prompt: "implementation.implement_review", reads: ["goal", "work", "implementation_plan", "implementation_summary", "review_verdict", "review_findings"], writes: ["implementation_summary"], class: impl },
@@ -113,11 +130,12 @@ export const spec: GraphSpec = {
   edges: [
     { from: "create_worktree", to: "implementation.plan" },
     { from: "implementation.plan", to: "implementation.implement" },
-    { from: "implementation.implement", to: "implementation.local_review" },
+    { from: "implementation.implement", to: "verify.run" },
+    { from: "verify.run", to: "implementation.local_review" },
     { from: "implementation.local_review", to: "implementation.plan_review", when: { op: "equals", key: "review_verdict", value: "reject" } },
     { from: "implementation.local_review", to: "delivery.publish", when: { op: "equals", key: "review_verdict", value: "pass" } },
     { from: "implementation.plan_review", to: "implementation.implement_review" },
-    { from: "implementation.implement_review", to: "implementation.local_review" },
+    { from: "implementation.implement_review", to: "verify.run" },
 
     { from: "delivery.publish", to: "delivery.probe_pr" },
     { from: "delivery.probe_pr", to: "complete_ticket", when: { op: "equals", key: "pr.state", value: "MERGED" } },

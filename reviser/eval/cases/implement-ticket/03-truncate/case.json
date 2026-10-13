@@ -1,0 +1,10 @@
+{
+  "graph": "eval-implement",
+  "inputs": {
+    "goal": "Add a truncate helper to src/text.ts",
+    "work": "Add and export `truncate(s: string, max: number): string` in src/text.ts. A string of at most `max` characters is returned unchanged; a longer one is cut so that the result, INCLUDING a trailing \"…\" (one character), is exactly `max` characters. `max` below 1 throws a RangeError. Count characters, not UTF-16 code units, so an emoji is never split. Add tests."
+  },
+  "repo": { "dir": "../_shared/repo", "verifyCommand": "bun test" },
+  "graphFile": "../_shared/graph.ts.tmpl",
+  "oracle": { "kind": "command", "run": "bun test", "files": { "src/truncate.oracle.test.ts": "oracle/truncate.oracle.ts" } }
+}

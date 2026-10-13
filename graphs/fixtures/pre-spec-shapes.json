@@ -62,7 +62,11 @@
       "create_worktree": {
         "kind": "worktree",
         "action": "create",
-        "writes": {}
+        "writes": {
+          "worktree.verify_command": {
+            "scope": "sticky"
+          }
+        }
       },
       "delivery.address_reviews": {
         "kind": "agent",
@@ -263,7 +267,8 @@
           "slice.ghosts",
           "slice.approval",
           "slice.drift",
-          "review_findings"
+          "review_findings",
+          "worktree.verify_command"
         ],
         "writes": {
           "implementation_summary": {
@@ -695,7 +700,11 @@
       "create_worktree": {
         "kind": "worktree",
         "action": "create",
-        "writes": {}
+        "writes": {
+          "worktree.verify_command": {
+            "scope": "sticky"
+          }
+        }
       },
       "delivery.address_reviews": {
         "kind": "agent",
@@ -756,8 +765,8 @@
             "scope": "sticky"
           }
         },
-        "class": "delivery",
-        "maxVisits": 5
+        "maxVisits": 5,
+        "class": "delivery"
       },
       "delivery.resolve_conflicts": {
         "kind": "agent",
@@ -809,8 +818,8 @@
             "scope": "sticky"
           }
         },
-        "class": "delivery",
-        "maxVisits": 3
+        "maxVisits": 3,
+        "class": "delivery"
       },
       "delivery.wait": {
         "kind": "wait",
@@ -824,7 +833,8 @@
         "reads": [
           "goal",
           "work",
-          "implementation_plan"
+          "implementation_plan",
+          "worktree.verify_command"
         ],
         "writes": {
           "implementation_summary": {
@@ -858,7 +868,8 @@
           "goal",
           "work",
           "implementation_plan",
-          "implementation_summary"
+          "implementation_summary",
+          "verify.result"
         ],
         "writes": {
           "review_findings": {
@@ -900,8 +911,19 @@
             "scope": "sticky"
           }
         },
-        "class": "implementation",
-        "maxVisits": 3
+        "maxVisits": 3,
+        "class": "implementation"
+      },
+      "verify.run": {
+        "kind": "command",
+        "run": "verify:run",
+        "reads": [],
+        "writes": {
+          "verify.result": {
+            "scope": "per-visit"
+          }
+        },
+        "class": "implementation"
       }
     },
     "edges": [
@@ -915,6 +937,10 @@
       },
       {
         "from": "implementation.implement",
+        "to": "verify.run"
+      },
+      {
+        "from": "verify.run",
         "to": "implementation.local_review"
       },
       {
@@ -943,7 +969,7 @@
       },
       {
         "from": "implementation.implement_review",
-        "to": "implementation.local_review"
+        "to": "verify.run"
       },
       {
         "from": "delivery.publish",

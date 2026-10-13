@@ -12,6 +12,7 @@ import {
   BUILT_IN_DEFAULT_HARNESS,
   DEFAULT_FALLBACK_CHAIN,
   defaultHarness,
+  effortFor,
   fallbackChain,
   harnessNames,
   harnessSpec,
@@ -168,5 +169,45 @@ describe("a harness the table does not know", () => {
     expect(skillsForHarness(bogus, ["review"])).toEqual([]);
     // an UNRESOLVED harness is a different thing from an unknown one and keeps the skills
     expect(skillsForHarness(undefined, ["review"])).toEqual(["review"]);
+  });
+});
+
+/**
+ * HOW-33: effort resolved through every layer but never reached claude — the default harness.
+ * What is pinned here: a set effort is SENT (verbatim or through an explicit map) or reported
+ * INERT with a reason. Never both, never neither.
+ */
+describe("effort per harness", () => {
+  test("every harness declares its effort levels, or null for none — never left to a default", () => {
+    for (const name of harnessNames()) expect(harnessSpec(name).effortLevels === null || Array.isArray(harnessSpec(name).effortLevels)).toBe(true);
+    expect(harnessSpec("claude").effortLevels).toEqual(["low", "medium", "high", "xhigh", "max"]);
+    expect(harnessSpec("cursor").effortLevels).toBeNull();
+  });
+
+  test("a level the harness accepts passes through verbatim", () => {
+    expect(effortFor("claude", "high")).toEqual({ effort: "high" });
+    expect(effortFor("codex", "low")).toEqual({ effort: "low" });
+    expect(effortFor("claude", undefined)).toEqual({});
+  });
+
+  test("a level the harness does not take is MAPPED explicitly where a map says so", () => {
+    expect(effortFor("codex", "max")).toEqual({ effort: "xhigh" });
+  });
+
+  test("a harness with no effort control, or a value outside the vocabulary, is inert and says why", () => {
+    expect(effortFor("cursor", "high")).toEqual({ inert: "effort high: not supported by cursor" });
+    const bogus = effortFor("claude", "ludicrous");
+    expect(bogus.effort).toBeUndefined();
+    expect(bogus.inert).toContain("not accepted by claude");
+  });
+
+  test("resolution re-maps effort for the harness that RESOLVED — a claude level does not leak", () => {
+    expect(resolveAgentConfigLayers([{ harness: "claude", effort: "max" }])).toMatchObject({ harness: "claude", effort: "max" });
+    // the fallback layer sits on top: the same node's `max` becomes codex's `xhigh`
+    expect(resolveAgentConfigLayers([{ harness: "codex" }, { harness: "claude", effort: "max" }])).toMatchObject({ harness: "codex", effort: "xhigh" });
+    const cursor = resolveAgentConfigLayers([{ harness: "cursor" }, { effort: "high" }]);
+    expect(cursor.effort).toBeUndefined();
+    expect(cursor.effortInert).toBe("effort high: not supported by cursor");
+    expect(resolveAgentConfigLayers([{ effort: "high" }]).effortInert).toBeUndefined();
   });
 });

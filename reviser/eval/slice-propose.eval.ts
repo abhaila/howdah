@@ -32,7 +32,7 @@ import { validateGhostSet, ghostEdgeId, type GhostSet } from "../../map/ghosts";
 import type { AssembledMap } from "../../map/types";
 import { proposerMapText } from "../../engine/executors/map";
 import { parseOutputs } from "../../engine/executors/outputs";
-import { SUFFIX_VERSION, assemblePrompt, expandIncludes, renderTemplate, splitFrontMatter } from "../../core/template";
+import { DEFAULT_CONTEXT_CAP, RENDER_VERSION, SUFFIX_VERSION, assemblePrompt, expandIncludes, renderTemplate, splitFrontMatter } from "../../core/template";
 import type { FeedbackItem } from "../../engine/slice-decision";
 import { sliceRepo, COMMENT_V1, SLICE_GOAL, SLICE_WORK, DELETE_ROUTE } from "../../graphs/slice-fixture";
 
@@ -179,7 +179,7 @@ function renderPropose(neighbourhood: string, goal: string, work: string, feedba
   const { text } = renderTemplate(body, (k) => {
     if (!(k in values)) throw new Error(`slice.propose reads ${k}, which the eval does not supply`);
     return values[k];
-  });
+  }, { version: RENDER_VERSION, cap: DEFAULT_CONTEXT_CAP, exempt: new Set(["goal", "work"]) }); // the engine's rules (HOW-37)
   return assemblePrompt({ body: text, skills: [], outputKeys: ["slice.ghosts"], suffixVersion: SUFFIX_VERSION });
 }
 

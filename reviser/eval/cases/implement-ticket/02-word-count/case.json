@@ -1,0 +1,10 @@
+{
+  "graph": "eval-implement",
+  "inputs": {
+    "goal": "Fix wordCount in src/text.ts",
+    "work": "Bug: `wordCount` in src/text.ts miscounts — an empty or blank string reports 1, and repeated spaces, tabs or newlines between words are counted as extra words. A word is a run of non-whitespace. Fix it and add regression tests."
+  },
+  "repo": { "dir": "../_shared/repo", "verifyCommand": "bun test" },
+  "graphFile": "../_shared/graph.ts.tmpl",
+  "oracle": { "kind": "command", "run": "bun test", "files": { "src/wordcount.oracle.test.ts": "oracle/wordcount.oracle.ts" } }
+}

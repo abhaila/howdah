@@ -48,7 +48,9 @@ const graph = () =>
     entry: "implement",
     inputs: ["goal"],
     nodes: {
-      implement: { kind: "agent", prompt: "slice.implement" as any, reads: ["goal"], writes: { summary: { scope: "sticky" } }, maxVisits: 5 },
+      // HOW-43: these pin HOW-14's park itself, so automatic continuation is turned off here
+      // (engine/auto-continue.test.ts covers the continuation)
+      implement: { kind: "agent", prompt: "slice.implement" as any, reads: ["goal"], writes: { summary: { scope: "sticky" } }, maxVisits: 5, contextRetries: 0 },
       review: { kind: "agent", prompt: "slice.review" as any, reads: ["summary"], writes: { review_verdict: { scope: "cleared" } } },
       done: { kind: "terminal", outcome: "success" },
     },
@@ -134,7 +136,7 @@ describe("engine: a context-exhausted attempt parks, never hops, and the retry r
     const [first, second] = renders(events, "implement");
     expect(first).not.toHaveProperty("reentry_after_visit");
     expect(second).toMatchObject({ visit: 2, reentry_after_visit: 1, suffix_version: SUFFIX_VERSION });
-    expect(SUFFIX_VERSION).toBe(4);
+    expect(SUFFIX_VERSION).toBe(5);
     expect(renderedHash(retry)).toBe(second!.rendered_hash);
 
     const rebuilt = reconstructRender(dir, second!.rendered_hash);

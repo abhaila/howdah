@@ -1,0 +1,38 @@
+/**
+ * eval-implement (HOW-42) — implement-ticket's implementation half, for the A/B harness:
+ * create_worktree → plan → implement → verify.run → done. It STOPS before delivery: an eval
+ * must never open a pull request. Installed by reviser/eval/ab.ts into an isolated
+ * $HOWDAH_HOME, with __HOWDAH_ROOT__ replaced by this checkout (a local graph cannot use a
+ * relative import).
+ */
+import { defineGraph } from "__HOWDAH_ROOT__/core/graph";
+
+interface Ctx {
+  goal: string;
+  work: string;
+  implementation_plan: string;
+  implementation_summary: string;
+  "verify.result": unknown;
+  "worktree.verify_command": string;
+}
+
+export const evalImplement = defineGraph<Ctx>({
+  name: "eval-implement",
+  description: "implement-ticket's implementation half, stopping before delivery (A/B eval)",
+  defaults: { permissionMode: "auto" },
+  entry: "create_worktree",
+  inputs: ["goal", "work"],
+  nodes: {
+    create_worktree: { kind: "worktree", action: "create", writes: { "worktree.verify_command": { scope: "sticky" } } },
+    "implementation.plan": { kind: "agent", prompt: "implementation.plan" as never, reads: ["goal", "work"], writes: { implementation_plan: { scope: "sticky" } } },
+    "implementation.implement": { kind: "agent", prompt: "implementation.implement" as never, reads: ["goal", "work", "implementation_plan", "worktree.verify_command"], writes: { implementation_summary: { scope: "sticky" } } },
+    "verify.run": { kind: "command", run: "verify:run", writes: { "verify.result": { scope: "per-visit" } } },
+    done: { kind: "terminal", outcome: "success" },
+  },
+  edges: [
+    { from: "create_worktree", to: "implementation.plan" },
+    { from: "implementation.plan", to: "implementation.implement" },
+    { from: "implementation.implement", to: "verify.run" },
+    { from: "verify.run", to: "done" },
+  ],
+});

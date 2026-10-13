@@ -11,7 +11,7 @@
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { AgentConfig } from "../core/graph";
+import { hasTools, type AgentConfig } from "../core/graph";
 import { howdahHome } from "./config";
 
 export interface GraphTuning {
@@ -48,6 +48,7 @@ export function pruneTuning(t: GraphTuning): GraphTuning {
     for (const [k, v] of Object.entries(c) as [keyof AgentConfig, unknown][]) {
       if (v === undefined || v === null || v === "") continue;
       if (Array.isArray(v) && v.length === 0) continue;
+      if (k === "tools" && !hasTools(v as AgentConfig["tools"])) continue; // HOW-41: {} is no restriction
       (out as any)[k] = v;
     }
     return Object.keys(out).length ? out : undefined;

@@ -18,7 +18,7 @@
  */
 import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, dirname } from "node:path";
-import { expandIncludes, isPartialId, splitFrontMatter } from "../core/template";
+import { expandIncludes, isPartialId, splitFrontMatter, templateFilterProblems } from "../core/template";
 
 const ROOT = dirname(dirname(new URL(import.meta.url).pathname));
 const PROMPTS = join(ROOT, "prompts");
@@ -43,6 +43,9 @@ const bodyOf = (id: string) => {
 for (const id of all) {
   try {
     expandIncludes(bodyOf(id), bodyOf, [id]);
+    // HOW-37: a filter that parses and does nothing is a trap — refuse it here, at the gate
+    const filters = templateFilterProblems(bodyOf(id));
+    if (filters.length) throw new Error(filters.join("; "));
   } catch (err) {
     console.error(`prompts/${id}.md: ${err instanceof Error ? err.message : String(err)}`);
     process.exit(1);

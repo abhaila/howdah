@@ -2,3 +2,6 @@
 # The preload adds a DOM without replacing Bun's runtime globals (see its header).
 [test]
 preload = ["./web/app/dom-preload.ts"]
+# HOW-42: the A/B case set ships a tiny repo whose tests belong to THAT repo (they run inside an
+# eval worktree), not to this suite
+pathIgnorePatterns = ["reviser/eval/cases/**"]

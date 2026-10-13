@@ -45,7 +45,7 @@
  * editor and forfeits the round trip, which the builder says once, at the point of need.
  */
 import { Graph, defineGraph, type AgentConfig, type Condition, type EdgeDef, type Effort, type NodeDef, type PermissionMode, type PromptRef } from "./graph";
-import { isHarness } from "./harnesses";
+import { defaultHarness, harnessSpec, isHarness, toolBaseName } from "./harnesses";
 import type { Scope } from "./context";
 import type { Violation } from "./validate";
 import { VERIFY_BUILTIN, VERIFY_PRODUCES } from "./verify";
@@ -270,6 +270,12 @@ export const COMMAND_BUILTINS: Array<{ run: string; label: string; produces: str
 /** A worktree CLEAN-UP step emits these two facts and no others (engine/executors/worktree.ts). */
 export const WORKTREE_FACTS = ["worktree.clean", "outcome"] as const;
 
+/**
+ * HOW-44: a worktree CREATE step may publish the workspace's verify command ("" when it has
+ * none), so a prompt can say "the harness runs <cmd> after you" only when it actually does.
+ */
+export const WORKTREE_CREATE_FACTS = ["worktree.verify_command"] as const;
+
 /** The built-in a command step runs, by its first word — `map:drift --since X` is still map:drift. */
 export function commandBuiltin(run: string): (typeof COMMAND_BUILTINS)[number] | undefined {
   const head = run.trim().split(/\s+/)[0];
@@ -287,8 +293,8 @@ export function commandBuiltin(run: string): (typeof COMMAND_BUILTINS)[number] |
  * one hand-written filter at ONE of the two call sites that needed it, and the one it missed
  * shipped a graph that raises a ContextError at run time (HOW-22 review, finding 3).
  *
- *   worktree "create"  → nothing: engine/executors/worktree.ts returns `writes: {}` on both
- *                        the fresh and the idempotent re-visit path.
+ *   worktree "create"  → WORKTREE_CREATE_FACTS (HOW-44), published on both the fresh and the
+ *                        idempotent re-visit path, and only when declared.
  *   worktree "remove"  → WORKTREE_FACTS.
  *   command, built-in  → that built-in's `produces`.
  *   command, a script  → undefined: its LAST line of JSON decides, at run time.
@@ -297,7 +303,7 @@ export function commandBuiltin(run: string): (typeof COMMAND_BUILTINS)[number] |
 export function emittableWrites(n: NodeSpec): readonly string[] | undefined {
   switch (n.kind) {
     case "worktree":
-      return n.action === "remove" ? WORKTREE_FACTS : [];
+      return n.action === "remove" ? WORKTREE_FACTS : WORKTREE_CREATE_FACTS;
     case "command":
       return commandBuiltin(n.run)?.produces;
     default:
@@ -851,6 +857,22 @@ export function specAdvice(spec: GraphSpec): SpecProblem[] {
   const who = (id: string) => `**${titleOf(spec, id)}**`;
 
   for (const n of spec.nodes) {
+    // HOW-41: A TOOL NAME THE HARNESS DOES NOT SHIP. Probably a typo — `Bassh` restricts nothing
+    // and allows nothing — but CLIs add tools between releases, so it is advice, never a refusal.
+    // A harness with no tool flags at all is not advised here: that one refuses at run time.
+    if (n.kind === "agent" && n.config?.tools) {
+      const picked = n.config.harness ?? spec.defaults?.harness;
+      const harness = isHarness(picked) ? picked : defaultHarness();
+      const known = harnessSpec(harness).knownTools;
+      const names = [...(n.config.tools.allow ?? []), ...(n.config.tools.deny ?? [])];
+      const unknown = known.length ? names.filter((t) => !known.includes(toolBaseName(t))) : [];
+      if (unknown.length)
+        advise({
+          node: n.id, where: "steps",
+          message: `${who(n.id)} names ${unknown.map((t) => `\`${t}\``).join(", ")}, which ${harness} does not ship as ${unknown.length === 1 ? "a tool" : "tools"} — check the spelling (it is ${known.slice(0, 6).join(", ")}, …).`,
+        });
+    }
+
     // AN AGENT THAT IS GIVEN NOTHING. `reads` is derived from the instructions, so an empty one
     // means the body names no field at all: the step is sent the seeded "Do the work." and is
     // never told the goal, the ticket, or what the step before it produced.
@@ -942,7 +964,7 @@ export function point(v: unknown): Point | undefined {
 const SCOPES = ["sticky", "cleared", "per-visit"] as const;
 const FIELD_KINDS = ["text", "choice", "number", "boolean", "json"] as const;
 const OUTCOMES = ["success", "failed", "aborted"] as const;
-const EFFORTS = ["low", "medium", "high", "xhigh"] as const;
+const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
 const PERMISSION_MODES = ["manual", "acceptEdits", "auto", "bypassPermissions", "dontAsk", "plan"] as const;
 
 /**
@@ -967,6 +989,18 @@ export function parseAgentConfig(v: unknown): AgentConfig | undefined {
   if (turns !== undefined) out.maxTurns = turns;
   const skills = strArray(v.skills);
   if (skills.length) out.skills = skills;
+  const timeout = posInt(v.turnTimeoutMs);
+  if (timeout !== undefined) out.turnTimeoutMs = timeout;
+  if (typeof v.stuckDetection === "boolean") out.stuckDetection = v.stuckDetection;
+  const cap = posInt(v.contextCap);
+  if (cap !== undefined) out.contextCap = cap;
+  const names = (x: unknown) => strArray(x).map((t) => t.trim()).filter(Boolean);
+  const allow = isObj(v.tools) ? names(v.tools.allow) : [];
+  const deny = isObj(v.tools) ? names(v.tools.deny) : [];
+  if (allow.length || deny.length) out.tools = { ...(allow.length ? { allow } : {}), ...(deny.length ? { deny } : {}) };
+  if (typeof v.diagnostics === "boolean") out.diagnostics = v.diagnostics;
+  // 0 is meaningful here (never continue automatically), so not posInt
+  if (typeof v.contextRetries === "number" && Number.isInteger(v.contextRetries) && v.contextRetries >= 0) out.contextRetries = v.contextRetries;
   return Object.keys(out).length ? out : undefined;
 }
 

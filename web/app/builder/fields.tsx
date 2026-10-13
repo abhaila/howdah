@@ -7,13 +7,15 @@
  * GraphError (core/graph.ts declarations()); asking once, per field, in plain language makes
  * that error unreachable instead of merely reported.
  */
+import { useState } from "react";
 import { Plus, Trash2 } from "lucide-react";
-import { FIELD_KINDS, SCOPE_CHOICES, type Draft, type DraftAction } from "@/lib/spec-draft";
+import { FIELD_KINDS, SCOPE_CHOICES, fieldRemoval, removalHasCost, type Draft, type DraftAction, type FieldRemoval } from "@/lib/spec-draft";
 import type { FieldKind, FieldSpec, GraphSpec } from "../../../core/graph-spec";
 import type { Scope } from "../../../core/context";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
+import { AlertDialog } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
@@ -35,11 +37,13 @@ import { useTypedText } from "@/lib/hooks";
  * the comma the instant it was typed and a second choice could never be started. A multi-value
  * choice field was unreachable from the wizard entirely (HOW-22 review, finding 2).
  */
-function FieldRow({ f, spec, writers, dispatch }: {
+function FieldRow({ f, spec, writers, dispatch, onRemove }: {
   f: FieldSpec;
   spec: GraphSpec;
   writers: string[];
   dispatch: (a: DraftAction) => void;
+  /** the row reports the intent; the pane decides whether to ask first (HOW-31 item 7) */
+  onRemove: (key: string) => void;
 }) {
   const [name, setName] = useTypedText(f.key, (t) => (t.trim() ? t : f.key));
   const joined = (f.choices ?? []).join(", ");
@@ -78,11 +82,51 @@ function FieldRow({ f, spec, writers, dispatch }: {
       </TableCell>
       <TableCell>{writers.length ? writers.join(", ") : spec.inputs.includes(f.key) ? "you, at launch" : "— nothing yet"}</TableCell>
       <TableCell>
-        <Button variant="ghost" size="icon" aria-label={`remove the ${f.key} field`} onClick={() => dispatch({ type: "remove-field", key: f.key })}>
+        <Button variant="ghost" size="icon" aria-label={`remove the ${f.key} field`} onClick={() => onRemove(f.key)}>
           <Trash2 size={13} />
         </Button>
       </TableCell>
     </TableRow>
+  );
+}
+
+/**
+ * What the operator is about to lose, in their own words. Every clause is something the old
+ * one-click removal did silently — and the panel's help text used to claim the opposite, that
+ * removal "removes it from the steps that used it", which was never true of an agent step.
+ */
+function RemovalCost({ field, cost }: { field: string; cost: FieldRemoval }) {
+  return (
+    <>
+      {cost.branches.length > 0 && (
+        <p>
+          <strong>{cost.branches.length === 1 ? "One route is deleted" : `${cost.branches.length} routes are deleted`}</strong>, because
+          nothing can test a field that is gone:{" "}
+          {cost.branches.map((b) => `${b.from} → ${b.to} (${b.label})`).join("; ")}.
+        </p>
+      )}
+      {cost.strandedSteps.length > 0 && (
+        <p>
+          That leaves <strong>{cost.strandedSteps.join(", ")}</strong> with nowhere to go next. Give{" "}
+          {cost.strandedSteps.length === 1 ? "it" : "them"} a route or a Finish step afterwards.
+        </p>
+      )}
+      {cost.instructions.length > 0 && (
+        <p>
+          <strong>{cost.instructions.map((i) => i.node).join(", ")}</strong>{" "}
+          {cost.instructions.length === 1 ? "still asks" : "still ask"} for <code>{field}</code> in the
+          instructions. That text is yours, so it is not edited for you — the graph cannot be saved until
+          you take the reference out or add the field back.
+        </p>
+      )}
+      {cost.producers.length > 0 && (
+        <p>
+          <strong>{cost.producers.join(", ")}</strong> will stop producing it.
+        </p>
+      )}
+      {cost.wasInput && <p>It will no longer be asked for when a run starts.</p>}
+      <p>There is no undo.</p>
+    </>
   );
 }
 
@@ -91,6 +135,19 @@ const splitChoices = (text: string): string[] => text.split(",").map((x) => x.tr
 
 export function FieldsPane({ draft, dispatch }: { draft: Draft; dispatch: (a: DraftAction) => void }) {
   const { spec } = draft;
+  // HOW-31 item 7. Removing a field cascades: branches testing it are deleted outright, and an
+  // agent step whose instructions still name it turns the draft blocking, because `reads` is
+  // derived from the body and the reducer will not rewrite an operator's text. A free removal
+  // goes straight through; a costly one names the damage first, the way destroying a step does
+  // (web/app/builder/properties.tsx).
+  const [pending, setPending] = useState<string | null>(null);
+  const cost = pending === null ? null : fieldRemoval(draft, pending);
+  const remove = (key: string) => { dispatch({ type: "remove-field", key }); setPending(null); };
+  const askOrRemove = (key: string) => {
+    const r = fieldRemoval(draft, key);
+    if (removalHasCost(r)) setPending(key);
+    else remove(key);
+  };
   /** who writes this key — so removing a field can say what it would take with it */
   const writersOf = (key: string) =>
     spec.nodes.filter((n) => ("writes" in n && n.writes.includes(key))).map((n) => n.title || n.id);
@@ -121,7 +178,7 @@ export function FieldsPane({ draft, dispatch }: { draft: Draft; dispatch: (a: Dr
               </TableHeader>
               <TableBody>
                 {spec.fields.map((f) => (
-                  <FieldRow key={f.key} f={f} spec={spec} writers={writersOf(f.key)} dispatch={dispatch} />
+                  <FieldRow key={f.key} f={f} spec={spec} writers={writersOf(f.key)} dispatch={dispatch} onRemove={askOrRemove} />
                 ))}
               </TableBody>
             </Table>
@@ -130,8 +187,17 @@ export function FieldsPane({ draft, dispatch }: { draft: Draft; dispatch: (a: Dr
             <Button variant="outline" size="sm" onClick={() => dispatch({ type: "add-field" })}><Plus />Add a field</Button>
           </div>
           <div className="field-hint">
-            Removing a field also removes it from the steps that used it and from any branch that tested it.
+            Removing a field deletes every branch that tested it, and any step whose instructions
+            still name it will need its text fixed. You are told what goes before it happens.
           </div>
+          <AlertDialog
+            open={pending !== null}
+            onClose={() => setPending(null)}
+            onConfirm={() => remove(pending!)}
+            title={`Remove ${pending ?? ""}?`}
+            description={cost ? <RemovalCost field={pending ?? ""} cost={cost} /> : undefined}
+            confirmLabel="Remove it anyway"
+          />
         </CardContent>
       </Card>
     </div>

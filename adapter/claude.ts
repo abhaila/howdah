@@ -33,9 +33,22 @@
  *     `context_compacted`. Not a failure; the turn goes on, on a summary.
  */
 import type { AgentEvent } from "./events";
+import { harnessSpec } from "../core/harnesses";
+
+/** HOW-41: the flag names live in the harness table, the one home of per-harness facts */
+const CLAUDE_TOOL_FLAGS = harnessSpec("claude").toolFlags!;
 
 /** argv for a headless claude session the engine can own. */
-export function claudeArgs(opts: { sessionId: string; permissionMode?: string; resume?: boolean; model?: string; maxTurns?: number }): string[] {
+export function claudeArgs(opts: {
+  sessionId: string; permissionMode?: string; resume?: boolean; model?: string; maxTurns?: number;
+  /** HOW-33: already mapped for claude by core/harnesses.ts effortFor — sent verbatim */
+  effort?: string;
+  /** HOW-41: the node's action space; each name its own argv item, so `Bash(git *)` stays whole */
+  allowedTools?: readonly string[];
+  disallowedTools?: readonly string[];
+  /** HOW-39: a settings JSON (the post-edit diagnostics hook) */
+  settings?: string;
+}): string[] {
   return [
     "-p",
     "--verbose", // required by --output-format stream-json under -p (claude >= 2.1.2xx)
@@ -46,6 +59,10 @@ export function claudeArgs(opts: { sessionId: string; permissionMode?: string; r
     "--permission-mode", opts.permissionMode ?? "auto",
     ...(opts.model ? ["--model", opts.model] : []),
     ...(opts.maxTurns ? ["--max-turns", String(opts.maxTurns)] : []),
+    ...(opts.effort ? ["--effort", opts.effort] : []),
+    ...(opts.allowedTools?.length ? [CLAUDE_TOOL_FLAGS.allow, ...opts.allowedTools] : []),
+    ...(opts.disallowedTools?.length ? [CLAUDE_TOOL_FLAGS.deny, ...opts.disallowedTools] : []),
+    ...(opts.settings ? ["--settings", opts.settings] : []),
     ...(opts.resume ? ["--resume", opts.sessionId] : ["--session-id", opts.sessionId]),
   ];
 }
@@ -105,7 +122,8 @@ export function mapClaudeEvent(raw: unknown): AgentEvent[] {
           type: "tool_result",
           id: String(b.tool_use_id),
           content: typeof b.content === "string" ? b.content : JSON.stringify(b.content ?? ""),
-          is_error: b.is_error === true ? true : undefined,
+          // HOW-38: false is a fact too ("it succeeded"), distinct from not reported
+          is_error: typeof b.is_error === "boolean" ? b.is_error : undefined,
         }));
     }
 
@@ -126,10 +144,14 @@ export function mapClaudeEvent(raw: unknown): AgentEvent[] {
       const error = e.is_error ? String(e.result ?? e.subtype ?? "error") : undefined;
       return [{
         type: "turn_end",
+        // HOW-34: the cache figures are separate fields on the wire, and on a long agent turn
+        // most input is cached — `input_tokens` alone was a large undercount
         usage: {
-          input_tokens: e.usage?.input_tokens,
-          output_tokens: e.usage?.output_tokens,
-          cost_usd: e.total_cost_usd,
+          input_tokens: num(e.usage?.input_tokens),
+          cache_read_input_tokens: num(e.usage?.cache_read_input_tokens),
+          cache_creation_input_tokens: num(e.usage?.cache_creation_input_tokens),
+          output_tokens: num(e.usage?.output_tokens),
+          ...(typeof e.total_cost_usd === "number" ? { cost_usd: e.total_cost_usd, cost_source: "reported" as const } : {}),
         },
         error,
         result_text: !e.is_error && typeof e.result === "string" ? e.result : undefined,
@@ -152,6 +174,8 @@ export function mapClaudeEvent(raw: unknown): AgentEvent[] {
       return []; // unknown types are ignored, never fatal — the CLI is a moving target
   }
 }
+
+const num = (v: unknown): number | undefined => (typeof v === "number" ? v : undefined);
 
 /** stdin reply to a permission_request (S2 wire shape, verified). */
 export function buildClaudePermissionResponse(

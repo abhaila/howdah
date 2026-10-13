@@ -57,7 +57,14 @@ import { decisionAnswers } from "./slice-decision";
  * HOW-14: `context-exhausted` is one — a reply ("skip the docs, just land the migration")
  * is exactly what helps a retry that is re-entering half-done work.
  */
-export const RENDERABLE_REPLY_CODES: ReadonlySet<ParkCode> = new Set<ParkCode>(["attempt-failed", "executor-threw", "context-exhausted"]);
+export const RENDERABLE_REPLY_CODES: ReadonlySet<ParkCode> = new Set<ParkCode>(["attempt-failed", "executor-threw", "context-exhausted", "stuck", "turn-timeout"]);
+
+/**
+ * HOW-38: parks whose REASON is itself a fact the retry needs — the call that kept failing,
+ * or the ceiling that was hit — so the rendered reply carries it after the operator's words.
+ * Derived from the logged ask, so reconstruction rebuilds the identical text.
+ */
+const REASON_CARRYING_CODES: ReadonlySet<ParkCode> = new Set<ParkCode>(["stuck", "turn-timeout"]);
 
 type Ask = Extract<LoggedEvent, { type: "attention-raised" }>;
 type Resolution = Pick<Extract<RunEvent, { type: "attention-resolved" }>, "node" | "reply" | "source">;
@@ -72,6 +79,7 @@ export function rendersReply(ask: Ask | null, resolution: Resolution): string | 
   if (message === undefined || message.trim() === "") return null;
   if (resolutionSource(resolution) !== "operator") return null;
   if (!ask || ask.code === undefined || !RENDERABLE_REPLY_CODES.has(ask.code) || ask.node !== resolution.node) return null;
+  if (REASON_CARRYING_CODES.has(ask.code)) return `${message}\n\n(The previous attempt was stopped by the harness — ${ask.reason})`;
   return message;
 }
 

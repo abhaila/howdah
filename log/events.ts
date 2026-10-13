@@ -19,6 +19,7 @@
 import type { AskAnswer } from "../core/ask";
 import type { PromptId } from "../core/prompt-ids";
 import type { Harness } from "../core/graph";
+import type { TurnUsage } from "../adapter/events";
 import type { DriftItem, DriftOutcome } from "../map/drift";
 
 /** fields the writer stamps on every event */
@@ -48,6 +49,19 @@ export type ParkCode =
    * into the retry, and the retry is rendered with a re-entry briefing (core/template.ts v4).
    */
   | "context-exhausted"
+  /**
+   * HOW-38: the agent reissued one call with identical arguments and it kept failing
+   * (engine/executors/stuck.ts). The turn was interrupted; the reason quotes the call and the
+   * error. Never hops harnesses — another harness would not unstick the same call.
+   */
+  | "stuck"
+  /** HOW-38: an agent turn ran past its `turnTimeoutMs` ceiling and its process group was killed */
+  | "turn-timeout"
+  /**
+   * HOW-41: the node restricts its tools and its resolved harness cannot (core/harnesses.ts
+   * toolFlags) — refused before it starts, because running unrestricted is the dangerous failure
+   */
+  | "tools-unsupported"
   | "executor-threw"
   | "max-visits"
   | "no-edge"
@@ -123,7 +137,21 @@ export type RunEvent =
       /** resolved execution config — run override → node → graph default */
       harness?: Harness;
       model?: string;
+      /** the effort the harness was SENT (already mapped for it by core/harnesses.ts effortFor) */
       effort?: string;
+      /**
+       * HOW-33: why an effort some layer set did NOT reach this harness ("effort high: not
+       * supported by cursor"). Absent: no effort was set, or it was sent as `effort` says.
+       */
+      effort_inert?: string;
+      /** HOW-41: the tool restriction the agent ran under, as resolved (readOnly applied) */
+      tools?: { allow?: string[]; deny?: string[] };
+      /**
+       * HOW-39: the command the post-edit hook ran after every edit, when the node had one. The
+       * rendered hash covers the prompt, not claude's --settings, so this is what says what
+       * in-turn feedback the agent had. Absent: no hook.
+       */
+      diagnostics_command?: string;
       /**
        * system-map 0.1 — the suffix inputs, so reconstruction can rebuild the prompt AS SENT.
        * Absent on pre-0.1 events, whose hash covered the template (+ jump suffix) only.
@@ -145,6 +173,18 @@ export type RunEvent =
        * the briefing from the log rather than guessing. Absent: no briefing was rendered.
        */
       reentry_after_visit?: number;
+      /**
+       * HOW-37: which core/template.ts substitution rules rendered the body. Absent: v1 (every
+       * pre-HOW-37 render). Reconstruction picks the same rules, so old runs stay VERIFIED.
+       */
+      render_version?: number;
+      /** HOW-37 (v2): the cap in force — a render input like `skills` */
+      context_cap?: number;
+      /**
+       * HOW-37 (v2): the keys whose value was ELIDED in this render, each with the source its
+       * stub named. Only elided keys appear; `context_read` still holds every value in full.
+       */
+      context_sources?: Record<string, string>;
     }
   | {
       type: "chunk";
@@ -160,13 +200,73 @@ export type RunEvent =
       /** tool_call/tool_result correlation */
       tool_id?: string;
       tool_name?: string;
+      /**
+       * HOW-38 — tool_call only: adapter/tools.ts argumentsHash over the FULL arguments, taken
+       * before `content` was clipped to 400 chars. Absent on older chunks.
+       */
+      input_hash?: string;
+      /** HOW-38 — tool_result only: the harness said the call failed. Absent: not reported. */
+      is_error?: boolean;
+    }
+  | {
+      /**
+       * HOW-39: the post-edit diagnostics hook ran after `tool_name` (tool_use_id) — appended by
+       * the hook process itself (engine/hooks/diagnostics.ts), under the log lock. `output` is
+       * the tail the agent was shown, capped; `timed_out` means nothing was checked.
+       */
+      type: "diagnostics-ran";
+      node: string;
+      visit: number;
+      tool_use_id?: string;
+      tool_name: string;
+      file?: string;
+      command: string;
+      exit_code: number | null;
+      timed_out: boolean;
+      duration_ms: number;
+      output: string;
+    }
+  | {
+      /**
+       * HOW-43: a visit filled its context window and the ENGINE continued the node itself — a
+       * fresh visit on the same harness, briefed with the handoff (suffix v5) — instead of
+       * parking. The decision is a fact in the log so a human reading it sees that an automatic
+       * continuation happened and why; `retry` of `budget` is how much of the node's
+       * `contextRetries` this used, and `head` the worktree HEAD at that moment (the no-progress
+       * check compares the next exhaustion against it).
+       */
+      type: "context-continued";
+      node: string;
+      visit: number;
+      retry: number;
+      budget: number;
+      head: string | null;
+    }
+  | {
+      /**
+       * HOW-38: the agent has called one tool with identical arguments `count` times in a row
+       * (`failing` of them failed, consecutively) — logged once per streak at the warn
+       * threshold. A fact, not a park: the turn carries on, and `reminded` says whether the
+       * harness was also sent a mid-turn reminder (claude only, see stuck.ts).
+       */
+      type: "stuck-warning";
+      node: string;
+      visit: number;
+      tool_name: string;
+      /** the call's arguments as logged, clipped */
+      input_summary: string;
+      count: number;
+      failing: number;
+      reminded: boolean;
     }
   | {
       type: "turn-finalized";
       node: string;
       visit: number;
+      /** HOW-34: 1 for the attempt's turn, 2 for the outputs-repair follow-up on the same session */
       turn: number;
-      usage?: { input_tokens?: number; output_tokens?: number; cost_usd?: number };
+      /** HOW-34: absent fields are UNKNOWN (pre-HOW-34 events have no cache figures) — log/usage.ts */
+      usage?: TurnUsage;
     }
   | {
       type: "prompt-outcome";

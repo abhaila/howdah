@@ -12,13 +12,15 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { GitBranch, FolderGit2, SlidersHorizontal, Pencil, Plus, RotateCcw as ResetIcon } from "lucide-react";
 import type { GraphCatalog } from "@/lib/types";
 import { navigate } from "@/lib/nav";
+import { useTypedText } from "@/lib/hooks";
 import { getJSON } from "@/lib/net";
 import { GraphDag, useGraphShape, type GraphShapeDto, type AgentConfigDto } from "../graph-dag";
 import { modelFitsHarness } from "../../../core/graph";
-import { defaultHarness, harnessNames, harnessSpec, isHarness } from "../../../core/harnesses";
+import { defaultHarness, effortFor, harnessNames, harnessSpec, isHarness } from "../../../core/harnesses";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
@@ -36,7 +38,7 @@ import { useToast } from "@/components/ui/toast";
  * The leading "" is the inherit option.
  */
 const HARNESSES = ["", ...harnessNames().filter((h) => harnessSpec(h).status !== "internal")];
-const EFFORTS = ["", "low", "medium", "high", "xhigh"];
+const EFFORTS = ["", "low", "medium", "high", "xhigh", "max"];
 const PERMISSION_MODES = ["", "auto"];
 const MODEL_SUGGESTIONS = ["claude-opus-5", "claude-sonnet-5", "claude-haiku-5", "gpt-5", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"];
 const BULK_PRESETS: Array<{ id: string; label: string; target: string; cfg: AgentConfigDto }> = [
@@ -91,13 +93,19 @@ export function resolvePreview(layers: Array<AgentConfigDto | undefined>, config
       break;
     }
   }
+  // HOW-33: the same verdict the engine reaches — an effort this harness cannot take is shown
+  // as inert, not displayed as if a run would use it
+  const effort = spec ? effortFor(spec.name, pick("effort") as string | undefined) : { effort: pick("effort") as string | undefined };
   return {
     harness,
     model,
-    effort: pick("effort") as string | undefined,
+    effort: effort.effort,
+    ...("inert" in effort && effort.inert !== undefined ? { effortInert: effort.inert } : {}),
     permissionMode: spec?.forcedPermissionMode ?? (pick("permissionMode") as string | undefined),
     maxTurns: pick("maxTurns") as number | undefined,
     skills: pick("skills") as string[] | undefined,
+    tools: pick("tools") as AgentConfigDto["tools"],
+    diagnostics: pick("diagnostics") as boolean | undefined,
   };
 }
 
@@ -113,6 +121,31 @@ export function previewShape(shape: GraphShapeDto, tuning: GraphTuningDto): Grap
       return { ...n, node_tuning: nodeTuning, effective, harness: effective.harness, model: effective.model, effort: effective.effort };
     }),
   };
+}
+
+/** the tools setting from two lists — absent when both are empty, so "inherit" stays inherit */
+function toolsOf(allow: string[] | undefined, deny: string[] | undefined): AgentConfigDto["tools"] {
+  if (!allow?.length && !deny?.length) return undefined;
+  return { ...(allow?.length ? { allow } : {}), ...(deny?.length ? { deny } : {}) };
+}
+
+const parseList = (typed: string) => typed.split(",").map((x) => x.trim()).filter(Boolean);
+
+/**
+ * A comma-separated list box that keeps what was TYPED while it still means the stored list —
+ * so a trailing comma, or the space before the next name, survives the keystroke (the
+ * useTypedText rule; a box fed straight back from `string[]` ate both).
+ */
+function ListInput({ value, placeholder, onChange }: { value: string[] | undefined; placeholder: string; onChange: (v: string[] | undefined) => void }) {
+  const stored = (value ?? []).join(", ");
+  const [shown, setShown] = useTypedText(stored, (typed) => parseList(typed).join(", "));
+  return (
+    <Input value={shown} placeholder={placeholder} onChange={(e) => {
+      setShown(e.target.value);
+      const list = parseList(e.target.value);
+      onChange(list.length ? list : undefined);
+    }} />
+  );
 }
 
 export function ConfigFields(
@@ -155,8 +188,23 @@ export function ConfigFields(
       </Label>
       <Label>
         Skills (comma-separated)
-        <Input value={(value.skills ?? []).join(", ")} placeholder={ph("skills", "none")} onChange={(e) => onChange({ ...value, skills: e.target.value ? e.target.value.split(",").map((x) => x.trim()).filter(Boolean) : undefined })} />
+        <ListInput value={value.skills} placeholder={ph("skills", "none")} onChange={(skills) => onChange({ ...value, skills })} />
       </Label>
+      {/* HOW-41: the node's action space — a harness that cannot restrict tools refuses the node */}
+      <Label>
+        Tools allowed without asking (comma-separated)
+        <ListInput value={value.tools?.allow} placeholder={baseline?.tools?.allow?.length ? `inherits: ${baseline.tools.allow.join(", ")}` : "harness default"} onChange={(allow) => onChange({ ...value, tools: toolsOf(allow, value.tools?.deny) })} />
+      </Label>
+      <Label>
+        Tools denied (comma-separated, e.g. WebFetch, Bash(git push *))
+        <ListInput value={value.tools?.deny} placeholder={baseline?.tools?.deny?.length ? `inherits: ${baseline.tools.deny.join(", ")}` : "none"} onChange={(deny) => onChange({ ...value, tools: toolsOf(value.tools?.allow, deny) })} />
+      </Label>
+      {/* HOW-39: opt-in; unticked means inherit, so a graph default still applies */}
+      <Checkbox
+        label={`Post-edit diagnostics (claude; runs the workspace's diagnostics command after every edit)${baseline?.diagnostics ? " — inherits: on" : ""}`}
+        checked={value.diagnostics === true}
+        onChange={(e) => onChange({ ...value, diagnostics: e.target.checked ? true : undefined })}
+      />
     </>
   );
 }
@@ -284,7 +332,7 @@ export function GraphTuner({ shape, onSaved }: { shape: GraphShapeDto; onSaved: 
             <>
               <CardHeader>
                 <CardTitle className="font-mono">{node.id}</CardTitle>
-                <CardDescription>prompt: {node.prompt} · effective now: {node.effective?.harness}{node.effective?.model ? ` · ${node.effective.model}` : ""}{node.effective?.effort ? ` · ${node.effective.effort}` : ""}{node.effective?.permissionMode ? ` · ${node.effective.permissionMode}` : ""}</CardDescription>
+                <CardDescription>prompt: {node.prompt} · effective now: {node.effective?.harness}{node.effective?.model ? ` · ${node.effective.model}` : ""}{node.effective?.effort ? ` · ${node.effective.effort}` : ""}{node.effective?.effortInert ? ` · ${node.effective.effortInert}` : ""}{node.effective?.permissionMode ? ` · ${node.effective.permissionMode}` : ""}</CardDescription>
               </CardHeader>
               <CardContent>
                 <ConfigFields value={tuning.nodes?.[node.id] ?? {}} baseline={node.baseline} inheritedHarness={shape.default_harness} onChange={(v) => setNodeCfg(node.id, v)} />
@@ -324,7 +372,7 @@ export function GraphTuner({ shape, onSaved }: { shape: GraphShapeDto; onSaved: 
                   <TableCell>{n.class ?? "—"}</TableCell>
                   <TableCell className="font-mono">{n.effective?.harness ?? "claude"}</TableCell>
                   <TableCell className="font-mono">{n.effective?.model ?? "default"}</TableCell>
-                  <TableCell className="font-mono">{n.effective?.effort ?? "—"}</TableCell>
+                  <TableCell className="font-mono">{n.effective?.effortInert ? `inert (${n.effective.effortInert})` : n.effective?.effort ?? "—"}</TableCell>
                   <TableCell>{n.node_tuning ? <Badge variant="attention">node</Badge> : <Badge variant="outline">inherit</Badge>}</TableCell>
                 </TableRow>
               ))}
