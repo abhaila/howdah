@@ -128,6 +128,8 @@ export interface WorktreeExecutorOpts {
   repoName?: (repoPath: string) => string;
   /** HOW-44: the workspace's verify command for a repo path — published as worktree.verify_command */
   verifyCommandFor?: (repoPath: string) => string | undefined;
+  /** HOW-59: the workspace's preview paths for a repo path — published as worktree.preview_paths */
+  previewPathsFor?: (repoPath: string) => readonly string[] | undefined;
   /** HOW-57: config.json `defaultBranch` for a repo path — the branch a new worktree starts from */
   defaultBranchFor?: (repoPath: string) => string | undefined;
 }
@@ -147,6 +149,8 @@ export function worktreeExecutor(opts: WorktreeExecutorOpts): Executor {
       const writes: Record<string, unknown> = {};
       if (def.writes && "worktree.verify_command" in def.writes)
         writes["worktree.verify_command"] = (cwd && opts.verifyCommandFor?.(cwd)) || "";
+      if (def.writes && "worktree.preview_paths" in def.writes)
+        writes["worktree.preview_paths"] = ((cwd && opts.previewPathsFor?.(cwd)) || []).join(", ");
       const existing = readWorktreeRecord(runDir);
       if (existing) return { status: "succeeded", writes }; // idempotent re-visit
       if (!cwd) throw new Error("worktree create needs a repo workspace (run has no cwd)");

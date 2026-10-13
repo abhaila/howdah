@@ -111,8 +111,10 @@ describe("deliveryGraph extraction keeps implement-ticket identical", () => {
     //           and writes `acceptance`; delivery.publish reads it and `requiresAcceptance`
     //   HOW-53  delivery.review_repairs is read-only (plan mode, no override can raise it)
     //   HOW-54  plan_review and delivery.publish declare `changesFiles: false` (no-progress check)
+    //   HOW-59  create_worktree also publishes `worktree.preview_paths`; implementation.criteria
+    //           reads it and `worktree.verify_command`, so it asks only for provable evidence
     const s = JSON.stringify(sortDeep(shapeOf(implementTicket)));
-    expect(createHash("sha256").update(s).digest("hex")).toBe("d0ba89ed85027b388f019ba5e9fe26acea90964ca686a3d35b72ed3d9bafa4b0");
+    expect(createHash("sha256").update(s).digest("hex")).toBe("9de8bcde4ee3ba0cd25791a9094da1092a188f021680fdb27de66f02cc4458fd");
   });
 ;
 

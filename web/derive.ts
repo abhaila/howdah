@@ -20,7 +20,7 @@
  */
 import { askQuestions, type UserQuestion } from "../core/ask";
 import { asEvidenceResult, EVIDENCE_KEY, type EvidenceResult } from "../core/evidence";
-import { latestAcceptance, unmetCriteria, waivedCriteria, type AcceptanceRow } from "../core/acceptance";
+import { evidenceSources, latestAcceptance, unmetCriteria, unprovable, waivedCriteria, type AcceptanceRow } from "../core/acceptance";
 import type { LoggedEvent, RunOutcome } from "../log/events";
 import { currentProposal, decisionAnswers, decisionKind, findDecision } from "../engine/slice-decision";
 import { replayState } from "../engine/replay";
@@ -188,9 +188,12 @@ export interface RunDetail {
    * Null for a run that never wrote one, so an old run renders no card rather than an empty red one.
    */
   acceptance: {
-    rows: Array<AcceptanceRow & { waived: { reason: string; at: string } | null }>;
+    /** `unprovable` (HOW-59): why this run can never prove the row, or null */
+    rows: Array<AcceptanceRow & { waived: { reason: string; at: string } | null; unprovable: string | null }>;
     written_by: { node: string; visit: number; at: string };
     unmet: number;
+    /** HOW-59: unmet rows this run cannot prove — what "Waive all unprovable" would settle */
+    unprovable: number;
   } | null;
   /**
    * HOW-46/HOW-49: when the agent last produced anything (a chunk or a turn boundary) — the
@@ -498,10 +501,13 @@ export function deriveDetail(
       const latest = latestAcceptance(events);
       if (!latest) return null;
       const waived = waivedCriteria(events);
+      const sources = evidenceSources(events);
+      const left = unmetCriteria(latest.rows, waived);
       return {
-        rows: latest.rows.map((r) => ({ ...r, waived: waived.get(r.id) ?? null })),
+        rows: latest.rows.map((r) => ({ ...r, waived: waived.get(r.id) ?? null, unprovable: unprovable(r, sources) })),
         written_by: { node: latest.node, visit: latest.visit, at: latest.at },
-        unmet: unmetCriteria(latest.rows, waived).length,
+        unmet: left.length,
+        unprovable: left.filter((r) => unprovable(r, sources) !== null).length,
       };
     })(),
     evidence: events.flatMap((e) => {

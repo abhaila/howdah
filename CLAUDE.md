@@ -82,6 +82,7 @@ bun cli/main.ts resume|pause|abort <run-id>  # pause/abort also interrupt a PROV
 bun cli/main.ts steer <run-id> <text>        # HOW-47: say something to a live agent; lands at its next tool call
 bun cli/main.ts stop <run-id>                # HOW-48: soft pause — the agent stops at its next tool call
 bun cli/main.ts waive <run-id> <criterion> <reason>   # HOW-51: accept an unmet acceptance criterion, on the record
+bun cli/main.ts waive <run-id> --unprovable <reason> # HOW-59: waive every criterion this run cannot prove, at once
 bun cli/main.ts jump <run-id> <node> [msg]   # move a dead run to a node, injecting an instruction
 bun cli/main.ts up                           # supervisor: heartbeat + resume dead runs
 bun cli/main.ts workspace add|add-github|remove|list|verify|preview|user-settings|package-check
@@ -466,7 +467,11 @@ Break one of these and the design stops working, so check them before changing t
 - **"Done" is a contract, not prose (HOW-51).** `acceptance` rows start failing; only a READ-ONLY
   node may write them (validate), a flip must cite evidence real in this run (outputs check,
   core/acceptance.ts), and `requiresAcceptance` holds delivery until every live row passes or an
-  operator waives it with a decision event (`acceptance-waived`).
+  operator waives it with a decision event (`acceptance-waived`). HOW-59: every row also says how it is checked
+  (`check`: tests | screenshot | command | human | after-publish), chosen from what the run CAN
+  produce (`worktree.verify_command`, `worktree.preview_paths`); `after-publish` rows never hold
+  publication, a row this run cannot prove (`unprovable()`) is never a reason for the evaluator
+  to reject, and the gate names those rows so one `waive --unprovable` settles them.
 - **Reviewers are read-only, and the harness enforces it (HOW-53).** Plan mode does NOT refuse an
   Edit — it asks the permission-prompt tool. On a plan-mode node the claude executor refuses every
   permission request itself and never asks the operator (adapter/fixtures/claude-plan-mode-*.jsonl).

@@ -417,11 +417,6 @@ export function RunChat({ runId, detail, ask, onPickStep, onResolved, liveGit = 
                 <span>{detail.waiting}</span>
               </div>
             )}
-            {/* HOW-51: a finished run's story LEADS with its contract, and so does a run held
-                at the delivery gate — the prose underneath is the account, this is the verdict */}
-            {(detail.summary.outcome !== null || detail.ask?.code === "acceptance-unmet") && (
-              <AcceptanceCard runId={runId} detail={detail} onChanged={onResolved} />
-            )}
           </div>
         </div>
 
@@ -430,6 +425,15 @@ export function RunChat({ runId, detail, ask, onPickStep, onResolved, liveGit = 
             {/* gap-0: the rows carry their own vertical rhythm in howdah.css, and the
                 component's default `gap-8` would double it */}
             <MessageScrollerContent className="chat-log chat-col gap-0">
+              {/* HOW-51: a finished run's story LEADS with its contract — the prose underneath is
+                  the account, this is the verdict. It is the transcript's first item, never the
+                  pane's fixed head: in the head (HOW-59) a long contract pushed the scrolling
+                  transcript below the fold and nothing on screen could be scrolled at all. */}
+              {detail.summary.outcome !== null && (
+                <MessageScrollerItem messageId="acceptance">
+                  <AcceptanceCard runId={runId} detail={detail} onChanged={onResolved} />
+                </MessageScrollerItem>
+              )}
               {messages.length === 0 && turns.length === 0 && (
                 <div className="chat-empty">
                   <div className="chat-eyebrow">Nothing has run yet</div>
@@ -464,6 +468,8 @@ export function RunChat({ runId, detail, ask, onPickStep, onResolved, liveGit = 
               {ask && (
                 <MessageScrollerItem messageId="needs-input" scrollAnchor>
                   <div className="cv-standing">
+                    {/* a run held at the delivery gate: the contract IS what is being asked about */}
+                    {ask.code === "acceptance-unmet" && <AcceptanceCard runId={runId} detail={detail} onChanged={onResolved} />}
                     <StandingAsk runId={runId} detail={detail} ask={ask} onResolved={onResolved} />
                   </div>
                 </MessageScrollerItem>

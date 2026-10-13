@@ -294,8 +294,10 @@ export const WORKTREE_FACTS = ["worktree.clean", "outcome"] as const;
 /**
  * HOW-44: a worktree CREATE step may publish the workspace's verify command ("" when it has
  * none), so a prompt can say "the harness runs <cmd> after you" only when it actually does.
+ * HOW-59: and the preview's paths ("" when none), so the criteria step only asks for a
+ * screenshot when one will be captured.
  */
-export const WORKTREE_CREATE_FACTS = ["worktree.verify_command"] as const;
+export const WORKTREE_CREATE_FACTS = ["worktree.verify_command", "worktree.preview_paths"] as const;
 
 /** The built-in a command step runs, by its first word — `map:drift --since X` is still map:drift. */
 export function commandBuiltin(run: string): (typeof COMMAND_BUILTINS)[number] | undefined {

@@ -140,6 +140,8 @@ export function liveExecutors(deps: LiveExecutorDeps): EngineOpts["executors"] {
       reposDir: deps.reposDir ?? join(deps.attentionDir, "..", "repos"),
       repoName: deps.repoName,
       ...(deps.verifyCommandFor ? { verifyCommandFor: deps.verifyCommandFor } : {}),
+      // HOW-59: a preview counts only when it has a command AND paths — what evidence:screenshot needs
+      ...(deps.previewFor ? { previewPathsFor: (repo: string) => { const p = deps.previewFor!(repo); return p?.command?.trim() ? p.paths : undefined; } } : {}),
       ...(deps.defaultBranchFor ? { defaultBranchFor: deps.defaultBranchFor } : {}),
     }),
   };

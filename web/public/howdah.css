@@ -1140,6 +1140,10 @@ main { flex: 1; min-width: 0; min-height: 0; overflow: hidden; display: flex; fl
 .ac-row svg { flex: none; margin-top: 3px; }
 .ac-row[data-state="pass"] svg { color: var(--status-running); }
 .ac-row[data-state="fail"] svg { color: var(--status-failed-recoverable); }
+.ac-row[data-state="later"] svg { color: var(--fg-faint); }
+/* HOW-59: the one decision for every row this run cannot prove */
+.ac-unprovable { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; padding: 10px 12px; border-radius: var(--radius-sm); background: var(--bg-inset); font-size: var(--type-sm); color: var(--fg-muted); }
+.ac-unprovable > button { align-self: flex-start; }
 .ac-row[data-state="waived"] svg { color: var(--attention); }
 .ac-row[data-state="superseded"] { color: var(--fg-faint); }
 .ac-row[data-state="superseded"] .ac-text { text-decoration: line-through; }

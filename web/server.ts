@@ -46,7 +46,7 @@ import { LiveGitHub, liveTargetOf } from "./live-git";
 import { softStop, steer } from "../engine/steer";
 import { SOFT_STOP_ESCALATE_MS } from "../core/steer";
 import { isEvidencePath } from "../core/evidence";
-import { waiveCriterion } from "../engine/acceptance-decision";
+import { waiveCriterion, waiveUnprovable } from "../engine/acceptance-decision";
 import { replayState } from "../engine/replay";
 import { BoardCache, boardRow } from "./board";
 import { currentProposal } from "../engine/slice-decision";
@@ -689,13 +689,16 @@ export function createHowdahServer(opts: ServerOpts) {
       if (aw && req.method === "POST") {
         const runId = aw[1]!;
         const runDir = join(opts.runsDir, runId);
-        const body = (await req.json().catch(() => ({}))) as { criterion?: unknown; reason?: unknown };
-        const r = waiveCriterion(runDir, String(body.criterion ?? ""), String(body.reason ?? ""));
+        const body = (await req.json().catch(() => ({}))) as { criterion?: unknown; reason?: unknown; unprovable?: unknown };
+        // HOW-59: `unprovable: true` waives every row this run could never prove, in one decision
+        const r = body.unprovable === true
+          ? waiveUnprovable(runDir, String(body.reason ?? ""))
+          : waiveCriterion(runDir, String(body.criterion ?? ""), String(body.reason ?? ""));
         if (!r.ok) return json({ error: r.message }, 409);
         const parked = replayState(readLog(join(runDir, "run.jsonl"))).parked;
         const resumed = r.remaining === 0 && parked?.code === "acceptance-unmet" && !runnerAlive(runDir);
         if (resumed) launchResume(runId);
-        return json({ ok: true, appended: r.appended, remaining: r.remaining, resumed }, 202);
+        return json({ ok: true, ...("waived" in r ? { waived: r.waived } : { appended: r.appended }), remaining: r.remaining, resumed }, 202);
       }
 
       /**

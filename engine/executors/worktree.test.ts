@@ -56,6 +56,18 @@ describe("worktree executor (real git)", () => {
     expect((await exec(args({ def: { kind: "worktree", action: "create" }, log: new EventLog(join(run3, "run.jsonl")), cwd: repo() }))).writes).toEqual({});
   });
 
+  test("HOW-59: create publishes the preview's paths when declared — \"\" when there is no preview, on both paths", async () => {
+    const repoDir = repo();
+    const runDir = mkdtempSync(join(tmpdir(), "howdah-wt-run-"));
+    const log = new EventLog(join(runDir, "run.jsonl"));
+    const declared = { kind: "worktree" as const, action: "create" as const, writes: { "worktree.preview_paths": { scope: "sticky" as const } } };
+    const exec = worktreeExecutor({ reposDir: join(runDir, "repos"), previewPathsFor: (p) => (p === repoDir ? ["/", "/runs"] : undefined) });
+    expect((await exec(args({ def: declared, log, cwd: repoDir }))).writes).toEqual({ "worktree.preview_paths": "/, /runs" });
+    expect((await exec(args({ def: declared, log, cwd: repoDir }))).writes).toEqual({ "worktree.preview_paths": "/, /runs" });
+    const run2 = mkdtempSync(join(tmpdir(), "howdah-wt-run-"));
+    expect((await worktreeExecutor({ reposDir: join(run2, "repos") })(args({ def: declared, log: new EventLog(join(run2, "run.jsonl")), cwd: repo() }))).writes).toEqual({ "worktree.preview_paths": "" });
+  });
+
   test("create → work lands in an isolated branch; remove refuses while dirty; clean remove succeeds", async () => {
     const repoDir = repo();
     const runDir = mkdtempSync(join(tmpdir(), "howdah-wt-run-"));

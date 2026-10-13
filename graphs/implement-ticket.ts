@@ -86,6 +86,8 @@ export interface ImplementTicketCtx {
   "verify.result": VerifyResult;
   /** HOW-44: the workspace's verify command ("" when none), published by create_worktree */
   "worktree.verify_command": string;
+  /** HOW-59: the workspace preview's paths ("" when none), published by create_worktree */
+  "worktree.preview_paths": string;
   "evidence.items": unknown;
   acceptance: unknown;
 }
@@ -120,6 +122,7 @@ export const spec: GraphSpec = {
     { key: "worktree.clean", kind: "boolean", scope: "per-visit" },
     { key: "verify.result", kind: "json", scope: "per-visit" },
     { key: "worktree.verify_command", kind: "text", scope: "sticky" },
+    { key: "worktree.preview_paths", kind: "text", scope: "sticky" },
     // HOW-52: what the reviewer LOOKS at — screenshots of the worktree's preview, per review
     { key: "evidence.items", kind: "json", scope: "per-visit" },
     // HOW-51: the default-FAIL contract — opened by the criteria step, flipped only by the evaluator
@@ -127,12 +130,12 @@ export const spec: GraphSpec = {
   ],
   nodes: [
     // HOW-44: publishes the verify command so the build prompt can say the harness verifies after it
-    { id: "create_worktree", kind: "worktree", action: "create", writes: ["worktree.verify_command"] },
+    { id: "create_worktree", kind: "worktree", action: "create", writes: ["worktree.verify_command", "worktree.preview_paths"] },
 
     { id: "implementation.plan", kind: "agent", prompt: "implementation.plan", reads: ["goal", "work"], writes: ["implementation_plan"], class: impl },
     // HOW-51: the criteria, from the ticket's checkboxes or proposed from the plan — all failing.
     // Read-only, because only a read-only node may write `acceptance` (core/graph.ts validate).
-    { id: "implementation.criteria", kind: "agent", prompt: "ticket.acceptance", reads: ["goal", "work", "implementation_plan"], writes: ["acceptance"], readOnly: true, class: impl },
+    { id: "implementation.criteria", kind: "agent", prompt: "ticket.acceptance", reads: ["goal", "work", "implementation_plan", "worktree.verify_command", "worktree.preview_paths"], writes: ["acceptance"], readOnly: true, class: impl },
     { id: "implementation.implement", kind: "agent", prompt: "implementation.implement", reads: ["goal", "work", "implementation_plan", "worktree.verify_command"], writes: ["implementation_summary"], class: impl },
     // HOW-40/HOW-52: the harness's own evidence, gathered before every review — the tests, run
     // in the worktree (`not-checked` with a reason when none), then the screens, captured from

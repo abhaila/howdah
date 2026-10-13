@@ -36,7 +36,7 @@ function engineFor(dir: string, script: Script, prompts: Map<string, string>, ex
     promptsDir: PROMPTS,
     ...extra,
     executors: {
-      worktree: async ({ nodeId }) => ok(nodeId.startsWith("cleanup") ? { "worktree.clean": true } : { "worktree.verify_command": "" }),
+      worktree: async ({ nodeId }) => ok(nodeId.startsWith("cleanup") ? { "worktree.clean": true } : { "worktree.verify_command": "", "worktree.preview_paths": "" }),
       // verify, the evidence capture and the probe are the only command steps; each publishes its own fact
       command: async ({ nodeId }) =>
         nodeId === "verify.run"

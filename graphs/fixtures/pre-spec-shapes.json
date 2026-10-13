@@ -709,6 +709,9 @@
           "deps.base_tip"
         ],
         "writes": {
+          "worktree.preview_paths": {
+            "scope": "sticky"
+          },
           "worktree.verify_command": {
             "scope": "sticky"
           }
@@ -954,7 +957,9 @@
         "reads": [
           "goal",
           "work",
-          "implementation_plan"
+          "implementation_plan",
+          "worktree.verify_command",
+          "worktree.preview_paths"
         ],
         "writes": {
           "acceptance": {
@@ -1380,6 +1385,9 @@
         "kind": "worktree",
         "action": "create",
         "writes": {
+          "worktree.preview_paths": {
+            "scope": "sticky"
+          },
           "worktree.verify_command": {
             "scope": "sticky"
           }
@@ -1516,7 +1524,9 @@
         "reads": [
           "goal",
           "work",
-          "implementation_plan"
+          "implementation_plan",
+          "worktree.verify_command",
+          "worktree.preview_paths"
         ],
         "writes": {
           "acceptance": {

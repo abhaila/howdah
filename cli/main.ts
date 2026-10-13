@@ -26,7 +26,7 @@
  */
 import { userHookReport } from "../engine/executors/agent-env";
 import { softStop, steer } from "../engine/steer";
-import { waiveCriterion } from "../engine/acceptance-decision";
+import { waiveCriterion, waiveUnprovable } from "../engine/acceptance-decision";
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { Engine } from "../engine/run";
@@ -327,16 +327,26 @@ export function softStopCommand(runId: string): void {
 }
 
 /**
- * HOW-51: `howdah waive <run> <criterion-id> <reason>` — accept an unmet criterion without
+ * HOW-51: `howdah waive <run> <criterion-id>|--unprovable <reason>` — accept an unmet criterion without
  * evidence, on the record. The same decision the Acceptance card makes; when it was the last
  * unmet one and the run is parked on the delivery gate, the run is resumed.
  */
 export async function waiveCommand(runId: string, criterionId: string, reason: string): Promise<void> {
   const runDir = join(runsDir, runId);
-  const r = waiveCriterion(runDir, criterionId, reason);
-  if (!r.ok) throw new Error(r.message);
-  console.log(r.appended ? `waived "${criterionId}"` : `"${criterionId}" was already waived`);
-  if (r.remaining > 0) return console.log(`${r.remaining} criteria still unmet — delivery stays held`);
+  // HOW-59: `--unprovable` waives every row this run could never prove, with one reason
+  let remaining: number;
+  if (criterionId === "--unprovable") {
+    const r = waiveUnprovable(runDir, reason);
+    if (!r.ok) throw new Error(r.message);
+    console.log(`waived ${r.waived.map((id) => `"${id}"`).join(", ")}`);
+    remaining = r.remaining;
+  } else {
+    const r = waiveCriterion(runDir, criterionId, reason);
+    if (!r.ok) throw new Error(r.message);
+    console.log(r.appended ? `waived "${criterionId}"` : `"${criterionId}" was already waived`);
+    remaining = r.remaining;
+  }
+  if (remaining > 0) return console.log(`${remaining} criteria still unmet — delivery stays held`);
   const parked = replayState(readLog(join(runDir, "run.jsonl"))).parked;
   if (parked?.code === "acceptance-unmet") {
     console.log("every criterion is met or waived; resuming");

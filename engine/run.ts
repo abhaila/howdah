@@ -69,7 +69,7 @@ import { DEFAULT_CONTEXT_CAP, RENDER_VERSION, SUFFIX_VERSION, assemblePrompt, ex
 import { defaultHarness, fallbackChain, harnessNames, harnessSpec, isHarness } from "../core/harnesses";
 import { EventLog } from "../log/write";
 import type { LoggedEvent, ParkCode } from "../log/events";
-import { ACCEPTANCE_KEY, asAcceptance, unmetCriteria, type AcceptanceRow } from "../core/acceptance";
+import { ACCEPTANCE_KEY, asAcceptance, evidenceSources, unmetCriteria, unprovable, type AcceptanceRow } from "../core/acceptance";
 import { waivedCriteria } from "./acceptance-decision";
 import { softStopState, stopResumeFor, undeliveredSteers } from "./steer-state";
 import { previousTree } from "./no-progress";
@@ -872,12 +872,24 @@ export class Engine {
       return unmet(err instanceof Error ? err.message : String(err));
     }
     if (!rows) return unmet(`"${ACCEPTANCE_KEY}" is not a list of criteria`);
-    const left = unmetCriteria(rows, waivedCriteria(this.log.read()));
+    const events = this.log.read();
+    const left = unmetCriteria(rows, waivedCriteria(events));
     if (left.length === 0) return null;
-    return unmet(
-      `${left.length} unmet — ${left.map((r) => `"${r.id}" (${r.text.length > 80 ? `${r.text.slice(0, 77)}…` : r.text})`).join("; ")}. ` +
-        `Waive a criterion that cannot be checked, or jump back to the review once it is met.`,
-    );
+    const short = (r: AcceptanceRow) => `"${r.id}" (${r.text.length > 80 ? `${r.text.slice(0, 77)}…` : r.text})`;
+    // HOW-59: say which rows THIS run could never prove, and why, before the ones that are
+    // merely not met yet — the first kind is settled by one waiver, not by another review
+    const sources = evidenceSources(events);
+    const cannot = left.flatMap((r) => { const why = unprovable(r, sources); return why ? [{ r, why }] : []; });
+    const open = left.filter((r) => !cannot.some((c) => c.r === r));
+    const parts: string[] = [];
+    if (cannot.length)
+      parts.push(
+        `${cannot.length} this run cannot prove — ${cannot.map((c) => `${short(c.r)}: ${c.why}`).join("; ")}. ` +
+          `Waive them together with \`howdah waive ${basename(this.opts.dir)} --unprovable "<reason>"\` (or "Waive all unprovable" on the Acceptance card), or configure the missing evidence and jump back to the review`,
+      );
+    if (open.length)
+      parts.push(`${open.length} not met yet — ${open.map(short).join("; ")}. Jump back to the review once met, or waive one that cannot be checked`);
+    return unmet(`${left.length} unmet. ${parts.join(". ")}.`);
   }
 
   /**

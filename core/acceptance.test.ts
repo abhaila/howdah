@@ -3,7 +3,7 @@
  * say (the outputs check), and what holds delivery (the gate's verdict).
  */
 import { describe, expect, test } from "bun:test";
-import { acceptanceProblem, asAcceptance, latestAcceptance, unmetCriteria, waivedCriteria, type AcceptanceRow } from "./acceptance";
+import { acceptanceProblem, asAcceptance, evidenceSources, latestAcceptance, unmetCriteria, unprovable, waivedCriteria, type AcceptanceRow } from "./acceptance";
 import { defineGraph } from "./graph";
 import { FakeLog } from "../web/slice.fixtures";
 
@@ -109,5 +109,50 @@ describe("the graph's rules (core/graph.ts validate)", () => {
   });
   test("a node gated on the contract must read it", () => {
     expect(graph(false, { publishReads: false }).validate().structural).toContain(`node "publish" requires acceptance but does not read "acceptance"`);
+  });
+});
+
+describe("HOW-59: how each criterion is checked", () => {
+  const r = (id: string, check?: string, extra: Record<string, unknown> = {}) => ({ id, text: `t ${id}`, source: "plan", passes: false, evidence: null, ...(check ? { check } : {}), ...extra });
+
+  test("check survives the read model, and an unknown one is refused", () => {
+    expect(asAcceptance([r("ac-1", "tests")])![0]!.check).toBe("tests");
+    expect(acceptanceProblem([r("ac-1", "tests"), r("ac-2", "after-publish")])).toBeNull();
+    expect(acceptanceProblem([r("ac-1", "vibes")])).toContain('check "vibes"');
+  });
+
+  test("an absent check is legal — a run pinned on the v1 criteria prompt must not be refused", () => {
+    expect(acceptanceProblem([r("ac-1")])).toBeNull();
+  });
+
+  test("a later write keeps each row's check, like its text", () => {
+    expect(acceptanceProblem([r("ac-1", "command")], { previous: [r("ac-1", "tests")] })).toContain('changed its check from "tests" to "command"');
+    expect(acceptanceProblem([r("ac-1")], { previous: [r("ac-1", "tests")] })).toContain('to "none"');
+    expect(acceptanceProblem([r("ac-1", "tests")], { previous: [r("ac-1", "tests")] })).toBeNull();
+  });
+
+  test("an after-publish row never holds delivery; every other kind still does", () => {
+    const rows = asAcceptance([r("a", "after-publish"), r("b", "tests"), r("c", "human"), r("d")])!;
+    expect(unmetCriteria(rows, new Set()).map((x) => x.id)).toEqual(["b", "c", "d"]);
+  });
+
+  test("unprovable: only what THIS run could never produce evidence for", () => {
+    const row = (check: string) => asAcceptance([r("x", check)])![0]!;
+    const none = { verify: { outcome: "not-checked", reason: "no verify command" }, screenshots: { outcome: "not-checked", reason: "no preview" } };
+    expect(unprovable(row("tests"), none)).toContain("no verify command");
+    expect(unprovable(row("screenshot"), none)).toContain("no preview");
+    expect(unprovable(row("screenshot"), { screenshots: { outcome: "failed" } })).toContain("evidence: failed");
+    expect(unprovable(row("human"), {})).toBe("only a human can judge it");
+    expect(unprovable(row("command"), none)).toBeNull();
+    expect(unprovable(row("tests"), { verify: { outcome: "fail" } })).toBeNull(); // red is real, not unprovable
+    expect(unprovable(row("tests"), {})).toBeNull(); // verify has not run yet: not decided
+  });
+
+  test("evidenceSources reads the latest verify and screenshot outcomes from the log", () => {
+    const log = new FakeLog();
+    log.add({ type: "node-finished", node: "verify.run", visit: 1, status: "succeeded", writes: { "verify.result": { outcome: "fail" } } } as never);
+    log.add({ type: "node-finished", node: "verify.run", visit: 2, status: "succeeded", writes: { "verify.result": { outcome: "not-checked", reason: "why" } } } as never);
+    log.add({ type: "node-finished", node: "implementation.evidence", visit: 1, status: "succeeded", writes: { "evidence.items": { outcome: "captured", items: [] } } } as never);
+    expect(evidenceSources(log.events)).toEqual({ verify: { outcome: "not-checked", reason: "why" }, screenshots: { outcome: "captured" } });
   });
 });

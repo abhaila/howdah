@@ -34,6 +34,9 @@
  *           (implementation.local_review, delivery.review_repairs) is `readOnly`.
  *   HOW-54  implement-ticket, implement-slice, improve-codebase: the steps that plan or publish
  *           (implementation.plan_review, delivery.publish) declare `changesFiles: false`.
+ *   HOW-59  implement-ticket and implement-stacked (through stackedFrom): create_worktree also
+ *           publishes `worktree.preview_paths`, and implementation.criteria reads it and
+ *           `worktree.verify_command`, so the contract only asks for evidence the run can produce.
  *
  * ONE ENTRY WAS ADDED BY HAND, 2026-10-13 (HOW-57, decision G9): `implement-stacked` is a NEW
  * graph, not a conversion, so it has no pre-conversion shape to be faithful to. Its entry was

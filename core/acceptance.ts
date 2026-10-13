@@ -31,6 +31,18 @@
  * A criterion that cannot be checked mechanically ("feels right") has no evidence kind on
  * purpose: it can only pass by waiver, never silently.
  *
+ * HOW-59: every row says HOW it will be checked (`check`), decided by the criteria step from
+ * what this run can actually produce. It exists because the contract turned into a blocker: a
+ * workspace with no verify command and no preview gives the read-only evaluator nothing it may
+ * cite, so test- and screen-shaped criteria could never flip, the evaluator rejected for the
+ * missing evidence, and the build loop rewrote code that was not wrong. Now:
+ *   - `after-publish` rows (PR state, CI, reviewers, merges) are not held at publish — they
+ *     cannot be true before it, and the delivery half probes them itself (probe:pr);
+ *   - `unprovable()` names the rows this run CANNOT prove (no verify, no screenshots, a human
+ *     judgement), so the gate says so in one sentence and one waiver settles them all.
+ * `check` is kept like `text`: a later write may not change it. A row without one (a run that
+ * pinned the criteria prompt before HOW-59) is gated exactly as before.
+ *
  * Node-free: the viewer's Acceptance card reads rows through `asAcceptance`.
  */
 
@@ -39,6 +51,11 @@ import type { LoggedEvent } from "../log/events";
 export const ACCEPTANCE_KEY = "acceptance";
 
 export type AcceptanceSource = "ticket" | "plan";
+
+/** HOW-59: how a criterion will be checked — chosen when the contract is opened */
+export const ACCEPTANCE_CHECKS = ["tests", "screenshot", "command", "human", "after-publish"] as const;
+export type AcceptanceCheck = (typeof ACCEPTANCE_CHECKS)[number];
+const isCheck = (v: unknown): v is AcceptanceCheck => typeof v === "string" && (ACCEPTANCE_CHECKS as readonly string[]).includes(v);
 
 export type AcceptanceEvidence =
   /** the workspace's tests passed (verify:run) — `note` says which tests cover the criterion */
@@ -57,6 +74,8 @@ export interface AcceptanceRow {
   evidence: AcceptanceEvidence | null;
   /** replaced by a later row after the plan changed; kept, never deleted (the log is append-only) */
   superseded?: boolean;
+  /** HOW-59: how it will be checked; absent on rows written before HOW-59 */
+  check?: AcceptanceCheck;
 }
 
 const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
@@ -74,6 +93,7 @@ export function asAcceptance(v: unknown): AcceptanceRow[] | null {
       passes: r.passes,
       evidence: isObj(r.evidence) ? (r.evidence as unknown as AcceptanceEvidence) : null,
       ...(r.superseded === true ? { superseded: true } : {}),
+      ...(isCheck(r.check) ? { check: r.check } : {}),
     });
   }
   return rows;
@@ -122,6 +142,10 @@ function evidenceProblem(row: AcceptanceRow, ctx: AcceptanceContext): string | n
 export function acceptanceProblem(value: unknown, ctx: AcceptanceContext = {}): string | null {
   const rows = asAcceptance(value);
   if (!rows) return `"acceptance" must be an array of { id, text, source, passes, evidence } rows`;
+  // HOW-59: a `check` that is present must be one we know. Absent is allowed — a run that
+  // pinned the criteria prompt before HOW-59 never writes one, and must not be refused for it.
+  const badCheck = (value as Array<Record<string, unknown>>).find((r) => r.check !== undefined && !isCheck(r.check));
+  if (badCheck) return `criterion "${String(badCheck.id)}" has check "${String(badCheck.check)}" — use one of ${ACCEPTANCE_CHECKS.join(", ")}`;
   const ids = new Set<string>();
   for (const r of rows) {
     if (!r.id.trim()) return "every acceptance criterion needs a non-empty id";
@@ -142,6 +166,8 @@ export function acceptanceProblem(value: unknown, ctx: AcceptanceContext = {}): 
     if (!now) return `criterion "${before.id}" was removed — criteria are never deleted; mark it superseded and add its replacement as a new row`;
     if (now.text !== before.text) return `criterion "${before.id}" was reworded — keep its text, mark it superseded, and add the new wording as a new row`;
     if (before.superseded && !now.superseded) return `criterion "${before.id}" was superseded and cannot be revived`;
+    if (before.check !== undefined && now.check !== before.check)
+      return `criterion "${before.id}" changed its check from "${before.check}" to "${now.check ?? "none"}" — keep it; supersede the row if it must be checked another way`;
   }
   for (const r of rows) {
     if (r.passes && !r.superseded) {
@@ -152,9 +178,56 @@ export function acceptanceProblem(value: unknown, ctx: AcceptanceContext = {}): 
   return null;
 }
 
-/** The live criteria that neither pass nor were waived — what holds delivery. */
+/**
+ * The live criteria that neither pass nor were waived — what holds delivery. An `after-publish`
+ * row never holds it (HOW-59): it cannot be true until publication, which is what it would hold.
+ */
 export function unmetCriteria(rows: readonly AcceptanceRow[], waived: { has(id: string): boolean }): AcceptanceRow[] {
-  return rows.filter((r) => !r.superseded && !r.passes && !waived.has(r.id));
+  return rows.filter((r) => !r.superseded && !r.passes && !waived.has(r.id) && r.check !== "after-publish");
+}
+
+/** HOW-59: what this run produced that a criterion could cite — each source's outcome and reason */
+export interface EvidenceSources {
+  verify?: { outcome: string; reason?: string };
+  screenshots?: { outcome: string; reason?: string };
+}
+
+function outcomeOf(v: unknown): { outcome: string; reason?: string } | undefined {
+  if (!isObj(v) || typeof v.outcome !== "string") return undefined;
+  return { outcome: v.outcome, ...(typeof v.reason === "string" ? { reason: v.reason } : {}) };
+}
+
+/** HOW-59: the latest verify:run and evidence:screenshot outcomes in the run's log */
+export function evidenceSources(events: readonly LoggedEvent[]): EvidenceSources {
+  const latest = (key: string) => {
+    const e = events.findLast((x) => x.type === "node-finished" && x.status === "succeeded" && key in x.writes);
+    return e?.type === "node-finished" ? outcomeOf(e.writes[key]) : undefined;
+  };
+  const verify = latest("verify.result");
+  const screenshots = latest("evidence.items");
+  return { ...(verify ? { verify } : {}), ...(screenshots ? { screenshots } : {}) };
+}
+
+/**
+ * HOW-59: why THIS run cannot prove a row, or null when it could. A test-shaped row needs a
+ * verify run that actually ran; a screen-shaped one needs captured screens; a human judgement
+ * never has evidence. "Could not" is not "did not": a red suite is a real failure, not this.
+ */
+export function unprovable(row: AcceptanceRow, sources: EvidenceSources): string | null {
+  switch (row.check) {
+    case "human":
+      return "only a human can judge it";
+    case "tests":
+      return sources.verify?.outcome === "not-checked"
+        ? `it needs the tests, and the tests were never run (${sources.verify.reason ?? "verify: not-checked"})`
+        : null;
+    case "screenshot":
+      return sources.screenshots?.outcome === "not-checked" || sources.screenshots?.outcome === "failed"
+        ? `it needs a screenshot, and none was captured (${sources.screenshots.reason ?? `evidence: ${sources.screenshots.outcome}`})`
+        : null;
+    default:
+      return null;
+  }
 }
 
 /** HOW-51: the criteria an operator waived, by id — from `acceptance-waived` decision events */

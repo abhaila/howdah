@@ -119,10 +119,63 @@ describe("the Acceptance card", () => {
     expect(el.querySelector(".ac-waive-open")).toBeNull();
   });
 
-  test("a finished run's Chat LEADS with the card", () => {
+  // HOW-59: it leads from INSIDE the transcript. In the pane's fixed head a long contract pushed
+  // the scrolling transcript off the screen, and then nothing in Chat could be scrolled at all.
+  test("a finished run's Chat LEADS with the card — as the transcript's first item, never the fixed head", () => {
     const detail = deriveDetail("r1", contractLog().events);
     const el = render(<RunChat runId="r1" detail={detail} ask={null} onPickStep={() => {}} onResolved={() => {}} />);
-    expect(el.querySelector(".chat-head .ac-card")).not.toBeNull();
+    expect(el.querySelector(".chat-head .ac-card")).toBeNull();
+    const log = el.querySelector(".chat-log")!;
+    expect(log.firstElementChild!.querySelector(".ac-card")).not.toBeNull();
+  });
+
+  test("a run held at the delivery gate shows the card WITH the ask, inside the transcript", () => {
+    const events = contractLog(false);
+    events.add({ type: "attention-raised", node: "delivery.publish", visit: 1, reason: "1 unmet", code: "acceptance-unmet" });
+    const detail = deriveDetail("r1", events.events);
+    const el = render(<RunChat runId="r1" detail={detail} ask={detail.ask} onPickStep={() => {}} onResolved={() => {}} />);
+    expect(el.querySelector(".chat-head .ac-card")).toBeNull();
+    expect(el.querySelector(".chat-log .cv-standing .ac-card")).not.toBeNull();
+  });
+
+  test("HOW-59: an unprovable row says why; after-publish rows wait; one control waives all the unprovable", async () => {
+    const log = new FakeLog();
+    log.add({ type: "run-started", graph: "implement-ticket", inputs: { goal: "g" }, pinned_prompts: {} });
+    log.add({ type: "node-finished", node: "verify.run", visit: 1, status: "succeeded", writes: { "verify.result": { outcome: "not-checked", reason: "no verify command is configured" } } });
+    log.add({
+      type: "node-finished", node: "implementation.local_review", visit: 1, status: "succeeded", writes: {
+        acceptance: [
+          { id: "ac-1", text: "tests cover it", source: "plan", check: "tests", passes: false, evidence: null },
+          { id: "ac-2", text: "it reads well", source: "plan", check: "human", passes: false, evidence: null },
+          { id: "ac-3", text: "CI is green", source: "plan", check: "after-publish", passes: false, evidence: null },
+          { id: "ac-4", text: "the handler is gone", source: "plan", check: "command", passes: false, evidence: null },
+        ],
+      },
+    });
+    const detail = deriveDetail("r1", log.events);
+    expect(detail.acceptance).toMatchObject({ unmet: 3, unprovable: 2 });
+    const posted: unknown[] = [];
+    globalThis.fetch = (async (_: unknown, init?: RequestInit) => {
+      posted.push(JSON.parse(String(init?.body)));
+      return new Response(JSON.stringify({ ok: true, waived: ["ac-1", "ac-2"], remaining: 1, resumed: false }), { status: 202 });
+    }) as typeof fetch;
+    const el = render(<AcceptanceCard runId="r1" detail={detail} onChanged={() => {}} />);
+    expect(state(el)).toEqual(["fail", "fail", "later", "fail"]);
+    const meta = [...el.querySelectorAll(".ac-meta")].map((m) => m.textContent);
+    expect(meta[0]).toContain("can't be proved in this run: it needs the tests, and the tests were never run (no verify command is configured)");
+    expect(meta[0]).toContain("checked by tests");
+    expect(meta[2]).toContain("not held at publish");
+    expect(meta[3]).toContain("no evidence yet");
+    const open = [...el.querySelectorAll("button")].find((b) => b.textContent === "Waive all unprovable…")!;
+    act(() => open.click());
+    const input = el.querySelector(".ac-unprovable input") as HTMLInputElement;
+    act(() => {
+      Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")!.set!.call(input, "no test command yet");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    const go = [...el.querySelectorAll("button")].find((b) => b.textContent === "Waive 2")!;
+    await act(async () => { go.click(); await new Promise((r) => setTimeout(r, 20)); });
+    expect(posted).toEqual([{ unprovable: true, reason: "no test command yet" }]);
   });
 
   test("migration: a run with no acceptance renders no card — not an empty red one", () => {

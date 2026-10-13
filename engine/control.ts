@@ -395,7 +395,8 @@ export const REPLY_RULES: Readonly<Record<ParkCode, Rule>> = {
     accept: false,
     message:
       `delivery is held until every acceptance criterion passes or is waived; waive one with ` +
-      `\`waive ${run} <criterion-id> <reason>\` (or in the Acceptance card), or \`jump ${run} implementation.local_review\` to review again`,
+      `\`waive ${run} <criterion-id> <reason>\`, every one this run cannot prove with \`waive ${run} --unprovable <reason>\` ` +
+      `(or in the Acceptance card), or \`jump ${run} implementation.local_review\` to review again`,
   }),
   "executor-threw": retryWithReply,
   "max-visits": useJump,
