@@ -144,12 +144,6 @@ describe("one broken graph stops itself, not the registry", () => {
     expect(entries.at(-1)).toMatchObject({ name: "zzz-local", source: "local", kind: "plain" });
     expect(entries.every((e) => e.source === "builtin" || e.name === "zzz-local")).toBe(true);
   });
-
-  test("HOW-57: implement-stacked is marked as started by plan-feature, and only it", async () => {
-    const entries = catalogOf(await loadRegistry(home(), ROOT));
-    expect(entries.find((e) => e.name === "implement-stacked")).toMatchObject({ launched_by: "plan-feature" });
-    expect(entries.filter((e) => e.launched_by).map((e) => e.name)).toEqual(["implement-stacked"]);
-  });
 });
 
 describe("saving source", () => {

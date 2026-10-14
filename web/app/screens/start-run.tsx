@@ -39,9 +39,7 @@ export function StartRun() {
 
   const loadWorkspaces = () => getJSON<Workspaces>("/api/workspaces").then(setWorkspaces).catch(() => {});
   useEffect(() => {
-    // a graph another graph starts takes inputs only its parent can fill (implement-stacked's
-    // `deps` names sibling runs), so it is not offered here — the Graphs page says who starts it
-    getJSON<GraphCatalog>("/api/graphs").then((c) => setGraphs(c.graphs.filter((g) => !g.launched_by))).catch(() => {});
+    getJSON<GraphCatalog>("/api/graphs").then((c) => setGraphs(c.graphs)).catch(() => {});
     loadWorkspaces();
   }, []);
   const selected = graphs.find((g) => g.name === graph);

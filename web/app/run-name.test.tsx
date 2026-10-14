@@ -167,23 +167,3 @@ describe("the launch form (HOW-18)", () => {
     expect("name" in (posted[0]!.body as object)).toBe(false);
   });
 });
-
-// HOW-57: implement-stacked's `deps` names sibling runs only its plan-feature parent knows, so
-// a free-text box for it was a trap ("merged" typed in, then a park on unparseable JSON)
-describe("the launch form leaves out graphs another graph starts", () => {
-  test("a launched_by graph is not offered; the others are", async () => {
-    serve({
-      "/api/graphs": { graphs: [
-        { name: "research", description: "d", inputs: ["goal"], kind: "plain", source: "builtin" },
-        { name: "implement-stacked", description: "d", inputs: ["goal", "work", "deps"], kind: "repo", source: "builtin", launched_by: "plan-feature" },
-      ], problems: [] },
-      "/api/workspaces": { repos: [], folders: [] },
-    });
-    const el = mount(<StartRun />);
-    await settle();
-    const options = [...el.querySelectorAll("select option")].map((o) => o.textContent);
-    expect(options.some((o) => o?.includes("research"))).toBe(true);
-    expect(options.some((o) => o?.includes("implement-stacked"))).toBe(false);
-  });
-});
-

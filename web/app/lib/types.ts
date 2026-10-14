@@ -14,8 +14,6 @@ export interface GraphInfo {
   kind: "repo" | "plain"; source: "builtin" | "local";
   /** HOW-22: the graph builder can re-open this one — it still carries the spec it was built from */
   builder: boolean;
-  /** started only by this graph (HOW-57 implement-stacked ← plan-feature) — never offered in New run */
-  launched_by?: string;
 }
 /** a local graph that will not load is reported beside the catalog, never silently missing */
 export interface GraphProblem { name: string; error: string }
