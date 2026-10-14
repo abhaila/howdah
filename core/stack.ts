@@ -11,6 +11,14 @@
  * places must agree and core/ cannot import an executor: the executors' prechecks, the
  * COMMAND_BUILTINS table the graph builder gates a step on, and implement-stacked's spec.
  */
+/**
+ * The graph a slice WITH dependencies runs. Only `runs:launch` starts it: its `deps` input names
+ * sibling runs (`<parent>--<slice>`) that only the parent knows, so the catalog marks it
+ * `launched_by` and New run leaves it out rather than offering a free-text box nobody can fill.
+ */
+export const STACKED_GRAPH = "implement-stacked";
+export const STACKED_GRAPH_LAUNCHED_BY = "plan-feature";
+
 /** How far a dependency must get before the dependent slice starts (decision 2A + G10). */
 export type DepUntil = "published" | "merged" | "package";
 export const DEP_UNTIL: readonly DepUntil[] = ["published", "merged", "package"];

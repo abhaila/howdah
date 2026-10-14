@@ -12,6 +12,7 @@
  * (prompt library, proposals) keep using GRAPHS directly and stay synchronous.
  */
 import { specOf } from "../core/graph-spec";
+import { STACKED_GRAPH, STACKED_GRAPH_LAUNCHED_BY } from "../core/stack";
 import type { Graph } from "../core/graph";
 import { GRAPHS } from "./index";
 import { loadLocalGraphs, type LocalGraphProblem } from "./local";
@@ -22,6 +23,8 @@ export interface CatalogEntry {
   name: string;
   description: string;
   inputs: string[];
+  /** a graph only another graph starts (its inputs name runs only that parent knows): New run hides it */
+  launched_by?: string;
   /** a graph with a worktree node needs a repo; everything else runs on a plain folder */
   kind: "repo" | "plain";
   source: GraphSource;
@@ -66,6 +69,8 @@ export function catalogOf(reg: Registry): CatalogEntry[] {
       kind: Object.values(g.def.nodes).some((n) => n.kind === "worktree") ? ("repo" as const) : ("plain" as const),
       source: reg.source[g.def.name] ?? ("builtin" as const),
       builder: reg.source[g.def.name] === "local" && specOf(g) !== null,
+      // a BUILT-IN only: a local graph that happens to share the name never gets here (registry)
+      ...(g.def.name === STACKED_GRAPH && reg.source[g.def.name] === "builtin" ? { launched_by: STACKED_GRAPH_LAUNCHED_BY } : {}),
     }))
     .sort((a, b) => (a.source === b.source ? a.name.localeCompare(b.name) : a.source === "builtin" ? -1 : 1));
 }
