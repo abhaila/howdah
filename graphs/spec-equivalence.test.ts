@@ -52,6 +52,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { shapeOf, probeValues } from "./spec-shape";
 import { GRAPHS } from "./index";
+import { buildGraph, parseGraphSpec } from "../core/graph-spec";
 
 type Shape = ReturnType<typeof shapeOf>;
 const BEFORE = JSON.parse(readFileSync(join(import.meta.dir, "fixtures", "pre-spec-shapes.json"), "utf8")) as Record<string, Shape>;
@@ -164,5 +165,21 @@ describe("B1: converting a built-in to a GraphSpec changes nothing (HOW-31)", ()
     expect(routeFor("CI_FAILED")).toBe("delivery.fix_ci");
     // OPEN is a legitimate probe:pr answer with no condition: it falls to the wait edge.
     expect(edges.filter((e) => e.condition!.test({ "pr.state": "OPEN" } as any))).toEqual([]);
+  });
+});
+
+describe("a drafted built-in compiles to the same graph (HOW-56 T3)", () => {
+  test("every GraphSpec built-in, with `drafted` added and re-parsed, has an unchanged shape", () => {
+    // the provenance is part of the artifact and never of the Graph: what a drafted graph DOES
+    // is exactly what its spec says, whoever wrote it
+    const specced = Object.entries(GRAPHS).filter(([, g]) => g.def.spec !== undefined);
+    expect(specced.length).toBeGreaterThan(0);
+    for (const [name, g] of specced) {
+      const parsed = parseGraphSpec(JSON.parse(JSON.stringify({ ...g.def.spec!, drafted: { run: "r", draftHash: "c53:00000000000000" } })));
+      expect([name, parsed.ok]).toEqual([name, true]);
+      if (!parsed.ok) continue;
+      expect([name, parsed.spec.drafted?.run]).toEqual([name, "r"]);
+      expect({ [name]: shapeOf(buildGraph(parsed.spec)) }).toEqual({ [name]: shapeOf(g) });
+    }
   });
 });

@@ -12,9 +12,10 @@
  */
 import { describe, expect, test } from "bun:test";
 import { templateReads } from "./template-refs";
+import { shapeOf } from "../graphs/spec-shape";
 import {
-  COMMAND_BUILTINS, WORKTREE_FACTS, WORKTREE_CREATE_FACTS,
-  buildGraph, builtinReads, coerceOperand, compilePredicate, emittableWrites, missingBuiltinReads, parseGraphSpec, predicateLabel,
+  COMMAND_BUILTINS, SPEC_VERSION, WORKTREE_FACTS, WORKTREE_CREATE_FACTS,
+  buildGraph, draftHashOf, draftRuleProblems, resolveDraftBodies, builtinReads, coerceOperand, compilePredicate, emittableWrites, missingBuiltinReads, parseGraphSpec, predicateLabel,
   isBlocking, keepPath, recoercePredicate, specAdvice, specProblems, unmatchableOperand,
   type GraphSpec, type NodeSpec, type Predicate,
 } from "./graph-spec";
@@ -1161,5 +1162,269 @@ describe("a step and its instructions are checked together when the bodies are g
     expect(specProblems(stale).filter(isBlocking)).toEqual([]);
     expect(specProblems(minimal(), { knownPrompts: ["my-review.draft"] })).toEqual([]);
     expect(specProblems(minimal(), { knownPrompts: [] })[0]!.message).toContain("has no file yet");
+  });
+});
+
+/**
+ * HOW-56 T3 (decisions 3A + C): the powers a DRAFTED graph may not take beyond its base. Every
+ * rule is pinned both ways — the draft it lets through and the draft it refuses — because a
+ * rule that only ever refuses is as wrong as one that never does.
+ */
+describe("draftRuleProblems: a draft stays within the powers its base grants", () => {
+  type Agent = Extract<NodeSpec, { kind: "agent" }>;
+  const review: Agent = { id: "review", kind: "agent", title: "Review it", prompt: "my-review.review", reads: ["summary"], writes: [], readOnly: true };
+  const base = (): GraphSpec => {
+    const m = minimal();
+    return minimal({ defaults: { effort: "high", harness: "claude" }, nodes: [m.nodes[0]!, review, m.nodes[1]!] });
+  };
+  /** the base, re-drafted: same steps, same defaults */
+  const draft = (over: Partial<GraphSpec> = {}): GraphSpec => ({ ...base(), name: "my-redraft", ...over });
+  const withStep = (n: NodeSpec): GraphSpec => draft({ nodes: [...base().nodes, n] });
+  /** `null` = no base: a default parameter would swallow an explicit `undefined` */
+  const blocking = (spec: GraphSpec, b: GraphSpec | null = base(), bodies?: Record<string, string | { copyOf: string }>) =>
+    draftRuleProblems(spec, b ?? undefined, bodies ? { bodies } : {}).filter(isBlocking);
+  const cmd = (run: string): NodeSpec => ({ id: "check", kind: "command", title: "Check", run, reads: [], writes: [] });
+
+  test("a draft that only re-uses its base's powers is clean", () => {
+    expect(draftRuleProblems(draft(), base())).toEqual([]);
+  });
+
+  test("a command must be EXACTLY a built-in", () => {
+    expect(blocking(withStep(cmd("verify:run")))).toEqual([]);
+    expect(blocking(withStep(cmd("  probe:pr  ")))).toEqual([]);
+
+    const shell = blocking(withStep(cmd("echo hi")));
+    expect(shell).toHaveLength(1);
+    expect(shell[0]).toMatchObject({ node: "check", where: "steps" });
+    expect(shell[0]!.message).toContain("**Check** runs `echo hi`, which is not one of Howdah's built-in steps");
+    expect(shell[0]!.message).toContain("`verify:run`");
+    expect(shell[0]!.message).not.toContain("`runs:launch`");
+
+    // commandBuiltin() matches the FIRST WORD, and probe:pr is dispatched by equality, so this
+    // would pass the builder's own check and run in bash
+    const smuggled = blocking(withStep(cmd("probe:pr && rm -rf ~")));
+    expect(smuggled).toHaveLength(1);
+    expect(smuggled[0]!.message).toContain("`probe:pr && rm -rf ~`");
+    expect(blocking(withStep(cmd("map:drift --since x")))).toHaveLength(1);
+  });
+
+  test("runs:launch is refused with its own sentence", () => {
+    const launch = blocking(withStep(cmd("runs:launch")));
+    expect(launch).toHaveLength(1);
+    expect(launch[0]).toMatchObject({ node: "check", where: "steps" });
+    expect(launch[0]!.message).toBe(
+      "**Check** launches one run per approved slice. A drafted graph cannot launch runs — that starts many runs at once with no approval between them. Remove the step.",
+    );
+  });
+
+  test("an approval step is refused", () => {
+    expect(blocking(draft())).toEqual([]);
+    const gate: NodeSpec = { id: "gate", kind: "approval", title: "Approve it", proposal: "p", base: "b", decision: "d", feedback: "f", redesignTo: "draft" };
+    const problems = blocking(withStep(gate));
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toMatchObject({ node: "gate", where: "steps" });
+    expect(problems[0]!.message).toContain("**Approve it** is an approval step");
+  });
+
+  test("defaults must be the base's, whatever their key order", () => {
+    expect(blocking(draft({ defaults: { harness: "claude", effort: "high" } }))).toEqual([]);
+
+    const changed = blocking(draft({ defaults: { effort: "max", harness: "claude" } }));
+    expect(changed).toHaveLength(1);
+    expect(changed[0]).toMatchObject({ where: "basics" });
+    expect(changed[0]!.node).toBeUndefined();
+    expect(changed[0]!.message).toContain("changes the default agent settings of `my-review`");
+
+    const { defaults: _d, ...bare } = draft();
+    expect(blocking(bare)).toHaveLength(1);
+  });
+
+  test("with no base, defaults must be absent (or empty, which is the same)", () => {
+    const { defaults: _d, ...bare } = draft();
+    expect(blocking(bare, null)).toEqual([]);
+    expect(blocking({ ...bare, defaults: {} }, null)).toEqual([]);
+    const set = blocking(draft(), null);
+    expect(set).toHaveLength(1);
+    expect(set[0]!.message).toContain("A drafted graph starts with none");
+  });
+
+  test("a step may not carry its own agent config", () => {
+    expect(blocking(draft())).toEqual([]);
+    const tuned = draft({ nodes: base().nodes.map((n) => (n.id === "draft" ? { ...n, config: { effort: "max" } } : n)) as NodeSpec[] });
+    const problems = blocking(tuned);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toMatchObject({ node: "draft", where: "steps" });
+    expect(problems[0]!.message).toContain("**Draft the doc** sets its own agent settings");
+  });
+
+  test("a copy of a read-only base prompt keeps readOnly", () => {
+    const copy = (readOnly: boolean): NodeSpec => ({
+      id: "second_look", kind: "agent", title: "Second look", prompt: "my-redraft.second_look", reads: [], writes: [], ...(readOnly ? { readOnly: true as const } : {}),
+    });
+    const bodies = { "my-redraft.second_look": { copyOf: "my-review.review" } };
+    expect(blocking(withStep(copy(true)), base(), bodies)).toEqual([]);
+
+    const loosened = blocking(withStep(copy(false)), base(), bodies);
+    expect(loosened).toHaveLength(1);
+    expect(loosened[0]).toMatchObject({ node: "second_look", where: "steps" });
+    expect(loosened[0]!.message).toBe(
+      "**Second look** copies the instructions of `my-review.review`, which is read-only in `my-review`, but the step is not. Make it read-only, as the original is.",
+    );
+
+    // the base's own step, kept with its id, loosened: still refused
+    const reviewLoosened = draft({ nodes: base().nodes.map((n) => (n.id === "review" ? { ...n, readOnly: undefined, prompt: "my-redraft.review" } : n)) as NodeSpec[] });
+    expect(blocking(reviewLoosened, base(), { "my-redraft.review": { copyOf: "my-review.review" } })).toHaveLength(1);
+
+    // a copy of a base step that was never read-only may stay writable; written-out text is not a copy
+    expect(blocking(withStep(copy(false)), base(), { "my-redraft.second_look": { copyOf: "my-review.draft" } })).toEqual([]);
+    expect(blocking(withStep(copy(false)), base(), { "my-redraft.second_look": "Look again." })).toEqual([]);
+  });
+
+  test("a NEW step that can change files is a permission callout, never a block", () => {
+    const step = (readOnly: boolean): NodeSpec => ({
+      id: "polish", kind: "agent", title: "Polish", prompt: "my-redraft.polish", reads: [], writes: [], ...(readOnly ? { readOnly: true as const } : {}),
+    });
+    const flagged = draftRuleProblems(withStep(step(false)), base());
+    expect(flagged).toEqual([{
+      node: "polish", where: "steps", severity: "advice", kind: "permission",
+      message: "**Polish** is a new step that can change files. Make it read-only if it only needs to look.",
+    }]);
+    expect(flagged.filter(isBlocking)).toEqual([]);
+
+    expect(draftRuleProblems(withStep(step(true)), base())).toEqual([]);
+    // `draft` is writable but is the base's own step: not new, so not called out
+    expect(draftRuleProblems(draft(), base()).filter((p) => p.kind === "permission")).toEqual([]);
+  });
+
+  test("with no base, every writable agent step is new", () => {
+    const { defaults: _d, ...bare } = draft();
+    const flagged = draftRuleProblems(bare);
+    expect(flagged.map((p) => [p.node, p.kind, p.severity])).toEqual([["draft", "permission", "advice"]]);
+  });
+
+  test("every refusal is reported, not just the first", () => {
+    const messy = draft({ defaults: { effort: "low" }, nodes: [...base().nodes, cmd("echo hi"), { ...cmd("runs:launch"), id: "launch" }] });
+    expect(blocking(messy).map((p) => p.node ?? "(graph)")).toEqual(["(graph)", "check", "launch"]);
+  });
+});
+
+describe("drafted: where a graph came from rides in the spec, never in the Graph (HOW-56)", () => {
+  const provenance = { run: "plan-feature-abc--draft", draftHash: "c53:0011223344556" };
+  const withDrafted = (): GraphSpec => ({ ...minimal(), drafted: provenance });
+
+  test("the exact shape parses, and survives a JSON round trip", () => {
+    const parsed = parseGraphSpec(JSON.parse(JSON.stringify(withDrafted())));
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.spec.drafted).toEqual(provenance);
+    const again = parseGraphSpec(JSON.parse(JSON.stringify(parsed.spec)));
+    expect(again).toEqual(parsed);
+  });
+
+  test("anything but exactly { run, draftHash } is dropped, and the spec still parses", () => {
+    for (const bad of [
+      null, "x", [], {},
+      { run: "r" },
+      { draftHash: "h" },
+      { run: "r", draftHash: "h", extra: 1 },
+      { run: 3, draftHash: "h" },
+      { run: "r", draftHash: "" },
+      { run: "", draftHash: "h" },
+    ]) {
+      const parsed = parseGraphSpec({ ...minimal(), drafted: bad });
+      expect([bad, parsed.ok]).toEqual([bad, true]);
+      if (parsed.ok) expect([bad, "drafted" in parsed.spec]).toEqual([bad, false]);
+    }
+  });
+
+  test("it is NOT compiled: the same shapeOf, the same def bar the spec", () => {
+    expect(SPEC_VERSION).toBe(1);
+    expect(shapeOf(buildGraph(withDrafted()))).toEqual(shapeOf(buildGraph(minimal())));
+    const { spec: _a, ...drafted } = buildGraph(withDrafted()).def;
+    const { spec: _b, ...plain } = buildGraph(minimal()).def;
+    expect(drafted).toEqual(plain);
+    expect(buildGraph(withDrafted()).def.spec?.drafted).toEqual(provenance);
+  });
+
+  test("...and it is not a problem to report", () => {
+    expect(specProblems(withDrafted())).toEqual(specProblems(minimal()));
+  });
+});
+
+describe("resolveDraftBodies: text, or a copy of a prompt Howdah has", () => {
+  const known = ["review.local", "write-doc.review"];
+
+  test("text and a known copy resolve", () => {
+    expect(resolveDraftBodies({ "x.draft": "Draft it.", "x.review": { copyOf: "review.local" } }, known)).toEqual({
+      ok: true,
+      bodies: { "x.draft": "Draft it.", "x.review": { copyOf: "review.local" } },
+    });
+    expect(resolveDraftBodies({}, known)).toEqual({ ok: true, bodies: {} });
+  });
+
+  test("an unknown copy is refused in the operator's words, naming both ids", () => {
+    const r = resolveDraftBodies({ "x.review": { copyOf: "foo.bar" } }, known);
+    expect(r).toEqual({
+      ok: false,
+      problems: [{
+        where: "steps",
+        message: "The instructions for `x.review` are a copy of `foo.bar`, which is not a prompt Howdah has. Copy one that exists, or write the instructions out.",
+      }],
+    });
+  });
+
+  test("a malformed body is refused separately", () => {
+    for (const bad of [3, null, [], {}, { copyOf: 3 }, { copyOf: "review.local", extra: true }, { copy: "review.local" }]) {
+      const r = resolveDraftBodies({ "x.review": bad }, known);
+      expect([bad, r.ok]).toEqual([bad, false]);
+      if (!r.ok) expect(r.problems[0]!.message).toContain("are neither text nor a copy");
+    }
+  });
+
+  test("every problem is reported", () => {
+    const r = resolveDraftBodies({ "x.a": { copyOf: "nope" }, "x.b": "fine", "x.c": 7 }, known);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.problems.map((p) => p.message.match(/`(x\.\w)`/)?.[1])).toEqual(["x.a", "x.c"]);
+  });
+});
+
+describe("draftHashOf: an edit changes it, a rename does not (D-9A)", () => {
+  const bodies = { "my-review.draft": "Draft it. {{ context.goal }}" };
+  const hash = (spec: GraphSpec, b: Record<string, string | { copyOf: string }> = bodies) => draftHashOf(spec, b);
+
+  test("deterministic, and node-free in form", () => {
+    expect(hash(minimal())).toBe(hash(minimal()));
+    expect(hash(minimal())).toMatch(/^c53:[0-9a-f]{14}$/);
+  });
+
+  test("key order and load normalisation are not edits", () => {
+    const reordered = JSON.parse(JSON.stringify(minimal(), Object.keys(minimal()).reverse().concat("id", "kind", "title", "prompt", "reads", "writes", "outcome", "from", "to", "key", "scope")));
+    expect(hash(reordered)).toBe(hash(minimal()));
+    // parseGraphSpec drops a key it does not know, so a draft carrying junk hashes as without
+    expect(hash({ ...minimal(), junk: 1 } as GraphSpec)).toBe(hash(minimal()));
+  });
+
+  test("a rename — the name, every prompt prefix and every body key together — is not an edit", () => {
+    const renamed = minimal({
+      name: "my-other",
+      nodes: minimal().nodes.map((n) => (n.kind === "agent" ? { ...n, prompt: "my-other.draft" } : n)),
+    });
+    expect(hash(renamed, { "my-other.draft": bodies["my-review.draft"] })).toBe(hash(minimal()));
+  });
+
+  test("a position, and the provenance itself, are not edits", () => {
+    const moved = minimal({ nodes: minimal().nodes.map((n, i) => ({ ...n, position: { x: i * 100, y: 7 } })) });
+    expect(hash(moved)).toBe(hash(minimal()));
+    expect(hash({ ...minimal(), drafted: { run: "r", draftHash: "h" } })).toBe(hash(minimal()));
+  });
+
+  test("a body edit, a title edit and an edge reorder are edits", () => {
+    const base = hash(minimal());
+    expect(hash(minimal(), { "my-review.draft": "Draft it again. {{ context.goal }}" })).not.toBe(base);
+    expect(hash(minimal(), { "my-review.draft": { copyOf: "write-doc.draft" } })).not.toBe(base);
+    expect(hash(minimal({ nodes: minimal().nodes.map((n) => (n.id === "draft" ? { ...n, title: "Write it" } : n)) }))).not.toBe(base);
+    const twoEdges = minimal({ edges: [{ from: "draft", to: "done", when: { op: "is-empty", key: "summary" } }, { from: "draft", to: "done" }] });
+    const swapped = minimal({ edges: [...twoEdges.edges].reverse() });
+    expect(hash(swapped)).not.toBe(hash(twoEdges));
   });
 });

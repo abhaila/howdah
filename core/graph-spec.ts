@@ -261,6 +261,23 @@ export interface GraphSpec {
   entry: string;
   nodes: NodeSpec[];
   edges: EdgeSpec[];
+  /**
+   * Where this graph came from when an agent drafted it (HOW-56 T3, decision B): the run that
+   * drafted it and `draftHashOf()` over the draft as proposed, so a later save can tell whether
+   * the operator edited it first. A PROVENANCE fact in the artifact, for the same reason
+   * `position` is a layout fact in it — a sidecar would split the artifact in two. `buildGraph`
+   * never compiles it, so a drafted graph is the identical `Graph` to an undrafted one.
+   *
+   * Optional and additive, so SPEC_VERSION stays 1.
+   */
+  drafted?: DraftedProvenance;
+}
+
+export interface DraftedProvenance {
+  /** the run id that drafted the graph */
+  run: string;
+  /** draftHashOf() over the draft that run proposed */
+  draftHash: string;
 }
 
 // ---- what an executor can actually publish ----------------------------------------------
@@ -560,6 +577,9 @@ export interface SpecProblem {
   message: string;
   /** absent = `blocking`; see Severity */
   severity?: Severity;
+  /** absent = an ordinary problem. `permission`: a draft gives a step a power its base did not
+   *  have (draftRuleProblems), which the review agenda calls out by itself rather than in the list */
+  kind?: "permission";
 }
 
 /** Blocking is the DEFAULT, so an absent severity is one — read here rather than at the five
@@ -1115,6 +1135,19 @@ export function point(v: unknown): Point | undefined {
   return typeof x === "number" && typeof y === "number" && Number.isFinite(x) && Number.isFinite(y) ? { x, y } : undefined;
 }
 
+/**
+ * Exactly `{ run, draftHash }`, both non-empty strings, or `undefined` (HOW-56). Anything else
+ * is DROPPED, never carried, and the spec still parses — as `point()` treats a position: a
+ * provenance typo must not make a graph unopenable, and it must not reach the file either.
+ */
+function parseDrafted(v: unknown): DraftedProvenance | undefined {
+  if (!isObj(v)) return undefined;
+  const keys = Object.keys(v).sort();
+  if (keys.length !== 2 || keys[0] !== "draftHash" || keys[1] !== "run") return undefined;
+  const { run, draftHash } = v;
+  return typeof run === "string" && run && typeof draftHash === "string" && draftHash ? { run, draftHash } : undefined;
+}
+
 const SCOPES = ["sticky", "cleared", "per-visit"] as const;
 const FIELD_KINDS = ["text", "choice", "number", "boolean", "json"] as const;
 const OUTCOMES = ["success", "failed", "aborted"] as const;
@@ -1285,6 +1318,7 @@ export function parseGraphSpec(value: unknown): ParseResult {
   }
 
   const defaults = parseAgentConfig(value.defaults);
+  const provenance = parseDrafted(value.drafted);
   return {
     ok: true,
     spec: {
@@ -1297,6 +1331,7 @@ export function parseGraphSpec(value: unknown): ParseResult {
       entry: str(value.entry) ?? nodes[0]?.id ?? "",
       nodes,
       edges,
+      ...(provenance ? { drafted: provenance } : {}),
     },
   };
 }
@@ -1314,4 +1349,176 @@ export function specOf(graph: Graph<any>): GraphSpec | null {
   if (spec === undefined) return null;
   const parsed = parseGraphSpec(spec);
   return parsed.ok ? parsed.spec : null;
+}
+
+// ---- drafts: a graph an agent proposed (HOW-56 T3) ---------------------------------------
+
+/**
+ * A drafted step's instructions: written out, or a COPY of a prompt Howdah already has
+ * (decision 4A). A copy is how a draft reuses a built-in's reviewer without retyping it, and
+ * it is what lets `draftRuleProblems` see that a copied step must keep the original's
+ * `readOnly`. Copies are materialised on the server at save (T6); this module only names them.
+ */
+export type DraftBody = string | { copyOf: string };
+
+export type DraftBodiesResult = { ok: true; bodies: Record<string, DraftBody> } | { ok: false; problems: SpecProblem[] };
+
+/**
+ * Untrusted draft bodies (an agent's output) → `DraftBody`s, keyed by prompt id. A body is text,
+ * or an object whose ONLY key is `copyOf`, naming one of `knownIds`. Every refusal is reported,
+ * not just the first, so one repair turn can fix them all.
+ */
+export function resolveDraftBodies(prompts: Readonly<Record<string, unknown>>, knownIds: readonly string[]): DraftBodiesResult {
+  const bodies: Record<string, DraftBody> = {};
+  const problems: SpecProblem[] = [];
+  for (const [id, body] of Object.entries(prompts)) {
+    if (typeof body === "string") {
+      bodies[id] = body;
+      continue;
+    }
+    const copyOf = isObj(body) && Object.keys(body).length === 1 ? str(body.copyOf) : undefined;
+    if (copyOf === undefined) {
+      problems.push({
+        where: "steps",
+        message: `The instructions for \`${id}\` are neither text nor a copy. Write the instructions out, or give \`{ "copyOf": "<prompt id>" }\` naming a prompt Howdah has.`,
+      });
+    } else if (!knownIds.includes(copyOf)) {
+      problems.push({
+        where: "steps",
+        message: `The instructions for \`${id}\` are a copy of \`${copyOf}\`, which is not a prompt Howdah has. Copy one that exists, or write the instructions out.`,
+      });
+    } else {
+      bodies[id] = { copyOf };
+    }
+  }
+  return problems.length ? { ok: false, problems } : { ok: true, bodies };
+}
+
+/**
+ * JSON with every object's keys sorted, recursively, and array order kept — so two values that
+ * mean the same compare equal however they were built. An `undefined` property is omitted, as
+ * JSON.stringify omits it.
+ */
+function canonicalJson(v: unknown): string {
+  const sorted = (x: unknown): unknown =>
+    Array.isArray(x)
+      ? x.map(sorted)
+      : isObj(x)
+        ? Object.fromEntries(Object.keys(x).sort().filter((k) => x[k] !== undefined).map((k) => [k, sorted(x[k])]))
+        : x;
+  return JSON.stringify(sorted(v));
+}
+
+/**
+ * cyrb53: a 53-bit string hash, synchronous and node-free (this module cannot import
+ * `node:crypto`, which is what core/template.ts hashes with). It tells "the operator edited the
+ * draft" from "they did not", for metrics; it is NOT a security boundary — nothing trusts it
+ * against a forger. The `c53:` prefix names the algorithm, so a later change of hash is legible.
+ */
+function stableHash(s: string): string {
+  let h1 = 0xdeadbeef;
+  let h2 = 0x41c6ce57;
+  for (let i = 0; i < s.length; i++) {
+    const ch = s.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return `c53:${(4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(16).padStart(14, "0")}`;
+}
+
+/**
+ * A stable hash of a draft — its spec and its bodies — taken after load normalisation
+ * (`parseGraphSpec`), so key order and dropped junk are not edits. Excluded, because none of
+ * them is an edit to what the graph DOES (D-9A): the graph's `name`, the `<name>.` prefix a
+ * rename rewrites on every prompt id and body key, each step's `position`, and `drafted` itself.
+ * A `copyOf` target is a catalog id, not this graph's, so it is kept.
+ *
+ * Callers must hash the same body FORM at both ends — the draft's, with copies still copies —
+ * or a copy filled in at save would read as an edit.
+ */
+export function draftHashOf(spec: GraphSpec, bodies: Readonly<Record<string, DraftBody>>): string {
+  const parsed = parseGraphSpec(JSON.parse(JSON.stringify(spec)));
+  const { name, drafted: _provenance, ...rest } = parsed.ok ? parsed.spec : spec;
+  const prefix = `${name}.`;
+  const unnamed = (id: string) => (id.startsWith(prefix) ? id.slice(name.length) : id);
+  const nodes = rest.nodes.map((n) => {
+    const { position: _at, ...node } = n;
+    return node.kind === "agent" ? { ...node, prompt: unnamed(node.prompt) } : node;
+  });
+  const named = Object.fromEntries(Object.entries(bodies).map(([id, body]) => [unnamed(id), body]));
+  return stableHash(canonicalJson({ spec: { ...rest, nodes }, bodies: named }));
+}
+
+/**
+ * The powers a DRAFTED graph may not take beyond its base graph's (HOW-56, decisions 3A + C).
+ * `specProblems` asks "is this a graph that runs"; this asks "is it one an agent may propose" —
+ * the drafter is untrusted, and Save being the approval only works if the review can see every
+ * way the draft does more than the graph it started from. Callers combine the two; this never
+ * calls specProblems and never throws.
+ *
+ * Blocking: a command that is not EXACTLY a built-in (the first-word match `commandBuiltin`
+ * makes would let `probe:pr && curl … | sh` through, since probe:pr is dispatched by equality
+ * and anything else runs in bash), `runs:launch`, an approval step, defaults that differ from
+ * the base's, a per-step `config`, and a copied step that drops its original's `readOnly`.
+ * Advice, with `kind: "permission"`: a NEW agent step that can change files — legal, and the one
+ * thing the operator must look at before saving.
+ */
+export function draftRuleProblems(
+  spec: GraphSpec,
+  base?: GraphSpec,
+  opts: { bodies?: Readonly<Record<string, DraftBody>> } = {},
+): SpecProblem[] {
+  const out: SpecProblem[] = [];
+  const who = (id: string) => `**${titleOf(spec, id)}**`;
+  const baseAgents = (base?.nodes ?? []).filter((n): n is Extract<NodeSpec, { kind: "agent" }> => n.kind === "agent");
+
+  if (canonicalJson(spec.defaults ?? {}) !== canonicalJson(base?.defaults ?? {}))
+    out.push({
+      where: "basics",
+      message: base
+        ? `This draft changes the default agent settings of \`${base.name}\`. A drafted graph keeps the defaults of the graph it started from — change them in the builder after saving.`
+        : `This draft sets default agent settings. A drafted graph starts with none — set them in the builder after saving.`,
+    });
+
+  for (const n of spec.nodes) {
+    if (n.kind === "approval")
+      out.push({
+        node: n.id, where: "steps",
+        message: `${who(n.id)} is an approval step. A drafted graph cannot contain one — remove it; Save is the approval for a draft.`,
+      });
+    if (n.kind === "command") {
+      const run = n.run.trim();
+      if (run === "runs:launch")
+        out.push({
+          node: n.id, where: "steps",
+          message: `${who(n.id)} launches one run per approved slice. A drafted graph cannot launch runs — that starts many runs at once with no approval between them. Remove the step.`,
+        });
+      else if (!COMMAND_BUILTINS.some((b) => b.run === run))
+        out.push({
+          node: n.id, where: "steps",
+          message: `${who(n.id)} runs \`${run}\`, which is not one of Howdah's built-in steps. A drafted graph may only run a built-in, exactly as named and with nothing after it: ${COMMAND_BUILTINS.filter((b) => b.run !== "runs:launch").map((b) => `\`${b.run}\``).join(", ")}.`,
+        });
+    }
+    if (n.kind !== "agent") continue;
+    if (n.config !== undefined)
+      out.push({
+        node: n.id, where: "steps",
+        message: `${who(n.id)} sets its own agent settings. A drafted graph cannot — remove them, and tune the step in the builder after saving.`,
+      });
+    const body = opts.bodies?.[n.prompt];
+    const copied = typeof body === "object" ? body.copyOf : undefined;
+    if (copied !== undefined && !n.readOnly && baseAgents.some((b) => b.prompt === copied && b.readOnly))
+      out.push({
+        node: n.id, where: "steps",
+        message: `${who(n.id)} copies the instructions of \`${copied}\`, which is read-only in \`${base?.name}\`, but the step is not. Make it read-only, as the original is.`,
+      });
+    if (!n.readOnly && !baseAgents.some((b) => b.id === n.id))
+      out.push({
+        node: n.id, where: "steps", severity: "advice", kind: "permission",
+        message: `${who(n.id)} is a new step that can change files. Make it read-only if it only needs to look.`,
+      });
+  }
+  return out;
 }
