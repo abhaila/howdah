@@ -113,3 +113,15 @@ export function renameTemplateRef(body: string, from: string, to: string): strin
     return whole.replace(`${ns}.${key}`, () => `${ns}.${to}`);
   });
 }
+
+/**
+ * `{{> prompt.id }}` — a pin-time include of another prompt file's body. Moved here from
+ * core/template.ts (HOW-60) so the graph builder can refuse an include in the browser;
+ * core/template.ts re-exports both names and expandIncludes still reads this one regex.
+ */
+export const INCLUDE_REF = String.raw`\{\{>\s*([\w.-]+)\s*\}\}`;
+
+/** The prompt ids a body includes directly, in order. */
+export function includeRefs(body: string): string[] {
+  return [...body.matchAll(new RegExp(INCLUDE_REF, "g"))].map((m) => m[1]!);
+}

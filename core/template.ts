@@ -59,7 +59,7 @@
  */
 import { createHash } from "node:crypto";
 import { harnessSpec, isHarness } from "./harnesses";
-import { TEMPLATE_FILTERS, ifBlockPattern, isEngineNamespace, templateRefPattern } from "./template-refs";
+import { INCLUDE_REF, TEMPLATE_FILTERS, ifBlockPattern, isEngineNamespace, templateRefPattern } from "./template-refs";
 import type { Harness } from "./graph";
 
 /**
@@ -68,7 +68,7 @@ import type { Harness } from "./graph";
  * Re-exported here because this file is still the one place a caller asks about templates —
  * the split moved the regex, it did not add a second one.
  */
-export { TEMPLATE_REF, TEMPLATE_FILTERS, IF_BLOCK, templateRefPattern, ifBlockPattern, isEngineNamespace, templateReads, templateFilterProblems } from "./template-refs";
+export { TEMPLATE_REF, TEMPLATE_FILTERS, IF_BLOCK, INCLUDE_REF, includeRefs, templateRefPattern, ifBlockPattern, isEngineNamespace, templateReads, templateFilterProblems } from "./template-refs";
 
 // ---- render rules (HOW-37) ---------------------------------------------------------
 
@@ -545,17 +545,10 @@ export function frontMatterField(frontmatter: string | null, name: string): stri
 
 // ---- includes (system-map 1c review) ----------------------------------------------------
 
-/** `{{> prompt.id }}` — a pin-time include of another prompt file's body. */
-const INCLUDE_REF = String.raw`\{\{>\s*([\w.-]+)\s*\}\}`;
 /** includes may nest this deep (a partial including a partial); deeper is refused */
 export const MAX_INCLUDE_DEPTH = 3;
 
 export class IncludeError extends Error {}
-
-/** The prompt ids a body includes directly, in order. */
-export function includeRefs(body: string): string[] {
-  return [...body.matchAll(new RegExp(INCLUDE_REF, "g"))].map((m) => m[1]!);
-}
 
 /**
  * Expand every `{{> id }}` with `load(id)` — the included prompt's BODY (front-matter already
