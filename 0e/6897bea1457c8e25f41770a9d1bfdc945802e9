@@ -1,0 +1,44 @@
+prompts/review._lens_names.md
+  s_ba56d096f9d0ab::t_45d6a2e3f74e67 1-18
+reviser/proposals/ticket.local_review.v4.panel.proposal.md
+  s_ba56d096f9d0ab::t_2615fa6fe77903 6
+  s_27d83f7d26bf25::t_7663b2adc5695d 1-5,7-73
+prompts/review._lens_simplicity.md
+  s_ba56d096f9d0ab::t_45d6a2e3f74e67 1-18
+prompts/review._lens_tests.md
+  s_ba56d096f9d0ab::t_45d6a2e3f74e67 1-17
+prompts/review._lens_standards.md
+  s_ba56d096f9d0ab::t_45d6a2e3f74e67 1-15
+prompts/review._lens_integrations.md
+  s_ba56d096f9d0ab::t_45d6a2e3f74e67 1-17
+prompts/review._lens_lifecycle.md
+  s_ba56d096f9d0ab::t_45d6a2e3f74e67 1-17
+prompts/review._lens_money.md
+  s_ba56d096f9d0ab::t_45d6a2e3f74e67 1-23
+prompts/review._panel.md
+  s_ba56d096f9d0ab::t_4b196c67a8c827 1-68
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "0e6897bea1457c8e25f41770a9d1bfdc945802e9",
+  "prompts": {},
+  "sessions": {
+    "s_27d83f7d26bf25": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "748a16ea-f45f-4f0e-8fee-4261bc765721",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "areeb.bhaila <areeb.bhaila@gmail.com>"
+    },
+    "s_ba56d096f9d0ab": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf0d9a59-7a0e-44cc-8034-8e49c96ec1af",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "areeb.bhaila <areeb.bhaila@gmail.com>"
+    }
+  }
+}
