@@ -28,7 +28,7 @@
  * to the run that launched it, and a dependency that fails parks THIS run, naming it.
  */
 import { buildGraph, type EdgeSpec, type FieldSpec, type GraphSpec, type NodeSpec } from "../core/graph-spec";
-import { AWAIT_BUILTIN, AWAIT_PRODUCES, AWAIT_PROBE_PRODUCES, RESTACK_BUILTIN, RESTACK_PRODUCES } from "../core/stack";
+import { AWAIT_BUILTIN, AWAIT_PRODUCES, AWAIT_PROBE_PRODUCES, RESTACK_BUILTIN, RESTACK_PRODUCES, STACKED_GRAPH } from "../core/stack";
 import { spec as implementTicketSpec } from "./implement-ticket";
 
 /** An edge by what the drift test compares: its endpoints and its condition's label. */
@@ -131,7 +131,7 @@ export function stackedFrom(base: GraphSpec): GraphSpec {
 
   return {
     ...base,
-    name: "implement-stacked",
+    name: STACKED_GRAPH,
     description: "Deliver one ticket stacked on the slices it depends on: wait for them, branch from the base, restack as it moves",
     entry: "deps.await",
     inputs: [...base.inputs, "deps"],

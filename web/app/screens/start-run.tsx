@@ -23,8 +23,6 @@ import { Select } from "@/components/ui/select";
 import { useToast } from "@/components/ui/toast";
 import { AddWorkspace } from "./settings";
 import { ConfigFields } from "./graphs";
-import { DepsPicker } from "./deps-picker";
-import { DEPS_KEY } from "../../../core/stack";
 
 export function StartRun() {
   const [graphs, setGraphs] = useState<GraphInfo[]>([]);
@@ -41,7 +39,9 @@ export function StartRun() {
 
   const loadWorkspaces = () => getJSON<Workspaces>("/api/workspaces").then(setWorkspaces).catch(() => {});
   useEffect(() => {
-    getJSON<GraphCatalog>("/api/graphs").then((c) => setGraphs(c.graphs)).catch(() => {});
+    // a graph another graph starts takes inputs only its parent can fill (implement-stacked's
+    // `deps` names sibling runs), so it is not offered here — the Graphs page says who starts it
+    getJSON<GraphCatalog>("/api/graphs").then((c) => setGraphs(c.graphs.filter((g) => !g.launched_by))).catch(() => {});
     loadWorkspaces();
   }, []);
   const selected = graphs.find((g) => g.name === graph);
@@ -87,19 +87,12 @@ export function StartRun() {
               <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="shown in the runs list instead of the goal" />
             </Label>
           )}
-          {selected?.inputs.map((k) =>
-            // HOW-57: a stacked run's `deps` is picked from existing runs, never typed as JSON
-            k === DEPS_KEY ? (
-              <div key={k} className="deps-field">
-                <span className="deps-title">Waits for</span>
-                <DepsPicker key={graph} onChange={(v) => setInputs((prev) => ({ ...prev, [k]: v }))} />
-              </div>
-            ) : (
-              <Label key={k}>
-                {k}
-                <Input value={inputs[k] ?? ""} onChange={(e) => setInputs({ ...inputs, [k]: e.target.value })} placeholder={k} />
-              </Label>
-            ))}
+          {selected?.inputs.map((k) => (
+            <Label key={k}>
+              {k}
+              <Input value={inputs[k] ?? ""} onChange={(e) => setInputs({ ...inputs, [k]: e.target.value })} placeholder={k} />
+            </Label>
+          ))}
           {selected && (
             <Label>
               Workspace {selected.kind === "repo" ? "(repo required)" : ""}

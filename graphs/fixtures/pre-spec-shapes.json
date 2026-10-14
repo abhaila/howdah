@@ -2294,7 +2294,7 @@
   },
   "plan-feature": {
     "name": "plan-feature",
-    "description": "Plan a large feature into vertical slices, raise a ticket each, and launch a run per slice",
+    "description": "Deliver one feature across repos: plan it into BE/FE slices, approve the plan, then each slice runs implement-ticket — stacked or waiting on the ones before it — and is merged one by one",
     "defaults": {
       "permissionMode": "auto"
     },

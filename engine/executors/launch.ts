@@ -56,7 +56,7 @@ import { launchArgs, type LaunchRequest } from "../../core/launch-args";
 import { normalizeRunName } from "../../core/run-name";
 // the slice-plan contract (the plan, its tickets, and what a launch publishes) is pure data
 // and lives with the graph that declares those keys — no graph imports an executor
-import type { DepRef } from "../../core/stack";
+import { STACKED_GRAPH, type DepRef } from "../../core/stack";
 import { describeDep, validateSlicePlan, type LaunchResult, type Slice, type SlicePlan, type SliceTicket } from "../../graphs/slice-plan";
 
 export type { LaunchResult, SliceTicket };
@@ -66,7 +66,7 @@ export const LAUNCH_BUILTIN = "runs:launch";
 /** The graph a slice with no dependencies runs. Named here rather than inlined: the log records it per child. */
 export const CHILD_GRAPH = "implement-ticket";
 /** HOW-57: the graph a slice WITH dependencies runs — it waits for them, then stacks or builds. */
-export const STACKED_CHILD_GRAPH = "implement-stacked";
+export const STACKED_CHILD_GRAPH = STACKED_GRAPH;
 
 /** The graph `slice` is launched as (G11): the one place the choice is made. */
 export function childGraph(slice: Pick<Slice, "depends_on">): string {

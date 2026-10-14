@@ -526,6 +526,12 @@ export function GraphsList() {
           {shape ? (
             <>
               <div className="field-hint graph-description">{shape.description}</div>
+              {current?.launched_by && (
+                <div className="field-hint">
+                  Started by <code>{current.launched_by}</code>, not from New run: it launches this graph for each approved
+                  slice that has <code>depends_on</code>, and fills in its <code>deps</code> input itself.
+                </div>
+              )}
               {isBuilder && (
                 <div className="actions">
                   <Button onClick={() => navigate(`/graphs/${selected}/build`)}><Pencil />Edit in builder</Button>

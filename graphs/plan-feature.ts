@@ -105,7 +105,7 @@ export const planFeature = defineGraph<PlanFeatureCtx>({
   // as implement-slice: Claude runs in auto mode, Codex in its full-access sandbox;
   // plan.propose is read-only regardless (plan, and codex's read-only sandbox)
   defaults: { permissionMode: "auto" },
-  description: "Plan a large feature into vertical slices, raise a ticket each, and launch a run per slice",
+  description: "Deliver one feature across repos: plan it into BE/FE slices, approve the plan, then each slice runs implement-ticket — stacked or waiting on the ones before it — and is merged one by one",
   entry: "create_worktree",
   inputs: ["goal", "work"],
   validateProposal: (proposal, _approval, run) => validatePlanProposal(proposal, run),

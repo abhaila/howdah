@@ -168,38 +168,22 @@ describe("the launch form (HOW-18)", () => {
   });
 });
 
-// HOW-57: implement-stacked's `deps` is picked from existing runs — a dropdown of runs and a
-// dropdown of how far each must get — never typed as JSON
-describe("the launch form picks a stacked run's dependencies", () => {
-  const board = (id: string, graph: string, outcome: string | null = null) => ({ ...deriveSummary(id, logFor(undefined, `goal ${id}`)), graph, outcome });
-  const catalog = {
-    "/api/graphs": { graphs: [{ name: "implement-stacked", description: "d", inputs: ["goal", "work", "deps"], kind: "repo", source: "builtin" }], problems: [] },
-    "/api/workspaces": { repos: [{ name: "web", path: "/repos/web" }], folders: [] },
-    "/api/runs": [board("be-1", "implement-ticket"), board("dead-1", "implement-ticket", "failed"), board("doc-1", "write-doc")],
-  };
-
-  test("no deps text box; runs that can be waited for are offered; the POST carries run_id + until", async () => {
-    const posted = serve(catalog, { id: "implement-stacked-abc" });
-    window.location.assign = (() => {}) as typeof window.location.assign;
+// HOW-57: implement-stacked's `deps` names sibling runs only its plan-feature parent knows, so
+// a free-text box for it was a trap ("merged" typed in, then a park on unparseable JSON)
+describe("the launch form leaves out graphs another graph starts", () => {
+  test("a launched_by graph is not offered; the others are", async () => {
+    serve({
+      "/api/graphs": { graphs: [
+        { name: "research", description: "d", inputs: ["goal"], kind: "plain", source: "builtin" },
+        { name: "implement-stacked", description: "d", inputs: ["goal", "work", "deps"], kind: "repo", source: "builtin", launched_by: "plan-feature" },
+      ], problems: [] },
+      "/api/workspaces": { repos: [], folders: [] },
+    });
     const el = mount(<StartRun />);
     await settle();
-    type(el.querySelector("select")!, "implement-stacked");
-    await settle();
-    expect([...el.querySelectorAll("label")].some((l) => l.textContent!.startsWith("deps"))).toBe(false);
-    const runSelect = el.querySelector('[aria-label="dependency 1: the run to wait for"]') as HTMLSelectElement;
-    const offered = [...runSelect.querySelectorAll("option")].map((o) => o.value).filter(Boolean);
-    expect(offered).toEqual(["be-1"]); // not the failed run, not a graph that opens no PR
-    const launch = () => [...el.querySelectorAll("button")].find((b) => b.textContent!.includes("Launch run")) as HTMLButtonElement;
-    for (const k of ["goal", "work"]) type([...el.querySelectorAll("label")].find((l) => l.textContent!.startsWith(k))!.querySelector("input")!, `a ${k}`);
-    const ws = [...el.querySelectorAll("label")].find((l) => l.textContent!.startsWith("Workspace"))!.querySelector("select")!;
-    type(ws, "web");
-    expect(launch().disabled).toBe(true); // no run picked yet
-    type(runSelect, "be-1");
-    type(el.querySelector('[aria-label="dependency 1: wait until"]') as HTMLSelectElement, "package");
-    expect(launch().disabled).toBe(false);
-    await act(async () => launch().click());
-    await settle();
-    expect(posted[0]).toMatchObject({ url: "/api/runs", body: { graph: "implement-stacked", inputs: { deps: JSON.stringify([{ run_id: "be-1", until: "package" }]) } } });
+    const options = [...el.querySelectorAll("select option")].map((o) => o.textContent);
+    expect(options.some((o) => o?.includes("research"))).toBe(true);
+    expect(options.some((o) => o?.includes("implement-stacked"))).toBe(false);
   });
 });
 

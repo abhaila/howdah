@@ -37,6 +37,8 @@
  *   HOW-59  implement-ticket and implement-stacked (through stackedFrom): create_worktree also
  *           publishes `worktree.preview_paths`, and implementation.criteria reads it and
  *           `worktree.verify_command`, so the contract only asks for evidence the run can produce.
+ *   HOW-57  plan-feature: the description only — it is now the one way into stacked slices
+ *           (implement-stacked is no longer offered in New run), so it says so.
  *
  * ONE ENTRY WAS ADDED BY HAND, 2026-10-13 (HOW-57, decision G9): `implement-stacked` is a NEW
  * graph, not a conversion, so it has no pre-conversion shape to be faithful to. Its entry was
