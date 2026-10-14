@@ -12,11 +12,10 @@
  */
 import { describe, expect, test } from "bun:test";
 import { templateReads } from "./template-refs";
-import { shapeOf } from "../graphs/spec-shape";
 import {
   COMMAND_BUILTINS, SPEC_VERSION, WORKTREE_FACTS, WORKTREE_CREATE_FACTS,
   buildGraph, draftHashOf, draftRuleProblems, resolveDraftBodies, builtinReads, coerceOperand, compilePredicate, emittableWrites, missingBuiltinReads, parseGraphSpec, predicateLabel,
-  isBlocking, keepPath, recoercePredicate, specAdvice, specProblems, unmatchableOperand,
+  isBlocking, keepPath, recoercePredicate, specAdvice, specProblems, unmatchableOperand, shapeOf
   type GraphSpec, type NodeSpec, type Predicate,
 } from "./graph-spec";
 
