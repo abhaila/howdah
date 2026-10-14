@@ -42,7 +42,7 @@
  */
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { isBlocking, nameTakenProblem, promptIdFor, specProblems, SPEC_PROMPT_ID, type GraphSpec, type NodeSpec } from "../core/graph-spec";
+import { isBlocking, nameTakenProblem, promptIdFor, specProblems, SPEC_PROMPT_ID, type GraphSpec, type NodeSpec, type SpecProblem } from "../core/graph-spec";
 import { frontMatterField, splitFrontMatter, templateReads } from "../core/template";
 import { ensureLocalDirs, LOCAL_NAME, loadLocalGraph, localGraphPath, localPromptsDir } from "./local";
 import type { Graph } from "../core/graph";
@@ -122,6 +122,45 @@ function restore(files: Snapshot[]): void {
 }
 
 /**
+ * The spec a save would write, and every BLOCKING problem with it — split out of
+ * saveBuilderGraph so a test can hold it against the browser's draftProblems() (HOW-60).
+ *
+ * Reads are DERIVED, never trusted: from the body being written, or the one already on disk.
+ * The bodies the verdict sees are the same: for each prompt a step names, the payload's body or
+ * else the file on disk — so a hand-edited prompt with an include blocks an update here exactly
+ * as it does in the browser, which loaded the same text.
+ *
+ * specProblems() is node-free precisely so both sides can run it; running it here too is what
+ * makes "Ready to save" and a 422 unable to disagree, and it answers a refusal in the
+ * operator's words instead of `validate()`'s. The server stays strictly STRONGER — the path
+ * checks in saveBuilderGraph need the filesystem, and loadLocalGraph still runs the real gate —
+ * but it never refuses something the browser called clean for a reason the browser could have
+ * known. It runs on the DERIVED spec, because that is what is about to be written.
+ *
+ * BLOCKING only (HOW-26). specProblems() also returns ADVICE — a graph that will load, validate
+ * and run and still not do what was meant. Advice is the operator's call, not this file's:
+ * refusing on one would make the builder's own nagging into a gate nobody asked for.
+ */
+export function saveVerdict(opts: { home: string; spec: GraphSpec; prompts: Record<string, string> }): { spec: GraphSpec; problems: SpecProblem[] } {
+  const bodyOf = (id: string): string | null =>
+    opts.prompts[id] !== undefined ? opts.prompts[id]! : readLocalPrompt(opts.home, id);
+  const spec: GraphSpec = {
+    ...opts.spec,
+    nodes: opts.spec.nodes.map((n) => {
+      if (n.kind !== "agent") return n;
+      const body = bodyOf(n.prompt);
+      return body === null ? n : { ...n, reads: templateReads(body) };
+    }),
+  };
+  const bodies: Record<string, string> = {};
+  for (const id of promptIdsOf(spec)) {
+    const body = bodyOf(id);
+    if (body !== null) bodies[id] = body;
+  }
+  return { spec, problems: specProblems(spec, { bodies }).filter(isBlocking) };
+}
+
+/**
  * Write a builder graph and its prompts, or change nothing.
  *
  * `prompts` maps prompt id → body, and only ids the spec's own agent steps name are accepted:
@@ -166,40 +205,17 @@ export async function saveBuilderGraph(opts: {
     return { ok: false, error: `there is no graph called "${opts.spec.name}" to update`, code: "missing" };
   }
 
+  // THE SAME VERDICT THE BROWSER SHOWED, and BEFORE ensureLocalDirs, so a refusal (an include
+  // in a body, say) writes nothing at all. See saveVerdict.
+  const { spec, problems: blocking } = saveVerdict({ home, spec: opts.spec, prompts });
+  if (blocking.length) return { ok: false, error: blocking[0]!.message };
+
   ensureLocalDirs(home);
   const graphPath = localGraphPath(home, opts.spec.name);
   const files: Snapshot[] = [];
   const read = (p: string) => (existsSync(p) ? readFileSync(p, "utf8") : null);
 
-  // reads are DERIVED, never trusted: from the body being written, or the one already on disk
-  const bodyOf = (id: string): string | null =>
-    prompts[id] !== undefined ? prompts[id]! : readLocalPrompt(home, id);
-  const spec: GraphSpec = {
-    ...opts.spec,
-    nodes: opts.spec.nodes.map((n) => {
-      if (n.kind !== "agent") return n;
-      const body = bodyOf(n.prompt);
-      return body === null ? n : { ...n, reads: templateReads(body) };
-    }),
-  };
-
   try {
-    // THE SAME VERDICT THE BROWSER SHOWED. specProblems() is node-free precisely so both
-    // sides can run it; running it here too is what makes "Ready to save" and a 422 unable to
-    // disagree, and it answers a refusal in the operator's words instead of `validate()`'s.
-    // The server stays strictly STRONGER — the two checks above it need the filesystem, and
-    // loadLocalGraph still runs the real gate — but it never refuses something the browser
-    // called clean for a reason the browser could have known. It runs on the DERIVED spec,
-    // because that is what is about to be written.
-    // BLOCKING only (HOW-26). specProblems() now also returns ADVICE — a graph that will load,
-    // validate and run and still not do what was meant (an agent told nothing, a branch on free
-    // text, an unbounded loop). Advice is the operator's call, not this file's: refusing on one
-    // would make the builder's own nagging into a gate nobody asked for, and would refuse a
-    // graph `validate()` accepts.
-    const blocking = specProblems(spec, {
-      knownPrompts: promptIdsOf(spec).filter((id) => bodyOf(id) !== null),
-    }).filter(isBlocking);
-    if (blocking.length) return { ok: false, error: blocking[0]!.message };
 
     // the writes live INSIDE the try so restore() covers an IO failure (EACCES, ENOSPC) and
     // not only a refusal: each snapshot is taken BEFORE its write, so a throw half way

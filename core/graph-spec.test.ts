@@ -11,6 +11,7 @@
  * `node "x" reads "y" but no writer covers every path` is the ticket's failure mode.
  */
 import { describe, expect, test } from "bun:test";
+import { templateReads } from "./template-refs";
 import {
   COMMAND_BUILTINS, WORKTREE_FACTS, WORKTREE_CREATE_FACTS,
   buildGraph, builtinReads, coerceOperand, compilePredicate, emittableWrites, missingBuiltinReads, parseGraphSpec, predicateLabel,
@@ -352,9 +353,9 @@ describe("a condition row that can never fire is refused, not saved", () => {
     // 3: a path on a yes/no field is invisible (the inner-name box renders for json only) and
     // fatal (the row can never fire), so the empty operand beside it went unreported too.
     expect(only({ op: "equals", key: "flag", path: "inner", value: "" })).toContain("is not a structured (JSON) field");
-    // a choice outside its declared choices: `probe:pr` can report OPEN for a pr.state the
-    // operator listed as MERGED/CLOSED, and that branch is a true statement about run time
-    expect(refused({ op: "equals", key: "verdict", value: "unlisted" })).toEqual([]);
+    // HOW-60 (H3): a choice outside its declared choices used to be listed here. It is refused
+    // now — see the describe below — and only `one-of` keeps the old leniency
+    expect(refused({ op: "one-of", key: "verdict", values: ["pass", "unlisted"] })).toEqual([]);
     // free text compared with a whole word IS advised against — it is the row that never fired
     // in HOW-26 — but it is still not refused, because a command can legitimately write it
     expect(refused({ op: "equals", key: "note", value: "anything" })).toEqual([]);
@@ -950,5 +951,215 @@ describe("advice: a graph that will run, and still not do what was meant (HOW-26
     expect(problems.every(isBlocking)).toBe(true);
     // ...and specAdvice() is still a pure reading of the spec, callable on its own
     expect(specAdvice(broken).length).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * HOW-60 (H3): a `choice` field's choices are the agent's vocabulary — the prompt says them in
+ * prose and the agent answers in them — so `verdict == 'approved'` against [pass, reject] is a
+ * row that can never fire. Refused, worded like every other unmatchable operand.
+ */
+describe("a choice row must name one of the field's choices (H3)", () => {
+  const verdict = (choices?: string[]): GraphSpec["fields"][number] => ({ key: "verdict", kind: "choice", scope: "sticky", ...(choices ? { choices } : {}) });
+  const branching = (when: Predicate, field = verdict(["pass", "reject"])): GraphSpec => minimal({
+    fields: [{ key: "goal", kind: "text", scope: "sticky" }, field, { key: "blob", kind: "json", scope: "sticky" }],
+    nodes: [
+      { id: "draft", kind: "agent", title: "Draft the doc", prompt: "my-review.draft", reads: ["goal"], writes: ["verdict", "blob"] },
+      { id: "again", kind: "command", title: "Try again", run: "true", reads: [], writes: [] },
+      { id: "done", kind: "terminal", outcome: "success" },
+    ],
+    edges: [{ from: "draft", to: "again", when }, { from: "draft", to: "done" }, { from: "again", to: "done" }],
+  });
+  const blocking = (spec: GraphSpec) => specProblems(spec).filter(isBlocking);
+
+  test("equals a value that is not a choice is ONE blocking problem, on the step, in Branching", () => {
+    const problems = blocking(branching({ op: "equals", key: "verdict", value: "approved" }));
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toMatchObject({ node: "draft", where: "branching" });
+    expect(problems[0]!.message).toContain("**Draft the doc**");
+    expect(problems[0]!.message).toContain("not one of its choices (`pass`, `reject`)");
+    expect(problems[0]!.message).toContain("add `approved` to the field's choices");
+  });
+
+  test("not-equals is refused the same way — it would fire on every value, which is not what was typed", () => {
+    const problems = blocking(branching({ op: "not-equals", key: "verdict", value: "approved" }));
+    expect(problems).toHaveLength(1);
+    expect(problems[0]!.message).toContain("not one of its choices");
+  });
+
+  test("unmatchableOperand is the rule, checked directly", () => {
+    expect(unmatchableOperand({ op: "equals", key: "verdict", value: "approved" }, verdict(["pass", "reject"]))).toContain("not one of its choices");
+    expect(unmatchableOperand({ op: "equals", key: "verdict", value: "reject" }, verdict(["pass", "reject"]))).toBeNull();
+  });
+
+  test("near misses are clean: a listed value, a field with no choices, one-of, a json path", () => {
+    expect(blocking(branching({ op: "equals", key: "verdict", value: "reject" }))).toEqual([]);
+    expect(blocking(branching({ op: "not-equals", key: "verdict", value: "pass" }))).toEqual([]);
+    expect(blocking(branching({ op: "equals", key: "verdict", value: "approved" }, verdict()))).toEqual([]);
+    expect(blocking(branching({ op: "equals", key: "verdict", value: "approved" }, verdict([])))).toEqual([]);
+    // scope pinned: one-of is not checked against the choices
+    expect(blocking(branching({ op: "one-of", key: "verdict", values: ["pass", "approved"] }))).toEqual([]);
+    expect(blocking(branching({ op: "equals", key: "blob", path: "outcome", value: "approved" }))).toEqual([]);
+  });
+
+  test("an empty operand still reports 'compares with nothing' first", () => {
+    const problems = blocking(branching({ op: "equals", key: "verdict", value: "" }));
+    expect(problems).toHaveLength(1);
+    expect(problems[0]!.message).toContain("with nothing");
+  });
+});
+
+/**
+ * HOW-60 (H6): the first matching row wins, so a row an earlier row always catches never
+ * fires. ADVICE, not a refusal: the graph runs, it just does not do what the row says.
+ */
+describe("a row shadowed by an earlier, broader row is advised against (H6)", () => {
+  const rows = (...whens: Predicate[]): GraphSpec => minimal({
+    fields: [
+      { key: "goal", kind: "text", scope: "sticky" },
+      { key: "verdict", kind: "choice", scope: "sticky", choices: ["pass", "reject"] },
+      { key: "flag", kind: "boolean", scope: "sticky" },
+      { key: "blob", kind: "json", scope: "sticky" },
+    ],
+    nodes: [
+      { id: "draft", kind: "agent", title: "Draft the doc", prompt: "my-review.draft", reads: ["goal"], writes: ["verdict", "flag", "blob"] },
+      ...whens.map((_, i): NodeSpec => ({ id: `to${i}`, kind: "command", title: `Path ${i}`, run: "true", reads: [], writes: [] })),
+      { id: "done", kind: "terminal", outcome: "success" },
+    ],
+    edges: [
+      ...whens.map((when, i) => ({ from: "draft", to: `to${i}`, when })),
+      { from: "draft", to: "done" },
+      ...whens.map((_, i) => ({ from: `to${i}`, to: "done" })),
+    ],
+  });
+  const shadowNotes = (spec: GraphSpec) => specProblems(spec).filter((p) => p.message.includes("never fires"));
+  const reject: Predicate = { op: "equals", key: "verdict", value: "reject" };
+  const pass: Predicate = { op: "equals", key: "verdict", value: "pass" };
+
+  test("the probe: `has a value` above `is reject` is advice on that step, and nothing blocks", () => {
+    const spec = rows({ op: "is-not-empty", key: "verdict" }, reject);
+    expect(specProblems(spec).filter(isBlocking)).toEqual([]);
+    const notes = shadowNotes(spec);
+    expect(notes).toHaveLength(1);
+    expect(notes[0]).toMatchObject({ node: "draft", where: "branching", severity: "advice" });
+    expect(isBlocking(notes[0]!)).toBe(false);
+    expect(notes[0]!.message).toContain("**Draft the doc**");
+    expect(notes[0]!.message).toContain("`verdict == 'reject'`");
+    expect(notes[0]!.message).toContain("(`verdict is set`)");
+    expect(specAdvice(spec)).toContainEqual(notes[0]!);
+  });
+
+  test("each broader-first ordering is caught", () => {
+    const cases: Array<[Predicate, Predicate]> = [
+      [{ op: "not-equals", key: "verdict", value: "pass" }, reject],
+      [{ op: "one-of", key: "verdict", values: ["pass", "reject"] }, pass],
+      [{ op: "one-of", key: "verdict", values: ["pass", "reject"] }, { op: "one-of", key: "verdict", values: ["reject"] }],
+      [reject, { ...reject }],
+      [{ op: "is-not-empty", key: "flag" }, { op: "is-true", key: "flag" }],
+      [{ op: "not-equals", key: "flag", value: false }, { op: "is-true", key: "flag" }],
+      [{ op: "is-true", key: "flag" }, { op: "equals", key: "flag", value: true }],
+      [{ op: "equals", key: "flag", value: false }, { op: "is-false", key: "flag" }],
+      [{ op: "is-empty", key: "verdict" }, { op: "is-empty", key: "verdict" }],
+    ];
+    for (const [a, b] of cases) expect(shadowNotes(rows(a, b)), `${predicateLabel(a)} / ${predicateLabel(b)}`).toHaveLength(1);
+  });
+
+  test("near misses are silent: narrower first, disjoint values, other keys, other paths, Otherwise first", () => {
+    const cases: Array<[Predicate, Predicate]> = [
+      [reject, { op: "is-not-empty", key: "verdict" }],
+      [pass, reject],
+      [{ op: "not-equals", key: "verdict", value: "reject" }, reject],
+      [{ op: "one-of", key: "verdict", values: ["pass"] }, { op: "one-of", key: "verdict", values: ["pass", "reject"] }],
+      [{ op: "is-not-empty", key: "flag" }, reject],
+      [{ op: "is-not-empty", key: "blob", path: "outcome" }, { op: "equals", key: "blob", path: "other", value: "x" }],
+      [{ op: "is-not-empty", key: "blob" }, { op: "equals", key: "blob", path: "outcome", value: "x" }],
+      [{ op: "is-not-empty", key: "verdict" }, { op: "is-empty", key: "verdict" }],
+      [{ op: "is-true", key: "flag" }, { op: "is-false", key: "flag" }],
+    ];
+    for (const [a, b] of cases) expect(shadowNotes(rows(a, b)), `${predicateLabel(a)} / ${predicateLabel(b)}`).toEqual([]);
+    // an Otherwise listed FIRST is still the weight-0 fallback, not a row that shadows anything
+    const otherwiseFirst = rows(reject);
+    otherwiseFirst.edges = [{ from: "draft", to: "done" }, ...otherwiseFirst.edges.filter((e) => !(e.from === "draft" && !e.when))];
+    expect(shadowNotes(otherwiseFirst)).toEqual([]);
+  });
+
+  test("a row shadowed twice is one note, naming the first row that catches it", () => {
+    const notes = shadowNotes(rows({ op: "is-not-empty", key: "verdict" }, pass, { op: "one-of", key: "verdict", values: ["pass"] }));
+    // row 2 is shadowed by row 1; row 3 by rows 1 AND 2 — one note each, both naming row 1
+    expect(notes).toHaveLength(2);
+    expect(notes.every((n) => n.message.includes("(`verdict is set`)"))).toBe(true);
+  });
+});
+
+/**
+ * HOW-60 (H2, decision 5A): given the bodies, specProblems checks each against its step. The
+ * browser and the save route both pass them, so both refuse the same things.
+ */
+describe("a step and its instructions are checked together when the bodies are given (H2)", () => {
+  const body = "Draft it.\n\nGoal: {{ context.goal }}";
+  const ok = { "my-review.draft": body };
+  const blocking = (spec: GraphSpec, bodies: Record<string, string>) => specProblems(spec, { bodies }).filter(isBlocking);
+
+  test("matching bodies are clean", () => {
+    expect(templateReads(body)).toEqual(["goal"]);
+    expect(specProblems(minimal(), { bodies: ok })).toEqual([]);
+  });
+
+  test("an include is refused on the step, in Steps, naming what it includes", () => {
+    const problems = blocking(minimal(), { "my-review.draft": `${body}\n\n{{> review._verify_result }}` });
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toMatchObject({ node: "draft", where: "steps" });
+    expect(problems[0]!.message).toBe(
+      "**Draft the doc**'s instructions include `review._verify_result` with `{{> … }}`. A graph built here cannot include another prompt — paste the text it needs into the instructions instead.",
+    );
+  });
+
+  test("a malformed include is still refused, without inventing an id", () => {
+    const problems = blocking(minimal(), { "my-review.draft": `${body}\n{{> }}` });
+    expect(problems).toHaveLength(1);
+    expect(problems[0]!.message).toContain("include another prompt with");
+  });
+
+  test("a step with no body is the existing 'has no file yet'", () => {
+    const problems = blocking(minimal(), {});
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toMatchObject({ node: "draft", where: "steps" });
+    expect(problems[0]!.message).toContain("has no file yet");
+  });
+
+  test("a body no step uses is a graph-level problem", () => {
+    const problems = blocking(minimal(), { ...ok, "my-review.gone": "Old text." });
+    expect(problems).toHaveLength(1);
+    expect(problems[0]!.node).toBeUndefined();
+    expect(problems[0]!.where).toBe("steps");
+    expect(problems[0]!.message).toBe(`Instructions are filed under "my-review.gone", but no step uses them. Remove them, or give a step that prompt.`);
+  });
+
+  test("reads that disagree with the body are refused, naming both directions", () => {
+    const spec = minimal({
+      fields: [...minimal().fields, { key: "work", kind: "text", scope: "sticky" }],
+      inputs: ["goal", "work"],
+    });
+    const unlisted = blocking(spec, { "my-review.draft": `${body} {{ context.work }}` });
+    expect(unlisted).toHaveLength(1);
+    expect(unlisted[0]).toMatchObject({ node: "draft", where: "steps" });
+    expect(unlisted[0]!.message).toContain("its instructions use `work`, which the step does not list");
+    expect(unlisted[0]!.message).not.toContain("never use");
+
+    const unused = blocking(spec, { "my-review.draft": "Draft it." });
+    expect(unused).toHaveLength(1);
+    expect(unused[0]!.message).toContain("it lists `goal`, which its instructions never use");
+    expect(unused[0]!.message).not.toContain("does not list");
+
+    const both = blocking(spec, { "my-review.draft": "Do {{ context.work }}" });
+    expect(both[0]!.message).toContain("use `work`");
+    expect(both[0]!.message).toContain("lists `goal`");
+  });
+
+  test("without bodies, no body checks run, and knownPrompts still works on its own", () => {
+    const stale: GraphSpec = { ...minimal(), nodes: minimal().nodes.map((n) => (n.kind === "agent" ? { ...n, reads: [] } : n)) };
+    expect(specProblems(stale).filter(isBlocking)).toEqual([]);
+    expect(specProblems(minimal(), { knownPrompts: ["my-review.draft"] })).toEqual([]);
+    expect(specProblems(minimal(), { knownPrompts: [] })[0]!.message).toContain("has no file yet");
   });
 });

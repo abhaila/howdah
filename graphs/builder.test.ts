@@ -7,9 +7,11 @@ import { describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { promptIdFor, promptIdsOf, readLocalPrompt, renderSpecModule, saveBuilderGraph } from "./builder";
+import { promptIdFor, promptIdsOf, readLocalPrompt, renderSpecModule, saveBuilderGraph, saveVerdict } from "./builder";
 import { loadLocalGraph, localGraphPath, localPromptsDir, ensureLocalDirs } from "./local";
-import { COMMAND_BUILTINS, WORKTREE_FACTS, coerceOperand, isBlocking, keepPath, specProblems, type GraphSpec, type NodeSpec } from "../core/graph-spec";
+import { COMMAND_BUILTINS, WORKTREE_FACTS, coerceOperand, isBlocking, keepPath, specAdvice, specOf, specProblems, type GraphSpec, type NodeSpec } from "../core/graph-spec";
+import { splitFrontMatter } from "../core/template";
+import { GRAPHS } from "./index";
 // core/ is node-free and cannot import an executor, so the table REPEATS what the executors
 // know. This file is node-side, so it imports the executors' own constants and pins the repetition.
 import { LAUNCH_BUILTIN, LAUNCH_PRODUCES, LAUNCH_READS } from "../engine/executors/launch";
@@ -796,4 +798,141 @@ describe("the browser's verdict and the server's gate cannot disagree", () => {
       expect(loaded.def.name, preset.id).toBe(`p-${preset.id}`);
     }
   });
+});
+
+/**
+ * HOW-60: the verifier gaps H2/H3/H6, on the save route. The browser's draftProblems and the
+ * server's saveVerdict both hand specProblems the BODIES they are about to write, so an
+ * include, a missing body and a choice row naming no choice are refused on both sides alike.
+ */
+describe("the bodies are checked on both sides, and both sides agree (HOW-60)", () => {
+  const INCLUDE = "{{> review._verify_result }}";
+  const withBody = (draft: Draft, id: string, body: string): Draft => draftReducer(draft, { type: "set-prompt", id, body });
+
+  test("a body with an include is a refusal BEFORE any write — neither the graph nor its prompt exists", async () => {
+    const h = home();
+    const draft = withBody(PRESETS[0]!.build("includes"), "includes.work", `Do the work.\n\nGoal: {{ context.goal }}\n\n${INCLUDE}`);
+    expect(draftProblems(draft).filter(isBlocking).map((p) => p.message)).toEqual([
+      "**Do the work**'s instructions include `review._verify_result` with `{{> … }}`. A graph built here cannot include another prompt — paste the text it needs into the instructions instead.",
+    ]);
+    const r = await saveBuilderGraph({ intent: "create", home: h, repoRoot: ROOT, spec: draft.spec, prompts: pickPrompts(draft) });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toContain("include `review._verify_result` with `{{> … }}`");
+    expect(existsSync(localGraphPath(h, "includes"))).toBe(false);
+    expect(existsSync(join(localPromptsDir(h), "includes.work.md"))).toBe(false);
+  });
+
+  test("an include in a body already ON DISK blocks an update too — the server reads what the browser loaded", async () => {
+    const h = home();
+    const draft = PRESETS[0]!.build("on-disk");
+    expect((await saveBuilderGraph({ intent: "create", home: h, repoRoot: ROOT, spec: draft.spec, prompts: pickPrompts(draft) })).ok).toBe(true);
+    // hand-edited after the save
+    const path = join(localPromptsDir(h), "on-disk.work.md");
+    writeFileSync(path, readFileSync(path, "utf8").replace(/\n$/, `\n${INCLUDE}\n`));
+    const r = await saveBuilderGraph({ intent: "update", home: h, repoRoot: ROOT, spec: draft.spec, prompts: {} });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toContain("cannot include another prompt");
+  });
+
+  /** one draft carrying all three: an include, a choice row naming no choice, a missing body */
+  const brokenThreeWays = (): Draft => {
+    const d = withBody(PRESETS.find((p) => p.id === "doc")!.build("three-ways"), "three-ways.draft",
+      `Write the deliverable.\n\nGoal: {{ context.goal }}\n\nWork item: {{ context.work }}\n\n${INCLUDE}`);
+    const prompts = { ...d.prompts };
+    delete prompts["three-ways.revise"];
+    return {
+      ...d,
+      prompts,
+      spec: {
+        ...d.spec,
+        edges: d.spec.edges.map((e) => (e.from === "review" && e.to === "revise" ? { ...e, when: { op: "equals" as const, key: "review_verdict", value: "approved" } } : e)),
+      },
+    };
+  };
+
+  test("parity: the browser's blocking set IS the server's, and the save refuses with the first of it", async () => {
+    const h = home();
+    const draft = brokenThreeWays();
+    const browser = draftProblems(draft).filter(isBlocking);
+    const server = saveVerdict({ home: h, spec: draft.spec, prompts: pickPrompts(draft) }).problems;
+    expect(server).toEqual(browser);
+    // all three kinds, each attributed to its step
+    expect(browser.map((p) => [p.node, p.where])).toEqual([
+      ["draft", "steps"],
+      ["revise", "steps"],
+      ["review", "branching"],
+    ]);
+    expect(browser[0]!.message).toContain("cannot include another prompt");
+    expect(browser[1]!.message).toContain("has no file yet");
+    expect(browser[2]!.message).toContain("not one of its choices (`pass`, `reject`)");
+
+    const r = await saveBuilderGraph({ intent: "create", home: h, repoRoot: ROOT, spec: draft.spec, prompts: pickPrompts(draft) });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toBe(browser[0]!.message);
+    expect(existsSync(localGraphPath(h, "three-ways"))).toBe(false);
+  });
+
+  test("parity, clean side: every preset is empty on both sides, and saves", async () => {
+    for (const preset of PRESETS) {
+      const h = home();
+      const d = preset.build(`clean-${preset.id}`);
+      expect(draftProblems(d).filter(isBlocking), preset.id).toEqual([]);
+      expect(saveVerdict({ home: h, spec: d.spec, prompts: pickPrompts(d) }).problems, preset.id).toEqual([]);
+      const r = await saveBuilderGraph({ intent: "create", home: h, repoRoot: ROOT, spec: d.spec, prompts: pickPrompts(d) });
+      expect(r.ok, r.ok ? preset.id : `${preset.id}: ${r.error}`).toBe(true);
+    }
+  });
+
+  test("a shadowed row is ADVICE: the browser notes it and the save still goes through", async () => {
+    const h = home();
+    const d = PRESETS.find((p) => p.id === "doc")!.build("shadowed");
+    const spec: GraphSpec = {
+      ...d.spec,
+      edges: [
+        { from: "draft", to: "review" },
+        { from: "review", to: "done", when: { op: "is-not-empty", key: "review_verdict" } },
+        { from: "review", to: "revise", when: { op: "equals", key: "review_verdict", value: "reject" } },
+        { from: "revise", to: "review" },
+      ],
+    };
+    const draft: Draft = { ...d, spec };
+    const problems = draftProblems(draft);
+    expect(problems.filter(isBlocking)).toEqual([]);
+    expect(problems.some((p) => !isBlocking(p) && p.node === "review" && p.message.includes("never fires"))).toBe(true);
+    const r = await saveBuilderGraph({ intent: "create", home: h, repoRoot: ROOT, spec, prompts: pickPrompts(draft) });
+    expect(r.ok, r.ok ? "" : r.error).toBe(true);
+  });
+});
+
+/**
+ * HOW-60: the built-in graphs, with their REAL bodies. They are hand-written, so they may use
+ * includes (expanded when a run pins its prompts), file their prompts under shared ids, and
+ * declare reads an include supplies — none of which a builder graph may do, and none of which
+ * this ticket may edit. So the test proves what is provable: H3 and H6 say nothing about any
+ * built-in, no step is missing a body and no body is orphaned, and every problem that DOES
+ * appear is one of three named, known categories — so a new kind of problem still fails here.
+ */
+describe("the built-ins, checked with their real bodies (HOW-60)", () => {
+  const KNOWN = [/which belongs to another graph/, /cannot include another prompt/, /does not match its instructions/];
+  const specs = Object.values(GRAPHS).map((g) => specOf(g)).filter((s): s is GraphSpec => s !== null);
+
+  test("there are built-in specs to check", () => {
+    expect(specs.length).toBeGreaterThanOrEqual(6);
+  });
+
+  for (const spec of specs)
+    test(`${spec.name}: no new kind of problem`, () => {
+      const bodies: Record<string, string> = {};
+      for (const id of promptIdsOf(spec)) {
+        const path = join(ROOT, "prompts", `${id}.md`);
+        expect(existsSync(path), id).toBe(true);
+        bodies[id] = splitFrontMatter(readFileSync(path, "utf8")).body;
+      }
+      const problems = specProblems(spec, { bodies });
+      expect(problems.filter((p) => p.message.includes("not one of its choices"))).toEqual([]);
+      expect(problems.filter((p) => /has no file yet|no step uses them/.test(p.message))).toEqual([]);
+      expect(specAdvice(spec).filter((p) => p.message.includes("never fires"))).toEqual([]);
+      const unknown = problems.filter(isBlocking).filter((p) => !KNOWN.some((re) => re.test(p.message)));
+      expect(unknown.map((p) => p.message)).toEqual([]);
+    });
 });

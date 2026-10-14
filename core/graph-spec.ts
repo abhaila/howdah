@@ -51,6 +51,7 @@ import type { Violation } from "./validate";
 import { VERIFY_BUILTIN, VERIFY_PRODUCES } from "./verify";
 import { AWAIT_BUILTIN, AWAIT_PRODUCES, AWAIT_PROBE_PRODUCES, AWAIT_READS, RESTACK_BUILTIN, RESTACK_PRODUCES, RESTACK_READS } from "./stack";
 import { EVIDENCE_BUILTIN, EVIDENCE_PRODUCES } from "./evidence";
+import { includeRefs, templateReads } from "./template-refs";
 
 export const SPEC_VERSION = 1;
 
@@ -133,11 +134,15 @@ export function keepPath(path: string | undefined, kind: FieldKind | undefined):
  * the value at the path has no declared type, so `slice.approval` + `outcome` == "reject" on a
  * json field is legitimate.
  *
- * Deliberately NOT checked: whether a `choice` operand is one of the declared `choices`.
- * `probe:pr` can legitimately report `OPEN` for a `pr.state` an operator declared as
- * ["MERGED","CLOSED"], and refusing that branch would be refusing a true statement about run
- * time on the strength of a launch-form hint. `text` beyond the empty case and `json` without
- * a path are unchecked for the same reason — a command may write a number into a text field.
+ * HOW-60 (H3): an `equals` / `not-equals` on a `choice` field with declared choices must name
+ * one of them. `verdict == 'approved'` against [pass, reject] saved clean and never fired —
+ * the agent is told the choices in prose and answers in them. This used to be deliberately
+ * unchecked on the argument that `probe:pr` can report `OPEN` for a `pr.state` declared as
+ * ["MERGED","CLOSED"]; that is answered by declaring every state you branch on (every
+ * built-in `pr.state` already lists OPEN), and the sentence below says exactly that. A choice
+ * field with NO choices declares nothing to check against, and `one-of` is left alone (a set
+ * that names one stray value still matches the others). `text` beyond the empty case and
+ * `json` without a path stay unchecked — a command may write a number into a text field.
  */
 export function unmatchableOperand(p: Predicate, field: FieldSpec | undefined): string | null {
   // a path the field's kind cannot carry is the one path case that IS decidable, and it was the
@@ -158,6 +163,8 @@ export function unmatchableOperand(p: Predicate, field: FieldSpec | undefined): 
       return `compares \`${p.key}\` with \`${JSON.stringify(v)}\`, but \`${p.key}\` is a yes/no field — nothing it can hold will ever equal that.`;
     if (field?.kind === "number" && typeof v !== "number")
       return `compares \`${p.key}\` with \`${JSON.stringify(v)}\` as text, but \`${p.key}\` is a number field. Type a number.`;
+    if (field?.kind === "choice" && field.choices?.length && (p.op === "equals" || p.op === "not-equals") && !(typeof v === "string" && field.choices.includes(v)))
+      return `compares \`${p.key}\` with \`${JSON.stringify(v)}\`, which is not one of its choices (${field.choices.map((c) => `\`${c}\``).join(", ")}). Pick one of them, or add \`${String(v)}\` to the field's choices.`;
   }
   return null;
 }
@@ -631,6 +638,47 @@ function rewriteStructural(spec: GraphSpec, raw: string): SpecProblem {
 }
 
 /**
+ * HOW-60 (H2): what is wrong between an agent step and the body it names. Both are BLOCKING:
+ *
+ *   An include. `{{> id }}` is expanded when a run PINS its prompts (Engine.pinPrompts), which
+ *   is fine for the hand-written built-ins and wrong here: the builder derives `reads` from the
+ *   text it can see, and an include hides the included prompt's reads from it, so the step
+ *   would be given less than its instructions ask for. A builder graph's step says everything
+ *   itself.
+ *
+ *   Reads that are not the body's. `reads` is DERIVED from the body (templateReads), on both
+ *   sides, so a mismatch means a spec that arrived some other way (a PUT, a hand edit) is about
+ *   to declare one thing and ask for another. Both directions are named.
+ */
+function bodyProblems(n: Extract<NodeSpec, { kind: "agent" }>, body: string, who: string): SpecProblem[] {
+  const out: SpecProblem[] = [];
+  if (body.includes("{{>")) {
+    const ids = includeRefs(body);
+    const named = ids.length ? ids.map((id) => `\`${id}\``).join(", ") : "another prompt";
+    out.push({
+      node: n.id, where: "steps",
+      message: `${who}'s instructions include ${named} with \`{{> … }}\`. A graph built here cannot include another prompt — paste the text it needs into the instructions instead.`,
+    });
+  }
+  const wanted = templateReads(body);
+  const declared = new Set(n.reads);
+  const unlisted = wanted.filter((k) => !declared.has(k));
+  const unused = [...declared].filter((k) => !wanted.includes(k)).sort();
+  if (unlisted.length || unused.length) {
+    const list = (keys: string[]) => keys.map((k) => `\`${k}\``).join(", ");
+    const parts = [
+      ...(unlisted.length ? [`its instructions use ${list(unlisted)}, which the step does not list`] : []),
+      ...(unused.length ? [`it lists ${list(unused)}, which its instructions never use`] : []),
+    ];
+    out.push({
+      node: n.id, where: "steps",
+      message: `${who} does not match its instructions: ${parts.join(", and ")}. Save the instructions again so the step is given what they ask for.`,
+    });
+  }
+  return out;
+}
+
+/**
  * Everything wrong with a draft, in the operator's terms, attributed to the step that owns
  * it. NEVER throws: this runs on every keystroke, over a half-built draft, and a throw would
  * take the whole builder down with it.
@@ -639,7 +687,19 @@ function rewriteStructural(spec: GraphSpec, raw: string): SpecProblem {
  * is SKIPPED — its `validateGraph` throws on an unknown entry or a dangling edge, and a
  * thrown "entry node not in graph" would replace the readable version of the same problem.
  */
-export function specProblems(spec: GraphSpec, opts: { knownPrompts?: readonly string[] } = {}): SpecProblem[] {
+export function specProblems(
+  spec: GraphSpec,
+  opts: {
+    knownPrompts?: readonly string[];
+    /**
+     * HOW-60 (H2): the prompt bodies, by id, when the caller has them — the browser's draft and
+     * the save route's about-to-be-written set. Given, they are ALSO the known prompts (a step
+     * with no body is the existing "has no file yet"), and each is checked against its step: no
+     * `{{> include }}`, `reads` equal to templateReads(body), and no body that no step uses.
+     */
+    bodies?: Readonly<Record<string, string>>;
+  } = {},
+): SpecProblem[] {
   const problems: SpecProblem[] = [];
   const ids = new Set<string>();
   const fieldKeys = new Set(spec.fields.map((f) => f.key));
@@ -658,7 +718,8 @@ export function specProblems(spec: GraphSpec, opts: { knownPrompts?: readonly st
   for (const key of spec.inputs)
     if (!fieldKeys.has(key)) problems.push({ where: "fields", message: `\`${key}\` is asked for at launch but is not a field. Add it in "What it works with".` });
 
-  const knownPrompts = opts.knownPrompts ? new Set(opts.knownPrompts) : null;
+  const bodies = opts.bodies;
+  const knownPrompts = bodies ? new Set(Object.keys(bodies)) : opts.knownPrompts ? new Set(opts.knownPrompts) : null;
   for (const n of spec.nodes) {
     const who = `**${titleOf(spec, n.id)}**`;
     if (!SPEC_NODE_ID.test(n.id)) problems.push({ node: n.id, where: "steps", message: `"${n.id}" is not a usable step id.` });
@@ -723,6 +784,8 @@ export function specProblems(spec: GraphSpec, opts: { knownPrompts?: readonly st
         });
       } else if (knownPrompts && !knownPrompts.has(n.prompt))
         problems.push({ node: n.id, where: "steps", message: `${who} names the prompt "${n.prompt}", which has no file yet. Write its instructions.` });
+      const body = bodies?.[n.prompt];
+      if (body !== undefined) problems.push(...bodyProblems(n, body, who));
       if (n.requires && !spec.nodes.some((x) => x.id === n.requires && x.kind === "approval"))
         problems.push({ node: n.id, where: "steps", message: `${who} waits on an approval step that does not exist. Pick one, or clear it.` });
     }
@@ -733,6 +796,15 @@ export function specProblems(spec: GraphSpec, opts: { knownPrompts?: readonly st
       problems.push({ node: n.id, where: "steps", message: `${who} has a back-off that is not a list of durations like "15m" or "30m".` });
     if (n.kind === "approval" && n.decision === n.feedback)
       problems.push({ node: n.id, where: "steps", message: `${who} uses one field for both the decision and the comments. Give them separate fields.` });
+  }
+
+  // a body no agent step names is a prompt file that would be written for nobody. No step owns
+  // it, so it is a graph-level problem — the steps pane is where an agent's prompt is picked.
+  if (bodies) {
+    const named = new Set(spec.nodes.flatMap((n) => (n.kind === "agent" ? [n.prompt] : [])));
+    for (const id of Object.keys(bodies))
+      if (!named.has(id))
+        problems.push({ where: "steps", message: `Instructions are filed under "${id}", but no step uses them. Remove them, or give a step that prompt.` });
   }
 
   // The starting step, both halves of the same question. A Finish step as the entry saves
@@ -825,6 +897,38 @@ export function specProblems(spec: GraphSpec, opts: { knownPrompts?: readonly st
 /** The ops that carry an operand to compare against — the complement of NULLARY_OPS, derived
  *  rather than restated so a seventh predicate cannot be missed by one of the two lists. */
 const OPERAND_OPS: readonly PredicateOp[] = PREDICATE_OPS.filter((op) => !NULLARY_OPS.includes(op));
+
+/**
+ * HOW-60 (H6): true when every value that satisfies `b` also satisfies `a` — so a row `b`
+ * listed BELOW a row `a` on the same step can never fire, because the first matching row wins.
+ *
+ * Deliberately a short list of cases rather than a general implication prover: each one is a
+ * sentence anyone can check against compilePredicate(), and anything not listed returns false
+ * (a missed shadow is a missing note; a wrong one is advice telling the operator to break a
+ * working graph). Only rows on the same key AND the same path are compared — a row reaching
+ * into `outcome` says nothing about a row on the whole value.
+ */
+function covers(a: Predicate, b: Predicate): boolean {
+  if (a.key !== b.key || (a.path ?? "") !== (b.path ?? "")) return false;
+  // what `b` can match, when that is a finite list of values; null for an open-ended test
+  const bValues: Array<string | number | boolean> | null =
+    b.op === "equals" ? [b.value]
+    : b.op === "one-of" ? (b.values.length ? b.values : null)
+    : b.op === "is-true" ? [true]
+    : b.op === "is-false" ? [false]
+    : null;
+  if (predicateLabel(a) === predicateLabel(b)) return true;
+  switch (a.op) {
+    // "" is the one empty scalar a listed value can be; 0 and false are answers (isEmptyValue)
+    case "is-not-empty": return bValues !== null && bValues.every((v) => v !== "");
+    case "not-equals": return bValues !== null && !bValues.includes(a.value);
+    case "one-of": return bValues !== null && bValues.every((v) => a.values.includes(v));
+    case "equals": return bValues !== null && bValues.every((v) => v === a.value);
+    case "is-true": return bValues !== null && bValues.every((v) => v === true);
+    case "is-false": return bValues !== null && bValues.every((v) => v === false);
+    case "is-empty": return b.op === "is-empty";
+  }
+}
 
 /**
  * Every cycle in the graph, as groups of mutually-reachable steps (one group per strongly
@@ -947,6 +1051,23 @@ export function specAdvice(spec: GraphSpec): SpecProblem[] {
         node: e.from, where: "branching",
         message: `${who(e.from)} has an "Otherwise" that goes back to itself, so whenever no other row matches it runs again with nothing changed, over and over. Send it somewhere else, or put a Wait step in between.`,
       });
+  }
+
+  // A ROW AN EARLIER ROW SHADOWS (HOW-60, H6). Among a step's conditional rows the first match
+  // wins, so a row whose every match is already caught by a row above it never fires — e.g.
+  // "has a value" listed above "is reject". Only conditional rows count: "Otherwise" is the
+  // weight-0 fallback wherever it sits. One note per shadowed row, naming the FIRST row that
+  // shadows it.
+  for (const n of spec.nodes) {
+    const rows = spec.edges.filter((e) => e.from === n.id && e.when).map((e) => e.when!);
+    rows.forEach((b, i) => {
+      const a = rows.slice(0, i).find((earlier) => covers(earlier, b));
+      if (a)
+        advise({
+          node: n.id, where: "branching",
+          message: `${who(n.id)} goes this way only when \`${predicateLabel(b)}\`, but the row above it (\`${predicateLabel(a)}\`) already catches everything that would match, so it never fires. Move it above that row, or remove it.`,
+        });
+    });
   }
 
   for (const group of loops(spec)) {

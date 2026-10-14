@@ -648,12 +648,14 @@ export function pickPrompts(draft: Draft): Record<string, string> {
  */
 export function draftProblems(draft: Draft, opts: { taken?: readonly string[] } = {}): SpecProblem[] {
   // a prompt is "known" if the operator has written one here or it already exists on disk;
-  // the builder seeds every agent step with a body, so an empty map means "do not check"
-  const known = Object.keys(draft.prompts);
+  // the builder seeds every agent step with a body, so an empty map means "do not check".
+  // HOW-60: the bodies go through too, and they are pickPrompts() — exactly what Save POSTS —
+  // not draft.prompts, or a stray body the server never receives would block here alone and
+  // the two verdicts would disagree (graphs/builder.ts saveVerdict).
   const collision = nameTakenProblem(draft.spec.name, draft.saved ? [] : (opts.taken ?? []));
   return [
     ...(collision ? [collision] : []),
-    ...specProblems(draft.spec, known.length ? { knownPrompts: known } : {}),
+    ...specProblems(draft.spec, Object.keys(draft.prompts).length ? { bodies: pickPrompts(draft) } : {}),
   ];
 }
 
