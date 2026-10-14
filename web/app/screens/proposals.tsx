@@ -115,11 +115,15 @@ export function ProposalsScreen({ selected }: { selected: string | null }) {
         {error && <div className="banner failed">{error}</div>}
         {notice && <div className="banner paused">{notice}</div>}
 
-        {current.status === "pending" && !current.stale && current.current_version !== null && (
+        {/* Reject is offered on EVERY pending proposal: a stale one used to show only Re-draft,
+            and one with no feedback to re-draft from was a dead end nothing on screen could close */}
+        {current.status === "pending" && (
           <div className="proposal-actions">
-            <Button size="sm" disabled={busy !== null} onClick={() => act(current.file, "accept")}>
-              <ThumbsUp />{busy === "accept" ? "accepting…" : `Accept → v${current.proposed_version}`}
-            </Button>
+            {!current.stale && current.current_version !== null && (
+              <Button size="sm" disabled={busy !== null} onClick={() => act(current.file, "accept")}>
+                <ThumbsUp />{busy === "accept" ? "accepting…" : `Accept → v${current.proposed_version}`}
+              </Button>
+            )}
             <Button variant="destructive-outline" size="sm" disabled={busy !== null} onClick={() => setRejecting(true)}><X />{busy === "reject" ? "rejecting…" : "Reject"}</Button>
           </div>
         )}

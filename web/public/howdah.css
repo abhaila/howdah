@@ -492,10 +492,14 @@ main { flex: 1; min-width: 0; min-height: 0; overflow: hidden; display: flex; fl
 
 /* list + detail, wider than the graphs split: prompt ids and v-ranges need the room,
    and the detail column must not run flush into the viewport edge */
+/* Both columns scroll on their own, inside `main` (overflow: hidden). The detail column used
+   to be a plain grid cell, so a long proposal or prompt ran below the fold with nothing able to
+   scroll to it. */
 .library-layout {
   display: grid; grid-template-columns: 320px minmax(0, 1fr); gap: 18px;
-  align-items: start; padding-right: 28px;
+  flex: 1; min-height: 0; overflow: hidden; padding-right: 28px;
 }
+.library-layout > * { min-height: 0; overflow-y: auto; }
 .library-layout .run-goal { min-width: 0; }
 .library-layout .run-meta { display: inline-flex; align-items: center; gap: 6px; }
 
@@ -568,6 +572,9 @@ main { flex: 1; min-width: 0; min-height: 0; overflow: hidden; display: flex; fl
 
 @media (max-width: 1100px) {
   .graphs-layout, .library-layout { grid-template-columns: 1fr; }
+  /* stacked, the page scrolls as one column rather than two clipped halves */
+  .library-layout { overflow-y: auto; }
+  .library-layout > * { overflow: visible; }
 }
 
 /* ---- steps tab (T24, story 3) ---------------------------------------------------

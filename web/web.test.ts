@@ -915,6 +915,7 @@ describe("proposal review API (T21)", () => {
   test("redraft is accepted for a known proposal and 404s for anything else", async () => {
     const root = fixtureRepo();
     const file = seedProposalFile(root, { id: "doc.outline", base: 0, body: "stale one\n" });
+    writeFileSync(join(root, "feedback", "doc.outline.jsonl"), JSON.stringify({ text: "missing the risks" }) + "\n"); // something to re-draft from
     const { server, url } = serve(root);
     process.env.HOWDAH_STUB = "1"; // never spawn the real reviser (it spends tokens) in tests
     try {

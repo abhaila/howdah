@@ -18,6 +18,8 @@ function repoWithPartial(): string {
   prompt("doc._style", "Write plainly.\n");
   prompt("doc.outline", "Outline {{ context.goal }} for {{ context.work }}.\n{{> doc._style }}\n");
   prompt("doc.other", "Something else for {{ context.goal }}.\n");
+  // feedback on the includer only: doc.other has none, which the no-feedback refusal relies on
+  writeFileSync(join(root, "feedback", "doc.outline.jsonl"), JSON.stringify({ text: "too long" }) + "\n");
   return root;
 }
 
@@ -89,5 +91,17 @@ describe("redraft route: partials and the spawn", () => {
     expect(res.status).toBe(409);
     expect(((await res.json()) as { error: string }).error).toContain("only for partials");
     expect(spawned).toHaveLength(1);
+  });
+
+  // the reviser exits 1 with no feedback, and a detached exit is invisible: the screen said
+  // "the reviser is running" forever. Refused here, before anything is spawned.
+  test("a prompt with no feedback is refused up front — nothing to re-draft from, so reject it", async () => {
+    spawned.length = 0;
+    const res = await redraft(proposal(root, "doc.other"));
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { error: string }).error).toBe(
+      "no feedback recorded for doc.other, so there is nothing to re-draft from — reject this proposal instead, or add feedback first",
+    );
+    expect(spawned).toEqual([]);
   });
 });

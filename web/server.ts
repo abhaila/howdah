@@ -80,7 +80,7 @@ import {
   type LibraryPaths,
 } from "../prompts/library";
 import { acceptProposal, listProposals, proposalsDir, rejectProposal, viewProposal } from "../prompts/proposals";
-import { evidenceSource } from "../reviser/revise";
+import { evidenceSource, loadFeedback } from "../reviser/revise";
 import { isPartialId } from "../core/template";
 import { normalizeRunName } from "../core/run-name";
 import { launchArgs } from "../core/launch-args";
@@ -525,7 +525,11 @@ export function createHowdahServer(opts: ServerOpts) {
             return json({
               error: `${view.id} is a partial; re-draft it from an includer: bun reviser/revise.ts ${view.id} --evidence-from <includer> (or POST {"evidence_from": "<includer>"})`,
             }, 409);
-          evidenceSource(view.id, evidenceFrom, root); // throws (→ 409) when the includer does not include it
+          const source = evidenceSource(view.id, evidenceFrom, root); // throws (→ 409) when the includer does not include it
+          // revise.ts exits 1 with nothing to revise from — in a detached child that is a screen
+          // saying "the reviser is running" forever. Same rule, applied where it can be seen.
+          if (loadFeedback(source, root).length === 0)
+            return json({ error: `no feedback recorded for ${source}, so there is nothing to re-draft from — reject this proposal instead, or add feedback first` }, 409);
           const argv = [process.execPath, join(import.meta.dir, "..", "reviser", "revise.ts"), view.id, ...(evidenceFrom ? ["--evidence-from", evidenceFrom] : [])];
           if (opts.spawnReviser) opts.spawnReviser(argv);
           else if (process.env.HOWDAH_STUB) return json({ ok: true, drafting: view.id, stubbed: true }, 202);

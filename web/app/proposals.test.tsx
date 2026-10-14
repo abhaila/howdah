@@ -48,7 +48,7 @@ const PROPOSAL: ProposalView = {
 };
 
 /** GET answers with the one pending proposal; every write answers with `write` */
-function serve(write: { status: number; body: unknown }) {
+function serve(write: { status: number; body: unknown }, proposal: ProposalView = PROPOSAL) {
   const posts: string[] = [];
   globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
@@ -56,7 +56,7 @@ function serve(write: { status: number; body: unknown }) {
       posts.push(url);
       return new Response(JSON.stringify(write.body), { status: write.status, headers: { "content-type": "application/json" } });
     }
-    return new Response(JSON.stringify([PROPOSAL]), { status: 200, headers: { "content-type": "application/json" } });
+    return new Response(JSON.stringify([proposal]), { status: 200, headers: { "content-type": "application/json" } });
   }) as typeof fetch;
   return { posts };
 }
@@ -128,5 +128,17 @@ describe("rejecting a revision", () => {
     expect(el.querySelector('[aria-live="polite"]')!.textContent).toContain("the reviser reads your reason as feedback");
     await act(async () => button(el, "Reject")!.click());
     expect(reasonInput(el).value).toBe("");
+  });
+});
+
+// a stale proposal used to show ONLY Re-draft — and one with no feedback to re-draft from could
+// then never be closed. Accept stays off (accepting would drop whatever moved the base, D7).
+describe("a stale proposal can still be closed", () => {
+  test("Reject is offered beside Re-draft; Accept is not", async () => {
+    serve({ status: 200, body: {} }, { ...PROPOSAL, stale: true, current_version: 3 });
+    const el = await render();
+    expect(button(el, "Reject")).toBeDefined();
+    expect([...el.querySelectorAll("button")].some((b) => b.textContent?.startsWith("Accept"))).toBe(false);
+    expect([...el.querySelectorAll("button")].some((b) => b.textContent?.includes("Re-draft"))).toBe(true);
   });
 });
