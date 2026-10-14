@@ -32,6 +32,17 @@
  *   existing path); this route became the PRIMARY authoring path without it, so a new draft
  *   that happened to reuse a name silently replaced that graph and its prompts.
  *
+ *   A COPY IS WRITTEN OUT, NOT LINKED (HOW-63). A drafted step may name its instructions as
+ *   `{ copyOf: <prompt id> }`. Save turns that into an ordinary `<graph>.<step>` file holding
+ *   the text a run would PIN for the original — includes expanded by the same `pinnableText`
+ *   `Engine.pinPrompts()` runs (prompts/pin.ts) — because a local prompt may not include
+ *   (specProblems refuses `{{>`), and because what the operator reviewed must be what a run
+ *   pins, not whatever the original says after its next accepted revision. The copy is
+ *   resolved BEFORE the verdict, so `reads` are derived from the copied text and every body
+ *   check sees it; a copy of a prompt Howdah does not have is refused before any write. The
+ *   copied-FROM id is only ever read: the id that is written is still the key, and still has
+ *   to pass every rule below.
+ *
  *   ONE VERDICT, NOT TWO. The refusal below runs the same `specProblems()` the browser runs
  *   on every keystroke, over the spec that is about to be WRITTEN. Before that, the browser
  *   could call a draft clean while this file refused it — and the message the operator got
@@ -42,9 +53,10 @@
  */
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { isBlocking, nameTakenProblem, promptIdFor, specProblems, SPEC_PROMPT_ID, type GraphSpec, type NodeSpec, type SpecProblem } from "../core/graph-spec";
-import { frontMatterField, splitFrontMatter, templateReads } from "../core/template";
-import { ensureLocalDirs, LOCAL_NAME, loadLocalGraph, localGraphPath, localPromptsDir } from "./local";
+import { isBlocking, nameTakenProblem, promptIdFor, specProblems, SPEC_PROMPT_ID, unknownCopyProblem, type DraftBody, type GraphSpec, type NodeSpec, type SpecProblem } from "../core/graph-spec";
+import { frontMatterField, IncludeError, splitFrontMatter, templateReads } from "../core/template";
+import { pinnableText, promptReader } from "../prompts/pin";
+import { ensureLocalDirs, findPromptFile, LOCAL_NAME, loadLocalGraph, localGraphPath, localPromptsDir, promptSearchPath } from "./local";
 import type { Graph } from "../core/graph";
 
 // promptIdFor lives in core/graph-spec.ts (the builder needs it in the browser too) and is
@@ -122,6 +134,37 @@ function restore(files: Snapshot[]): void {
 }
 
 /**
+ * Every body as the text that will be written: a string as given, a `{ copyOf }` as the BODY a
+ * run would pin for that prompt (prompts/pin.ts), found on the run's own search path — local
+ * first, then the repo's. Reads only; a refusal names the first body that cannot be resolved.
+ */
+export function materialiseBodies(
+  home: string,
+  repoRoot: string,
+  prompts: Readonly<Record<string, DraftBody>>,
+): { ok: true; texts: Record<string, string> } | { ok: false; error: string } {
+  const dirs = promptSearchPath(home, repoRoot);
+  const rawOf = promptReader(dirs);
+  const texts: Record<string, string> = {};
+  for (const [id, body] of Object.entries(prompts)) {
+    if (typeof body === "string") {
+      texts[id] = body;
+      continue;
+    }
+    // the id becomes a path: one that is not prompt-shaped is not a prompt Howdah has
+    if (!SPEC_PROMPT_ID.test(body.copyOf) || findPromptFile(body.copyOf, dirs) === null)
+      return { ok: false, error: unknownCopyProblem(id, body.copyOf).message };
+    try {
+      texts[id] = splitFrontMatter(pinnableText(body.copyOf, rawOf).pinned).body;
+    } catch (err) {
+      if (!(err instanceof IncludeError)) throw err;
+      return { ok: false, error: `The instructions for \`${id}\` are a copy of \`${body.copyOf}\`, which cannot be read in full: ${err.message}` };
+    }
+  }
+  return { ok: true, texts };
+}
+
+/**
  * The spec a save would write, and every BLOCKING problem with it — split out of
  * saveBuilderGraph so a test can hold it against the browser's draftProblems() (HOW-60).
  *
@@ -163,7 +206,8 @@ export function saveVerdict(opts: { home: string; spec: GraphSpec; prompts: Reco
 /**
  * Write a builder graph and its prompts, or change nothing.
  *
- * `prompts` maps prompt id → body, and only ids the spec's own agent steps name are accepted:
+ * `prompts` maps prompt id → body — text, or a `{ copyOf }` that is written out as the copied
+ * prompt's pinned text (see materialiseBodies) — and only ids the spec's own agent steps name are accepted:
  * the id becomes a file path, so an id from the network that no step asked for has no reason
  * to exist. An id the REPO already ships is refused too — `promptSearchPath` puts local
  * first (graphs/local.ts), so writing one would silently shadow a shipped prompt for every
@@ -173,7 +217,7 @@ export async function saveBuilderGraph(opts: {
   home: string;
   repoRoot: string;
   spec: GraphSpec;
-  prompts: Record<string, string>;
+  prompts: Record<string, DraftBody>;
   /**
    * REQUIRED: a create that lands on an existing graph is REFUSED, never merged over it
    * (HOW-22 review, finding 2 — a brand-new draft reusing a name replaced that graph's module
@@ -205,9 +249,15 @@ export async function saveBuilderGraph(opts: {
     return { ok: false, error: `there is no graph called "${opts.spec.name}" to update`, code: "missing" };
   }
 
+  // copies are resolved BEFORE the verdict, so it judges (and derives reads from) the text that
+  // will actually be written — and BEFORE ensureLocalDirs, so an unknown copy writes nothing
+  const materialised = materialiseBodies(home, repoRoot, prompts);
+  if (!materialised.ok) return { ok: false, error: materialised.error };
+  const { texts } = materialised;
+
   // THE SAME VERDICT THE BROWSER SHOWED, and BEFORE ensureLocalDirs, so a refusal (an include
   // in a body, say) writes nothing at all. See saveVerdict.
-  const { spec, problems: blocking } = saveVerdict({ home, spec: opts.spec, prompts });
+  const { spec, problems: blocking } = saveVerdict({ home, spec: opts.spec, prompts: texts });
   if (blocking.length) return { ok: false, error: blocking[0]!.message };
 
   ensureLocalDirs(home);
@@ -220,7 +270,7 @@ export async function saveBuilderGraph(opts: {
     // the writes live INSIDE the try so restore() covers an IO failure (EACCES, ENOSPC) and
     // not only a refusal: each snapshot is taken BEFORE its write, so a throw half way
     // through the loop puts back exactly the files that had already moved
-    for (const [id, body] of Object.entries(prompts)) {
+    for (const [id, body] of Object.entries(texts)) {
       const path = join(localPromptsDir(home), `${id}.md`);
       const previous = read(path);
       files.push({ path, previous });

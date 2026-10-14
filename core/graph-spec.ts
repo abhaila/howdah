@@ -1384,6 +1384,15 @@ export type DraftBody = string | { copyOf: string };
 
 export type DraftBodiesResult = { ok: true; bodies: Record<string, DraftBody> } | { ok: false; problems: SpecProblem[] };
 
+/** A copy naming no prompt Howdah has — one sentence, written here and read by both the draft
+ *  check below and the save that materialises copies (graphs/builder.ts, HOW-63). */
+export function unknownCopyProblem(id: string, copyOf: string): SpecProblem {
+  return {
+    where: "steps",
+    message: `The instructions for \`${id}\` are a copy of \`${copyOf}\`, which is not a prompt Howdah has. Copy one that exists, or write the instructions out.`,
+  };
+}
+
 /**
  * Untrusted draft bodies (an agent's output) → `DraftBody`s, keyed by prompt id. A body is text,
  * or an object whose ONLY key is `copyOf`, naming one of `knownIds`. Every refusal is reported,
@@ -1404,10 +1413,7 @@ export function resolveDraftBodies(prompts: Readonly<Record<string, unknown>>, k
         message: `The instructions for \`${id}\` are neither text nor a copy. Write the instructions out, or give \`{ "copyOf": "<prompt id>" }\` naming a prompt Howdah has.`,
       });
     } else if (!knownIds.includes(copyOf)) {
-      problems.push({
-        where: "steps",
-        message: `The instructions for \`${id}\` are a copy of \`${copyOf}\`, which is not a prompt Howdah has. Copy one that exists, or write the instructions out.`,
-      });
+      problems.push(unknownCopyProblem(id, copyOf));
     } else {
       bodies[id] = { copyOf };
     }

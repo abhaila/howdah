@@ -65,7 +65,7 @@ import { join } from "node:path";
 import { agentConfigOf, hasTools, nodeReads, resolveAgentConfigLayers, type Graph, type NodeDef, type EdgeDef, type AgentConfig, type ApprovalNodeDef, type Harness } from "../core/graph";
 import { basename } from "node:path";
 import { ContextStore, type Scope } from "../core/context";
-import { DEFAULT_CONTEXT_CAP, RENDER_VERSION, SUFFIX_VERSION, assemblePrompt, expandIncludes, renderTemplate, renderedHash, skillsForHarness, splitFrontMatter } from "../core/template";
+import { DEFAULT_CONTEXT_CAP, RENDER_VERSION, SUFFIX_VERSION, assemblePrompt, renderTemplate, renderedHash, skillsForHarness, splitFrontMatter } from "../core/template";
 import { defaultHarness, fallbackChain, harnessNames, harnessSpec, isHarness } from "../core/harnesses";
 import { EventLog } from "../log/write";
 import type { LoggedEvent, ParkCode } from "../log/events";
@@ -79,6 +79,7 @@ import type { PromptId } from "../core/prompt-ids";
 import { proposalHash } from "../core/proposal";
 import { describeFingerprintChange, fingerprint, worktreeTree, type Fingerprint } from "./reconcile";
 import { effectiveCwd } from "./executors/worktree-record";
+import { pinnableText, promptReader } from "../prompts/pin";
 import { currentProposal, findDecision, isApproved, nextSeq, pendingRedesigns, readBase } from "./slice-decision";
 import { claimRunner, releaseRunner, type RunnerHolder } from "./control";
 import { RATE_LIMIT_TEXT } from "./executors/harness-failure";
@@ -1014,25 +1015,14 @@ export class Engine {
     const dirs = this.opts.promptsDir === undefined
       ? [join(import.meta.dir, "..", "prompts")]
       : Array.isArray(this.opts.promptsDir) ? this.opts.promptsDir : [this.opts.promptsDir];
-    const rawOf = (id: string) => {
-      for (const d of dirs) {
-        const p = join(d, `${id}.md`);
-        if (existsSync(p)) return readFileSync(p, "utf8");
-      }
-      // name every place we looked: a missing prompt is usually a typo or an un-scaffolded id
-      throw new Error(`prompt "${id}" not found in ${dirs.join(", ")}`);
-    };
-    const bodyOf = (id: string) => splitFrontMatter(rawOf(id)).body;
-    const plans: Array<{ id: PromptId; raw: string; text: string | null; version: number; includes: Record<string, number> }> = [];
+    const rawOf = promptReader(dirs);
+    const plans: Array<{ id: PromptId; pinned: string; version: number; includes: Record<string, number> }> = [];
     for (const node of Object.values(this.graph.def.nodes)) {
       if (node.kind !== "agent" || plans.some((p) => p.id === node.prompt)) continue;
-      const raw = rawOf(node.prompt);
-      const { frontmatter, body } = splitFrontMatter(raw);
-      const { text, included } = expandIncludes(body, bodyOf, [node.prompt]);
+      const { raw, pinned, included } = pinnableText(node.prompt, rawOf);
       plans.push({
         id: node.prompt,
-        raw,
-        text: included.length ? `---\n${frontmatter ?? ""}\n---\n${text}` : null,
+        pinned,
         version: promptVersion(raw),
         includes: Object.fromEntries(included.map((id) => [id, promptVersion(rawOf(id))])),
       });
@@ -1042,7 +1032,7 @@ export class Engine {
     const includes: Record<string, Record<string, number>> = {};
     for (const plan of plans) {
       const dest = join(this.pinDir(), `${plan.id}.md`);
-      if (!existsSync(dest)) writeFileSync(dest, plan.text ?? plan.raw);
+      if (!existsSync(dest)) writeFileSync(dest, plan.pinned);
       pinned[plan.id] = promptVersion(readFileSync(dest, "utf8"));
       if (Object.keys(plan.includes).length) includes[plan.id] = plan.includes;
     }

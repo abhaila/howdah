@@ -253,6 +253,20 @@ describe("saving a graph built in the viewer", () => {
     expect(existsSync(localGraphPath(base, "one-name"))).toBe(false);
   });
 
+  test("HOW-63: a copy body is typed through — malformed is a 400, an unknown prompt a 422, and neither writes", async () => {
+    for (const body of [{ copyOf: 7 }, { copyOf: "implementation.plan", extra: 1 }, ["x"], null]) {
+      const r = await put("/api/graphs/copy-shape/builder", { intent: "create", spec: spec("copy-shape"), prompts: { "copy-shape.draft": body } });
+      expect(r.status).toBe(400);
+    }
+    const unknown = await put("/api/graphs/copy-unknown/builder", { intent: "create", spec: spec("copy-unknown"), prompts: { "copy-unknown.draft": { copyOf: "nope" } } });
+    expect(unknown.status).toBe(422);
+    expect((await unknown.json() as { error: string }).error).toContain("which is not a prompt Howdah has");
+    for (const name of ["copy-shape", "copy-unknown"]) {
+      expect(existsSync(localGraphPath(base, name))).toBe(false);
+      expect(existsSync(join(base, "prompts", `${name}.draft.md`))).toBe(false);
+    }
+  });
+
   test("a save that fails the gate leaves the graph AND its prompts at the last good version", async () => {
     await put("/api/graphs/kept/builder", { intent: "create", spec: spec("kept"), prompts: prompts("kept") });
     const graphBytes = readFileSync(localGraphPath(base, "kept"), "utf8");
