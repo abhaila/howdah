@@ -62,7 +62,8 @@ import { typecheckLocalGraph } from "../graphs/typecheck";
 import { newGraph, type GraphKind } from "../cli/new-graph";
 import { readLocalPrompt, saveBuilderGraph } from "../graphs/builder";
 import { parseGraphSpec, specOf, SPEC_PROMPT_ID } from "../core/graph-spec";
-import { ensureHowdahHome, howdahHome, loadConfig, saveConfig, typesafeKeyState } from "../config/config";
+import { ensureHowdahHome, howdahHome, loadConfig, saveConfig, typesafeKeyState, workspaceNameFor } from "../config/config";
+import { resolveDepsInput } from "./deps-input";
 import { listGithubRepos, registerGithubRepo } from "../config/github";
 import { loadTuning, saveTuning, pruneTuning } from "../config/tuning";
 import {
@@ -676,7 +677,16 @@ export function createHowdahServer(opts: ServerOpts) {
         const harness = body.overrides?.harness;
         if (harness !== undefined && !isHarness(harness))
           return json({ error: `unknown harness "${harness}" — have: ${harnessNames().join(", ")}` }, 400);
-        const args = launchArgs({ ...body, graph: body.graph, name: named.name }, runId);
+        // HOW-57: New run picks the runs a stacked run waits for; the rest of each `deps` entry
+        // comes from the picked run's own log, and a bad pick is refused before the spawn
+        let inputs = body.inputs;
+        if (inputs?.deps !== undefined) {
+          const config = loadConfig();
+          const deps = resolveDepsInput(inputs.deps, { runsDir: opts.runsDir, workspace: body.workspace, workspaceOf: (cwd) => workspaceNameFor(config, cwd) });
+          if (!deps.ok) return json({ error: deps.error }, 400);
+          inputs = { ...inputs, deps: deps.deps };
+        }
+        const args = launchArgs({ ...body, inputs, graph: body.graph, name: named.name }, runId);
         Bun.spawn(["bun", join(import.meta.dir, "..", "cli", "main.ts"), ...args], {
           stdout: "ignore", stderr: "ignore", env: { ...process.env },
         }).unref();
