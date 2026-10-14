@@ -2,7 +2,9 @@
 id: implementation.implement
 base_version: 1
 proposed_version: 2
-status: pending
+status: rejected
+rejected_at: 2026-10-14T06:18:45.398Z
+rejection_reason: HOW-44: variant C (plan-first) was accepted for implementation.implement instead; this variant was not chosen
 created: 2026-10-12T00:00:00.000Z
 fork: true
 experiment: HOW-44 variant B (verification-aware)
