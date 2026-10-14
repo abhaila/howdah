@@ -506,8 +506,16 @@ export function claudeExecutor(opts: ClaudeExecutorOpts): Executor {
           refusedFirst = refused;
           chunk("text", refused ? `\n[outputs refused — ${refused} — asking again]` : "\n[outputs object missing — asking for it]");
           turn = 2;
-          proc.stdin.write(buildClaudeUserTurn(buildRepairInstruction(writeKeys, refused)));
-          proc.stdin.flush();
+          // a CLI that exited on its result has closed stdin: the write is EPIPE, and that must
+          // not become the attempt's reason — the turn simply ends unanswered, and the first
+          // answer's refusal (refusedFirst, below) is what gets reported
+          try {
+            proc.stdin.write(buildClaudeUserTurn(buildRepairInstruction(writeKeys, refused)));
+            proc.stdin.flush();
+          } catch {
+            chunk("text", "\n[the harness exited before the repair could be asked]");
+            break readLoop;
+          }
           continue;
         }
         // the CLI stays open for more stdin turns; one attempt = one turn, so leave on result
