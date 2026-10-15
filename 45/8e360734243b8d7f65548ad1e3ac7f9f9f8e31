@@ -1,0 +1,71 @@
+prompts/library.ts
+  s_bafb3ad34c9e95::t_a0b34a3b8b4ddd 584-586,602-603
+log/events.ts
+  s_bafb3ad34c9e95::t_7503ffb677ed9d 223-228
+core/template.ts
+  s_bafb3ad34c9e95::t_7503ffb677ed9d 202,263-275,428-448,450,502-503,513,528-532,561
+core/template.test.ts
+  s_bafb3ad34c9e95::t_15ee0c994f7739 49-50
+  s_bafb3ad34c9e95::t_67a77bf4fee2f8 82-115
+prompts/library.test.ts
+  s_bafb3ad34c9e95::t_15ee0c994f7739 461
+  s_bafb3ad34c9e95::t_6168cbc915a538 276
+engine/repair-scope.ts
+  s_bafb3ad34c9e95::t_7503ffb677ed9d 1-33
+core/graph-spec.ts
+  s_bafb3ad34c9e95::t_7503ffb677ed9d 226-227,477,814-816,1242
+core/graph-spec.test.ts
+  s_bafb3ad34c9e95::t_ef1e84df259e34 18,21
+  s_bafb3ad34c9e95::t_0ef07cd5959534 615-648
+graphs/implement-ticket.ts
+  s_bafb3ad34c9e95::t_cb8292400dcafe 159-160
+CLAUDE.md
+  s_bafb3ad34c9e95::t_68563fec6e465b 507-515
+graphs/spec-equivalence.test.ts
+  s_bafb3ad34c9e95::t_ef1e84df259e34 42-44
+graphs/implement-slice.test.ts
+  s_bafb3ad34c9e95::t_cad26e7f733194 116-117,119
+  s_bafb3ad34c9e95::t_15ee0c994f7739 369
+graphs/implement-stacked.test.ts
+  s_bafb3ad34c9e95::t_6168cbc915a538 160
+core/graph.ts
+  s_bafb3ad34c9e95::t_7503ffb677ed9d 283-291,492-494
+graphs/improve-codebase.ts
+  s_bafb3ad34c9e95::t_cb8292400dcafe 95-96
+prompts/delivery.review_repairs.md
+  s_bafb3ad34c9e95::t_ef1e84df259e34 3,25
+graphs/delivery.ts
+  s_bafb3ad34c9e95::t_a0b34a3b8b4ddd 138-139,263
+engine/executors/executors.test.ts
+  s_bafb3ad34c9e95::t_6168cbc915a538 804
+graphs/fixtures/pre-spec-shapes.json
+  s_bafb3ad34c9e95::t_ef1e84df259e34 871-876,1505-1510
+  s_bafb3ad34c9e95::t_cad26e7f733194 231-236,1987-1992
+engine/control.test.ts
+  s_bafb3ad34c9e95::t_15ee0c994f7739 397
+engine/engine.test.ts
+  s_bafb3ad34c9e95::t_6168cbc915a538 626
+engine/run.ts
+  s_bafb3ad34c9e95::t_7503ffb677ed9d 1226-1229,1235,1274
+  s_bafb3ad34c9e95::t_a0b34a3b8b4ddd 74
+engine/repair-scope.test.ts
+  s_bafb3ad34c9e95::t_e3943db7e88f13 15,105,107-111
+  s_bafb3ad34c9e95::t_67a77bf4fee2f8 1-14,16-104,106,112-141,143-144
+  s_bafb3ad34c9e95::t_4f69bfbe853083 142
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "458e360734243b8d7f65548ad1e3ac7f9f9f8e31",
+  "prompts": {},
+  "sessions": {
+    "s_bafb3ad34c9e95": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "badc1cd2-b3b2-49f7-93ba-331ef7da67b5",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "areeb.bhaila <areeb.bhaila@gmail.com>"
+    }
+  }
+}
