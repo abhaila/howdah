@@ -32,6 +32,12 @@
  *                                 (0.162.1 schema); the final text carries the answers received
  *   FAKE_CODEX_UNKNOWN_REQUEST=1  `account/chatgptAuthTokens/refresh`, a kind howdah does not
  *                                 model; the final text says whether it was answered or refused
+ * FAKE_CODEX_SUBAGENT=1 — codex's `multi_agent` feature: before EVERY turn's own answer, a
+ *   SUB-THREAD (`fake-sub-1`, the shapes of a `spawn_agent` child on the same connection: its
+ *   own threadId on every notification) runs a command, streams a report without an outputs
+ *   object and completes ITS turn, then a pause so an executor that took that for our turn's
+ *   end has already acted on it when ours arrives. Live, that was a three-reviewer turn
+ *   failing the outputs contract on the first reviewer's report.
  */
 import { appendFileSync, existsSync, writeFileSync } from "node:fs";
 
@@ -129,11 +135,26 @@ for await (const chunk of Bun.stdin.stream()) {
           }
           break;
         }
+        if (process.env.FAKE_CODEX_SUBAGENT === "1") await subagentTurn();
         finishTurn(turnId, promptText);
         break;
       }
     }
   }
+}
+
+/** a sub-agent thread's whole turn on this connection (schema 0.162.1: threadId on every notification) */
+async function subagentTurn(): Promise<void> {
+  const threadId = "fake-sub-1";
+  const turnId = "fake-sub-turn-1";
+  out({ jsonrpc: "2.0", method: "thread/started", params: { thread: { id: threadId } } });
+  out({ jsonrpc: "2.0", method: "turn/started", params: { threadId, turn: { id: turnId } } });
+  out({ jsonrpc: "2.0", method: "item/started", params: { threadId, turnId, item: { type: "commandExecution", id: "sub-cx1", command: "git diff origin/main...HEAD" } } });
+  out({ jsonrpc: "2.0", method: "item/completed", params: { threadId, turnId, item: { type: "commandExecution", id: "sub-cx1", status: "completed", aggregatedOutput: "diff --git a/x b/x" } } });
+  out({ jsonrpc: "2.0", method: "item/agentMessage/delta", params: { threadId, turnId, itemId: "sub-msg1", delta: "SUB DELTA " } });
+  out({ jsonrpc: "2.0", method: "item/completed", params: { threadId, turnId, item: { type: "agentMessage", id: "sub-msg1", text: "SUB REPORT: one blocking finding; no outputs object here." } } });
+  out({ jsonrpc: "2.0", method: "turn/completed", params: { threadId, turn: { id: turnId, status: "completed" } } });
+  await Bun.sleep(80);
 }
 
 /** the agent's final message — carrying the outputs contract it was asked for — and the turn's end */
@@ -147,10 +168,10 @@ function finishTurn(turnId: string, promptText: string, note = ""): void {
   const text = drop
     ? `${note}Verified the shared renderer and the affected integration cases. No files modified.`
     : `${note}All done.\n{"outputs": ${JSON.stringify(outputs)}}`;
-  out({ jsonrpc: "2.0", method: "item/agentMessage/delta", params: { delta: text } });
-  out({ jsonrpc: "2.0", method: "item/completed", params: { item: { type: "agentMessage", text } } });
+  out({ jsonrpc: "2.0", method: "item/agentMessage/delta", params: { threadId: "fake-thread-1", turnId, delta: text } });
+  out({ jsonrpc: "2.0", method: "item/completed", params: { threadId: "fake-thread-1", turnId, item: { type: "agentMessage", text } } });
   // HOW-34: codex reports THREAD totals (cachedInputTokens included in inputTokens), so a
   // repair turn's figures are the running total — the executor records the delta
   out({ jsonrpc: "2.0", method: "thread/tokenUsage/updated", params: { threadId: "fake-thread-1", tokenUsage: { total: { inputTokens: 500 * turns, cachedInputTokens: 300 * turns, outputTokens: 40 * turns } } } });
-  out({ jsonrpc: "2.0", method: "turn/completed", params: { turn: { id: turnId, status: "completed" } } });
+  out({ jsonrpc: "2.0", method: "turn/completed", params: { threadId: "fake-thread-1", turn: { id: turnId, status: "completed" } } });
 }

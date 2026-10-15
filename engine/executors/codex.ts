@@ -20,6 +20,15 @@
  * naming it. A park that ends with the harness gone, or past the configured wait, fails the
  * attempt with that reason — nothing waits in silence (same contract as claude.ts).
  *
+ * ONE CONNECTION, MANY THREADS. Codex's `multi_agent` feature (stable, on by default in
+ * 0.162.1) lets the model `spawn_agent` sub-threads, and their notifications arrive on this
+ * same stdio connection under THEIR `threadId`. Every notification is therefore keyed on the
+ * thread this executor opened: a sub-agent's `turn/completed` is not our turn's end, its
+ * deltas are not our text, and its finished message is a tagged note in the transcript, never
+ * the final message the outputs contract is read from. Before that, a reviewer that fanned
+ * out to three sub-agents ended its turn on the first one's report, spent the repair turn on
+ * the second's, and failed the outputs contract with three reports interleaved word by word.
+ *
  * PIN NOTE: the protocol is a moving target (S3-Q4). `howdah doctor` asserts the version.
  *
  * The prompt is sent UNCHANGED: the engine already appended the outputs contract before
@@ -174,6 +183,8 @@ export function codexExecutor(opts: CodexExecutorOpts): Executor {
 
     let harnessGone = false;
     void proc.exited.then(() => { harnessGone = true; }, () => { harnessGone = true; });
+    /** the thread this attempt opened; a notification from any other thread is a sub-agent's */
+    let ownThread: string | undefined;
     /** a park that ended without an answer is a FAILED attempt with a stated cause, never a hang */
     let stopped: string | null = null;
 
@@ -261,6 +272,33 @@ export function codexExecutor(opts: CodexExecutorOpts): Executor {
       chunk("tool_result", accept ? `elicitation accepted: ${got.reply || "done"}` : `elicitation declined: ${got.reply}`, { name: ev.server });
     };
 
+    /**
+     * What a sub-agent thread's notification contributes: its tool calls, so the transcript
+     * and the HOW-38 stuck detector see work that is really happening (names unchanged, so
+     * log/trajectory.ts classifies them like any other), and its finished message as a note
+     * naming the thread. Never a text delta — three threads' deltas interleave word by word —
+     * and never a turn end, which is the hang-then-fail this guards against.
+     */
+    const subagent = (raw: Record<string, any>, from: string) => {
+      const tag = `sub-agent ${from.slice(0, 8)}`;
+      if (raw.method === "item/completed" && raw.params?.item?.type === "agentMessage") {
+        const text = String(raw.params.item.text ?? "").trim();
+        if (text) chunk("text", `\n[${tag} reported]\n${text}\n`);
+        return;
+      }
+      for (const ev of mapCodexEvent(raw)) {
+        if (ev.type === "tool_call") {
+          const summary = JSON.stringify(ev.input).slice(0, 400);
+          chunk("tool_call", summary, { id: ev.id, name: ev.name, input_hash: watch.call(ev.id, ev.name, ev.input, summary) });
+        } else if (ev.type === "tool_result") {
+          chunk("tool_result", ev.content.slice(0, 400), { id: ev.id, ...(ev.is_error !== undefined ? { is_error: ev.is_error } : {}) });
+          if (watch.result(ev.id, ev.is_error === true, ev.content)?.kind === "stop") killGroup(proc.pid);
+        } else if (ev.type === "error") {
+          chunk("text", `\n[${tag} notice: ${ev.message}]`);
+        }
+      }
+    };
+
     const parser = new JsonlChunkParser();
     const pump = (async () => {
       for await (const bytes of proc.stdout) {
@@ -273,6 +311,12 @@ export function codexExecutor(opts: CodexExecutorOpts): Executor {
             pending.get(Number(raw.id))?.(raw.result ?? raw.error);
             pending.delete(Number(raw.id));
             if (raw.error) rpcFault = String(raw.error.message ?? "codex rpc error");
+            continue;
+          }
+          // a notification from a thread we did not open is a sub-agent's (header comment)
+          const from = raw.method !== undefined && raw.id === undefined ? raw.params?.threadId : undefined;
+          if (typeof from === "string" && ownThread !== undefined && from !== ownThread) {
+            subagent(raw, from);
             continue;
           }
           // capture the completed agent message for the outputs contract
@@ -351,6 +395,7 @@ export function codexExecutor(opts: CodexExecutorOpts): Executor {
       });
       const threadId = thread?.threadId ?? thread?.thread?.id;
       if (!threadId) throw new Error(`thread/start gave no threadId: ${JSON.stringify(thread).slice(0, 200)}`);
+      ownThread = String(threadId);
 
       const runTurn = async (text: string): Promise<void> => {
         turn++;

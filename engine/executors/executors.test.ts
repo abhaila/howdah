@@ -543,6 +543,30 @@ describe("codex executor over the fake app-server wire", () => {
     }
   }, 30000);
 
+  // codex's multi_agent feature: a `spawn_agent` child shares this connection. Its turn end
+  // must not end OUR turn and its report is not OUR final message — live, a three-reviewer
+  // turn failed the outputs contract on the first reviewer's report (fake-codex.ts header)
+  test("codex: a sub-agent thread's turn end and report are not the attempt's own", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "howdah-codex-sub-"));
+    const engine = codexEngine(dir, { FAKE_CODEX_SUBAGENT: "1" });
+    try {
+      expect(await engine.start({ goal: "sub-agents" })).toEqual({ state: "finished", outcome: "success" });
+    } finally {
+      delete process.env.FAKE_CODEX_SUBAGENT;
+    }
+    const events = engine.log.read() as any[];
+    // one turn: the sub-agent's turn/completed did not end ours, so no repair turn was asked for
+    expect(events.filter((e) => e.type === "turn-finalized" && e.node === "draft")).toHaveLength(1);
+    const text = finalText(engine);
+    expect(text).not.toContain("[outputs object missing");
+    expect(text).not.toContain("SUB DELTA"); // its deltas never interleave with ours
+    expect(text).toContain("[sub-agent fake-sub reported]\nSUB REPORT: one blocking finding");
+    // its work is still on the record, under the tool's own name
+    const call = events.find((e) => e.type === "chunk" && e.kind === "tool_call" && e.tool_id === "sub-cx1");
+    expect(call?.tool_name).toBe("commandExecution");
+    expect(events.find((e) => e.type === "chunk" && e.kind === "tool_result" && e.tool_id === "sub-cx1")?.content).toContain("diff --git");
+  }, 30000);
+
   test("codex: a form elicitation is declined at once with a note — nothing here can draw a schema", async () => {
     const dir = mkdtempSync(join(tmpdir(), "howdah-codex-form-"));
     const engine = codexEngine(dir, { FAKE_CODEX_ELICIT: "1", FAKE_CODEX_ELICIT_MODE: "form" });

@@ -381,7 +381,14 @@ Break one of these and the design stops working, so check them before changing t
   answers with the profile GRANTED, not a `{decision}`; and any kind the adapter does not model
   is refused on the wire with a JSON-RPC error naming it. Replies go back under the id's wire
   TYPE (a numeric string becomes the number again). A park the harness dies under, or that
-  outlives `askTimeoutMs`, fails the attempt with that reason.
+  outlives `askTimeoutMs`, fails the attempt with that reason. AND ONE CONNECTION CARRIES MANY
+  THREADS: codex's `multi_agent` feature (stable, on in 0.162.1) lets the model `spawn_agent`
+  sub-threads whose notifications arrive on the same stdio connection under their own
+  `threadId`, so the executor keys everything on the thread it opened — a sub-agent's
+  `turn/completed` never ends the attempt's turn, its deltas are never the attempt's text, and
+  its finished report is a tagged note in the transcript, never the final message the outputs
+  contract is read from (`FAKE_CODEX_SUBAGENT` pins it). A three-reviewer turn used to end on
+  the first reviewer's report and fail the contract with three reports interleaved word by word.
 - **Attention is durable before it is delivered.** `engine/attention.ts` writes the record,
   then notifies; `watchdog/check.ts` runs outside the process (launchd, 60s) so `kill -9`
   with an ask pending still rings, and a stale heartbeat is itself an attention event.
