@@ -1,6 +1,6 @@
 ---
 id: delivery.publish
-version: 3
+version: 4
 tags: [delivery, pr]
 accepted: 2026-09-13T06:55:56Z
 provenance: reviser proposal v2 (GEPA-method, feedback 2026-09-11-dwn832 delivery.publish@1)
@@ -29,11 +29,11 @@ Reading the Linear ticket or project for context is permitted; do not modify tra
 
 Use ticket references only when the work scope identifies an existing ticket.
 
-Enable auto-merge if possible. Respect required checks, approvals and merge-queue rules.
+Enable auto-merge only on a PR whose base is the repository's default branch, and only through the forge's own auto-merge, which waits for required checks, approvals and the merge queue. Never merge a PR yourself, in any form. Never enable auto-merge on a PR whose base is another PR's branch: an unprotected base merges at once, which collapses the stack into its base and deletes the branch — merging a stacked PR is a human decision, always.
 
 If the associated PR is already merged and the branch contains follow up changes, open a new PR.
 
-If the change is already published as a stack of PRs, each targeting the one below it, push every branch in the stack whose local commits differ from its remote, not only the branch checked out, and keep each PR targeting the branch below it.
+If the change is already published as a stack of PRs, each targeting the one below it, push every branch in the stack whose local commits differ from its remote, not only the branch checked out, and keep each PR targeting the branch below it. Auto-merge, if any, belongs to the bottom PR alone.
 
 Confirm the PR URL from the remote. If publication or enabling auto-merge fails, inspect the current remote state before retrying. Preserve local work and avoid creating duplicate PRs.
 
