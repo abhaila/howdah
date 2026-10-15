@@ -1,0 +1,25 @@
+engine/executors/codex.ts
+  s_bafb3ad34c9e95::t_2c95ce37321bad 23-31,186-187,275-301,316-321,398
+engine/executors/fake-codex.ts
+  s_bafb3ad34c9e95::t_bb1107bb3d7477 35-40,138,146-159,171-172,176
+CLAUDE.md
+  s_bafb3ad34c9e95::t_b802d34dc14df4 384-391
+engine/executors/executors.test.ts
+  s_bafb3ad34c9e95::t_bb1107bb3d7477 546-569
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d00505c27378874d0187da0add58ba351542155d",
+  "prompts": {},
+  "sessions": {
+    "s_bafb3ad34c9e95": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "badc1cd2-b3b2-49f7-93ba-331ef7da67b5",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "areeb.bhaila <areeb.bhaila@gmail.com>"
+    }
+  }
+}
