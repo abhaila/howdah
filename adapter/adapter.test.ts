@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { JsonlChunkParser, type JsonlRecord } from "./parse";
 import { mapClaudeEvent, buildClaudePermissionResponse, buildClaudeUserTurn, claudeArgs, looksContextExceeded } from "./claude";
-import { mapCodexEvent, buildCodexApprovalResponse } from "./codex";
+import { mapCodexEvent, buildCodexApprovalResponse, buildCodexElicitationResponse, buildCodexErrorResponse, buildCodexPermissionsResponse, buildCodexUserInputResponse } from "./codex";
 import { mapOpencodeEvent } from "./opencode";
 import { mapCursorEvent, cursorArgs } from "./cursor";
 import { harnessNames } from "../core/harnesses";
@@ -254,6 +254,65 @@ describe("codex adapter mapping", () => {
   test("usedPercent 100 maps to exhausted with remaining 0", () => {
     const rl = events.find((e) => e.type === "rate_limit")!;
     expect(rl).toMatchObject({ state: "exhausted", remaining: 0 });
+  });
+});
+
+// Captured against codex 0.162.1 (the ChatGPT Linear connector asking to be reconnected —
+// the request that held a live turn open for ten hours), plus the other request kinds the
+// generated schema lists, read from the schema rather than captured.
+describe("codex server requests are modelled or reported, never dropped", () => {
+  const elicitFixture = readFileSync(join(import.meta.dir, "fixtures", "codex-elicitation.jsonl"));
+  const events = replay(elicitFixture, 32).flatMap((r) => (r.ok ? mapCodexEvent(r.value) : []));
+
+  test("an MCP tool item is a tool call, the elicitation is its own event, the failed item is an error result", () => {
+    expect(events.map((e) => e.type)).toEqual(["tool_call", "elicitation", "tool_result", "turn_end"]);
+    expect(events[0]).toMatchObject({ type: "tool_call", id: "exec-66a0fb7b-57a3-42eb-ae37-a4d4ab7f9268", name: "mcpToolCall" });
+    expect(events[1]).toEqual({
+      type: "elicitation", id: "0", server: "codex_apps", mode: "url",
+      message: "Reconnect Linear on ChatGPT to restore access for this request.",
+      url: "https://chatgpt.com/apps/linear/asdk_app_69a089a326dc8191b32a3f2553f5be2c",
+    });
+    expect(events[2]).toMatchObject({ type: "tool_result", id: "exec-66a0fb7b-57a3-42eb-ae37-a4d4ab7f9268", is_error: true });
+    expect((events[2] as any).content).toContain("Reconnect Linear");
+    expect(JSON.parse(buildCodexElicitationResponse(0, "decline"))).toEqual({ id: 0, result: { action: "decline" } });
+  });
+
+  test("every tool-shaped item with an id is shown; messages and reasoning are not", () => {
+    for (const type of ["dynamicToolCall", "webSearch", "someFutureKind"])
+      expect(mapCodexEvent({ method: "item/started", params: { item: { type, id: "x1" } } })).toEqual([{ type: "tool_call", id: "x1", name: type, input: { type, id: "x1" } }]);
+    for (const type of ["agentMessage", "userMessage", "reasoning", "plan"])
+      expect(mapCodexEvent({ method: "item/started", params: { item: { type, id: "m1", text: "hi" } } })).toEqual([]);
+    // the output is read from whichever field the item kind uses
+    expect(mapCodexEvent({ method: "item/completed", params: { item: { type: "dynamicToolCall", id: "x1", status: "completed", output: "42" } } })[0]).toMatchObject({ type: "tool_result", content: "42" });
+    expect(mapCodexEvent({ method: "item/completed", params: { item: { type: "webSearch", id: "x2", status: "completed", result: { hits: 3 } } } })[0]).toMatchObject({ content: '{"hits":3}' });
+  });
+
+  test("request_user_input is a question for the operator in the shape core/ask.ts reads", () => {
+    const [ev] = mapCodexEvent({ id: 3, method: "item/tool/requestUserInput", params: {
+      itemId: "ask1", questions: [{ id: "colour", header: "Colour", question: "Which colour?", options: [{ label: "Red" }, { label: "Blue", description: "cool" }] }],
+    } });
+    expect(ev).toMatchObject({ type: "permission_request", id: "3", tool_name: "request_user_input", requires_user_interaction: true });
+    const questions = normalizeAskPayload((ev as any).input);
+    expect(questions).toEqual([{ id: "q0", header: "Colour", question: "Which colour?", multiSelect: false, options: [{ label: "Red" }, { label: "Blue", description: "cool" }] }]);
+    expect(JSON.parse(buildCodexUserInputResponse(3, { colour: { answers: ["Blue"] } }))).toEqual({ id: 3, result: { answers: { colour: { answers: ["Blue"] } } } });
+  });
+
+  test("a permission-profile request is a permission whose answer is the profile granted, not a decision", () => {
+    const [ev] = mapCodexEvent({ id: 4, method: "item/permissions/requestApproval", params: { itemId: "i", permissions: { network: { enabled: true } }, reason: "fetch deps" } });
+    expect(ev).toMatchObject({ type: "permission_request", id: "4", tool_name: "permissions", input: { permissions: { network: { enabled: true } }, reason: "fetch deps" } });
+    expect(JSON.parse(buildCodexPermissionsResponse(4, { network: { enabled: true } }))).toEqual({ id: 4, result: { permissions: { network: { enabled: true } }, scope: "turn" } });
+    expect(JSON.parse(buildCodexPermissionsResponse(4, {}))).toEqual({ id: 4, result: { permissions: {}, scope: "turn" } });
+    // the v1 names still in the schema answer with a decision, like the v2 item approvals
+    expect(mapCodexEvent({ id: 5, method: "execCommandApproval", params: { command: ["ls"], cwd: "/x" } })[0]).toMatchObject({ type: "permission_request", tool_name: "execCommandApproval" });
+    expect(mapCodexEvent({ id: 6, method: "applyPatchApproval", params: {} })[0]).toMatchObject({ type: "permission_request", tool_name: "applyPatchApproval" });
+  });
+
+  test("a request kind the adapter does not model is reported with its method, so the executor can refuse it", () => {
+    expect(mapCodexEvent({ id: 9, method: "account/chatgptAuthTokens/refresh", params: { reason: "expired" } })).toEqual([{ type: "unsupported_request", id: "9", method: "account/chatgptAuthTokens/refresh" }]);
+    expect(mapCodexEvent({ id: 10, method: "item/tool/call", params: {} })).toEqual([{ type: "unsupported_request", id: "10", method: "item/tool/call" }]);
+    expect(JSON.parse(buildCodexErrorResponse(9, "howdah does not handle account/chatgptAuthTokens/refresh"))).toEqual({ id: 9, error: { code: -32601, message: "howdah does not handle account/chatgptAuthTokens/refresh" } });
+    // a NOTIFICATION with an unknown method carries no id and is still nothing
+    expect(mapCodexEvent({ method: "thread/status/changed", params: { status: { activeFlags: ["waitingOnApproval"] } } })).toEqual([]);
   });
 });
 

@@ -484,6 +484,129 @@ describe("codex executor over the fake app-server wire", () => {
       delete process.env.FAKE_CODEX_CAPTURE;
     }
   });
+
+  // Every server→client request is answered on the wire or the turn hangs — the live failure
+  // was ten hours inside an MCP connector's "reconnect me" request that nothing answered.
+  // The fake raises one request per mode and writes what came back into its final text.
+  function codexEngine(dir: string, env: Record<string, string>, opts: { askTimeoutMs?: number } = {}) {
+    chmodSync(FAKE_CODEX, 0o755);
+    Object.assign(process.env, env);
+    return new Engine(miniGraph(), {
+      dir,
+      promptsDir: promptDir(),
+      executors: { agent: codexExecutor({ attentionDir: join(dir, "attn"), binary: FAKE_CODEX, notifiers: [], askPollMs: 30, ...opts }) },
+    });
+  }
+  function codexReplier(dir: string, answer: (ask: any) => { reply: string; answers?: unknown }, stop: { done: boolean }) {
+    return (async () => {
+      const path = join(dir, "run.jsonl");
+      const seen: any[] = [];
+      while (!stop.done) {
+        await Bun.sleep(30);
+        const events = new EventLog(path).read();
+        const asks = events.filter((e) => e.type === "attention-raised");
+        const resolutions = events.filter((e) => e.type === "attention-resolved").length;
+        if (asks.length > resolutions) {
+          const ask = asks[resolutions]! as any;
+          seen.push(ask);
+          const a = answer(ask);
+          new EventLog(path).append({ type: "attention-resolved", node: ask.node, visit: ask.visit, reply: a.reply, ...(a.answers !== undefined ? { answers: a.answers } : {}) } as any);
+          new AttentionCenter(join(dir, "attn"), []).resolve(`${ask.node}:${ask.visit}`);
+        }
+      }
+      return seen;
+    })();
+  }
+  const finalText = (engine: Engine) =>
+    engine.log.read().filter((e: any) => e.type === "chunk" && e.kind === "text").map((e: any) => e.content).join("");
+
+  test("codex: an MCP elicitation parks quoting the message and the URL; a refusal declines, anything else accepts", async () => {
+    for (const [reply, action] of [["deny", "decline"], ["done, reconnected", "accept"], ["", "accept"]] as const) {
+      const dir = mkdtempSync(join(tmpdir(), "howdah-codex-elicit-"));
+      const engine = codexEngine(dir, { FAKE_CODEX_ELICIT: "1" });
+      const stop = { done: false };
+      const replier = codexReplier(dir, () => ({ reply }), stop);
+      try {
+        expect(await engine.start({ goal: "elicit" })).toEqual({ state: "finished", outcome: "success" });
+      } finally {
+        stop.done = true;
+        delete process.env.FAKE_CODEX_ELICIT;
+      }
+      const [ask] = await replier;
+      expect(ask.ask).toMatchObject({ kind: "mcp-elicitation", server: "codex_apps", mode: "url", url: "https://chatgpt.com/apps/linear/fake" });
+      expect(ask.reason).toBe("codex_apps needs you: Reconnect Linear on ChatGPT to restore access for this request. https://chatgpt.com/apps/linear/fake");
+      expect(finalText(engine)).toContain(`[fake: elicitation ${action}]`);
+      // the MCP call itself is a tool call in the transcript now, with its outcome
+      const chunks = engine.log.read().filter((e: any) => e.type === "chunk" && e.node === "draft") as any[];
+      expect(chunks.find((c) => c.kind === "tool_call")?.tool_name).toBe("mcpToolCall");
+      expect(chunks.find((c) => c.kind === "tool_result" && c.tool_id === "mcp1")?.is_error).toBe(action === "accept" ? undefined : true);
+    }
+  }, 30000);
+
+  test("codex: a form elicitation is declined at once with a note — nothing here can draw a schema", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "howdah-codex-form-"));
+    const engine = codexEngine(dir, { FAKE_CODEX_ELICIT: "1", FAKE_CODEX_ELICIT_MODE: "form" });
+    try {
+      expect(await engine.start({ goal: "form" })).toEqual({ state: "finished", outcome: "success" });
+    } finally {
+      for (const k of ["FAKE_CODEX_ELICIT", "FAKE_CODEX_ELICIT_MODE"]) delete process.env[k];
+    }
+    expect(engine.log.read().some((e) => e.type === "attention-raised")).toBe(false);
+    expect(finalText(engine)).toContain("asked for a form form howdah cannot draw — declined");
+    expect(finalText(engine)).toContain("[fake: elicitation decline]");
+  }, 20000);
+
+  test("codex: request_user_input is the HOW-25 question park, answered in codex's own shape", async () => {
+    const { askQuestions } = await import("../../core/ask");
+    for (const [name, answer] of [
+      ["clicked", (ask: any) => ({ reply: "Blue", answers: [{ id: askQuestions(ask)![0]!.id, selected: ["Blue"], other: "the cool one" }] })],
+      ["typed", () => ({ reply: "Blue" })],
+    ] as const) {
+      const dir = mkdtempSync(join(tmpdir(), `howdah-codex-ask-${name}-`));
+      const engine = codexEngine(dir, { FAKE_CODEX_ASK: "1" });
+      const stop = { done: false };
+      const replier = codexReplier(dir, answer, stop);
+      try {
+        expect(await engine.start({ goal: "ask" })).toEqual({ state: "finished", outcome: "success" });
+      } finally {
+        stop.done = true;
+        delete process.env.FAKE_CODEX_ASK;
+      }
+      const [ask] = await replier;
+      expect(ask.ask.kind).toBe("user-question");
+      expect(ask.reason).toBe("Which colour?");
+      expect(askQuestions(ask)).toEqual([{ id: "q0", header: "Colour", question: "Which colour?", multiSelect: false, options: [{ label: "Red", description: "warm" }, { label: "Blue", description: "cool" }] }]);
+      // keyed by codex's own question id, never q0
+      expect(finalText(engine)).toContain(name === "clicked" ? '[fake: answered {"colour":{"answers":["Blue","the cool one"]}}]' : '[fake: answered {"colour":{"answers":["Blue"]}}]');
+    }
+  }, 30000);
+
+  test("codex: a request kind howdah does not model is refused on the wire, and the turn goes on", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "howdah-codex-unknown-"));
+    const engine = codexEngine(dir, { FAKE_CODEX_UNKNOWN_REQUEST: "1" });
+    try {
+      expect(await engine.start({ goal: "unknown" })).toEqual({ state: "finished", outcome: "success" });
+    } finally {
+      delete process.env.FAKE_CODEX_UNKNOWN_REQUEST;
+    }
+    expect(engine.log.read().some((e) => e.type === "attention-raised")).toBe(false);
+    const text = finalText(engine);
+    expect(text).toContain("[codex asked for account/chatgptAuthTokens/refresh, which howdah does not handle — refused on the wire]");
+    expect(text).toContain("[fake: token refresh refused: howdah does not handle account/chatgptAuthTokens/refresh]");
+  }, 20000);
+
+  test("codex: a park nobody answers within the configured wait fails the attempt with that reason", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "howdah-codex-wait-"));
+    const engine = codexEngine(dir, { FAKE_CODEX_ELICIT: "1" }, { askTimeoutMs: 150 });
+    try {
+      expect(await engine.start({ goal: "wait" })).toMatchObject({ state: "parked" });
+    } finally {
+      delete process.env.FAKE_CODEX_ELICIT;
+    }
+    const parks = engine.log.read().filter((e) => e.type === "attention-raised") as any[];
+    expect(parks.at(-1)).toMatchObject({ code: "attempt-failed", reason: expect.stringContaining("nobody answered within the configured wait: codex_apps needs you") });
+    expect(finalText(engine)).toContain("[nobody answered within the configured wait: codex_apps needs you");
+  }, 20000);
 });
 
 /**

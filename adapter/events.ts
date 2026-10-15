@@ -52,6 +52,33 @@ export type AgentEvent =
       requires_user_interaction?: boolean;
     }
   | {
+      /**
+       * An MCP server behind the harness is asking the HUMAN something — codex relays it as a
+       * `mcpServer/elicitation/request` and holds the turn until it is answered (captured live
+       * against 0.162.1: the ChatGPT Linear connector asking to be reconnected). `url` mode is
+       * answerable from a card (go there, then say done); a `form` mode carries a JSON schema
+       * nothing here can draw, so the executor declines it and says so.
+       */
+      type: "elicitation";
+      /** answer with this id via the adapter's buildCodexElicitationResponse */
+      id: string;
+      server: string;
+      mode: string;
+      message: string;
+      url?: string;
+    }
+  | {
+      /**
+       * A server→client REQUEST the adapter does not model. It carries an id, so the harness
+       * is waiting for an answer and the turn hangs until one arrives — the executor must
+       * refuse it on the wire, never ignore it. The codex app-server has ten request kinds
+       * (0.162.1 schema) and used to get an answer to two.
+       */
+      type: "unsupported_request";
+      id: string;
+      method: string;
+    }
+  | {
       type: "turn_end";
       /**
        * claude: `cost_usd` is the CLI's `total_cost_usd`, which is SESSION-CUMULATIVE (pinned by
