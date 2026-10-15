@@ -1,0 +1,21 @@
+web/server.ts
+  s_bafb3ad34c9e95::t_c264d51f7f6634 144-153,228-229,1072-1075,1101,1107-1109
+web/app/run/view.tsx
+  s_bafb3ad34c9e95::t_c264d51f7f6634 15,341-348,371,377-393
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f153c97bd10191d28ec854c5d4d728a5701a4964",
+  "prompts": {},
+  "sessions": {
+    "s_bafb3ad34c9e95": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "badc1cd2-b3b2-49f7-93ba-331ef7da67b5",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "areeb.bhaila <areeb.bhaila@gmail.com>"
+    }
+  }
+}
