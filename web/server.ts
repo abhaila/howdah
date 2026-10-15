@@ -141,6 +141,16 @@ const logPath = (runsDir: string, id: string) => join(runsDir, id, "run.jsonl");
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", "cache-control": "no-store" } });
 
+/**
+ * How long a run's derived view is reused while its log has not grown. The run page refetches
+ * the view on every streamed event and on a 5s timer, several tabs may be open, and a live step
+ * streams many events a second: deriving a 55k-event log took 1.3s of the one thread each time,
+ * so the server never left 100% CPU. A size-keyed cache with a short ceiling collapses a burst
+ * into one derive; the ceiling bounds how stale a fact that is NOT in the log (a runner dying
+ * without writing) can read.
+ */
+const DETAIL_CACHE_MS = 2000;
+
 /** loopback only: see the header — this is the LAN half of system-map 0.4 */
 const LOOPBACK = "127.0.0.1";
 const WRITE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
@@ -215,6 +225,10 @@ export function createHowdahServer(opts: ServerOpts) {
    * covers it. Subscribers are the run's SSE streams, so nobody watching means no git spawns.
    */
   const liveTargets = new Map<string, { size: number; target: LiveTarget | null }>();
+  /** the derived run view by run id, reused while the log is the same size and the entry is young (DETAIL_CACHE_MS) */
+  const detailCache = new Map<string, { size: number; at: number; body: string }>();
+  /** a cache hit is a copy of the serialised view, never a re-stringify of 14 MB */
+  const detailResponse = (body: string) => new Response(body, { headers: { "content-type": "application/json", "cache-control": "no-store" } });
   const liveGit = new LiveGitHub({
     intervalMs: opts.liveGitIntervalMs,
     target: (rid) => {
@@ -1057,6 +1071,10 @@ export function createHowdahServer(opts: ServerOpts) {
         });
       }
 
+      let logSize = -1;
+      try { logSize = statSync(path).size; } catch { /* not there yet: derive from nothing, cache nothing */ }
+      const cached = detailCache.get(id);
+      if (cached && cached.size === logSize && Date.now() - cached.at < DETAIL_CACHE_MS) return detailResponse(cached.body);
       const events = readLog(path);
       // scopes and declared writers come from the graph, not the log: that is what lets the
       // Context tab list a key no step has reached yet instead of hiding it (CUR5)
@@ -1082,13 +1100,16 @@ export function createHowdahServer(opts: ServerOpts) {
         worktree_path: wt?.path ?? null,
         runner_alive: alive,
       };
-      return json({
+      const body = {
         ...detail,
         cwd_exists: target ? existsSync(target) : false,
         editor_configured: Boolean(loadConfig().editorCommand),
         // HOW-48: when the header offers to escalate a soft stop that has not taken effect
         soft_stop_escalate_ms: loadConfig().softStopEscalateMs ?? SOFT_STOP_ESCALATE_MS,
-      });
+      };
+      const serialised = JSON.stringify(body);
+      if (logSize >= 0) detailCache.set(id, { size: logSize, at: Date.now(), body: serialised });
+      return detailResponse(serialised);
     },
   });
 }

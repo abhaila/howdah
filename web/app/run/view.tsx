@@ -12,7 +12,7 @@
  *  - The native `title=` tooltips on the rail's truncated paths are Tooltips, and every
  *    icon-only control carries an aria-label (P2.11).
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Rows3, Workflow, Play, Pause, OctagonX, RotateCcw, ExternalLink, GitBranch, GitPullRequest,
   Clock, Coins, Pin, Fingerprint, MessagesSquare, CornerDownRight, X, ScrollText, Loader2,
@@ -338,6 +338,14 @@ function PathValue({ full, shown }: { full: string; shown?: string }) {
 
 export const OPEN_GRACE_MS = 10_000;
 const OPEN_POLL_MS = 300;
+/**
+ * The gap between one refetch of the derived view finishing and the next one starting when
+ * events kept arriving meanwhile. The stream sends every log event and a live step streams
+ * several a second; refetching the whole view per event kept the server deriving and the
+ * browser parsing 14 MB continuously, which is a blank page. Events that land during a fetch
+ * collapse into ONE follow-up fetch after this gap.
+ */
+const RELOAD_GAP_MS = 750;
 
 /** `graceMs` is a seam for the component test (web/app/runview.test.tsx); nothing else sets it. */
 export function RunView({ id, graceMs = OPEN_GRACE_MS }: { id: string; graceMs?: number }) {
@@ -360,12 +368,29 @@ export function RunView({ id, graceMs = OPEN_GRACE_MS }: { id: string; graceMs?:
   // run.jsonl. Leaving `detail` null keeps the loading state this component already renders;
   // the poll below is what brings it back. Any other failure also leaves the last good view
   // in place rather than replacing it with an error body.
-  const reload = useCallback(
+  const fetchDetail = useCallback(
     () => getJSON<DetailDto>(`/api/runs/${id}`)
       .then((d) => { setDetail(d); setMissing(false); })
       .catch(() => {}),
     [id],
   );
+  // one fetch in flight at a time; a request that arrives during it marks the view dirty and
+  // is served by ONE follow-up fetch after RELOAD_GAP_MS, however many arrived
+  const inflight = useRef<Promise<void> | null>(null);
+  const dirty = useRef(false);
+  const reload = useCallback((): Promise<void> => {
+    if (inflight.current) { dirty.current = true; return inflight.current; }
+    const loop = async (): Promise<void> => {
+      do {
+        dirty.current = false;
+        await fetchDetail();
+        if (dirty.current) await new Promise((r) => setTimeout(r, RELOAD_GAP_MS));
+      } while (dirty.current);
+      inflight.current = null;
+    };
+    inflight.current = loop();
+    return inflight.current;
+  }, [fetchDetail]);
   const runAction = useCallback(async (verb: "resume") => {
     setBannerAction(verb);
     setBannerError(null);
