@@ -213,6 +213,40 @@ describe("server API", () => {
     expect((await fetch(url("/api/runs/nope"))).status).toBe(404);
   });
 
+  test("the shell omits the transcript and the log; transcript, logs and one event are separate", async () => {
+    const log = seedParkedRun(runsDir, "run-view");
+    const shell = (await (await fetch(url("/api/runs/run-view/shell"))).json()) as any;
+    expect(shell.summary.graph).toBe("write-doc");
+    expect(shell.turns).toEqual([]);
+    expect(shell.log_rows.map((r: { type: string }) => r.type)).toEqual(["attention-raised"]);
+    expect(shell.ask.reason).toBe("needs your reply");
+    expect(shell.events_seq).toBeGreaterThan(0);
+
+    const transcript = (await (await fetch(url("/api/runs/run-view/transcript?limit=40"))).json()) as any;
+    expect(transcript.total).toBe(1);
+    expect(transcript.start).toBe(0);
+    expect(transcript.turns[0].parts.map((p: { content: string }) => p.content).join("")).toContain("Drafting");
+
+    const logs = (await (await fetch(url("/api/runs/run-view/logs?limit=2"))).json()) as any;
+    expect(logs.total).toBeGreaterThan(2);
+    expect(logs.rows).toHaveLength(2);
+    expect(logs.rows[0].raw).toBeUndefined();
+    expect(logs.oldest).toBe(logs.rows[0].seq);
+
+    const raw = (await (await fetch(url(`/api/runs/run-view/event/${logs.oldest}`))).json()) as any;
+    expect(raw.seq).toBe(logs.oldest);
+    expect(raw.type).toBe(logs.rows[0].type);
+    expect((await fetch(url("/api/runs/run-view/event/999999"))).status).toBe(404);
+
+    // a text chunk updates the transcript and the seq, and does not put turns back on the shell
+    log.append({ type: "chunk", node: "doc.draft", visit: 1, turn: 1, index: 2, kind: "text", content: " more" });
+    const shell2 = (await (await fetch(url("/api/runs/run-view/shell"))).json()) as any;
+    expect(shell2.turns).toEqual([]);
+    expect(shell2.events_seq).toBeGreaterThan(shell.events_seq);
+    const transcript2 = (await (await fetch(url("/api/runs/run-view/transcript?limit=40"))).json()) as any;
+    expect(transcript2.turns[0].parts.map((p: { content: string }) => p.content).join("")).toContain("more");
+  });
+
   test("an unfinished node with no live runner is reported as harness-dead", async () => {
     const id = "dead-runner";
     const log = new EventLog(join(runsDir, id, "run.jsonl"), fixedClock());

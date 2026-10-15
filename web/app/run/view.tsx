@@ -12,14 +12,15 @@
  *  - The native `title=` tooltips on the rail's truncated paths are Tooltips, and every
  *    icon-only control carries an aria-label (P2.11).
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Rows3, Workflow, Play, Pause, OctagonX, RotateCcw, ExternalLink, GitBranch, GitPullRequest,
   Clock, Coins, Pin, Fingerprint, MessagesSquare, CornerDownRight, X, ScrollText, Loader2,
   FolderOpen, Copy, GitFork, Activity, Hand, ChevronDown,
 } from "lucide-react";
 import type { RunDetail } from "../../derive";
-import type { CoalescedTurn } from "../../../log/coalesce";
+import { applyLiveEvent, type CoalescedTurn } from "../../../log/coalesce";
+import type { LoggedEvent } from "../../../log/events";
 import { GraphDag, useGraphShape } from "../graph-dag";
 import { StatusBadge, askRowKey } from "../status";
 import { getJSON } from "@/lib/net";
@@ -339,13 +340,37 @@ function PathValue({ full, shown }: { full: string; shown?: string }) {
 export const OPEN_GRACE_MS = 10_000;
 const OPEN_POLL_MS = 300;
 /**
- * The gap between one refetch of the derived view finishing and the next one starting when
- * events kept arriving meanwhile. The stream sends every log event and a live step streams
- * several a second; refetching the whole view per event kept the server deriving and the
- * browser parsing 14 MB continuously, which is a blank page. Events that land during a fetch
- * collapse into ONE follow-up fetch after this gap.
+ * The gap between one shell refetch finishing and the next one starting when structural
+ * events kept arriving. Streaming chunks are NOT a refetch: the page folds them into the
+ * open turn itself. Refetching the whole view per chunk was a blank page — the server
+ * re-derived a 15 MB log and the browser parsed it, continuously.
  */
 const RELOAD_GAP_MS = 750;
+/** How many turns the chat loads at once. Older ones arrive through "Load earlier". */
+const TRANSCRIPT_WINDOW = 40;
+
+type TranscriptPage = { turns: CoalescedTurn[]; total: number; start: number; last_seq: number };
+
+function mergeTurns(base: CoalescedTurn[], extra: CoalescedTurn[]): CoalescedTurn[] {
+  if (extra.length === 0) return base;
+  const seen = new Set(base.map((t) => `${t.node}\0${t.visit}\0${t.turn}`));
+  const out = base.slice();
+  for (const t of extra) {
+    const k = `${t.node}\0${t.visit}\0${t.turn}`;
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(t);
+  }
+  return out;
+}
+
+/** The step the Steps pane is showing: the one the operator picked, else the one that needs them, else the newest. */
+function selectedStepKey(detail: DetailDto, picked: string | null): string | null {
+  const askKey = askRowKey(detail.timeline, detail.ask);
+  const waiting = askKey ? detail.timeline.find((t) => `${t.node}@${t.visit}` === askKey) : undefined;
+  const row = waiting ?? detail.timeline.at(-1);
+  return picked ?? (row ? `${row.node}@${row.visit}` : null);
+}
 
 /** `graceMs` is a seam for the component test (web/app/runview.test.tsx); nothing else sets it. */
 export function RunView({ id, graceMs = OPEN_GRACE_MS }: { id: string; graceMs?: number }) {
@@ -358,6 +383,8 @@ export function RunView({ id, graceMs = OPEN_GRACE_MS }: { id: string; graceMs?:
   const [bannerAction, setBannerAction] = useState<"resume" | null>(null);
   const [bannerError, setBannerError] = useState<string | null>(null);
   const [missing, setMissing] = useState(false);
+  /** index of the first loaded turn; above 0, the chat offers the previous window */
+  const [transcriptStart, setTranscriptStart] = useState(0);
   // the inspector rail: collapsible and drag-resizable, remembered per operator. Declared
   // with the other state because the early `!detail` return below is after every hook.
   const rail = usePanel({ key: "howdah.rail", min: 260, def: 344, minOther: 520, side: "right" });
@@ -368,12 +395,50 @@ export function RunView({ id, graceMs = OPEN_GRACE_MS }: { id: string; graceMs?:
   // run.jsonl. Leaving `detail` null keeps the loading state this component already renders;
   // the poll below is what brings it back. Any other failure also leaves the last good view
   // in place rather than replacing it with an error body.
-  const fetchDetail = useCallback(
-    () => getJSON<DetailDto>(`/api/runs/${id}`)
-      .then((d) => { setDetail(d); setMissing(false); })
-      .catch(() => {}),
-    [id],
-  );
+  // the transcript is loaded once and then extended. A shell refetch must not replace it:
+  // the shell document deliberately carries no turns.
+  const turnsRef = useRef<CoalescedTurn[] | null>(null);
+  const windowRef = useRef({ start: 0, total: 0 });
+  const triedSteps = useRef(new Set<string>());
+  const gen = useRef(0);
+  const fetchDetail = useCallback(async () => {
+    const mine = gen.current;
+    try {
+      // shell and transcript are two reads of a growing file. The turns and the seq the
+      // stream resumes from have to be the SAME snapshot, or a chunk already in the window
+      // is appended again when the stream replays it. The transcript names that seq; if the
+      // shell was read earlier, it is read once more so a step that finished in between is
+      // on the page, and the stream still resumes where the turns left off.
+      let shell = await getJSON<DetailDto>(`/api/runs/${id}/shell`);
+      if (mine !== gen.current) return;
+      if (turnsRef.current === null) {
+        let page: TranscriptPage | null = null;
+        try {
+          const t = await getJSON<TranscriptPage>(`/api/runs/${id}/transcript?limit=${TRANSCRIPT_WINDOW}`);
+          if (t && Array.isArray(t.turns) && typeof t.last_seq === "number") page = t;
+        } catch { /* the shell's own turns still draw; a short fixture has them */ }
+        if (mine !== gen.current) return;
+        if (page && shell.events_seq < page.last_seq) {
+          try {
+            const again = await getJSON<DetailDto>(`/api/runs/${id}/shell`);
+            if (mine !== gen.current) return;
+            shell = again;
+          } catch { /* the first shell still draws; the stream covers what it missed */ }
+        }
+        if (page) {
+          turnsRef.current = page.turns;
+          windowRef.current = { start: page.start, total: page.total };
+          shell = { ...shell, events_seq: page.last_seq };
+        } else {
+          turnsRef.current = shell.turns;
+          windowRef.current = { start: 0, total: shell.turns.length };
+        }
+        setTranscriptStart(windowRef.current.start);
+      }
+      setDetail({ ...shell, turns: turnsRef.current ?? shell.turns });
+      setMissing(false);
+    } catch { /* a 404 while the run dir is still being created: leave the loading state */ }
+  }, [id]);
   // one fetch in flight at a time; a request that arrives during it marks the view dirty and
   // is served by ONE follow-up fetch after RELOAD_GAP_MS, however many arrived
   const inflight = useRef<Promise<void> | null>(null);
@@ -407,6 +472,33 @@ export function RunView({ id, graceMs = OPEN_GRACE_MS }: { id: string; graceMs?:
       setBannerAction(null);
     }
   }, [id, reload, toast]);
+  const loadEarlier = useCallback(async () => {
+    const before = windowRef.current.start;
+    if (before <= 0) return;
+    const mine = gen.current;
+    try {
+      const t = await getJSON<TranscriptPage>(`/api/runs/${id}/transcript?limit=${TRANSCRIPT_WINDOW}&before=${before}`);
+      if (mine !== gen.current || !t || !Array.isArray(t.turns) || t.turns.length === 0) return;
+      const have = new Set((turnsRef.current ?? []).map((turn) => `${turn.node}\0${turn.visit}\0${turn.turn}`));
+      const older = t.turns.filter((turn) => !have.has(`${turn.node}\0${turn.visit}\0${turn.turn}`));
+      const next = [...older, ...(turnsRef.current ?? [])];
+      turnsRef.current = next;
+      windowRef.current = { start: t.start, total: t.total };
+      setTranscriptStart(t.start);
+      setDetail((d) => d ? { ...d, turns: next } : d);
+    } catch { /* the window already on screen stays */ }
+  }, [id]);
+  // a different run is a different log. Drop the previous transcript before the next fetch,
+  // or the new page would keep drawing the previous run's turns.
+  useEffect(() => {
+    gen.current += 1;
+    turnsRef.current = null;
+    windowRef.current = { start: 0, total: 0 };
+    triedSteps.current.clear();
+    setTranscriptStart(0);
+    setDetail(null);
+    setMissing(false);
+  }, [id]);
   // Waiting for a run that does not exist YET. The CLI needs a moment to boot and write its
   // first event, so poll while the page shows its loading state, and stop after OPEN_GRACE_MS
   // rather than spinning forever — a launch that died on boot never arrives, and a spinner
@@ -447,14 +539,59 @@ export function RunView({ id, graceMs = OPEN_GRACE_MS }: { id: string; graceMs?:
   useEffect(() => {
     if (!detail) return;
     const es = new EventSource(`/api/runs/${id}/events?since=${detail.events_seq}`);
-    es.onmessage = () => reload();
+    es.onmessage = (msg) => {
+      let event: LoggedEvent;
+      try { event = JSON.parse(String((msg as MessageEvent).data)) as LoggedEvent; } catch { return; }
+      // a streaming chunk joins the open turn here. Reloading the shell per chunk is what
+      // blanked the page: one text delta used to re-derive and re-download the whole run.
+      if (event.type === "chunk" || event.type === "turn-finalized") {
+        const turns = applyLiveEvent(turnsRef.current ?? [], event);
+        turnsRef.current = turns;
+        setDetail((d) => d ? {
+          ...d,
+          turns,
+          events_seq: event.seq,
+          last_agent_event_at: event.ts,
+          summary: { ...d.summary, last_event_at: event.ts },
+        } : d);
+        if (event.type === "chunk") return;
+      }
+      reload();
+    };
     // HOW-49: the live worktree probe arrives as its own named event — never a log event
     es.addEventListener("git-live", (m) => {
       try { setLiveGit(JSON.parse((m as MessageEvent).data) as LiveGit); } catch { /* a torn frame: the next probe replaces it */ }
     });
     return () => es.close();
-    // subscribe once per run; reload() refetches the derived view on any new event
+    // subscribe once per run; a chunk updates the open turn, anything else refetches the shell
   }, [id, detail === null]); // eslint-disable-line react-hooks/exhaustive-deps
+  // a step the window does not cover (an earlier visit, opened from the Steps list) is fetched
+  // once. Chunks for the step in view arrive on the stream, so this is only for history.
+  // Keyed on the step, not on `detail`: a chunk replaces detail and must not cancel the fetch.
+  const stepKey = detail && tab === "steps" ? selectedStepKey(detail, picked) : null;
+  useEffect(() => {
+    if (!stepKey) return;
+    if (triedSteps.current.has(stepKey)) return;
+    const at = stepKey.lastIndexOf("@");
+    const node = stepKey.slice(0, at);
+    const visit = Number(stepKey.slice(at + 1));
+    if (!node || !Number.isFinite(visit)) return;
+    if ((turnsRef.current ?? []).some((t) => t.node === node && t.visit === visit)) return;
+    triedSteps.current.add(stepKey);
+    const mine = gen.current;
+    let stop = false;
+    getJSON<TranscriptPage>(`/api/runs/${id}/transcript?node=${encodeURIComponent(node)}&visit=${visit}`)
+      .then((t) => {
+        // a cleanup means the operator moved on; forget the attempt so coming back fetches it
+        if (stop || mine !== gen.current) { triedSteps.current.delete(stepKey); return; }
+        if (!t || !Array.isArray(t.turns) || t.turns.length === 0) return;
+        const merged = mergeTurns(turnsRef.current ?? [], t.turns);
+        turnsRef.current = merged;
+        setDetail((d) => d ? { ...d, turns: merged } : d);
+      })
+      .catch(() => { triedSteps.current.delete(stepKey); });
+    return () => { stop = true; };
+  }, [stepKey, id]);
   useAttentionSurfaces(detail?.summary.status === "needs-input");
 
 
@@ -478,10 +615,14 @@ export function RunView({ id, graceMs = OPEN_GRACE_MS }: { id: string; graceMs?:
   const lastEventAgeMs = summary.last_event_at ? now - new Date(summary.last_event_at).getTime() : 0;
   const staleRunning = summary.status === "running" && lastEventAgeMs > 5 * 60_000;
   // the step that needs a human wins the selection; otherwise the newest one
-  const askKey = askRowKey(detail.timeline, ask);
-  const waitingRow = askKey ? detail.timeline.find((t) => `${t.node}@${t.visit}` === askKey) : undefined;
-  const defaultRow = waitingRow ?? detail.timeline.at(-1);
-  const selectedKey = picked ?? (defaultRow ? `${defaultRow.node}@${defaultRow.visit}` : null);
+  const selectedKey = selectedStepKey(detail, picked);
+  // the chat shows the loaded window. Steps above it stay on the Steps list; "Load earlier"
+  // brings the next window in, and the newest step stays even before it has spoken.
+  const chatDetail = transcriptStart <= 0 ? detail : (() => {
+    const loaded = new Set(detail.turns.map((t) => `${t.node}@${t.visit}`));
+    const first = detail.timeline.findIndex((r) => loaded.has(`${r.node}@${r.visit}`));
+    return first <= 0 ? detail : { ...detail, timeline: detail.timeline.slice(first) };
+  })();
   const selectedRow = detail.timeline.find((t) => `${t.node}@${t.visit}` === selectedKey) ?? null;
 
   return (
@@ -567,9 +708,9 @@ export function RunView({ id, graceMs = OPEN_GRACE_MS }: { id: string; graceMs?:
         {tab === "context" ? (
           <RunContext entries={detail.context} />
         ) : tab === "chat" ? (
-          <RunChat runId={id} detail={detail} ask={ask} liveGit={liveGit} onResolved={reload} onPickStep={(k) => { setPicked(k); setTab("steps"); }} />
+          <RunChat runId={id} detail={chatDetail} ask={ask} liveGit={liveGit} onResolved={reload} onPickStep={(k) => { setPicked(k); setTab("steps"); }} earlier={transcriptStart > 0} onEarlier={loadEarlier} />
         ) : tab === "logs" ? (
-          <RunLogs rows={detail.log_rows} />
+          <RunLogs runId={id} />
         ) : tab === "graph" ? (
           <RunGraph runId={id} graph={summary.graph} timeline={detail.timeline} status={summary.status} onJumped={reload} />
         ) : (

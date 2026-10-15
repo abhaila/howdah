@@ -61,12 +61,15 @@ function serve(replies: Reply[], write: Reply = { status: 200, body: { ok: true 
     const url = String(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
     calls.push(url);
     if ((init?.method ?? "GET") !== "GET") return new Response(JSON.stringify(write.body), { status: write.status, headers: { "content-type": "application/json" } });
-    // every other read model the page touches answers empty; only the run detail matters here
-    if (!/\/api\/runs\/[^/]+$/.test(url)) return new Response("[]", { status: 200, headers: { "content-type": "application/json" } });
+    // the page loads /shell (and, separately, /transcript). A fixture served as the shell still
+    // carries its turns, which is what these tests render; the transcript answer is ignored
+    // unless it is a `{ turns }` page. Every other read answers empty.
+    const path = url.replace(/^https?:\/\/[^/]+/, "").split("?")[0] ?? url;
+    if (!/\/api\/runs\/[^/]+(?:\/shell)?$/.test(path)) return new Response("[]", { status: 200, headers: { "content-type": "application/json" } });
     const r = replies[Math.min(i++, replies.length - 1)]!;
     return new Response(JSON.stringify(r.body), { status: r.status, headers: { "content-type": "application/json" } });
   }) as typeof fetch;
-  return { calls: () => calls.filter((u) => /\/api\/runs\/[^/]+$/.test(u)) };
+  return { calls: () => calls.filter((u) => /\/api\/runs\/[^/]+(?:\/shell)?$/.test(u.replace(/^https?:\/\/[^/]+/, "").split("?")[0] ?? u)) };
 }
 
 /** the provider is the app shell's, so a control's toast is observable here as it is live */

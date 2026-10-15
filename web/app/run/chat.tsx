@@ -291,7 +291,7 @@ export function SteerBubble({ steer }: { steer: RunDetail["steers"][number] }) {
   );
 }
 
-export function RunChat({ runId, detail, ask, onPickStep, onResolved, liveGit = null }: {
+export function RunChat({ runId, detail, ask, onPickStep, onResolved, liveGit = null, earlier = false, onEarlier }: {
   runId: string;
   detail: RunDetail;
   ask: RunDetail["ask"];
@@ -299,6 +299,9 @@ export function RunChat({ runId, detail, ask, onPickStep, onResolved, liveGit = 
   onResolved: () => void;
   /** HOW-49: the latest live worktree probe pushed over the run's SSE stream */
   liveGit?: LiveGit | null;
+  /** the transcript on screen is a tail window; older turns are one press away */
+  earlier?: boolean;
+  onEarlier?: () => void;
 }) {
   const [turns, setTurns] = useState<AskTurn[]>([]);
   const [q, setQ] = useState("");
@@ -376,6 +379,9 @@ export function RunChat({ runId, detail, ask, onPickStep, onResolved, liveGit = 
             <span className="chat-eyebrow">
               {detail.timeline.length} {detail.timeline.length === 1 ? "step" : "steps"} · {toolCount} tool {toolCount === 1 ? "call" : "calls"}
             </span>
+            {earlier && (
+              <Button variant="ghost" size="sm" onClick={onEarlier}>Load earlier</Button>
+            )}
             {/* HOW-30: the Top pin is a toolbar control, not a float. Floated, it sat centred over
                 the first line of text it was meant to take you back to. It still appears only
                 when there is somewhere to go — the primitive marks it inert otherwise. */}

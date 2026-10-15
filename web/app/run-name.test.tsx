@@ -108,7 +108,7 @@ describe("the Runs list (HOW-18)", () => {
 
 describe("the run page (HOW-18)", () => {
   test("the heading is the name, and the Identity rail lists it beside the graph", async () => {
-    serve({ "/api/runs/write-doc-abc": deriveDetail("write-doc-abc", logFor("Fix login")) });
+    serve({ "/api/runs/write-doc-abc/shell": deriveDetail("write-doc-abc", logFor("Fix login")) });
     const el = mount(<RunView id="write-doc-abc" graceMs={OPEN_GRACE_MS} />);
     await settle();
     expect(el.querySelector(".topbar h1")!.textContent).toBe("Fix login");
@@ -118,7 +118,7 @@ describe("the run page (HOW-18)", () => {
   });
 
   test("an unnamed run renders as before: goal heading, no name row", async () => {
-    serve({ "/api/runs/write-doc-abc": deriveDetail("write-doc-abc", logFor()) });
+    serve({ "/api/runs/write-doc-abc/shell": deriveDetail("write-doc-abc", logFor()) });
     const el = mount(<RunView id="write-doc-abc" graceMs={OPEN_GRACE_MS} />);
     await settle();
     expect(el.querySelector(".topbar h1")!.textContent).toBe("add a user endpoint");

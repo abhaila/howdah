@@ -6,6 +6,10 @@
  *
  *   GET  /api/runs                 run summaries, needs-input first
  *   GET  /api/runs/:id             full detail (thread, timeline, usage, allowance, ask)
+ *   GET  /api/runs/:id/shell       the same detail without the transcript or the log — what the page loads
+ *   GET  /api/runs/:id/transcript  a window of coalesced turns (?limit & ?before index, or ?node & ?visit)
+ *   GET  /api/runs/:id/logs        a page of log rows, without the stored event (?limit & ?before seq)
+ *   GET  /api/runs/:id/event/:seq  one stored event, for the log row's Raw pane
  *   POST /api/runs                 {graph, inputs, workspace?, name?, overrides?} → launch detached; a bad name is 400 before the spawn (HOW-18)
  *   GET  /api/runs/:id/events?since=N   SSE of events with seq > N
  *   POST /api/runs/:id/reply       {text?, answers?} → resolveReply (system-map 0.2): 200 + record cleared, or 409 naming
@@ -49,6 +53,7 @@ import { isEvidencePath } from "../core/evidence";
 import { waiveCriterion, waiveUnprovable } from "../engine/acceptance-decision";
 import { replayState } from "../engine/replay";
 import { BoardCache, boardRow } from "./board";
+import { RunViewCache } from "./run-view-cache";
 import { currentProposal } from "../engine/slice-decision";
 import { loadSnapshot } from "../engine/slice-map";
 import { MapStore, defaultStoreDir } from "../map/store";
@@ -137,6 +142,19 @@ const PROMPT_ID = /^[A-Za-z0-9_][A-Za-z0-9_-]*(\.[A-Za-z0-9_][A-Za-z0-9_-]*)*$/;
 type EngineTuning = NonNullable<Parameters<typeof resolveAgentConfig>[3]>["tuning"];
 
 const logPath = (runsDir: string, id: string) => join(runsDir, id, "run.jsonl");
+
+function queryLimit(url: URL, fallback: number, max: number): number {
+  const n = Number(url.searchParams.get("limit") ?? fallback);
+  if (!Number.isFinite(n) || n < 1) return fallback;
+  return Math.min(max, Math.floor(n));
+}
+
+function queryNum(url: URL, key: string): number | undefined {
+  const raw = url.searchParams.get(key);
+  if (raw === null || raw === "") return undefined;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : undefined;
+}
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", "cache-control": "no-store" } });
@@ -247,6 +265,14 @@ export function createHowdahServer(opts: ServerOpts) {
     },
   });
   const board = new BoardCache();
+  /** one incremental fold per run log: shell, transcript and log pages all read it */
+  const runViews = new RunViewCache();
+  /**
+   * The shell document, reused while the non-streaming events and the runner's liveness are
+   * unchanged. A text chunk does not rebuild it — the page applies those itself — but the seq
+   * and the last timestamps are patched on the way out so a new tab does not replay them.
+   */
+  const shellCache = new Map<string, { shellCount: number; shellSeq: number; alive: boolean; lastSeq: number; lastAt: string | null; body: string; detail: Record<string, unknown> }>();
   const launchTerminal =
     opts.openTerminal ??
     ((argv: string[]) => Bun.spawn(argv, { stdout: "ignore", stderr: "ignore" }).unref());
@@ -756,7 +782,18 @@ export function createHowdahServer(opts: ServerOpts) {
         return render ? json(render) : json({ error: "no such render, or its pinned prompt is gone" }, 404);
       }
 
-      const m = url.pathname.match(/^\/api\/runs(?:\/([^/]+)(?:\/(events|reply|open-ide|open-run-folder|harness-login|resume|pause|abort|jump|steer|soft-stop|ask|comments|approval|redesign|effects))?)?$/);
+      const evm = url.pathname.match(/^\/api\/runs\/([^/]+)\/event\/(\d+)$/);
+      if (evm) {
+        if (req.method !== "GET") return json({ error: "method not allowed" }, 405);
+        const runId = evm[1]!;
+        const seq = Number(evm[2]);
+        const logFile = logPath(opts.runsDir, runId);
+        if (!existsSync(logFile)) return json({ error: "unknown run" }, 404);
+        const event = runViews.event(logFile, seq);
+        return event ? json(event) : json({ error: "no such event" }, 404);
+      }
+
+      const m = url.pathname.match(/^\/api\/runs(?:\/([^/]+)(?:\/(events|reply|open-ide|open-run-folder|harness-login|resume|pause|abort|jump|steer|soft-stop|ask|comments|approval|redesign|effects|shell|transcript|logs))?)?$/);
       if (!m) {
         // static: /public assets by name, everything else → the app shell.
         // no-cache: this is a local app whose bundle changes constantly — the browser must
@@ -1069,6 +1106,60 @@ export function createHowdahServer(opts: ServerOpts) {
         return new Response(stream, {
           headers: { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" },
         });
+      }
+
+      if (sub === "shell" || sub === "transcript" || sub === "logs") {
+        if (req.method !== "GET") return json({ error: "method not allowed" }, 405);
+        if (sub === "transcript") {
+          const node = url.searchParams.get("node");
+          return json(runViews.transcript(path, {
+            limit: queryLimit(url, 40, 200),
+            before: queryNum(url, "before"),
+            node: node ?? undefined,
+            visit: queryNum(url, "visit"),
+          }));
+        }
+        if (sub === "logs") {
+          return json(runViews.logs(path, { limit: queryLimit(url, 200, 1000), before: queryNum(url, "before") }));
+        }
+        const view = runViews.fold(path);
+        const runDir = join(opts.runsDir, id);
+        const alive = runnerAlive(runDir);
+        const shellSeq = view.shellEvents.at(-1)?.seq ?? 0;
+        const hit = shellCache.get(id);
+        const sameShell = hit !== undefined && hit.shellCount === view.shellCount && hit.shellSeq === shellSeq && hit.alive === alive;
+        if (hit && sameShell && hit.lastSeq === view.lastSeq && hit.lastAt === view.lastAt) return detailResponse(hit.body);
+        const base = hit && sameShell ? hit.detail : await (async () => {
+          const started = view.shellEvents.find((e) => e.type === "run-started");
+          const graph = started?.type === "run-started" ? (await registry()).graphs[started.graph] : undefined;
+          let declarations = {};
+          try { declarations = graph ? graph.declarations() : {}; } catch { /* the rest of the view still renders */ }
+          const derived = deriveDetail(id, view.shellEvents, declarations, {
+            turns: view.turns, omitTurns: true, skipLogRows: true, snapshot: baseIndex(runDir, view.shellEvents), runnerAlive: alive,
+          });
+          derived.log_rows = view.notices;
+          derived.summary = withRunnerLiveness(derived.summary, view.shellEvents, runDir);
+          const target = effectiveCwd(path, derived.identity.cwd ?? undefined);
+          const wt = readWorktreeRecord(runDir);
+          derived.persistence = { home, run_dir: runDir, log_path: path, worktree_path: wt?.path ?? null, runner_alive: alive };
+          return {
+            ...derived,
+            cwd_exists: target ? existsSync(target) : false,
+            editor_configured: Boolean(loadConfig().editorCommand),
+            soft_stop_escalate_ms: loadConfig().softStopEscalateMs ?? SOFT_STOP_ESCALATE_MS,
+          };
+        })();
+        const summary = base.summary as { last_event_at?: string | null };
+        const agentAt = base.last_agent_event_at;
+        const patched = {
+          ...base,
+          events_seq: view.lastSeq,
+          last_agent_event_at: view.lastAgentAt ?? (typeof agentAt === "string" ? agentAt : null),
+          summary: { ...summary, last_event_at: view.lastAt ?? summary.last_event_at ?? null },
+        };
+        const body = JSON.stringify(patched);
+        shellCache.set(id, { shellCount: view.shellCount, shellSeq, alive, lastSeq: view.lastSeq, lastAt: view.lastAt, body, detail: base });
+        return detailResponse(body);
       }
 
       let logSize = -1;

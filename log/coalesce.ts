@@ -73,6 +73,43 @@ export function coalesce(events: LoggedEvent[]): CoalescedTurn[] {
   return [...turns.values()];
 }
 
+/**
+ * Fold one chunk or turn-finalized into an existing turn list, in place.
+ *
+ * The same merge rule as coalesce(): contiguous text/thinking deltas join, tool calls stay
+ * discrete, and a turn is created the first time it is seen. The log is append-only, so
+ * arrival order is index order — coalesce() sorts because it may be handed a shuffled slice;
+ * this path is the live one, where each event is the next line of the file.
+ */
+export function absorbTurnEvent(turns: CoalescedTurn[], e: LoggedEvent): void {
+  if (e.type !== "chunk" && e.type !== "turn-finalized") return;
+  const key = `${e.node}\0${e.visit}\0${e.turn}`;
+  let t = turns.find((turn) => `${turn.node}\0${turn.visit}\0${turn.turn}` === key);
+  if (!t) {
+    t = { node: e.node, visit: e.visit, turn: e.turn, parts: [], finalized: false };
+    turns.push(t);
+  }
+  if (e.type === "turn-finalized") {
+    t.finalized = true;
+    if (e.usage) t.usage = e.usage;
+    return;
+  }
+  const last = t.parts.at(-1);
+  if (last && last.kind === e.kind && (e.kind === "text" || e.kind === "thinking")) last.content += e.content;
+  else t.parts.push({ kind: e.kind, content: e.content, tool_id: e.tool_id, tool_name: e.tool_name });
+}
+
+/**
+ * The viewer's copy of absorbTurnEvent: a new array, so a React state update sees the change
+ * and the previous window is left untouched. A non-turn event comes back as the same array.
+ */
+export function applyLiveEvent(turns: readonly CoalescedTurn[], e: LoggedEvent): CoalescedTurn[] {
+  if (e.type !== "chunk" && e.type !== "turn-finalized") return turns as CoalescedTurn[];
+  const next = turns.map((t) => ({ ...t, parts: t.parts.map((p) => ({ ...p })) }));
+  absorbTurnEvent(next, e);
+  return next;
+}
+
 export interface JoinedOutcome {
   rendered_hash: string;
   node: string;

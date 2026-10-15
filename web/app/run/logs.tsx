@@ -9,12 +9,15 @@
  * aria-pressed>`s that style themselves. The search box was `.logs-search`, a hand-written
  * copy of Input; the rows were `<div onClick>`s, and are Rows.
  */
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { LogRow } from "../../derive";
+import type { LoggedEvent } from "../../../log/events";
+import { getJSON } from "@/lib/net";
 import { Input } from "@/components/ui/input";
 import { Chip } from "@/components/ui/chip";
 import { Row } from "@/components/ui/row";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { PanelTabs } from "@/components/ui/tabs";
 import { ScrollShell } from "@/components/scroll-shell";
@@ -22,12 +25,53 @@ import { PanelResizer, PanelToggle } from "@/components/ui/panel";
 import { usePanel } from "@/lib/panel";
 
 const KINDS: Array<"all" | LogRow["kind"]> = ["all", "agent", "tool", "engine", "operator", "attention"];
+const LOG_PAGE = 200;
 
-export function RunLogs({ rows }: { rows: LogRow[] }) {
+/** A log row as the page sends it: the stored event stays on GET /event/:seq until Raw is opened. */
+type ListedRow = Omit<LogRow, "raw"> & { raw?: LoggedEvent };
+
+type LogPage = { rows: ListedRow[]; total: number; oldest: number | null };
+
+export function RunLogs({ runId }: { runId: string }) {
   const panel = usePanel({ key: "howdah.logs", min: 300, def: 420, minOther: 360, side: "right" });
   const [kind, setKind] = useState<"all" | LogRow["kind"]>("all");
   const [q, setQ] = useState("");
   const [picked, setPicked] = useState<number | null>(null);
+  const [rows, setRows] = useState<ListedRow[]>([]);
+  const [total, setTotal] = useState(0);
+  // once the operator pages backwards, a refresh of the tail would throw those rows away
+  const pagedBack = useRef(false);
+
+  useEffect(() => {
+    let stop = false;
+    pagedBack.current = false;
+    const pull = () => {
+      if (pagedBack.current || stop) return;
+      getJSON<LogPage>(`/api/runs/${runId}/logs?limit=${LOG_PAGE}`)
+        .then((p) => {
+          if (stop || pagedBack.current || !p || !Array.isArray(p.rows)) return;
+          setRows(p.rows);
+          setTotal(p.total);
+        })
+        .catch(() => {});
+    };
+    pull();
+    const t = setInterval(pull, 5000);
+    return () => { stop = true; clearInterval(t); };
+  }, [runId]);
+
+  const loadEarlier = () => {
+    const oldest = rows[0]?.seq;
+    if (oldest === undefined) return;
+    pagedBack.current = true;
+    getJSON<LogPage>(`/api/runs/${runId}/logs?limit=${LOG_PAGE}&before=${oldest}`)
+      .then((p) => {
+        if (!p || !Array.isArray(p.rows) || p.rows.length === 0) return;
+        setRows((prev) => [...p.rows, ...prev]);
+        setTotal(p.total);
+      })
+      .catch(() => {});
+  };
 
   const shown = rows.filter((r) => {
     if (kind !== "all" && r.kind !== kind) return false;
@@ -50,7 +94,10 @@ export function RunLogs({ rows }: { rows: LogRow[] }) {
           {KINDS.map((k) => (
             <Chip key={k} on={kind === k} tone={k === "attention" ? "attention" : "default"} onClick={() => setKind(k)}>{k}</Chip>
           ))}
-          <span className="m logs-count">{shown.length} of {rows.length}</span>
+          {rows.length < total && (
+            <Button variant="outline" size="sm" onClick={loadEarlier}>Load earlier</Button>
+          )}
+          <span className="m logs-count">{shown.length} of {total}</span>
         </div>
         <ScrollShell className="logs-shell" followKey={`${shown.length}:${shown.at(-1)?.seq ?? "empty"}:${kind}:${q}`}>
           <div className="logs-rows">
@@ -77,14 +124,25 @@ export function RunLogs({ rows }: { rows: LogRow[] }) {
           <PanelToggle panel={panel} label="the event detail" side="right" />
         </div>
       </PanelResizer>
-      {!panel.collapsed && <EventDetail row={selected} />}
+      {!panel.collapsed && <EventDetail row={selected} runId={runId} />}
     </div>
   );
 }
 
 /** Story 8: the selected event with its ids and its exact stored form. */
-export function EventDetail({ row }: { row: LogRow | null }) {
+export function EventDetail({ row, runId }: { row: ListedRow | null; runId?: string }) {
   const [pane, setPane] = useState<"details" | "raw">("details");
+  const [raw, setRaw] = useState<LoggedEvent | null>(row?.raw ?? null);
+  useEffect(() => {
+    if (!row) { setRaw(null); return; }
+    if (row.raw) { setRaw(row.raw); return; }
+    if (pane !== "raw" || !runId) { setRaw(null); return; }
+    let stop = false;
+    getJSON<LoggedEvent>(`/api/runs/${runId}/event/${row.seq}`)
+      .then((e) => { if (!stop) setRaw(e); })
+      .catch(() => { if (!stop) setRaw(null); });
+    return () => { stop = true; };
+  }, [row, pane, runId]);
   if (!row) return <div className="step-detail"><EmptyState>pick an event</EmptyState></div>;
   return (
     <div className="step-detail">
@@ -107,7 +165,9 @@ export function EventDetail({ row }: { row: LogRow | null }) {
             <div className="kv"><span className="k">at</span><span className="v">{row.ts}</span></div>
           </>
         ) : (
-          <pre className="sd-raw">{JSON.stringify(row.raw, null, 2)}</pre>
+          raw
+            ? <pre className="sd-raw">{JSON.stringify(raw, null, 2)}</pre>
+            : <EmptyState>Loading the stored event…</EmptyState>
         )}
       </div>
     </div>

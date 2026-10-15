@@ -451,7 +451,20 @@ export function deriveDetail(
   id: string,
   events: LoggedEvent[],
   declarations: Declarations = {},
-  opts: { snapshot?: SnapshotIndex | null; runnerAlive?: boolean } = {},
+  opts: {
+    snapshot?: SnapshotIndex | null;
+    runnerAlive?: boolean;
+    /**
+     * Turns already coalesced by the run-view cache. Text and thinking chunks are the bulk of
+     * a long log; the cache folds them as the file grows and passes the result in, so this
+     * walk does not coalesce them again. Absent, the turns are coalesced from `events`.
+     */
+    turns?: CoalescedTurn[];
+    /** turn_states still see `turns`; the transcript itself is left off the document */
+    omitTurns?: boolean;
+    /** the caller supplies log rows (the shell keeps only the few the chat notices) */
+    skipLogRows?: boolean;
+  } = {},
 ): RunDetail {
   const summary = deriveSummary(id, events);
   const allowanceByHarness = new Map<string, Extract<LoggedEvent, { type: "allowance" }>>();
@@ -482,12 +495,12 @@ export function deriveDetail(
 
   const { ask } = deriveStatus(events);
   const { id: _id, ...summaryRest } = summary;
-  const turns = coalesce(events);
+  const turns = opts.turns ?? coalesce(events);
   const timeline = deriveTimeline(events);
   const lastAgent = events.findLast((e) => e.type === "chunk" || e.type === "turn-finalized");
   return {
     summary: summaryRest,
-    turns,
+    turns: opts.omitTurns ? [] : turns,
     timeline,
     turn_states: deriveTurnStates(turns, timeline, ask, summary.status, opts.runnerAlive),
     plan: timeline.length ? derivePlan(events, timeline.at(-1)!.node, timeline.at(-1)!.visit) : null,
@@ -526,7 +539,7 @@ export function deriveDetail(
     pinned_prompts: pinned,
     git,
     pull_requests: [...prs.values()],
-    log_rows: deriveLogRows(events),
+    log_rows: opts.skipLogRows ? [] : deriveLogRows(events),
     context: deriveContextTable(events, declarations),
     identity,
     slice: deriveSlice(events, opts.snapshot ?? null),
