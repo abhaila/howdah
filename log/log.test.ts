@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, writeFileSync, appendFileSync, existsSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { EventLog, readLog } from "./write";
+import { EventLog, LogTail, readLog } from "./write";
 import { processStart } from "./lockfile";
 import { coalesce, outcomesByHash } from "./coalesce";
 import type { LoggedEvent } from "./events";
@@ -78,6 +78,60 @@ describe("EventLog", () => {
     const turns = coalesce(events);
     expect(turns).toHaveLength(1);
     expect(turns[0]!.finalized).toBe(false); // the death is visible in the record
+  });
+});
+
+describe("LogTail: the viewer's live stream reads only what was appended", () => {
+  const ev = (n: number) => ({ type: "chunk", node: "a", visit: 1, turn: 1, index: n, kind: "text", content: `c${n}` }) as const;
+
+  test("first call reads everything; later calls return only new events; nothing new is an empty array", () => {
+    const dir = mkdtempSync(join(tmpdir(), "howdah-tail-"));
+    const path = join(dir, "run.jsonl");
+    const log = new EventLog(path);
+    log.append(ev(1)); log.append(ev(2));
+    const tail = new LogTail(path);
+    expect(tail.next().map((e) => e.seq)).toEqual([1, 2]);
+    expect(tail.next()).toEqual([]);
+    log.append(ev(3));
+    expect(tail.next().map((e) => e.seq)).toEqual([3]);
+    expect(tail.next()).toEqual([]);
+    expect(readLog(path).map((e) => e.seq)).toEqual([1, 2, 3]); // the plain reader is untouched
+  });
+
+  test("a torn tail waits for its newline instead of being parsed; a missing file is no events", () => {
+    const dir = mkdtempSync(join(tmpdir(), "howdah-tail-"));
+    const path = join(dir, "run.jsonl");
+    const tail = new LogTail(path);
+    expect(tail.next()).toEqual([]);
+    writeFileSync(path, JSON.stringify({ ...ev(1), seq: 1, ts: "t" }) + "\n" + '{"type":"chunk","seq":2,"con');
+    expect(tail.next().map((e) => e.seq)).toEqual([1]);
+    expect(tail.next()).toEqual([]); // the torn line is still torn
+    appendFileSync(path, 'tent":"x","ts":"t"}\n');
+    expect(tail.next().map((e) => e.seq)).toEqual([2]); // completed across two reads
+  });
+
+  test("a file that shrank is re-read from the start — the caller's seq filter makes that harmless", () => {
+    const dir = mkdtempSync(join(tmpdir(), "howdah-tail-"));
+    const path = join(dir, "run.jsonl");
+    writeFileSync(path, [1, 2, 3].map((n) => JSON.stringify({ ...ev(n), seq: n, ts: "t" })).join("\n") + "\n");
+    const tail = new LogTail(path);
+    expect(tail.next().map((e) => e.seq)).toEqual([1, 2, 3]);
+    writeFileSync(path, [1, 2].map((n) => JSON.stringify({ ...ev(n), seq: n, ts: "t" })).join("\n") + "\n");
+    expect(tail.next().map((e) => e.seq)).toEqual([1, 2]);
+    appendFileSync(path, JSON.stringify({ ...ev(9), seq: 3, ts: "t" }) + "\n");
+    expect(tail.next().map((e) => e.seq)).toEqual([3]);
+  });
+
+  test("a multi-byte character split across two reads survives", () => {
+    const dir = mkdtempSync(join(tmpdir(), "howdah-tail-"));
+    const path = join(dir, "run.jsonl");
+    const line = Buffer.from(JSON.stringify({ ...ev(1), seq: 1, ts: "t", content: "héllo — wörld" }) + "\n");
+    const cut = line.indexOf(Buffer.from("—")) + 1; // inside the 3-byte em dash
+    writeFileSync(path, line.subarray(0, cut));
+    const tail = new LogTail(path);
+    expect(tail.next()).toEqual([]);
+    appendFileSync(path, line.subarray(cut));
+    expect((tail.next()[0] as { content: string }).content).toBe("héllo — wörld");
   });
 });
 

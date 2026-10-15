@@ -40,9 +40,9 @@
 import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
 import { homedir, tmpdir } from "node:os";
-import { readLog } from "../log/write";
+import { LogTail, readLog } from "../log/write";
 import { deriveDetail, deriveSummary, deriveTimeline, runDigest, snapshotIndex, sortRuns, type RunSummary, type SnapshotIndex } from "./derive";
-import { LiveGitHub, liveTargetOf } from "./live-git";
+import { LiveGitHub, liveTargetOf, type LiveTarget } from "./live-git";
 import { softStop, steer } from "../engine/steer";
 import { SOFT_STOP_ESCALATE_MS } from "../core/steer";
 import { isEvidencePath } from "../core/evidence";
@@ -214,14 +214,22 @@ export function createHowdahServer(opts: ServerOpts) {
    * target — a dead run's worktree is not "live", and the rail's reconciler reading already
    * covers it. Subscribers are the run's SSE streams, so nobody watching means no git spawns.
    */
+  const liveTargets = new Map<string, { size: number; target: LiveTarget | null }>();
   const liveGit = new LiveGitHub({
     intervalMs: opts.liveGitIntervalMs,
     target: (rid) => {
       const p = logPath(opts.runsDir, rid);
       if (!existsSync(p) || !runnerAlive(join(opts.runsDir, rid))) return null;
+      // the log is re-read only when it grew: a 15s probe on a 13 MB log is otherwise a full
+      // parse each time, for a target that cannot have changed without a new event
+      const size = statSync(p).size;
+      const cached = liveTargets.get(rid);
+      if (cached && cached.size === size) return cached.target;
       const events = readLog(p);
       const started = events.find((e) => e.type === "run-started");
-      return liveTargetOf(events, effectiveCwd(p, started?.type === "run-started" ? started.cwd : undefined));
+      const target = liveTargetOf(events, effectiveCwd(p, started?.type === "run-started" ? started.cwd : undefined));
+      liveTargets.set(rid, { size, target });
+      return target;
     },
   });
   const board = new BoardCache();
@@ -1017,6 +1025,9 @@ export function createHowdahServer(opts: ServerOpts) {
         let since = Number(url.searchParams.get("since") ?? 0);
         let timer: ReturnType<typeof setInterval>;
         let unwatch: () => void = () => {};
+        // only the bytes appended since the last tick are read (log/write.ts LogTail): a full
+        // re-read every tick per tab is what froze the viewer on a 13 MB log
+        const tail = new LogTail(path);
         const stream = new ReadableStream({
           start(controller) {
             controller.enqueue(": connected\n\n"); // flush headers so clients resolve immediately
@@ -1025,7 +1036,7 @@ export function createHowdahServer(opts: ServerOpts) {
             unwatch = liveGit.subscribe(id, (g) => controller.enqueue(`event: git-live\ndata: ${JSON.stringify(g)}\n\n`));
             const push = () => {
               try {
-                for (const e of readLog(path).filter((e) => e.seq > since)) {
+                for (const e of tail.next().filter((e) => e.seq > since)) {
                   controller.enqueue(`data: ${JSON.stringify(e)}\n\n`);
                   since = e.seq;
                 }

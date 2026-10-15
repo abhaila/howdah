@@ -144,6 +144,60 @@ export class EventLog {
   }
 }
 
+/**
+ * The viewer's live-stream primitive: events appended since the last call, read from the byte
+ * the previous call stopped at, never the whole file again. The per-run SSE route used to call
+ * readLog() every 500ms per open tab — on a 13 MB, 55k-event log with five tabs open that was
+ * ten full parses a second on the one thread every route shares, and the viewer sat on a blank
+ * page. A line is parsed only once it is newline-terminated, so a torn tail (a write in
+ * progress) waits in the buffer for its next bytes rather than being read as corrupt; a file
+ * that SHRANK (the writer truncates a torn tail before appending, or the log was replaced) is
+ * re-read from the start, and callers filter by seq, so a replayed event is never a duplicate.
+ */
+export class LogTail {
+  private offset = 0;
+  private partial = "";
+  /** streaming, so a multi-byte character split across two reads is decoded whole */
+  private decoder = new TextDecoder();
+  constructor(private readonly path: string) {}
+
+  /** the events whose lines completed since the last call (all of them, on the first) */
+  next(): LoggedEvent[] {
+    if (!existsSync(this.path)) return [];
+    const fd = openSync(this.path, "r");
+    try {
+      const size = fstatSync(fd).size;
+      if (size < this.offset) { this.offset = 0; this.partial = ""; this.decoder = new TextDecoder(); }
+      if (size === this.offset) return [];
+      const buf = Buffer.alloc(size - this.offset);
+      let read = 0;
+      while (read < buf.length) {
+        const n = readSync(fd, buf, read, buf.length - read, this.offset + read);
+        if (n === 0) break;
+        read += n;
+      }
+      const text = this.partial + this.decoder.decode(buf.subarray(0, read), { stream: true });
+      const lastNl = text.lastIndexOf("\n");
+      // bytes up to the last newline are consumed; what follows waits for its newline
+      const complete = lastNl === -1 ? "" : text.slice(0, lastNl + 1);
+      this.partial = lastNl === -1 ? text : text.slice(lastNl + 1);
+      this.offset += read;
+      const events: LoggedEvent[] = [];
+      for (const line of complete.split("\n")) {
+        if (line.length === 0) continue;
+        try {
+          events.push(JSON.parse(line) as LoggedEvent);
+        } catch {
+          /* a complete line that is not JSON: skipped, as readLog would have thrown on it */
+        }
+      }
+      return events;
+    } finally {
+      closeSync(fd);
+    }
+  }
+}
+
 export function readLog(path: string): LoggedEvent[] {
   if (!existsSync(path)) return [];
   const lines = readFileSync(path, "utf8").split("\n").filter((l) => l.length > 0);
