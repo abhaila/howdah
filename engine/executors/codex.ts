@@ -8,6 +8,18 @@
  * with {decision} on the same id — routed through the same attention round-trip as claude:
  * durable ask, human replies in the web card, executor answers the wire.
  *
+ * EVERY server request is answered, or the turn hangs. The app-server has ten request kinds
+ * (adapter/codex.ts) and this executor used to answer two; the others were ignored, which
+ * held a thread open for ten hours on an MCP connector asking to be re-authenticated. Now:
+ * a permission (command, file change, extra permission profile) parks `codex_approval` and is
+ * answered allow/deny; a `request_user_input` question is the HOW-25 question card
+ * (`user-question`), answered mid-turn in codex's own answer shape; an MCP elicitation in
+ * `url` mode parks `mcp-elicitation` quoting the message and the URL (done = accept, a deny =
+ * decline) while a `form` mode, which carries a schema nothing here can draw, is declined at
+ * once with a note; and a kind the adapter does not model is refused with a JSON-RPC error
+ * naming it. A park that ends with the harness gone, or past the configured wait, fails the
+ * attempt with that reason — nothing waits in silence (same contract as claude.ts).
+ *
  * PIN NOTE: the protocol is a moving target (S3-Q4). `howdah doctor` asserts the version.
  *
  * The prompt is sent UNCHANGED: the engine already appended the outputs contract before
@@ -26,8 +38,13 @@ import { writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { Executor } from "../run";
 import { JsonlChunkParser } from "../../adapter/parse";
-import { mapCodexEvent, buildCodexApprovalResponse, codexUsage } from "../../adapter/codex";
+import {
+  mapCodexEvent, buildCodexApprovalResponse, buildCodexPermissionsResponse, buildCodexUserInputResponse,
+  buildCodexElicitationResponse, buildCodexErrorResponse, codexUsage,
+} from "../../adapter/codex";
 import type { TurnUsage } from "../../adapter/events";
+import { answersToReplyText, askReason, normalizeAskPayload, parseFreeTextAnswer, validateAnswers, type UserQuestion } from "../../core/ask";
+import { isDenyReply } from "./reply";
 import { buildRepairInstruction, checkWrites, parseOutputs } from "./outputs";
 import { classifyHarnessExit, compactionNote, contextExhaustedFailure } from "./harness-failure";
 import { AttentionCenter, osNotifier, type Notifier } from "../attention";
@@ -44,6 +61,8 @@ export interface CodexExecutorOpts {
   effort?: string;
   sandbox?: string; // default danger-full-access: Howdah-owned Codex runs get full access
   askPollMs?: number;
+  /** how long a park may wait for an answer before the attempt fails with that reason; default forever */
+  askTimeoutMs?: number;
   notifiers?: Notifier[];
   viewerBase?: string;
   /** HOW-38: config.json `stuck` thresholds */
@@ -153,29 +172,93 @@ export function codexExecutor(opts: CodexExecutorOpts): Executor {
     const ceiling = new TurnCeiling(agentConfig?.turnTimeoutMs, () => killGroup(proc.pid));
     ceiling.start();
 
-    const answerApproval = async (rpcRequestId: string | number, toolName: string, input: unknown) => {
+    let harnessGone = false;
+    void proc.exited.then(() => { harnessGone = true; }, () => { harnessGone = true; });
+    /** a park that ended without an answer is a FAILED attempt with a stated cause, never a hang */
+    let stopped: string | null = null;
+
+    /** the one wait behind every kind of park: durable ask, notify, poll for the reply */
+    const awaitOperator = async (
+      reason: string,
+      ask: Record<string, unknown>,
+    ): Promise<{ ok: true; reply: string; answers?: unknown } | { ok: false; reason: string }> => {
       const center = new AttentionCenter(opts.attentionDir, opts.notifiers ?? [osNotifier], { viewerBase: opts.viewerBase });
-      const raised = log.append({
-        type: "attention-raised", node: nodeId, visit,
-        reason: `${toolName} needs approval`,
-        ask: { kind: "codex_approval", request_id: rpcRequestId, tool_name: toolName, input },
-      });
+      // durable BEFORE delivered (engine/attention.ts): the record outlives a kill -9
+      const raised = log.append({ type: "attention-raised", node: nodeId, visit, reason, ask });
       ceiling.pause(); // a human's thinking time is not the agent's (HOW-38)
-      await center.raise({ run: runId, node: nodeId, visit, reason: `${toolName} needs approval` }).catch(() => {});
+      await center.raise({ run: runId, node: nodeId, visit, reason }).catch(() => {});
+      const deadline = opts.askTimeoutMs === undefined ? null : Date.now() + opts.askTimeoutMs;
       for (;;) {
         await Bun.sleep(opts.askPollMs ?? 400);
         const resolved = readLog(log.path).find((e) => e.type === "attention-resolved" && e.seq > raised.seq);
         if (resolved && resolved.type === "attention-resolved") {
-          const reply = (resolved.reply ?? "").trim();
-          const allow = isAllowReply(reply);
           ceiling.start();
-          if (!allow) watch.markDenied(String((input as { id?: unknown } | null)?.id ?? ""));
-          proc.stdin.write(buildCodexApprovalResponse(rpcRequestId, allow ? "approved" : "denied"));
-          proc.stdin.flush();
-          chunk("tool_result", allow ? "approval granted" : `approval denied: ${reply}`, { name: toolName });
-          return;
+          return { ok: true, reply: (resolved.reply ?? "").trim(), answers: resolved.answers };
         }
+        if (harnessGone) return { ok: false, reason: `the harness exited while it was waiting for you to answer: ${reason}` };
+        if (deadline !== null && Date.now() > deadline) return { ok: false, reason: `nobody answered within the configured wait: ${reason}` };
       }
+    };
+
+    const send = (frame: string) => { proc.stdin.write(frame); proc.stdin.flush(); };
+
+    /** a permission: command, file change, or (0.162.1) an extra permission profile */
+    const answerApproval = async (rpcRequestId: string, toolName: string, input: unknown) => {
+      const got = await awaitOperator(`${toolName} needs approval`, { kind: "codex_approval", request_id: rpcRequestId, tool_name: toolName, input });
+      if (!got.ok) { stopped = got.reason; killGroup(proc.pid); return; } // nothing answers a dead park: end the turn
+      const allow = isAllowReply(got.reply);
+      if (!allow) watch.markDenied(String((input as { id?: unknown } | null)?.id ?? ""));
+      if (toolName === "permissions") send(buildCodexPermissionsResponse(rpcRequestId, allow ? (input as { permissions?: unknown }).permissions : {}));
+      else send(buildCodexApprovalResponse(rpcRequestId, allow ? "approved" : "denied"));
+      chunk("tool_result", allow ? "approval granted" : `approval denied: ${got.reply}`, { name: toolName });
+    };
+
+    /**
+     * HOW-25 for codex: `request_user_input`. The questions go into the park in the shape the
+     * question card draws; the answer goes back keyed by codex's OWN question ids (core/ask.ts
+     * numbers them q0.. in order, so the two line up by index). A payload the model cannot
+     * read is refused on the wire with a note, never left waiting.
+     */
+    const answerQuestion = async (rpcRequestId: string, raw: unknown) => {
+      const questions = normalizeAskPayload(raw);
+      const ownIds = ((raw as { questions?: Array<{ id?: unknown }> } | null)?.questions ?? []).map((q) => (typeof q?.id === "string" ? q.id : null));
+      if (!questions || ownIds.some((id) => id === null)) {
+        send(buildCodexErrorResponse(rpcRequestId, "howdah could not read the request_user_input questions"));
+        chunk("text", "\n[codex asked a question howdah could not read — refused on the wire]");
+        return;
+      }
+      const got = await awaitOperator(askReason(questions), { kind: "user-question", request_id: rpcRequestId, tool_name: "request_user_input", questions });
+      if (!got.ok) { stopped = got.reason; killGroup(proc.pid); return; } // nothing answers a dead park: end the turn
+      const answers = validateAnswers(questions, got.answers) ?? parseFreeTextAnswer(questions, got.reply);
+      const byOwnId: Record<string, { answers: string[] }> = {};
+      for (const a of answers) {
+        const i = questions.findIndex((q) => q.id === a.id);
+        const own = ownIds[i];
+        if (own === undefined || own === null) continue;
+        byOwnId[own] = { answers: [...a.selected, ...(a.other ? [a.other] : [])] };
+      }
+      send(buildCodexUserInputResponse(rpcRequestId, byOwnId));
+      chunk("tool_result", answersToReplyText(questions, answers) || "(no answer)", { name: "request_user_input" });
+    };
+
+    /**
+     * An MCP server asking the HUMAN. `url` mode is a place to go (captured: "Reconnect Linear
+     * on ChatGPT…" + the link): park with both, and any reply that is not a refusal means it
+     * was done. A `form` mode carries a JSON schema nothing here can draw: declined at once,
+     * and the transcript says why, so the model sees the tool fail instead of a frozen turn.
+     */
+    const answerElicitation = async (ev: { id: string; server: string; mode: string; message: string; url?: string }) => {
+      if (ev.mode !== "url") {
+        send(buildCodexElicitationResponse(ev.id, "decline"));
+        chunk("text", `\n[${ev.server} asked for a ${ev.mode} form howdah cannot draw — declined: ${ev.message}]`);
+        return;
+      }
+      const reason = `${ev.server} needs you: ${ev.message}${ev.url ? ` ${ev.url}` : ""}`;
+      const got = await awaitOperator(reason, { kind: "mcp-elicitation", request_id: ev.id, server: ev.server, mode: ev.mode, message: ev.message, url: ev.url });
+      if (!got.ok) { stopped = got.reason; killGroup(proc.pid); return; } // nothing answers a dead park: end the turn
+      const accept = !isDenyReply(got.reply);
+      send(buildCodexElicitationResponse(ev.id, accept ? "accept" : "decline"));
+      chunk("tool_result", accept ? `elicitation accepted: ${got.reply || "done"}` : `elicitation declined: ${got.reply}`, { name: ev.server });
     };
 
     const parser = new JsonlChunkParser();
@@ -217,7 +300,16 @@ export function codexExecutor(opts: CodexExecutorOpts): Executor {
                 if (watch.result(ev.id, ev.is_error === true, ev.content)?.kind === "stop") killGroup(proc.pid);
                 break;
               case "permission_request":
-                await answerApproval(ev.id, ev.tool_name, ev.input);
+                if (ev.requires_user_interaction) await answerQuestion(ev.id, ev.input);
+                else await answerApproval(ev.id, ev.tool_name, ev.input);
+                break;
+              case "elicitation":
+                await answerElicitation(ev);
+                break;
+              case "unsupported_request":
+                // answered, not ignored: an unanswered request holds the turn open forever
+                send(buildCodexErrorResponse(ev.id, `howdah does not handle ${ev.method}`));
+                chunk("text", `\n[codex asked for ${ev.method}, which howdah does not handle — refused on the wire]`);
                 break;
               case "rate_limit":
                 log.append({ type: "allowance", harness: "codex", state: ev.state, remaining: ev.remaining, resets_at: ev.resets_at, raw: ev.raw });
@@ -293,7 +385,7 @@ export function codexExecutor(opts: CodexExecutorOpts): Executor {
     } catch (err) {
       // HOW-38: an app-server WE killed fails whatever it was doing; that is the timeout or the
       // stuck streak speaking, reported below — anything else is a real fault
-      if (!ceiling.fired && !watch.stopped) throw err;
+      if (!ceiling.fired && !watch.stopped && !stopped) throw err;
     } finally {
       ceiling.clear();
       selfExit = proc.exitCode; // non-null here = it died before we asked it to
@@ -319,6 +411,11 @@ export function codexExecutor(opts: CodexExecutorOpts): Executor {
       const reason = stuckReason(watch.stopped);
       chunk("text", `\n[${reason}]`);
       return { status: "failed", writes: {}, reason, code: "stuck" };
+    }
+    // a park that ended without an answer: the stated cause, before any reading of the exit
+    if (stopped) {
+      chunk("text", `\n[${stopped}]`);
+      return { status: "failed", writes: {}, reason: stopped };
     }
     // an app-server that died without ever answering us did not start: name the cause
     // (usually "not logged in") rather than reporting a stream that ended

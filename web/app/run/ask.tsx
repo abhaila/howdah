@@ -96,6 +96,18 @@ export function HarnessLogin({ runId, ask, detail }: { runId: string; ask: NonNu
   );
 }
 
+/**
+ * An MCP server behind codex asking the OPERATOR to go somewhere (captured: the ChatGPT Linear
+ * connector's "reconnect me" link; engine/executors/codex.ts answerElicitation). The park's
+ * reason already quotes the message and the URL; this makes the link a link and says what a
+ * reply does, because "done" and "decline" mean different wire answers here.
+ */
+function elicitationAsk(ask: NonNullable<RunDetail["ask"]>): { server: string; url?: string } | null {
+  const a = ask.ask as { kind?: unknown; server?: unknown; url?: unknown } | null | undefined;
+  if (!a || a.kind !== "mcp-elicitation") return null;
+  return { server: typeof a.server === "string" ? a.server : "the MCP server", ...(typeof a.url === "string" ? { url: a.url } : {}) };
+}
+
 export function AskCard({ runId, ask, detail, onResolved }: { runId: string; ask: NonNullable<RunDetail["ask"]>; detail: RunDetail; onResolved: () => void }) {
   const [text, setText] = useState("");
   const [state, setState] = useState<"idle" | "sending" | "delivered" | "failed" | "refused">("idle");
@@ -106,6 +118,7 @@ export function AskCard({ runId, ask, detail, onResolved }: { runId: string; ask
   const { toast } = useToast();
   useEffect(() => { if (location.hash === "#needs-input") ref.current?.focus(); }, []);
   const context = attentionContext(detail, ask);
+  const elicitation = elicitationAsk(ask);
 
   const send = useCallback(async () => {
     setState("sending");
@@ -137,6 +150,12 @@ export function AskCard({ runId, ask, detail, onResolved }: { runId: string; ask
     <div className={`ask-card ${state === "delivered" ? "collapsing" : ""}`} id="needs-input">
       <h3>Needs you — {ask.node}@{ask.visit}</h3>
       <div>{ask.reason}</div>
+      {elicitation && (
+        <div className="field-hint">
+          {elicitation.url && <><a className="pr-link" href={elicitation.url} target="_blank" rel="noreferrer">Open {elicitation.server}'s link</a>, do what it asks, then </>}
+          send an empty reply or "done" to let the agent continue. Reply "decline" to refuse — the tool call fails and the agent carries on without it.
+        </div>
+      )}
       {context && (
         <div className="field-error">
           {context}

@@ -367,7 +367,21 @@ Break one of these and the design stops working, so check them before changing t
   The wire shapes are pinned in `adapter/fixtures/claude-ask-user-question.jsonl` and probed
   against claude 2.1.278; the CLI's own `request_user_dialog` channel is NOT used, because
   under `-p` it belongs to its cloud host and declaring a kind we cannot draw is worse than
-  declaring none.
+  declaring none. CODEX: every server→client request is answered or the turn hangs. The
+  app-server has ten request kinds (0.162.1 schema) and the executor answered two; a run sat
+  ten hours inside `mcpServer/elicitation/request` (the ChatGPT Linear connector asking to be
+  reconnected — `adapter/fixtures/codex-elicitation.jsonl` is the capture) with a transcript
+  that showed nothing, because only commandExecution/fileChange items were drawn. Now
+  `adapter/codex.ts` maps EVERY item with an id to a tool call (mcpToolCall, the code-mode
+  `exec`, webSearch…), so the transcript and the HOW-38 stuck detector see them; a
+  `request_user_input` question is the same `user-question` park and card, answered in codex's
+  own shape (schema-derived, pinned by `fake-codex.ts`); a `url` elicitation parks
+  `mcp-elicitation` quoting the message and the link (any non-refusal = accept, a refusal =
+  decline, a `form` mode is declined at once with a note); `item/permissions/requestApproval`
+  answers with the profile GRANTED, not a `{decision}`; and any kind the adapter does not model
+  is refused on the wire with a JSON-RPC error naming it. Replies go back under the id's wire
+  TYPE (a numeric string becomes the number again). A park the harness dies under, or that
+  outlives `askTimeoutMs`, fails the attempt with that reason.
 - **Attention is durable before it is delivered.** `engine/attention.ts` writes the record,
   then notifies; `watchdog/check.ts` runs outside the process (launchd, 60s) so `kill -9`
   with an ask pending still rings, and a stale heartbeat is itself an attention event.

@@ -23,6 +23,15 @@
  *            codexErrorInfo "contextWindowExceeded"
  * FAKE_CODEX_FAIL=1 completes the turn with status "failed" and an ordinary error — the case
  * that used to be reported as an output contract violation.
+ * Server→client REQUESTS, raised on the first turn and held until the executor answers on the
+ * id, which is the shape of the live ten-hour hang (adapter/fixtures/codex-elicitation.jsonl):
+ *   FAKE_CODEX_ELICIT=1           an mcpToolCall item, then `mcpServer/elicitation/request`
+ *                                 (FAKE_CODEX_ELICIT_MODE overrides `url`); the tool item
+ *                                 completes or fails on the action, and the final text names it
+ *   FAKE_CODEX_ASK=1              `item/tool/requestUserInput` with one two-option question
+ *                                 (0.162.1 schema); the final text carries the answers received
+ *   FAKE_CODEX_UNKNOWN_REQUEST=1  `account/chatgptAuthTokens/refresh`, a kind howdah does not
+ *                                 model; the final text says whether it was answered or refused
  */
 import { appendFileSync, existsSync, writeFileSync } from "node:fs";
 
@@ -32,6 +41,8 @@ const threadCapture = process.env.FAKE_CODEX_CAPTURE;
 const decoder = new TextDecoder();
 let buffer = "";
 let turns = 0;
+/** a server→client request this fake raised and has not been answered yet (see below) */
+let pendingRequest: { id: number; kind: "elicit" | "ask" | "unknown"; turnId: string; promptText: string } | null = null;
 
 for await (const chunk of Bun.stdin.stream()) {
   buffer += decoder.decode(chunk, { stream: true });
@@ -40,7 +51,24 @@ for await (const chunk of Bun.stdin.stream()) {
     const line = buffer.slice(0, nl);
     buffer = buffer.slice(nl + 1);
     if (!line.trim()) continue;
-    const msg = JSON.parse(line) as { id?: number; method?: string; params?: any };
+    const msg = JSON.parse(line) as { id?: number; method?: string; params?: any; result?: any; error?: any };
+    // the executor's answer to a request this fake raised: finish the turn and SAY what came back
+    if (msg.method === undefined && msg.id !== undefined && pendingRequest && msg.id === pendingRequest.id) {
+      const { kind, turnId, promptText } = pendingRequest;
+      pendingRequest = null;
+      let note: string;
+      if (kind === "elicit") {
+        const action = String(msg.result?.action ?? (msg.error ? "error" : "none"));
+        out({ jsonrpc: "2.0", method: "item/completed", params: { item: { type: "mcpToolCall", id: "mcp1", server: "codex_apps", tool: "linear.get_issue", status: action === "accept" ? "completed" : "failed", error: action === "accept" ? null : { message: "Reconnect Linear on ChatGPT to restore access for this request." } } } });
+        note = `[fake: elicitation ${action}] `;
+      } else if (kind === "ask") {
+        note = msg.error ? `[fake: question refused: ${msg.error.message}] ` : `[fake: answered ${JSON.stringify(msg.result?.answers ?? null)}] `;
+      } else {
+        note = msg.error ? `[fake: token refresh refused: ${msg.error.message}] ` : "[fake: token refresh answered] ";
+      }
+      finishTurn(turnId, promptText, note);
+      continue;
+    }
     switch (msg.method) {
       case "initialize":
         out({ jsonrpc: "2.0", id: msg.id, result: { userAgent: "fake-codex" } });
@@ -77,23 +105,52 @@ for await (const chunk of Bun.stdin.stream()) {
           out({ jsonrpc: "2.0", method: "turn/completed", params: { threadId: "fake-thread-1", turn: { id: turnId, status: "failed", error } } });
           break;
         }
-        if (process.env.FAKE_CODEX_CONTEXT === "compact")
-          out({ jsonrpc: "2.0", method: "item/started", params: { item: { type: "contextCompaction", id: "compact-1" } } });
-        const keys = [...promptText.matchAll(/"([\w.]+)": <value>/g)].map((m) => m[1]!);
-        const outputs = Object.fromEntries(keys.map((k) => [k, k === "review_verdict" ? (process.env.FAKE_CLAUDE_VERDICT ?? "pass") : `fake ${k}`]));
-        const isRepair = /did not end with the required outputs object/.test(promptText);
-        const drop = process.env.FAKE_CODEX_DROP_OUTPUTS === "1" && !isRepair;
-        const text = drop
-          ? "Verified the shared renderer and the affected integration cases. No files modified."
-          : `All done.\n{"outputs": ${JSON.stringify(outputs)}}`;
-        out({ jsonrpc: "2.0", method: "item/agentMessage/delta", params: { delta: text } });
-        out({ jsonrpc: "2.0", method: "item/completed", params: { item: { type: "agentMessage", text } } });
-        // HOW-34: codex reports THREAD totals (cachedInputTokens included in inputTokens), so a
-        // repair turn's figures are the running total — the executor records the delta
-        out({ jsonrpc: "2.0", method: "thread/tokenUsage/updated", params: { threadId: "fake-thread-1", tokenUsage: { total: { inputTokens: 500 * turns, cachedInputTokens: 300 * turns, outputTokens: 40 * turns } } } });
-        out({ jsonrpc: "2.0", method: "turn/completed", params: { turn: { id: turnId, status: "completed" } } });
+        // the three server→client REQUESTS (first turn only; the repair turn never asks). Each
+        // holds the turn until the executor answers on the id — exactly the live hang
+        const request = process.env.FAKE_CODEX_ELICIT === "1" ? "elicit"
+          : process.env.FAKE_CODEX_ASK === "1" ? "ask"
+          : process.env.FAKE_CODEX_UNKNOWN_REQUEST === "1" ? "unknown" : null;
+        if (request && turns === 1) {
+          pendingRequest = { id: 7, kind: request, turnId, promptText };
+          if (request === "elicit") {
+            out({ jsonrpc: "2.0", method: "item/started", params: { item: { type: "mcpToolCall", id: "mcp1", server: "codex_apps", tool: "linear.get_issue", status: "inProgress", arguments: { id: "BADGE-1" } } } });
+            out({ jsonrpc: "2.0", method: "thread/status/changed", params: { threadId: "fake-thread-1", status: { type: "active", activeFlags: ["waitingOnApproval"] } } });
+            out({ jsonrpc: "2.0", id: 7, method: "mcpServer/elicitation/request", params: {
+              threadId: "fake-thread-1", turnId, serverName: "codex_apps", mode: process.env.FAKE_CODEX_ELICIT_MODE ?? "url",
+              message: "Reconnect Linear on ChatGPT to restore access for this request.", url: "https://chatgpt.com/apps/linear/fake", elicitationId: "codex_apps_auth_mcp1",
+            } });
+          } else if (request === "ask") {
+            out({ jsonrpc: "2.0", id: 7, method: "item/tool/requestUserInput", params: {
+              threadId: "fake-thread-1", turnId, itemId: "ask1", isBlocking: true,
+              questions: [{ id: "colour", header: "Colour", question: "Which colour?", isOther: false, isSecret: false, options: [{ label: "Red", description: "warm" }, { label: "Blue", description: "cool" }] }],
+            } });
+          } else {
+            out({ jsonrpc: "2.0", id: 7, method: "account/chatgptAuthTokens/refresh", params: { reason: "expired", previousAccountId: null } });
+          }
+          break;
+        }
+        finishTurn(turnId, promptText);
         break;
       }
     }
   }
+}
+
+/** the agent's final message — carrying the outputs contract it was asked for — and the turn's end */
+function finishTurn(turnId: string, promptText: string, note = ""): void {
+  if (process.env.FAKE_CODEX_CONTEXT === "compact")
+    out({ jsonrpc: "2.0", method: "item/started", params: { item: { type: "contextCompaction", id: "compact-1" } } });
+  const keys = [...promptText.matchAll(/"([\w.]+)": <value>/g)].map((m) => m[1]!);
+  const outputs = Object.fromEntries(keys.map((k) => [k, k === "review_verdict" ? (process.env.FAKE_CLAUDE_VERDICT ?? "pass") : `fake ${k}`]));
+  const isRepair = /did not end with the required outputs object/.test(promptText);
+  const drop = process.env.FAKE_CODEX_DROP_OUTPUTS === "1" && !isRepair;
+  const text = drop
+    ? `${note}Verified the shared renderer and the affected integration cases. No files modified.`
+    : `${note}All done.\n{"outputs": ${JSON.stringify(outputs)}}`;
+  out({ jsonrpc: "2.0", method: "item/agentMessage/delta", params: { delta: text } });
+  out({ jsonrpc: "2.0", method: "item/completed", params: { item: { type: "agentMessage", text } } });
+  // HOW-34: codex reports THREAD totals (cachedInputTokens included in inputTokens), so a
+  // repair turn's figures are the running total — the executor records the delta
+  out({ jsonrpc: "2.0", method: "thread/tokenUsage/updated", params: { threadId: "fake-thread-1", tokenUsage: { total: { inputTokens: 500 * turns, cachedInputTokens: 300 * turns, outputTokens: 40 * turns } } } });
+  out({ jsonrpc: "2.0", method: "turn/completed", params: { turn: { id: turnId, status: "completed" } } });
 }
