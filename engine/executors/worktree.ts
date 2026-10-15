@@ -230,9 +230,38 @@ export function derivePrState(pr: { state: string; mergeable?: string; reviewDec
   return "OPEN";
 }
 
-function isFailedCheck(check: { conclusion?: string | null; state?: string | null; bucket?: string | null }): boolean {
-  const status = (check.conclusion ?? check.state ?? check.bucket ?? "").toUpperCase();
-  return ["FAILURE", "FAILED", "ERROR", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED"].includes(status);
+/** one row of `gh pr checks --json` (state/bucket) or of `statusCheckRollup` (status/conclusion) */
+export type CheckRow = { name?: string | null; context?: string | null; status?: string | null; conclusion?: string | null; state?: string | null; bucket?: string | null; startedAt?: string | null };
+const PENDING = new Set(["IN_PROGRESS", "QUEUED", "PENDING", "WAITING", "REQUESTED", "EXPECTED"]);
+const FAILED = new Set(["FAILURE", "FAILED", "FAIL", "ERROR", "TIMED_OUT", "ACTION_REQUIRED"]);
+const isPendingCheck = (c: CheckRow): boolean =>
+  PENDING.has((c.status ?? "").toUpperCase()) || PENDING.has((c.state ?? "").toUpperCase()) || (c.bucket ?? "").toLowerCase() === "pending";
+/** a verdict against the code; CANCELLED is deliberately not one (see checksFailed) */
+const isFailedCheck = (c: CheckRow): boolean => !isPendingCheck(c) && FAILED.has((c.conclusion || c.state || c.bucket || "").toUpperCase());
+
+/**
+ * A check has failed only when its LATEST run says so. A force-push — every restack — leaves
+ * each check's superseded run in the rollup as CANCELLED beside the new run of the same name
+ * that is still in progress, and `gh pr checks` lists both. Read flat, that was "CI failed"
+ * ninety seconds after a publish, and this graph went into fix_ci on a verdict CI had not
+ * given (seven probes in a row on one run, each repair "fixing" nothing). So rows are grouped
+ * by check name; a name with a run still pending has no verdict yet; the newest run decides
+ * when start times are known; and a cancelled run is not a verdict on the code at all — it is
+ * waited on, like a reviewer, rather than repaired.
+ */
+export function checksFailed(rows: readonly CheckRow[]): boolean {
+  const groups = new Map<string, CheckRow[]>();
+  rows.forEach((r, i) => {
+    const key = r.name ?? r.context ?? `#${i}`;
+    groups.set(key, [...(groups.get(key) ?? []), r]);
+  });
+  for (const runs of groups.values()) {
+    if (runs.some(isPendingCheck)) continue; // a re-run is under way: no verdict yet
+    const dated = runs.every((r) => typeof r.startedAt === "string" && r.startedAt !== "");
+    const latest = dated ? runs.reduce((a, b) => (String(b.startedAt) > String(a.startedAt) ? b : a)) : undefined;
+    if (latest !== undefined ? isFailedCheck(latest) : runs.some(isFailedCheck)) return true;
+  }
+  return false;
 }
 
 /**
@@ -287,11 +316,11 @@ export function stackPrState(states: readonly PrState[]): { state: PrState; deci
 }
 
 function requiredChecksFailed(cwd: string, prRef: string): boolean | null {
-  const r = sh(["gh", "pr", "checks", prRef, "--required", "--json", "name,state,bucket"], cwd);
+  const r = sh(["gh", "pr", "checks", prRef, "--required", "--json", "name,state,bucket,startedAt"], cwd);
   if (r.code !== 0) return null;
   try {
-    const checks = JSON.parse(r.stdout) as Array<{ state?: string | null; bucket?: string | null }>;
-    return checks.some(isFailedCheck);
+    const checks = JSON.parse(r.stdout) as CheckRow[];
+    return checksFailed(checks);
   } catch {
     return null;
   }
@@ -304,8 +333,8 @@ export const ghPrProbe = (cwd: string, prRef: string): { state: PrState; url: st
     if (/no pull requests? found/i.test(r.stderr + r.stdout)) return null;
     throw new Error(`forge unreachable: ${r.stderr.trim().slice(0, 200) || "gh failed"}`);
   }
-  const j = JSON.parse(r.stdout) as { state: string; url: string; mergeable?: string; reviewDecision?: string; statusCheckRollup?: Array<{ conclusion?: string; state?: string }> };
-  const failedChecks = requiredChecksFailed(cwd, j.url) ?? (j.statusCheckRollup ?? []).some(isFailedCheck);
+  const j = JSON.parse(r.stdout) as { state: string; url: string; mergeable?: string; reviewDecision?: string; statusCheckRollup?: CheckRow[] };
+  const failedChecks = requiredChecksFailed(cwd, j.url) ?? checksFailed(j.statusCheckRollup ?? []);
   return { state: derivePrState({ ...j, failedChecks }), url: j.url, approved: j.reviewDecision === "APPROVED" };
 };
 

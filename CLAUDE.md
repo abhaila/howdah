@@ -320,7 +320,12 @@ Break one of these and the design stops working, so check them before changing t
 - **Observed reality beats recorded state.** `engine/reconcile.ts` probes git before every
   node and the forge only before nodes that declare forge reads. No cached branch name is
   ever read. Intended-vs-observed disagreement is logged as a fact and surfaced, never
-  auto-resolved; "no PR" and "forge unreachable" are distinct outcomes.
+  auto-resolved; "no PR" and "forge unreachable" are distinct outcomes. A CHECK HAS FAILED ONLY
+  WHEN ITS LATEST RUN SAYS SO (`checksFailed`, engine/executors/worktree.ts): a force-push
+  leaves each check's superseded run CANCELLED beside the new run still in progress, and read
+  flat that was `CI_FAILED` ninety seconds after a publish — fix_ci on a verdict CI had not
+  given, seven times on one run. Rows group by name, a pending run means no verdict, the newest
+  run decides, and a cancelled run is waited on like a reviewer, never repaired.
 - **Nothing dead-ends silently.** A failed attempt, an exhausted condition set, `maxVisits`,
   or an ambiguous effect all *park* the run with a reason (`attention-raised`) and wait for a
   human. Parking is normal control flow, not an error path.

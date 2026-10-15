@@ -3,7 +3,7 @@ import { chmodSync, mkdtempSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { execSync } from "node:child_process";
-import { worktreeExecutor, commandExecutor, effectiveCwd, readWorktreeRecord, derivePrState, ghPrProbe, stackPrState, publicationPrRefs, type PrState } from "./worktree";
+import { worktreeExecutor, commandExecutor, effectiveCwd, readWorktreeRecord, derivePrState, ghPrProbe, stackPrState, publicationPrRefs, checksFailed, type PrState } from "./worktree";
 import { EventLog } from "../../log/write";
 import type { ExecArgs } from "../run";
 import { commit, git, lonelyRepo, originFixture, sha } from "./git-testkit";
@@ -417,6 +417,65 @@ describe("probe:pr", () => {
     expect(publicationPrRefs({ pr_url: "https://github.com/a/b/pull/7" })).toEqual(["https://github.com/a/b/pull/7"]);
     expect(publicationPrRefs("opened https://github.com/a/b/pull/3 after https://github.com/c/d/pull/9")).toEqual(["https://github.com/a/b/pull/3"]);
     expect(publicationPrRefs({ note: "nothing" })).toEqual([]);
+  });
+
+  // Captured from PR 14969 ninety seconds after a stack force-push: every check's superseded
+  // run sits CANCELLED beside the new run of the same name, still in progress. Read flat that
+  // was CI_FAILED, and the graph went into fix_ci on a verdict CI had not given.
+  test("a check is failed only when its latest run says so — a superseded CANCELLED run is not a verdict", () => {
+    const rollup = [
+      { conclusion: "CANCELLED", name: "check-commits", startedAt: "2026-10-15T11:34:42Z", status: "COMPLETED" },
+      { conclusion: "SUCCESS", name: "check-commits", startedAt: "2026-10-15T11:34:51Z", status: "COMPLETED" },
+      { conclusion: "CANCELLED", name: "build", startedAt: "2026-10-15T11:34:43Z", status: "COMPLETED" },
+      { conclusion: "", name: "build", startedAt: "2026-10-15T11:35:24Z", status: "IN_PROGRESS" },
+      { conclusion: "CANCELLED", name: "pact-check", startedAt: "2026-10-15T11:34:44Z", status: "COMPLETED" },
+    ];
+    expect(checksFailed(rollup)).toBe(false);
+    // the same picture from `gh pr checks` (state + bucket, no conclusion)
+    expect(checksFailed([
+      { name: "build", state: "CANCELLED", bucket: "cancel", startedAt: "2026-10-15T11:34:43Z" },
+      { name: "build", state: "PENDING", bucket: "pending", startedAt: "2026-10-15T11:35:24Z" },
+    ])).toBe(false);
+    // a real failure with nothing re-running IS a verdict, under either spelling
+    expect(checksFailed([{ name: "unit-test", conclusion: "FAILURE", status: "COMPLETED" }])).toBe(true);
+    expect(checksFailed([{ name: "unit-test", state: "FAILURE", bucket: "fail" }])).toBe(true);
+    // a failure that has since been re-run green is not; an older green beside a newer failure is
+    expect(checksFailed([
+      { name: "unit-test", conclusion: "FAILURE", startedAt: "2026-10-15T10:00:00Z", status: "COMPLETED" },
+      { name: "unit-test", conclusion: "SUCCESS", startedAt: "2026-10-15T11:00:00Z", status: "COMPLETED" },
+    ])).toBe(false);
+    expect(checksFailed([
+      { name: "unit-test", conclusion: "SUCCESS", startedAt: "2026-10-15T10:00:00Z", status: "COMPLETED" },
+      { name: "unit-test", conclusion: "FAILURE", startedAt: "2026-10-15T11:00:00Z", status: "COMPLETED" },
+    ])).toBe(true);
+    // a failure still being re-run has no verdict yet; a cancelled run alone is waited on, not repaired
+    expect(checksFailed([{ name: "build", conclusion: "FAILURE", status: "COMPLETED" }, { name: "build", conclusion: "", status: "IN_PROGRESS" }])).toBe(false);
+    expect(checksFailed([{ name: "build", conclusion: "CANCELLED", status: "COMPLETED" }])).toBe(false);
+    // rows with no name (status contexts) each stand alone
+    expect(checksFailed([{ context: "ci/legacy", state: "FAILURE" }, { context: "ci/other", state: "SUCCESS" }])).toBe(true);
+    expect(checksFailed([])).toBe(false);
+  });
+
+  test("the probe reads OPEN, not CI_FAILED, while a force-push's superseded runs sit beside new ones", () => {
+    const repoDir = repo();
+    const binDir = mkdtempSync(join(tmpdir(), "howdah-gh-"));
+    const gh = join(binDir, "gh");
+    writeFileSync(gh, `#!/usr/bin/env bash
+if [[ "$1 $2" == "pr view" ]]; then
+  printf '%s\\n' '{"state":"OPEN","url":"https://github.com/areeb/x/pull/9","mergeable":"MERGEABLE","reviewDecision":"REVIEW_REQUIRED","statusCheckRollup":[{"conclusion":"CANCELLED","name":"build","startedAt":"2026-10-15T11:34:43Z","status":"COMPLETED"},{"conclusion":"","name":"build","startedAt":"2026-10-15T11:35:24Z","status":"IN_PROGRESS"}]}'
+  exit 0
+fi
+exit 1
+`);
+    chmodSync(gh, 0o755);
+    const priorPath = process.env.PATH;
+    process.env.PATH = `${binDir}:${priorPath ?? ""}`;
+    try {
+      // no required checks configured (gh pr checks exits 1): the rollup decides, and it is pending
+      expect(ghPrProbe(repoDir, "https://github.com/areeb/x/pull/9")?.state).toBe("OPEN");
+    } finally {
+      process.env.PATH = priorPath;
+    }
   });
 
   test("required checks decide CI_FAILED, not optional failures in the rollup", () => {
