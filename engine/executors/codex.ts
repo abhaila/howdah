@@ -117,7 +117,11 @@ export function codexExecutor(opts: CodexExecutorOpts): Executor {
       files: environmentFiles("codex", effectiveCwd(log.path, cwd), true) });
     const prompt = renderedPrompt ?? ""; // exactly what rendered_hash covers (system-map 0.1)
 
-    const proc = Bun.spawn([opts.binary ?? "codex", "app-server"], {
+    // ChatGPT app connectors (codex's `apps` feature: Linear, Notion… as `codex_apps` MCP tools)
+    // are off for a run: they live on the operator's ChatGPT login, and when that lapses every
+    // call parks the run on a "reconnect" ask nobody headless can answer — a publish step hit it
+    // twice in one visit. The operator's own codex keeps them; the override is per spawn.
+    const proc = Bun.spawn([opts.binary ?? "codex", "app-server", "-c", "features.apps=false"], {
       cwd: effectiveCwd(log.path, cwd) ?? dirname(log.path),
       env: { ...process.env },
       stdin: "pipe",
