@@ -280,6 +280,15 @@ export type NodeDef<C extends object> =
        * changes none parks `no-progress` (engine/run.ts).
        */
       changesFiles?: false;
+      /**
+       * A review of repairs judges only what the repairs changed. Names the agent steps whose
+       * work this step reviews; the engine finds in the log the commit the EARLIEST of those
+       * steps started from since this step last judged (engine/repair-scope.ts) and briefs the
+       * step (suffix v9) to judge `<that commit>..HEAD`. Without it a repair review re-judged
+       * the whole branch against its target and found a new rule to reject on every visit —
+       * three rejects on three different rules, each about code an earlier repair wrote.
+       */
+      reviewsWorkOf?: readonly string[];
     } & AgentConfig)
   | {
       kind: "command";
@@ -480,6 +489,9 @@ export class Graph<C extends object> {
         continue;
       }
       if (outs.length === 0) structural.push(`non-terminal node "${id}" has no outgoing edge (dead end)`);
+      if (node.kind === "agent" && node.reviewsWorkOf)
+        for (const r of node.reviewsWorkOf)
+          if (d.nodes[r]?.kind !== "agent") structural.push(`node "${id}" reviews the work of "${r}", which is not an agent node`);
       // HOW-57: a back-off entry the wait executor cannot parse would throw mid-run, days in
       if (node.kind === "wait")
         for (const d of node.backoff ?? [])

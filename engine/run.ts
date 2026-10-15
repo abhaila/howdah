@@ -71,6 +71,7 @@ import { EventLog } from "../log/write";
 import type { LoggedEvent, ParkCode } from "../log/events";
 import { ACCEPTANCE_KEY, asAcceptance, evidenceSources, unmetCriteria, unprovable, type AcceptanceRow } from "../core/acceptance";
 import { waivedCriteria } from "./acceptance-decision";
+import { repairScope } from "./repair-scope";
 import { softStopState, stopResumeFor, undeliveredSteers } from "./steer-state";
 import { previousTree } from "./no-progress";
 import { replayState, effectKey } from "./replay";
@@ -1222,11 +1223,16 @@ export class Engine {
     );
     // HOW-57 (G8): a stacked run's every agent step judges only its own range
     const stackedOn = this.stackedOn(nodeId, visit);
+    // a review of repairs judges only the repairs' range (core/graph.ts reviewsWorkOf)
+    const def = this.graph.def.nodes[nodeId];
+    const reviewed = def?.kind === "agent" ? def.reviewsWorkOf : undefined;
+    const scope = reviewed && reviewed.length > 0 ? repairScope(logged, nodeId, reviewed) : undefined;
     // system-map 0.1: every suffix goes in BEFORE hashing, so the hash covers what is sent
     const skills = skillsForHarness(config?.harness, config?.skills);
     const finalRendered = assemblePrompt({
       body: rendered,
       ...(stackedOn ? { stackedOn } : {}),
+      ...(scope ? { repairScope: scope } : {}),
       jumpMessage,
       replyMessage,
       refusalMessage,
@@ -1265,6 +1271,7 @@ export class Engine {
       ...(carried.length ? { steers_carried: carried.map((c) => c.seq) } : {}),
       ...(stopResume ? { resumed_after_stop: stopResume.seq } : {}),
       ...(stackedOn ? { stacked_on: stackedOn } : {}),
+      ...(scope ? { repair_scope: scope } : {}),
     });
     return finalRendered;
   }

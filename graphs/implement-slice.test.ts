@@ -113,8 +113,10 @@ describe("deliveryGraph extraction keeps implement-ticket identical", () => {
     //   HOW-54  plan_review and delivery.publish declare `changesFiles: false` (no-progress check)
     //   HOW-59  create_worktree also publishes `worktree.preview_paths`; implementation.criteria
     //           reads it and `worktree.verify_command`, so it asks only for provable evidence
+    //   (repair scope) delivery.review_repairs declares `reviewsWorkOf` — the four code-changing
+    //           repairs — so it is briefed to judge the repairs' diff, not the whole branch again
     const s = JSON.stringify(sortDeep(shapeOf(implementTicket)));
-    expect(createHash("sha256").update(s).digest("hex")).toBe("9de8bcde4ee3ba0cd25791a9094da1092a188f021680fdb27de66f02cc4458fd");
+    expect(createHash("sha256").update(s).digest("hex")).toBe("1bfe95ad92a3a9913e86b9a5022e339d7931e3d8aac034234fa211762d94202d");
   });
 ;
 
@@ -364,7 +366,7 @@ describe("validateProposal (GhostSet against the base the proposal was drawn on)
     expect(retry).toContain("com.example.api.<top>.nope(Request)");
     const retryRender = run.events().filter((e) => e.type === "prompt-rendered" && e.node === "slice.propose")[1]!;
     if (retryRender.type !== "prompt-rendered") throw new Error("no render");
-    expect(retryRender.suffix_version).toBe(8);
+    expect(retryRender.suffix_version).toBe(9);
     expect(reconstructRender(run.runDir, retryRender.rendered_hash)).toMatchObject({ verified: true, text: retry });
 
     // ...once: the redraw after operator feedback does not repeat it

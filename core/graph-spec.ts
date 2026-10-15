@@ -223,6 +223,8 @@ export type NodeSpec =
       requiresAcceptance?: true;
       /** HOW-54: never changes the worktree (it plans or publishes) — not progress-checked on a cycle */
       changesFiles?: false;
+      /** the agent steps whose work this step reviews — it is briefed to judge only their diff (core/graph.ts) */
+      reviewsWorkOf?: string[];
       config?: AgentConfig;
     })
   | (NodeBase & { kind: "command"; run: string; reads: string[]; writes: string[]; timeoutMs?: number; maxVisits?: number })
@@ -472,6 +474,7 @@ function compileNode(n: NodeSpec, scopes: Record<string, Scope>, fields: FieldSp
         ...(n.requires ? { requires: { approvalOf: n.requires } } : {}),
         ...(n.requiresAcceptance ? { requiresAcceptance: true as const } : {}),
         ...(n.changesFiles === false ? { changesFiles: false as const } : {}),
+        ...(n.reviewsWorkOf?.length ? { reviewsWorkOf: [...n.reviewsWorkOf] } : {}),
         ...(n.config ?? {}),
         ...cls,
       };
@@ -808,6 +811,9 @@ export function specProblems(
       if (body !== undefined) problems.push(...bodyProblems(n, body, who));
       if (n.requires && !spec.nodes.some((x) => x.id === n.requires && x.kind === "approval"))
         problems.push({ node: n.id, where: "steps", message: `${who} waits on an approval step that does not exist. Pick one, or clear it.` });
+      for (const r of n.reviewsWorkOf ?? [])
+        if (!spec.nodes.some((x) => x.id === r && x.kind === "agent"))
+          problems.push({ node: n.id, where: "steps", message: `${who} reviews the work of "${r}", which is not an agent step. Name the steps whose repairs it judges, or clear it.` });
     }
     if (n.kind === "command" && !n.run.trim()) problems.push({ node: n.id, where: "steps", message: `${who} has no command to run.` });
     if (n.kind === "wait" && !/^\d+\s*(ms|s|m|h)$/.test(n.duration))
@@ -1233,6 +1239,7 @@ function parseNode(v: unknown): NodeSpec | undefined {
         ...(requires ? { requires } : {}),
         ...(v.requiresAcceptance === true ? { requiresAcceptance: true as const } : {}),
         ...(v.changesFiles === false ? { changesFiles: false as const } : {}),
+        ...(strArray(v.reviewsWorkOf).length ? { reviewsWorkOf: strArray(v.reviewsWorkOf) } : {}),
         ...(config ? { config } : {}),
       };
     }

@@ -220,6 +220,12 @@ export type RunEvent =
        * words the same range even after a restack moved the base.
        */
       stacked_on?: { branch: string; sha: string };
+      /**
+       * Suffix v9: where the repairs this step reviews began (`reviewsWorkOf`) — the REPAIR
+       * SCOPE briefing's input, derived from the log (engine/repair-scope.ts) and logged so
+       * reconstruction words the same range.
+       */
+      repair_scope?: { node: string; visit: number; sha: string; branch?: string };
     }
   | {
       type: "chunk";

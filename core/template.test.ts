@@ -46,8 +46,8 @@ describe("versioned suffix builders (system-map 0.1)", () => {
     expect(v1.outputContract([])).toBe(V1_SUMMARY_ONLY);
   });
 
-  test("the current version is 8 and buildOutputInstruction is its contract builder", () => {
-    expect(SUFFIX_VERSION).toBe(8);
+  test("the current version is 9 and buildOutputInstruction is its contract builder", () => {
+    expect(SUFFIX_VERSION).toBe(9);
     expect(buildOutputInstruction(["a", "b"])).toBe(V1_CONTRACT);
   });
 
@@ -77,6 +77,40 @@ describe("versioned suffix builders (system-map 0.1)", () => {
     // without stackedOn, v8 is v7 byte for byte
     const { stackedOn: _s, ...plain } = parts;
     expect(assemblePrompt({ ...plain, suffixVersion: 8 })).toBe(assemblePrompt({ ...plain, suffixVersion: 7 }));
+  });
+
+  test("v9 is v8 plus the REPAIR SCOPE briefing: everything else byte-identical, the briefing pinned literally", () => {
+    const v8 = suffixBuilders(8)!;
+    const v9 = suffixBuilders(9)!;
+    expect(v8.repairScopeInstruction).toBeUndefined();
+    expect(v9.outputContract(["a"])).toBe(v8.outputContract(["a"]));
+    expect(v9.skillHint(["review"])).toBe(v8.skillHint(["review"]));
+    expect(v9.reentryInstruction!(2)).toBe(v8.reentryInstruction!(2));
+    const sha = "0123456789abcdef0123456789abcdef01234567";
+    expect(v9.stackedInstruction!({ branch: "b", sha })).toBe(v8.stackedInstruction!({ branch: "b", sha }));
+    expect(v9.repairScopeInstruction!({ node: "delivery.fix_ci", visit: 9, sha, branch: "feature/x" })).toBe(
+      "\n\n## Repair scope\n" +
+        "This is a review of a repair, not of the whole branch. The repair began at delivery.fix_ci@9 from 0123456789ab on feature/x; " +
+        "everything on the branch up to that commit was reviewed and published already — it is context, not the subject. " +
+        "Judge only what changed since: `git diff 0123456789ab` (committed and uncommitted) and `git log 0123456789ab..HEAD`. " +
+        "Where that diff merely replays commits that already sit on the target branch (a rebase or restack), those are not the repair's work. " +
+        "A defect you notice outside this range is a note for the summary, not a blocking finding.",
+    );
+    // no branch known: the sentence simply omits it
+    expect(v9.repairScopeInstruction!({ node: "repair", visit: 1, sha })).toContain("began at repair@1 from 0123456789ab; everything");
+  });
+
+  test("v9: the repair scope sits after the stacked briefing and before every other suffix; a v8 render refuses one", () => {
+    const sha = "s".repeat(40);
+    const parts = { body: "BODY", skills: [], outputKeys: ["a"], jumpMessage: "JUMP", stackedOn: { branch: "b", sha }, repairScope: { node: "fix", visit: 2, sha } };
+    const text = assemblePrompt({ ...parts, suffixVersion: 9 });
+    expect(text.startsWith("BODY\n\n## Stacked change\n")).toBe(true);
+    expect(text.indexOf("## Stacked change")).toBeLessThan(text.indexOf("## Repair scope"));
+    expect(text.indexOf("## Repair scope")).toBeLessThan(text.indexOf("## Operator instruction"));
+    expect(() => assemblePrompt({ ...parts, suffixVersion: 8 })).toThrow("suffix version 8 has no repair-scope builder");
+    // without repairScope, v9 is v8 byte for byte
+    const { repairScope: _r, ...plain } = parts;
+    expect(assemblePrompt({ ...plain, suffixVersion: 9 })).toBe(assemblePrompt({ ...plain, suffixVersion: 8 }));
   });
 
   test("v3 is v2 plus the refusal builder (system-map 1c): everything else byte-identical, refusal pinned literally", () => {

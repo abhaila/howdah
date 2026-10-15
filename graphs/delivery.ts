@@ -135,6 +135,8 @@ function plainDelivery(): DeliveryParts<DeliveryCtx> {
         writes: { review_verdict: cleared, review_findings: cleared },
         // HOW-53: a reviewer that can edit can "fix" what it was meant to judge and pass its own work
         readOnly: true,
+        // it judges the repairs' own diff, not the whole branch again (core/graph.ts reviewsWorkOf)
+        reviewsWorkOf: [...CODE_CHANGING_REPAIRS],
         class: "delivery",
       },
       "delivery.revise_repairs": {
@@ -258,6 +260,7 @@ function verifiedDelivery(): DeliveryParts<VerifiedDeliveryCtx> {
       reads: ["goal", "work", "publication_summary", "repair_summary", ...design],
       writes: { review_verdict: cleared, review_findings: cleared },
       readOnly: true, // HOW-53
+      reviewsWorkOf: [...CODE_CHANGING_REPAIRS],
       class: "delivery",
     },
     "delivery.revise_repairs": {

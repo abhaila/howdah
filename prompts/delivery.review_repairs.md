@@ -1,6 +1,6 @@
 ---
 id: delivery.review_repairs
-version: 1
+version: 2
 tags: [implement-ticket]
 provenance: ported from Orbital implement-ticket
 ---
@@ -22,7 +22,7 @@ Repair summary:
 
 {{ context.repair_summary }}
 
-Review the complete current branch change against the work scope, goal and applicable repository instructions. Inspect the diff against the current target branch, including uncommitted changes, affected code and relevant tests.
+Review the repair against the work scope, goal and applicable repository instructions. A repair-scope briefing below names the commit the repair started from: judge the diff from that commit, including uncommitted changes, the affected code and relevant tests — the branch up to that commit was reviewed and published already and is context, not the subject. If no such briefing is given, judge the complete current branch change against its target branch.
 
 Verify the corrections and verification claims in the repair summary against the code and available evidence.
 

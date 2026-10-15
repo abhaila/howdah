@@ -504,6 +504,15 @@ Break one of these and the design stops working, so check them before changing t
 - **The harness gathers its own evidence (HOW-40, HOW-52).** `verify:run` runs the tests and
   `evidence:screenshot` captures the workspace preview into the run dir (never the worktree) over
   CDP; neither passes silently — no contract or no browser is `not-checked` with a reason.
+- **A review of repairs judges the repairs, not the branch again.** `reviewsWorkOf` on an agent
+  node (core/graph.ts) names the steps whose work it reviews; the engine derives from the log the
+  commit the EARLIEST of those steps started from since the review last judged
+  (engine/repair-scope.ts, the `reconciled` probe before that step's `node-started`) and briefs
+  the reviewer with suffix v9 to judge `<that commit>..HEAD`, logged as `repair_scope` so
+  reconstruction words it the same. delivery.review_repairs declares the four code-changing
+  repairs. Before this it re-judged the whole stack against main and found a new repository
+  rule to reject on every visit, each about code an earlier repair had written, and the CI fix
+  sat unpushed behind the loop for a day.
 - **A loop that changes nothing parks (HOW-54).** Progress-checked steps (on a cycle, not
   readOnly, not `changesFiles: false`) record `node-finished.tree`, the worktree's content tree
   id; a visit whose tree equals its previous visit's parks `no-progress`.

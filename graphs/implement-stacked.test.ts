@@ -157,7 +157,7 @@ describe("G8: the STACKED briefing (suffix v8)", () => {
     const { dir, render, sent } = await run("howdah/p--fe-1", TIP);
     expect(sent).toContain("This change is stacked on howdah/p--fe-1@0123456789ab");
     expect(sent).toContain("Your change is `0123456789ab..HEAD`");
-    expect(render).toMatchObject({ suffix_version: 8, stacked_on: { branch: "howdah/p--fe-1", sha: TIP } });
+    expect(render).toMatchObject({ suffix_version: 9, stacked_on: { branch: "howdah/p--fe-1", sha: TIP } });
     const r = reconstructRender(dir, render.rendered_hash)!;
     expect(r.verified).toBe(true);
     expect(r.text).toBe(sent);

@@ -228,6 +228,12 @@
           }
         },
         "class": "delivery",
+        "reviewsWorkOf": [
+          "delivery.resolve_conflicts",
+          "delivery.fix_ci",
+          "delivery.address_reviews",
+          "delivery.revise_repairs"
+        ],
         "readOnly": true
       },
       "delivery.revise_repairs": {
@@ -862,6 +868,12 @@
             "scope": "cleared"
           }
         },
+        "reviewsWorkOf": [
+          "delivery.resolve_conflicts",
+          "delivery.fix_ci",
+          "delivery.address_reviews",
+          "delivery.revise_repairs"
+        ],
         "readOnly": true,
         "class": "delivery"
       },
@@ -1490,6 +1502,12 @@
             "scope": "cleared"
           }
         },
+        "reviewsWorkOf": [
+          "delivery.resolve_conflicts",
+          "delivery.fix_ci",
+          "delivery.address_reviews",
+          "delivery.revise_repairs"
+        ],
         "readOnly": true,
         "class": "delivery"
       },
@@ -1966,6 +1984,12 @@
           }
         },
         "class": "delivery",
+        "reviewsWorkOf": [
+          "delivery.resolve_conflicts",
+          "delivery.fix_ci",
+          "delivery.address_reviews",
+          "delivery.revise_repairs"
+        ],
         "readOnly": true
       },
       "delivery.revise_repairs": {

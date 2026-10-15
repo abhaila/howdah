@@ -394,7 +394,7 @@ describe("reply to an agent failure reaches the retry, once (system-map 0.2)", (
       const events = readLog(join(dir, "run.jsonl"));
       expect(events.filter((e) => e.type === "attention-resolved").map((e: any) => e.source)).toEqual(["operator", "resume"]);
       const render: any = events.find((e) => e.type === "prompt-rendered" && e.node === "one" && e.visit === 2);
-      expect(render.suffix_version).toBe(8);
+      expect(render.suffix_version).toBe(9);
     });
   }
 

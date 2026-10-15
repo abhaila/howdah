@@ -15,9 +15,10 @@ import { templateReads } from "./template-refs";
 import {
   COMMAND_BUILTINS, SPEC_VERSION, WORKTREE_FACTS, WORKTREE_CREATE_FACTS,
   buildGraph, draftHashOf, draftRuleProblems, resolveDraftBodies, builtinReads, coerceOperand, compilePredicate, emittableWrites, missingBuiltinReads, parseGraphSpec, predicateLabel,
-  isBlocking, keepPath, recoercePredicate, specAdvice, specProblems, unmatchableOperand, shapeOf
+  isBlocking, keepPath, recoercePredicate, specAdvice, specProblems, unmatchableOperand,
   type GraphSpec, type NodeSpec, type Predicate,
 } from "./graph-spec";
+import { shapeOf } from "../graphs/spec-shape";
 
 /** the smallest legal graph: one agent, one terminal */
 function minimal(over: Partial<GraphSpec> = {}): GraphSpec {
@@ -608,6 +609,40 @@ describe("a field's kind owns the operands that compare against it", () => {
     for (const k of ["text", "number", "boolean", "choice", undefined] as const)
       expect(keepPath("outcome", k)).toBeUndefined();
     expect(keepPath(undefined, "json")).toBeUndefined();
+  });
+});
+
+describe("reviewsWorkOf: a review of repairs judges only their diff", () => {
+  const scoped = (reviews: string[]) => minimal({
+    nodes: [
+      { id: "draft", kind: "agent", title: "Draft the doc", prompt: "my-review.draft", reads: ["goal"], writes: ["summary"] },
+      { id: "check", kind: "agent", prompt: "my-review.check", reads: ["goal", "summary"], writes: [], readOnly: true, reviewsWorkOf: reviews },
+      { id: "done", kind: "terminal", outcome: "success" },
+    ],
+    edges: [{ from: "draft", to: "check" }, { from: "check", to: "done" }],
+  });
+
+  test("round-trips through parse and compiles onto the node, in order", () => {
+    const spec = scoped(["draft"]);
+    const parsed = parseGraphSpec(JSON.parse(JSON.stringify(spec)));
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) expect(parsed.spec.nodes[1]).toMatchObject({ reviewsWorkOf: ["draft"] });
+    expect(buildGraph(spec).def.nodes.check).toMatchObject({ reviewsWorkOf: ["draft"] });
+    expect(specProblems(spec)).toEqual([]);
+    // absent and empty are the same: neither is carried
+    const bare = parseGraphSpec(JSON.parse(JSON.stringify(scoped([]))));
+    if (bare.ok) expect("reviewsWorkOf" in bare.spec.nodes[1]!).toBe(false);
+    expect("reviewsWorkOf" in buildGraph(scoped([])).def.nodes.check!).toBe(false);
+  });
+
+  test("naming a step that is not an agent step is refused, in the operator's words, and by the compiled graph too", () => {
+    const problems = specProblems(scoped(["done", "ghost"]));
+    expect(problems.map((p) => p.message)).toEqual([
+      expect.stringContaining('reviews the work of "done", which is not an agent step'),
+      expect.stringContaining('reviews the work of "ghost", which is not an agent step'),
+    ]);
+    expect(problems.every((p) => p.node === "check" && p.where === "steps")).toBe(true);
+    expect(buildGraph(scoped(["ghost"])).validate().structural).toContain('node "check" reviews the work of "ghost", which is not an agent node');
   });
 });
 

@@ -199,7 +199,7 @@ export function operatorInstructionSuffix(message: string): string {
 // ---- suffixes (system-map 0.1) ---------------------------------------------------
 
 /** The suffix wording new renders use. Bump it — and add a builder set — to reword. */
-export const SUFFIX_VERSION = 8;
+export const SUFFIX_VERSION = 9;
 
 /**
  * HOW-36: what a context-exhausted visit had done, as data — derived by engine/handoff.ts from
@@ -260,6 +260,19 @@ export interface SuffixBuilders {
    * `<sha>..HEAD`. Absent from versions that predate it (v1–v7).
    */
   stackedInstruction?(base: StackedOn): string;
+  /**
+   * A review of repairs: judge only `<sha>..HEAD`, the range the repairs it reviews have
+   * changed since this step last judged (engine/repair-scope.ts). Absent from v1–v8.
+   */
+  repairScopeInstruction?(scope: RepairScope): string;
+}
+
+/** where the repairs a review judges began: the step, its visit, and the commit it started from */
+export interface RepairScope {
+  node: string;
+  visit: number;
+  sha: string;
+  branch?: string;
 }
 
 /** HOW-57: the branch and commit a stacked run's work sits on (`deps.base` / `deps.base_tip`). */
@@ -412,9 +425,29 @@ const V8: SuffixBuilders = {
     `Use \`git diff ${sha.slice(0, 12)}..HEAD\` and \`git log ${sha.slice(0, 12)}..HEAD\` to see it.`,
 };
 
-const SUFFIX_BUILDERS: Readonly<Record<number, SuffixBuilders>> = { 1: V1, 2: V2, 3: V3, 4: V4, 5: V5, 6: V6, 7: V7, 8: V8 };
+/**
+ * v9 = v8 + the REPAIR SCOPE briefing for a step that reviews other steps' repairs
+ * (`reviewsWorkOf`). Without it the reviewer judged the whole branch against its target and
+ * found a new rule to reject on every visit. NEVER edit a published version.
+ */
+const V9: SuffixBuilders = {
+  ...V8,
+  repairScopeInstruction: ({ node, visit, sha, branch }) => {
+    const short = sha.slice(0, 12);
+    return (
+      `\n\n## Repair scope\n` +
+      `This is a review of a repair, not of the whole branch. The repair began at ${node}@${visit} from ${short}${branch ? ` on ${branch}` : ""}; ` +
+      `everything on the branch up to that commit was reviewed and published already — it is context, not the subject. ` +
+      `Judge only what changed since: \`git diff ${short}\` (committed and uncommitted) and \`git log ${short}..HEAD\`. ` +
+      `Where that diff merely replays commits that already sit on the target branch (a rebase or restack), those are not the repair's work. ` +
+      `A defect you notice outside this range is a note for the summary, not a blocking finding.`
+    );
+  },
+};
+
+const SUFFIX_BUILDERS: Readonly<Record<number, SuffixBuilders>> = { 1: V1, 2: V2, 3: V3, 4: V4, 5: V5, 6: V6, 7: V7, 8: V8, 9: V9 };
 /** the builders new renders use; bump together with SUFFIX_VERSION */
-const CURRENT: SuffixBuilders = V8;
+const CURRENT: SuffixBuilders = V9;
 
 /** The builders a logged `suffix_version` pins, or undefined for a version this code never had. */
 export function suffixBuilders(version: number): SuffixBuilders | undefined {
@@ -466,6 +499,8 @@ export interface PromptParts {
   stopResumeMessage?: string;
   /** HOW-57 (v8): what this run's branch is stacked on — renders the STACKED briefing */
   stackedOn?: StackedOn;
+  /** v9: where the repairs this step reviews began — renders the REPAIR SCOPE briefing */
+  repairScope?: RepairScope;
   /** skills named in the hint — already filtered by skillsForHarness */
   skills: readonly string[];
   /** the node's declared write keys, in declaration order */
@@ -475,7 +510,7 @@ export interface PromptParts {
 
 /**
  * The ONE assembly of a prompt as sent. Fixed order:
- *   template body → stacked briefing (HOW-57) → operator jump → operator reply (0.2) → proposal refusal (1c)
+ *   template body → stacked briefing (HOW-57) → repair scope (v9) → operator jump → operator reply (0.2) → proposal refusal (1c)
  *   → context re-entry (HOW-14) → resume after operator stop (HOW-48) → carried operator steers
  *   (HOW-47) → skill hint → outputs contract.
  * Throws on a suffix version with no builders — the engine only ever passes SUFFIX_VERSION,
@@ -489,6 +524,11 @@ export function assemblePrompt(parts: PromptParts): string {
   if (parts.stackedOn !== undefined) {
     if (!builders.stackedInstruction) throw new Error(`suffix version ${parts.suffixVersion} has no stacked builder`);
     stacked = builders.stackedInstruction(parts.stackedOn);
+  }
+  let scope = "";
+  if (parts.repairScope !== undefined) {
+    if (!builders.repairScopeInstruction) throw new Error(`suffix version ${parts.suffixVersion} has no repair-scope builder`);
+    scope = builders.repairScopeInstruction(parts.repairScope);
   }
   let reply = "";
   if (parts.replyMessage !== undefined) {
@@ -518,6 +558,7 @@ export function assemblePrompt(parts: PromptParts): string {
   return (
     parts.body +
     stacked +
+    scope +
     (parts.jumpMessage !== undefined ? operatorInstructionSuffix(parts.jumpMessage) : "") +
     reply +
     refusal +
