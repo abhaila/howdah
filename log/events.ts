@@ -716,6 +716,8 @@ export type RunEvent =
       memory_paths?: string[];
       /** hooks that ran before the session started, and the context each one injected (hashed, and its text bounded) */
       hooks?: Array<{ name: string; exit_code?: number; injected?: { sha256: string; chars: number; text: string } }>;
+      /** codex: the thread's `developerInstructions` (engine/executors/codex.ts CODEX_SKILL_INSTRUCTIONS) */
+      developer_instructions?: string;
       /** settings and instruction files the harness reads, hashed; `sha256: null` = absent */
       files: Array<{ path: string; scope: "project" | "user"; sha256: string | null }>;
     }

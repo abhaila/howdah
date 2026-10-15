@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Engine } from "../run";
 import { claudeExecutor } from "./claude";
-import { codexExecutor } from "./codex";
+import { CODEX_SKILL_INSTRUCTIONS, codexExecutor } from "./codex";
 import { cursorApprovalMode, cursorExecutor } from "./cursor";
 import { buildOutputInstruction, buildRepairInstruction, parseOutputs } from "./outputs";
 import { defineGraph } from "../../core/graph";
@@ -449,7 +449,10 @@ describe("codex executor over the fake app-server wire", () => {
     const result = await engine.start({ goal: "codex sandbox" });
 
     expect(result).toEqual({ state: "finished", outcome: "success" });
-    expect(JSON.parse(readFileSync(capture, "utf8")).sandbox).toBe("danger-full-access");
+    const params = JSON.parse(readFileSync(capture, "utf8"));
+    expect(params.sandbox).toBe("danger-full-access");
+    // a skill mandate from a hook must be satisfiable on a harness with no Skill tool
+    expect(params.developerInstructions).toBe(CODEX_SKILL_INSTRUCTIONS);
     delete process.env.FAKE_CODEX_CAPTURE;
   });
 

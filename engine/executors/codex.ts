@@ -106,6 +106,22 @@ export function usageDelta(now: TurnUsage | undefined, before: TurnUsage | undef
   };
 }
 
+/**
+ * Sent as the thread's `developerInstructions`. Codex has no Skill tool, but the operator's
+ * Claude-Code-shaped plugins still fire their SessionStart hooks here (the sequence plugin's
+ * `default-behaviour`: "Use the `Skill` tool … Never use the Read tool on skill files"), and
+ * repos inject "you MUST invoke the `kotlin-engineer` skill". Together those deadlocked every
+ * Codex review on a Kotlin repo: the model refused to read SKILL.md and refused to work until
+ * a tool that is not on the wire had been called, then parked `no-progress`. This names how a
+ * skill is invoked on THIS harness. Logged on `agent-environment`, since it is agent input.
+ */
+export const CODEX_SKILL_INSTRUCTIONS =
+  "Howdah harness note: this Codex session has no `Skill` tool. Wherever any instruction tells you to " +
+  "invoke, load or use a skill, invoke it by reading that skill's SKILL.md with your file tools and " +
+  "following it. Reading SKILL.md is how a skill is invoked here; it is not a prohibited fallback. " +
+  "Skills live under the skill roots listed in your instructions, `.agents/skills/<name>/SKILL.md` " +
+  "or `.claude/skills/<name>/SKILL.md` in the repository. A missing Skill tool is never a reason to stop.";
+
 export function codexExecutor(opts: CodexExecutorOpts): Executor {
   return async ({ nodeId, def, visit, runId, cwd, log, renderedPrompt, agentConfig, reads }) => {
     if (def.kind !== "agent") throw new Error("codexExecutor on non-agent node");
@@ -114,6 +130,7 @@ export function codexExecutor(opts: CodexExecutorOpts): Executor {
     // HOW-55: codex has no switch for the operator's own config, so what it reads regardless is
     // recorded — hashed — on every attempt; a run can say what it ran with even where it cannot choose
     log.append({ type: "agent-environment", node: nodeId, visit, harness: "codex", setting_sources: null, inherits_user: true,
+      developer_instructions: CODEX_SKILL_INSTRUCTIONS,
       files: environmentFiles("codex", effectiveCwd(log.path, cwd), true) });
     const prompt = renderedPrompt ?? ""; // exactly what rendered_hash covers (system-map 0.1)
 
@@ -395,6 +412,7 @@ export function codexExecutor(opts: CodexExecutorOpts): Executor {
         cwd: effectiveCwd(log.path, cwd) ?? dirname(log.path),
         approvalPolicy: "on-request",
         sandbox: codexSandbox(agentConfig?.permissionMode, opts.sandbox),
+        developerInstructions: CODEX_SKILL_INSTRUCTIONS,
         ...((agentConfig?.model ?? opts.model) ? { model: agentConfig?.model ?? opts.model } : {}),
       });
       const threadId = thread?.threadId ?? thread?.thread?.id;
