@@ -1,0 +1,36 @@
+engine/run.ts
+  s_ac87379091570a::t_25e5d174924e66 1120
+  s_ac87379091570a::t_6149f43a72e8e7 1121-1126
+  s_ac87379091570a::t_b76744b794f1ab 230-250
+web/derive.ts
+  s_ac87379091570a::t_c08ea6112573e3 745-746
+log/events.ts
+  s_ac87379091570a::t_a232c857f737a2 393-401
+  s_ac87379091570a::t_ecc1488e838d88 392
+cli/main.ts
+  s_ac87379091570a::t_7fa88eba8fb42b 265
+  s_ac87379091570a::t_62cffbc60264f1 256
+  s_ac87379091570a::t_0e95d0b6284680 264
+  s_ac87379091570a::t_880209a1617a3e 32
+  s_ac87379091570a::t_85a5ab5f4f2e5f 633-641
+engine/config.test.ts
+  s_ac87379091570a::t_fc4f5817d78ecc 265
+  s_ac87379091570a::t_06c0f7b69789b2 6-7
+  s_ac87379091570a::t_361d590464ed82 259-264,266-269
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c8f8cd364d48a28a7cc13b4bf5d9cd43d17abee5",
+  "prompts": {},
+  "sessions": {
+    "s_ac87379091570a": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "b9d52fa4-356f-4de8-bc19-0771f1f2bf1b",
+        "model": "auto-smart"
+      },
+      "human_author": "areeb.bhaila <areeb.bhaila@gmail.com>"
+    }
+  }
+}
