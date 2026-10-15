@@ -1,0 +1,24 @@
+CLAUDE.md
+  s_bafb3ad34c9e95::t_ce0c45e39e70b6 323-328
+engine/executors/worktree.test.ts
+  s_bafb3ad34c9e95::t_9e2a6d61a00255 6,422-479
+  s_bafb3ad34c9e95::t_0ebb0436618fc9 480
+engine/executors/worktree.ts
+  s_bafb3ad34c9e95::t_9e2a6d61a00255 233-264,319,322-323,336-337
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d730c6b9c1bbca6e57e4bbb256b54b4d139ed7fe",
+  "prompts": {},
+  "sessions": {
+    "s_bafb3ad34c9e95": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "badc1cd2-b3b2-49f7-93ba-331ef7da67b5",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "areeb.bhaila <areeb.bhaila@gmail.com>"
+    }
+  }
+}
