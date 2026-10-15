@@ -1,0 +1,26 @@
+log/events.ts
+  s_ac87379091570a::t_8ed20480fb3b34 719-720
+engine/executors/codex.ts
+  s_ac87379091570a::t_ce865aa6eb8bf0 133
+  s_ac87379091570a::t_fe754d24d022ac 415
+  s_ac87379091570a::t_7bac5970506f8b 109-124
+engine/executors/executors.test.ts
+  s_ac87379091570a::t_ec465e7a437ebb 452-455
+  s_ac87379091570a::t_623b94411ce043 7
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "cac0568364a74ef986b11b8574c842fee1104095",
+  "prompts": {},
+  "sessions": {
+    "s_ac87379091570a": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "b9d52fa4-356f-4de8-bc19-0771f1f2bf1b",
+        "model": "auto-smart"
+      },
+      "human_author": "areeb.bhaila <areeb.bhaila@gmail.com>"
+    }
+  }
+}
