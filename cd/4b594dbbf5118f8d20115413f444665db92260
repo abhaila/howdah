@@ -1,0 +1,24 @@
+adapter/fixtures/codex-elicitation.jsonl
+  s_bafb3ad34c9e95::t_bd2cd674be502a 1-7
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "cd4b594dbbf5118f8d20115413f444665db92260",
+  "prompts": {},
+  "humans": {
+    "h_2e3f9438885174": {
+      "author": "areeb.bhaila <areeb.bhaila@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_bafb3ad34c9e95": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "badc1cd2-b3b2-49f7-93ba-331ef7da67b5",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "areeb.bhaila <areeb.bhaila@gmail.com>"
+    }
+  }
+}
