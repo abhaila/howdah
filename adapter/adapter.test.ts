@@ -471,6 +471,9 @@ describe("cursor adapter (shapes documented, not captured)", () => {
     expect(argv.at(-1)).toBe("do the thing"); // positional: a piped prompt would arrive empty
     expect(argv).not.toContain("--force"); // approval flags are the caller's decision, never a default
     expect(argv).not.toContain("--model");
+    // the worktree is howdah's own: without this cursor-agent exits 1 on "Workspace Trust
+    // Required" before saying anything, which is how a fallback visit died live
+    expect(argv).toContain("--trust");
   });
 
   test("model, resume and approval flags ride only when given", () => {

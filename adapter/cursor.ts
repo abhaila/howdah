@@ -30,6 +30,11 @@ import type { AgentEvent } from "./events";
  * form (`cursor-agent -p "..."`). It is not piped on stdin: stdin in that form is EXTRA
  * context appended to a positional prompt, not the prompt itself, so a piped prompt would
  * arrive as an empty request with a note attached.
+ *
+ * `--trust` is NOT an approval flag: cursor-agent 2026.10.14 refuses to start at all in a
+ * directory nobody has trusted ("Workspace Trust Required", exit 1, before any output), and
+ * a run's worktree is howdah's own. A read-only node still needs it to read. Approval flags
+ * stay the caller's decision (cursorApprovalMode), so a plan node is trusted and still asks.
  */
 export function cursorArgs(opts: {
   prompt: string;
@@ -44,6 +49,7 @@ export function cursorArgs(opts: {
     "--output-format", "stream-json",
     ...(opts.model ? ["--model", opts.model] : []),
     ...(opts.resume ? ["--resume", opts.resume] : []),
+    "--trust",
     ...(opts.approvalFlags ?? []),
     opts.prompt,
   ];
