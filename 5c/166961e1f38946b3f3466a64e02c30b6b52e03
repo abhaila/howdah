@@ -1,0 +1,19 @@
+engine/executors/codex.ts
+  s_bafb3ad34c9e95::t_4b1886e82bec3b 120-124
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5c166961e1f38946b3f3466a64e02c30b6b52e03",
+  "prompts": {},
+  "sessions": {
+    "s_bafb3ad34c9e95": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "badc1cd2-b3b2-49f7-93ba-331ef7da67b5",
+        "model": "unknown"
+      },
+      "human_author": "areeb.bhaila <areeb.bhaila@gmail.com>"
+    }
+  }
+}
