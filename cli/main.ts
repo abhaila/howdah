@@ -29,7 +29,7 @@ import { softStop, steer } from "../engine/steer";
 import { waiveCriterion, waiveUnprovable } from "../engine/acceptance-decision";
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { Engine } from "../engine/run";
+import { Engine, pinnedHarness } from "../engine/run";
 import { liveExecutors, stubExecutors } from "../engine/executors";
 import { EventLog, readLog } from "../log/write";
 import { AttentionCenter, osNotifier, writeHeartbeat } from "../engine/attention";
@@ -253,6 +253,7 @@ export async function resumeCommand(runId: string, opts: { force?: boolean } = {
         : `run ${runId} uses unknown graph "${replayed.started!.graph}"`,
     );
   }
+  const pinned = pinnedHarness(readLog(path));
   const engine: Engine = new Engine(graph, {
     dir: runDir,
     executors: executors(),
@@ -260,7 +261,8 @@ export async function resumeCommand(runId: string, opts: { force?: boolean } = {
     cwd: replayed.started.cwd,
     folderKind: replayed.started.folder_kind,
     diagnosticsCommandFor: (repoPath) => diagnosticsCommandFor(loadConfig(base), repoPath), // HOW-39
-    overrides: (replayed.started.overrides ?? undefined) as any, // the launch overrides survive resume
+    // the launch overrides survive resume; a later harness-pinned event replaces the harness
+    overrides: { ...(replayed.started.overrides ?? {}), ...(pinned ? { harness: pinned } : {}) } as import("../core/graph").AgentConfig,
     tuning: loadTuning(base)[replayed.started.graph],
     harnesses: harnessSettings(),
     control: () => readControl(runDir),
@@ -628,7 +630,15 @@ if (import.meta.main) {
       resolveEffectCommand(args[0] ?? "", args[1] ?? "", args[2] ?? "", node);
     }
     else if (verb === "resume") {
-      const id = rest.find((a) => a !== "--force") ?? "";
+      const id = rest.find((a) => a !== "--force" && a !== "--harness" && rest[rest.indexOf(a) - 1] !== "--harness") ?? "";
+      const harnessFlag = rest.indexOf("--harness");
+      const harness = harnessFlag >= 0 ? rest[harnessFlag + 1] : undefined;
+      if (harness !== undefined) {
+        if (!isHarness(harness)) throw new Error(`unknown harness "${harness}" — have: ${harnessNames().join(", ")}`);
+        const runDir = join(runsDir, id);
+        if (!existsSync(join(runDir, "run.jsonl"))) throw new Error(`unknown run: ${id}`);
+        new EventLog(join(runDir, "run.jsonl")).append({ type: "harness-pinned", harness, by: "operator" });
+      }
       clearControl(join(runsDir, id));
       await resumeCommand(id, { force: rest.includes("--force") });
     }

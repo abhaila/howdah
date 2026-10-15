@@ -390,6 +390,16 @@ export type RunEvent =
   | { type: "run-paused"; by: string }
   | { type: "run-resumed"; by: string }
   | {
+      /**
+       * The operator moved this run onto a harness. Spend before this event — a rate-limit
+       * hop, an exhausted allowance — no longer forces the fallback: the window may have
+       * reset, and the choice is the operator's. A limit hit AFTER the pin still hops.
+       */
+      type: "harness-pinned";
+      harness: Harness;
+      by: "operator";
+    }
+  | {
       /** operator moved the run to a node; the message is injected into that node's next
        *  prompt as an operator instruction */
       type: "operator-jump";

@@ -3,7 +3,8 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { defineGraph } from "../core/graph";
-import { Engine, resolveAgentConfig } from "./run";
+import { Engine, eventsSinceHarnessPin, pinnedHarness, resolveAgentConfig } from "./run";
+import type { LoggedEvent } from "../log/events";
 import { codexSandbox } from "./executors/codex";
 
 interface Ctx { goal: string; a: string; b: string; }
@@ -254,5 +255,16 @@ describe("read-only nodes (system-map 1a, D6/5A)", () => {
     });
     await engine.start({ goal: "g" });
     expect(mode).toBe("plan");
+  });
+
+  test("a harness pin drops spend from before it and names the harness", () => {
+    const before = [
+      { type: "node-finished", node: "n", visit: 1, status: "failed", writes: {} },
+      { type: "prompt-rendered", node: "n", visit: 1, prompt: "doc.draft", prompt_version: 1, rendered_hash: "h", harness: "claude" },
+    ] as LoggedEvent[];
+    const pin = { type: "harness-pinned", harness: "claude", by: "operator", seq: 3, ts: "t" } as LoggedEvent;
+    expect(eventsSinceHarnessPin(before)).toBe(before);
+    expect(eventsSinceHarnessPin([...before, pin])).toEqual([]);
+    expect(pinnedHarness([...before, pin])).toBe("claude");
   });
 });

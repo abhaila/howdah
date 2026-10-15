@@ -227,6 +227,27 @@ interface ProposalRound {
  *   - `defaultHarness` is config.json's `defaultHarness`, read from disk by the caller — the
  *     bottom of the stack, under the graph's own default.
  */
+/**
+ * Where an operator pin takes over. Allowance hops and exhausted-allowance events before
+ * the latest `harness-pinned` do not count: that event is the operator putting the run
+ * back on a harness the chain had left. Events after it count as usual, so a fresh
+ * limit still hops.
+ */
+export function eventsSinceHarnessPin(events: readonly LoggedEvent[]): readonly LoggedEvent[] {
+  let at = -1;
+  for (let i = 0; i < events.length; i++) if (events[i]?.type === "harness-pinned") at = i;
+  return at < 0 ? events : events.slice(at + 1);
+}
+
+/** the harness the operator last pinned, if they have */
+export function pinnedHarness(events: readonly LoggedEvent[]): Harness | undefined {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const e = events[i];
+    if (e?.type === "harness-pinned") return e.harness;
+  }
+  return undefined;
+}
+
 export function resolveAgentConfig(
   graph: Graph<any>,
   def: Extract<NodeDef<any>, { kind: "agent" }>,
@@ -1096,7 +1117,13 @@ export class Engine {
    * log, so it survives a resume in another process.
    */
   private spentHarnesses(events: readonly LoggedEvent[]): Set<Harness> {
-    const spent = new Set<Harness>(this.hoppedAwayFrom);
+    // a harness-pinned event is a line: the operator took the run back, so only spend
+    // after that line can force it off again. Hops this process already made are the
+    // same evidence, and the pin cancels them too.
+    const sincePin = eventsSinceHarnessPin(events);
+    const spent = new Set<Harness>();
+    if (sincePin === events) for (const h of this.hoppedAwayFrom) spent.add(h);
+    events = sincePin;
     for (const h of harnessNames()) if (this.latestAllowanceState(events, h) === "exhausted") spent.add(h);
     for (const h of this.priorLimitFailureHarnesses(events)) spent.add(h);
     return spent;
