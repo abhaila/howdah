@@ -1,0 +1,35 @@
+core/template.test.ts
+  s_bafb3ad34c9e95::t_85ba9d51260dd9 49-50,116-131
+  s_bafb3ad34c9e95::t_b0feb58d97625c 132-133
+engine/engine.test.ts
+  s_bafb3ad34c9e95::t_681eda256dd12f 626
+graphs/implement-stacked.test.ts
+  s_bafb3ad34c9e95::t_681eda256dd12f 160
+engine/executors/executors.test.ts
+  s_bafb3ad34c9e95::t_681eda256dd12f 807
+core/template.ts
+  s_bafb3ad34c9e95::t_85ba9d51260dd9 202,448-464,466
+engine/control.test.ts
+  s_bafb3ad34c9e95::t_85ba9d51260dd9 397
+graphs/implement-slice.test.ts
+  s_bafb3ad34c9e95::t_85ba9d51260dd9 369
+prompts/library.test.ts
+  s_bafb3ad34c9e95::t_85ba9d51260dd9 461
+  s_bafb3ad34c9e95::t_681eda256dd12f 276
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d3dc07880384047e527f03bbdd912536a58e5d2a",
+  "prompts": {},
+  "sessions": {
+    "s_bafb3ad34c9e95": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "badc1cd2-b3b2-49f7-93ba-331ef7da67b5",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "areeb.bhaila <areeb.bhaila@gmail.com>"
+    }
+  }
+}
