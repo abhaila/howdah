@@ -51,6 +51,7 @@ import type { Violation } from "./validate";
 import { VERIFY_BUILTIN, VERIFY_PRODUCES } from "./verify";
 import { AWAIT_BUILTIN, AWAIT_PRODUCES, AWAIT_PROBE_PRODUCES, AWAIT_READS, RESTACK_BUILTIN, RESTACK_PRODUCES, RESTACK_READS } from "./stack";
 import { EVIDENCE_BUILTIN, EVIDENCE_PRODUCES } from "./evidence";
+import { GRAPHS_CATALOG_BUILTIN, GRAPHS_CATALOG_PRODUCES } from "./catalog";
 import { includeRefs, templateReads } from "./template-refs";
 
 export const SPEC_VERSION = 1;
@@ -66,6 +67,14 @@ export const SPEC_PROMPT_ID = /^[a-z][a-z0-9._-]*$/;
 
 /** how a field's value is offered in the launch form and read in a condition */
 export type FieldKind = "text" | "choice" | "number" | "boolean" | "json";
+
+/**
+ * The kinds a `NodeSpec` can have, as a value. `graphs:catalog` reads it so a drafter sees
+ * the SAME list the parser and the step form see — one source, nothing hand-listed to drift
+ * when a kind is added or removed.
+ */
+export const NODE_KINDS = ["agent", "command", "worktree", "wait", "approval", "terminal"] as const;
+export type NodeKind = (typeof NODE_KINDS)[number];
 
 export interface FieldSpec {
   key: string;
@@ -312,6 +321,9 @@ export const COMMAND_BUILTINS: Array<{ run: string; label: string; produces: str
   // HOW-57: one row, both modes — the executor refuses a step that mixes them (await.ts precheck)
   { run: AWAIT_BUILTIN, label: "Wait for the slices this one depends on", produces: [...AWAIT_PRODUCES, ...AWAIT_PROBE_PRODUCES], reads: [...AWAIT_READS] },
   { run: RESTACK_BUILTIN, label: "Restack onto the moved or merged base", produces: [...RESTACK_PRODUCES], reads: [...RESTACK_READS] },
+  // HOW-56 T4 (decision 2A): what a drafter MAY USE — ids, not bodies. Reads nothing (the
+  // registry it reads is this installation's, not something an earlier step produces).
+  { run: GRAPHS_CATALOG_BUILTIN, label: "List the graphs and built-ins a drafter may use", produces: [...GRAPHS_CATALOG_PRODUCES] },
 ];
 
 /** A worktree CLEAN-UP step emits these two facts and no others (engine/executors/worktree.ts). */
@@ -1155,7 +1167,9 @@ function parseDrafted(v: unknown): DraftedProvenance | undefined {
 }
 
 const SCOPES = ["sticky", "cleared", "per-visit"] as const;
-const FIELD_KINDS = ["text", "choice", "number", "boolean", "json"] as const;
+/** The field kinds a FieldSpec may carry — exported so `graphs:catalog` and anywhere else
+ *  that lists them (the step form, a drafter's catalog) reads the SAME source as the parser. */
+export const FIELD_KINDS = ["text", "choice", "number", "boolean", "json"] as const;
 const OUTCOMES = ["success", "failed", "aborted"] as const;
 const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
 const PERMISSION_MODES = ["manual", "acceptEdits", "auto", "bypassPermissions", "dontAsk", "plan"] as const;

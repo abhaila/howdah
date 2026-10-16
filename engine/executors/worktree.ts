@@ -45,6 +45,7 @@ import { runShell } from "./shell";
 import { remoteDefaultBranch, revParse, sh } from "./git";
 import { awaitBuiltinExecutor, isAwaitBuiltin, type AwaitBuiltinOpts } from "./await";
 import { isRestackBuiltin, restackBuiltinExecutor, type RestackBuiltinOpts } from "./restack";
+import { graphsCatalogBuiltinExecutor, isGraphsCatalogBuiltin, type GraphsCatalogBuiltinOpts } from "./catalog";
 
 export { type WorktreeRecord, worktreeRecordPath, readWorktreeRecord, effectiveCwd } from "./worktree-record";
 
@@ -354,6 +355,8 @@ export interface CommandExecutorOpts {
   await?: AwaitBuiltinOpts;
   /** HOW-57: the forge seams and default branch `git:restack` uses */
   restack?: RestackBuiltinOpts;
+  /** HOW-56 T4: how `graphs:catalog` reads the registry (built-ins + local) */
+  catalog?: GraphsCatalogBuiltinOpts;
 }
 
 export function commandExecutor(opts: CommandExecutorOpts = {}): Executor {
@@ -363,6 +366,7 @@ export function commandExecutor(opts: CommandExecutorOpts = {}): Executor {
   const evidenceBuiltin = evidenceBuiltinExecutor(opts.evidence);
   const awaitBuiltin = awaitBuiltinExecutor(opts.await);
   const restackBuiltin = restackBuiltinExecutor(opts.restack);
+  const catalogBuiltin = graphsCatalogBuiltinExecutor(opts.catalog);
   return async (args) => {
     const { nodeId, def, visit, cwd, log, reads } = args;
     if (def.kind !== "command") throw new Error("commandExecutor on non-command node");
@@ -381,6 +385,8 @@ export function commandExecutor(opts: CommandExecutorOpts = {}): Executor {
     if (isAwaitBuiltin(def.run)) return awaitBuiltin(args);
     // HOW-57: `git:restack` rewrites and force-pushes this run's branch — an exactly-once effect
     if (isRestackBuiltin(def.run)) return restackBuiltin(args);
+    // HOW-56 T4: `graphs:catalog` reads the registry and publishes what a drafter may use
+    if (isGraphsCatalogBuiltin(def.run)) return catalogBuiltin(args);
     const workDir = effectiveCwd(log.path, cwd);
     const declared = Object.keys(def.writes ?? {});
     let index = 0;
