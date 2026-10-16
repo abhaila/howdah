@@ -31,17 +31,7 @@ export function Mark({ className }: { className?: string }) {
 export function Splash({ onDone }: { onDone: () => void }) {
   const [leaving, setLeaving] = useState(false);
   useEffect(() => {
-    // autoplay is blocked until the user's first gesture on the origin — if the direct
-    // play is refused, the jingle rides the first click/keypress instead (12s window)
-    const audio = new Audio("/boot.wav");
-    let cleanupUnlock = () => {};
-    audio.play().catch(() => {
-      const unlock = () => { audio.play().catch(() => {}); cleanupUnlock(); };
-      addEventListener("pointerdown", unlock, { once: true });
-      addEventListener("keydown", unlock, { once: true });
-      const expire = setTimeout(cleanupUnlock, 12000);
-      cleanupUnlock = () => { removeEventListener("pointerdown", unlock); removeEventListener("keydown", unlock); clearTimeout(expire); };
-    });
+    // silent on purpose: the load used to play a jingle, removed at the operator's request
     const hold = setTimeout(() => setLeaving(true), 1900);
     const gone = setTimeout(() => { sessionStorage.setItem("howdah-splash", "1"); onDone(); }, 2350);
     return () => { clearTimeout(hold); clearTimeout(gone); };

@@ -141,7 +141,7 @@ function App() {
             stay, which is the same shape the 900px breakpoint already falls back to. */}
         <nav className="sidebar" aria-label="Primary">
           {/* the mark goes home like every other logo; it does NOT replay the splash —
-              the boot jingle belongs to an actual load, not to navigating back to Runs */}
+              the splash belongs to an actual load, not to navigating back to Runs */}
           <a className="mark-btn" href="/" aria-label="Howdah — runs"><Mark className="mark" /><span className="wordmark">Howdah</span></a>
           <a className={`nav ${isRuns ? "active" : ""}`} href="/"><Rows3 size={15} /><span className="label">Runs</span></a>
           <a className={`nav ${isAttention ? "active" : ""}`} href="/attention">
