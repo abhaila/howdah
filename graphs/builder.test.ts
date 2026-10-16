@@ -21,6 +21,7 @@ import { AWAIT_BUILTIN } from "../engine/executors/await";
 import { RESTACK_BUILTIN } from "../engine/executors/restack";
 import { AWAIT_PRODUCES, AWAIT_PROBE_PRODUCES, AWAIT_READS, RESTACK_PRODUCES, RESTACK_READS } from "../core/stack";
 import { EVIDENCE_BUILTIN } from "../engine/executors/evidence";
+import { GRAPHS_CATALOG_BUILTIN } from "../engine/executors/catalog";
 // the reducer is plain data over core/ — no React, no DOM — so the browser's verdict can be
 // driven from here and compared against this file's gate, which is the whole point below
 import { PRESETS, bySeverity, draftProblems, draftReducer, newStep, pickPrompts, type Draft, type DraftAction } from "../web/app/lib/spec-draft";
@@ -381,7 +382,20 @@ describe("what an executor can emit — the table checked against the executors 
    * returns undefined, which MEANS "anything the operator declares is legal".
    */
   test("every built-in the command executor dispatches is in the table", () => {
-    expect([...MAP_BUILTINS, LAUNCH_BUILTIN, VERIFY_BUILTIN, EVIDENCE_BUILTIN, AWAIT_BUILTIN, RESTACK_BUILTIN, "probe:pr"].sort()).toEqual(COMMAND_BUILTINS.map((b) => b.run).sort());
+    expect([...MAP_BUILTINS, LAUNCH_BUILTIN, VERIFY_BUILTIN, EVIDENCE_BUILTIN, AWAIT_BUILTIN, RESTACK_BUILTIN, GRAPHS_CATALOG_BUILTIN, "probe:pr"].sort()).toEqual(COMMAND_BUILTINS.map((b) => b.run).sort());
+  });
+
+  // HOW-56 T4. core/catalog.ts carries the key the row produces, so what is pinned here is
+  // that the EXECUTOR hands declaredWrites exactly that contract — and is dispatched at all.
+  test("graphs:catalog publishes exactly what the table claims", () => {
+    const row = COMMAND_BUILTINS.find((b) => b.run === GRAPHS_CATALOG_BUILTIN)!;
+    expect(row.produces).toEqual(["graphs.catalog"]);
+    expect(row.reads).toBeUndefined();
+    const src = executor("catalog.ts");
+    const m = src.match(/declaredWrites\(\s*GRAPHS_CATALOG_BUILTIN\s*,\s*def\s*,\s*\{\s*\[([A-Z_]+)\]\s*:/);
+    expect(m, "no declaredWrites(GRAPHS_CATALOG_BUILTIN, def, { [KEY]: … }) call found").not.toBeNull();
+    expect(m![1]).toBe("GRAPHS_CATALOG_KEY");
+    expect(executor("worktree.ts")).toContain("if (isGraphsCatalogBuiltin(def.run)) return catalogBuiltin(args);");
   });
 
   // HOW-57. runs:await reads core/stack.ts like verify reads core/verify.ts; what is pinned is
