@@ -273,7 +273,7 @@ describe("reconstructRender — proven against what the engine actually wrote", 
     expect(r.verified).toBe(true);
     // system-map 0.1: the outputs contract is part of what the agent read, so part of the proof
     expect(r.text).toBe("Do ship the thing given nothing yet.\n" + buildOutputInstruction(["summary"]));
-    expect(render).toMatchObject({ skills: [], output_keys: ["summary"], suffix_version: 9 });
+    expect(render).toMatchObject({ skills: [], output_keys: ["summary"], suffix_version: 10 });
     expect(r).toMatchObject({ prompt: "work", prompt_version: 3, node: "work", visit: 1 });
     expect(r.context_read).toEqual({ goal: "ship the thing", summary: "nothing yet" });
   });
@@ -458,7 +458,7 @@ describe("reconstructRender — proven against what the engine actually wrote", 
     await engine().resume();
 
     const render: any = readLog(join(runDir, "run.jsonl")).find((e) => e.type === "prompt-rendered" && e.node === "work" && e.visit === 2);
-    expect(render.suffix_version).toBe(9);
+    expect(render.suffix_version).toBe(10);
     const r = reconstructRender(runDir, render.rendered_hash)!;
     expect(r.verified).toBe(true);
     expect(r.text).toBe("Do g given s.\n" + replyV2("mind the null case") + buildOutputInstruction(["summary"]));

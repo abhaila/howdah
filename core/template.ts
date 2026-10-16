@@ -199,7 +199,7 @@ export function operatorInstructionSuffix(message: string): string {
 // ---- suffixes (system-map 0.1) ---------------------------------------------------
 
 /** The suffix wording new renders use. Bump it — and add a builder set — to reword. */
-export const SUFFIX_VERSION = 9;
+export const SUFFIX_VERSION = 10;
 
 /**
  * HOW-36: what a context-exhausted visit had done, as data — derived by engine/handoff.ts from
@@ -445,9 +445,25 @@ const V9: SuffixBuilders = {
   },
 };
 
-const SUFFIX_BUILDERS: Readonly<Record<number, SuffixBuilders>> = { 1: V1, 2: V2, 3: V3, 4: V4, 5: V5, 6: V6, 7: V7, 8: V8, 9: V9 };
+/**
+ * v10 = v9 + a NEVER-MERGE sentence in the STACKED briefing. A stacked PR's base is another PR's
+ * branch, which is unprotected, so `gh pr merge --auto` merges it at once: two runs collapsed a
+ * stacked PR into its base that way (#14969/#14971, then #15104 into #15102). The publish prompt
+ * says so since delivery.publish v4, but prompts are pinned at run start and suffixes are not, so
+ * this is what reaches runs already in flight. NEVER edit a published version.
+ */
+const V10: SuffixBuilders = {
+  ...V9,
+  stackedInstruction: (base) =>
+    V9.stackedInstruction!(base) +
+    ` Never merge a pull request yourself and never enable auto-merge: do not run \`gh pr merge\` in any form ` +
+    `(\`--auto\`, \`--squash\`, \`--merge\` or \`--rebase\`). This PR's base is another PR's branch, which is unprotected, ` +
+    `so any merge request completes at once and folds this change into that PR. Merging a stacked PR is a human decision.`,
+};
+
+const SUFFIX_BUILDERS: Readonly<Record<number, SuffixBuilders>> = { 1: V1, 2: V2, 3: V3, 4: V4, 5: V5, 6: V6, 7: V7, 8: V8, 9: V9, 10: V10 };
 /** the builders new renders use; bump together with SUFFIX_VERSION */
-const CURRENT: SuffixBuilders = V9;
+const CURRENT: SuffixBuilders = V10;
 
 /** The builders a logged `suffix_version` pins, or undefined for a version this code never had. */
 export function suffixBuilders(version: number): SuffixBuilders | undefined {

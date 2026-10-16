@@ -46,8 +46,8 @@ describe("versioned suffix builders (system-map 0.1)", () => {
     expect(v1.outputContract([])).toBe(V1_SUMMARY_ONLY);
   });
 
-  test("the current version is 9 and buildOutputInstruction is its contract builder", () => {
-    expect(SUFFIX_VERSION).toBe(9);
+  test("the current version is 10 and buildOutputInstruction is its contract builder", () => {
+    expect(SUFFIX_VERSION).toBe(10);
     expect(buildOutputInstruction(["a", "b"])).toBe(V1_CONTRACT);
   });
 
@@ -111,6 +111,24 @@ describe("versioned suffix builders (system-map 0.1)", () => {
     // without repairScope, v9 is v8 byte for byte
     const { repairScope: _r, ...plain } = parts;
     expect(assemblePrompt({ ...plain, suffixVersion: 9 })).toBe(assemblePrompt({ ...plain, suffixVersion: 8 }));
+  });
+
+  test("v10 is v9 plus a never-merge sentence in the STACKED briefing; everything else byte-identical", () => {
+    const v9 = suffixBuilders(9)!;
+    const v10 = suffixBuilders(10)!;
+    const sha = "0123456789abcdef0123456789abcdef01234567";
+    const base = { branch: "howdah/p--fe-1", sha };
+    expect(v10.stackedInstruction!(base).startsWith(v9.stackedInstruction!(base))).toBe(true);
+    expect(v10.stackedInstruction!(base).slice(v9.stackedInstruction!(base).length)).toBe(
+      " Never merge a pull request yourself and never enable auto-merge: do not run `gh pr merge` in any form " +
+        "(`--auto`, `--squash`, `--merge` or `--rebase`). This PR's base is another PR's branch, which is unprotected, " +
+        "so any merge request completes at once and folds this change into that PR. Merging a stacked PR is a human decision.",
+    );
+    expect(v10.outputContract(["a"])).toBe(v9.outputContract(["a"]));
+    expect(v10.repairScopeInstruction!({ node: "fix", visit: 1, sha })).toBe(v9.repairScopeInstruction!({ node: "fix", visit: 1, sha }));
+    // a run that is not stacked renders v10 exactly as v9
+    const plain = { body: "BODY", skills: [], outputKeys: ["a"], jumpMessage: "JUMP" };
+    expect(assemblePrompt({ ...plain, suffixVersion: 10 })).toBe(assemblePrompt({ ...plain, suffixVersion: 9 }));
   });
 
   test("v3 is v2 plus the refusal builder (system-map 1c): everything else byte-identical, refusal pinned literally", () => {
