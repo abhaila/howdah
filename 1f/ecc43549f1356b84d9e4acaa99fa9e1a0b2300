@@ -1,0 +1,23 @@
+web/app/main.tsx
+  s_bafb3ad34c9e95::t_86c2435d4274d3 144
+DESIGN.md
+  s_bafb3ad34c9e95::t_86c2435d4274d3 105
+web/app/brand.tsx
+  s_bafb3ad34c9e95::t_86c2435d4274d3 34
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1fecc43549f1356b84d9e4acaa99fa9e1a0b2300",
+  "prompts": {},
+  "sessions": {
+    "s_bafb3ad34c9e95": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "badc1cd2-b3b2-49f7-93ba-331ef7da67b5",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "areeb.bhaila <areeb.bhaila@gmail.com>"
+    }
+  }
+}
