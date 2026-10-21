@@ -21,6 +21,11 @@
  * down with it, unsaved draft included, because web/app has no error boundary. The missing
  * step is reported in words by specProblems(), in the pane that fixes it.
  *
+ * HOW-65: it also draws a DRAFT AGAINST ITS BASE on the review page. A step the draft removes
+ * is still drawn — dashed, struck through, marked − with the word "removed" — because a
+ * removal is the change the operator is least likely to notice from a list; the caller passes
+ * it with no edges into it. `highlight` lights the box whose row has focus in the list beside it.
+ *
  * The box truncates a node id at 20 characters, and what carries the full one is the node's
  * OWN aria-label rather than a tooltip. A Tooltip here would have to live in a
  * `foreignObject`, whose overflow Safari clips — so the floating panel would be cut off
@@ -93,6 +98,8 @@ export function GraphDag({
   onSelect,
   selected,
   canSelect = (node) => node.kind === "agent",
+  removed,
+  highlight,
 }: {
   shape: GraphShapeDto;
   current?: string;
@@ -100,6 +107,10 @@ export function GraphDag({
   onSelect?: (id: string) => void;
   selected?: string;
   canSelect?: (node: GraphShapeDto["nodes"][number]) => boolean;
+  /** HOW-65: steps a draft removes — drawn dashed and struck through, labelled "removed" */
+  removed?: ReadonlySet<string>;
+  /** HOW-65: the step whose row has focus in the list beside the picture */
+  highlight?: string | null;
 }) {
   const pos = layout(shape);
   const width = Math.max(...[...pos.values()].map((p) => p.x)) + 230;
@@ -256,7 +267,8 @@ export function GraphDag({
           const isCurrent = n.id === current;
           const v = visits?.[n.id];
           const selectable = !!onSelect && canSelect(n);
-          const sub = subtitle(n);
+          const gone = removed?.has(n.id) ?? false;
+          const sub = gone ? `removed · ${subtitle(n)}` : subtitle(n);
           const shown = n.title?.trim() || n.id;
           const label = [
             // the id is spoken too when a title stands in for it: the id is what every other
@@ -267,13 +279,14 @@ export function GraphDag({
             n.node_tuning ? "has a node override" : "",
             isCurrent ? "current" : "",
             selected === n.id ? "selected" : "",
+            highlight === n.id ? "highlighted" : "",
           ].filter(Boolean).join(", ");
           return (
             <g
               key={n.id}
               ref={(el) => { nodeRefs.current[i] = el; }}
               transform={`translate(${p.x}, ${p.y})`}
-              className={`dag-node ${isCurrent ? "current" : ""} ${selected === n.id ? "selected" : ""} ${selectable ? "clickable" : ""} kind-${n.kind}`}
+              className={`dag-node ${isCurrent ? "current" : ""} ${selected === n.id ? "selected" : ""} ${selectable ? "clickable" : ""} ${gone ? "removed" : ""} ${highlight === n.id ? "highlight" : ""} kind-${n.kind}`}
               style={{ ["--dag-delay" as string]: `${(p.y / 92) * 55}ms` }}
               role={selectable ? "button" : "listitem"}
               aria-label={label}
@@ -295,7 +308,7 @@ export function GraphDag({
             >
               <rect width="180" height="52" rx="9" />
               <text x="12" y="21" className="dag-title" aria-hidden>
-                {KIND_GLYPH[n.kind] ?? "?"} {shown.length > 20 ? shown.slice(0, 19) + "…" : shown}
+                {gone ? "−" : KIND_GLYPH[n.kind] ?? "?"} {shown.length > 20 ? shown.slice(0, 19) + "…" : shown}
               </text>
               <text x="12" y="40" className="dag-sub" aria-hidden>{sub}</text>
               {v !== undefined && v > 0 && <g aria-hidden><rect x="150" y="-9" width="30" height="18" rx="9" className="dag-visits" /><text x="165" y="4" textAnchor="middle" className="dag-visits-text">×{v}</text></g>}

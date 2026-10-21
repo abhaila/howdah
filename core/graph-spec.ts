@@ -289,6 +289,13 @@ export interface DraftedProvenance {
   run: string;
   /** draftHashOf() over the draft that run proposed */
   draftHash: string;
+  /**
+   * HOW-65: the operator saved it from the canvas, not straight from the run's review. Set by
+   * the SERVER on any builder save of a drafted graph (web/server.ts), never by a client. A
+   * flag rather than a second hash, because `draftHashOf` ignores `position` on purpose and
+   * "moved a step, then saved" is still an edit to what the operator approved.
+   */
+  edited?: true;
 }
 
 // ---- what an executor can actually publish ----------------------------------------------
@@ -1154,16 +1161,18 @@ export function point(v: unknown): Point | undefined {
 }
 
 /**
- * Exactly `{ run, draftHash }`, both non-empty strings, or `undefined` (HOW-56). Anything else
- * is DROPPED, never carried, and the spec still parses — as `point()` treats a position: a
- * provenance typo must not make a graph unopenable, and it must not reach the file either.
+ * Exactly `{ run, draftHash }` or `{ run, draftHash, edited: true }`, both strings non-empty, or
+ * `undefined` (HOW-56, HOW-65). Anything else is DROPPED, never carried, and the spec still
+ * parses — as `point()` treats a position: a provenance typo must not make a graph unopenable,
+ * and it must not reach the file either.
  */
 function parseDrafted(v: unknown): DraftedProvenance | undefined {
   if (!isObj(v)) return undefined;
-  const keys = Object.keys(v).sort();
-  if (keys.length !== 2 || keys[0] !== "draftHash" || keys[1] !== "run") return undefined;
+  const keys = Object.keys(v).sort().join(",");
+  if (keys !== "draftHash,run" && !(keys === "draftHash,edited,run" && v.edited === true)) return undefined;
   const { run, draftHash } = v;
-  return typeof run === "string" && run && typeof draftHash === "string" && draftHash ? { run, draftHash } : undefined;
+  if (typeof run !== "string" || !run || typeof draftHash !== "string" || !draftHash) return undefined;
+  return v.edited === true ? { run, draftHash, edited: true } : { run, draftHash };
 }
 
 const SCOPES = ["sticky", "cleared", "per-visit"] as const;
@@ -1362,6 +1371,27 @@ export function parseGraphSpec(value: unknown): ParseResult {
  *  directory and the `<graph>.` prefix is the only thing keeping them apart (HOW-22 review). */
 export function promptIdFor(graphName: string, nodeId: string): string {
   return `${graphName}.${nodeId}`;
+}
+
+/**
+ * The graph renamed, and every prompt id it OWNS moved with it (HOW-65): a step's `prompt` and
+ * the body filed under it, wherever the id starts `<old>.`. One function, because the builder's
+ * name box (web/app/lib/spec-draft.ts) and the draft card's Save (web/server.ts) both rename a
+ * graph, and the prefix is the only thing keeping two graphs' instructions apart — a rename
+ * that moved the step but not its body would save a step with no instructions.
+ *
+ * Step ids do NOT move: they are run identity (`${node}#${visit}`). A `{ copyOf }` body moves
+ * under its new key, but its TARGET is another graph's id and is left alone. A body whose key
+ * no step names is left where it is; `specProblems` already calls it an orphan.
+ */
+export function renameDraft<B>(spec: GraphSpec, bodies: Readonly<Record<string, B>>, name: string): { spec: GraphSpec; bodies: Record<string, B> } {
+  const prefix = `${spec.name}.`;
+  const moved = (id: string) => (id.startsWith(prefix) ? `${name}.${id.slice(prefix.length)}` : id);
+  const owned = new Set(spec.nodes.flatMap((n) => (n.kind === "agent" ? [n.prompt] : [])));
+  const out: Record<string, B> = {};
+  for (const [id, body] of Object.entries(bodies)) out[owned.has(id) ? moved(id) : id] = body;
+  const nodes = spec.nodes.map((n) => (n.kind === "agent" && moved(n.prompt) !== n.prompt ? { ...n, prompt: moved(n.prompt) } : n));
+  return { spec: { ...spec, name, nodes }, bodies: out };
 }
 
 /** The spec a loaded graph was built from, or null when it was not built here (R1). */

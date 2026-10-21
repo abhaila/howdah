@@ -257,3 +257,23 @@ describe("a half-built shape is drawn, not crashed on", () => {
     expect(edges(el)).toBe(0);
   });
 });
+
+describe("HOW-65: a draft's removed steps, and the row in focus", () => {
+  test("a removed step is drawn struck through, labelled `removed`, marked −; the highlighted one is lit", () => {
+    const el = render({ removed: new Set(["probe"]), highlight: "build" });
+    const probe = [...el.querySelectorAll(".dag-node")].find((n) => n.getAttribute("aria-label")?.includes("probe"))!;
+    expect(probe.classList.contains("removed")).toBe(true);
+    expect(probe.getAttribute("aria-label")).toContain("removed");
+    expect(probe.querySelector(".dag-title")?.textContent).toStartWith("−");
+    const build = [...el.querySelectorAll(".dag-node")].find((n) => n.getAttribute("aria-label")?.includes("build"))!;
+    expect(build.classList.contains("highlight")).toBe(true);
+    expect(build.getAttribute("aria-label")).toContain("highlighted");
+    expect(el.querySelectorAll(".dag-node.removed")).toHaveLength(1);
+    expect(el.querySelectorAll(".dag-node.highlight")).toHaveLength(1);
+  });
+
+  test("without the props nothing is marked", () => {
+    const el = render();
+    expect(el.querySelectorAll(".dag-node.removed, .dag-node.highlight")).toHaveLength(0);
+  });
+});

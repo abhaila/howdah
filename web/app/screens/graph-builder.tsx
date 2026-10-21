@@ -30,8 +30,15 @@
  *   THE SELECTION. What the right-hand panel is showing: a step, a route, or the graph. It
  *   lives here rather than in React Flow's store, so it survives a re-render, a rename and an
  *   edge being renumbered.
+ *
+ * HOW-65: `/graphs/new?fromRun=<run>` opens a draft-graph run's draft as an UNSAVED draft —
+ * copies already written out as text, laid out on the way in — under a header naming the run.
+ * Its Save is the ordinary create, carrying `fromRun` so the SERVER stamps the provenance
+ * (`drafted`, marked edited); nothing here sends a `drafted` of its own. A draft that is
+ * already a graph opens that graph instead, so a second tab cannot save it twice.
  */
 import { useCallback, useEffect, useMemo, useReducer, useState } from "react";
+import type { RunDraft } from "../../draft";
 import { ReactFlowProvider } from "@xyflow/react";
 import { CircleAlert, CircleCheck, Lightbulb, Save } from "lucide-react";
 import type { GraphCatalog } from "@/lib/types";
@@ -82,7 +89,15 @@ async function loadDraft(name: string): Promise<Draft | { unopenable: string }> 
   return { spec: autoLayout(parsed.spec), prompts, saved: true };
 }
 
-export function GraphBuilder({ name }: { name?: string }) {
+/** A draft-graph run's draft → a builder Draft, or why it cannot be opened (HOW-65). */
+async function loadRunDraft(run: string): Promise<Draft | { unopenable: string } | { savedAs: string }> {
+  const got = (await fetch(`/api/runs/${encodeURIComponent(run)}/draft`).then((r) => r.json())) as RunDraft;
+  if (got.state !== "ready") return { unopenable: got.reason };
+  if (got.saved) return { savedAs: got.saved.name };
+  return { spec: autoLayout(got.draft.spec), prompts: got.texts, saved: false };
+}
+
+export function GraphBuilder({ name, fromRun }: { name?: string; fromRun?: string }) {
   const [draft, dispatch] = useReducer(draftReducer, undefined, () => freshDraft(name ?? ""));
   const [selection, setSelection] = useState<Selection>(null);
   // what the NEXT step will be called. It lives here rather than in the palette because a drop
@@ -92,7 +107,7 @@ export function GraphBuilder({ name }: { name?: string }) {
   // every wholesale replacement of the draft — a preset, a graph read back — so the canvas can
   // refit to what just arrived without refitting on every ordinary edit
   const [generation, setGeneration] = useState(0);
-  const [loading, setLoading] = useState(!!name);
+  const [loading, setLoading] = useState(!!name || !!fromRun);
   const [unopenable, setUnopenable] = useState<string | null>(null);
   const [taken, setTaken] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
@@ -119,6 +134,22 @@ export function GraphBuilder({ name }: { name?: string }) {
       .finally(() => live && setLoading(false));
     return () => { live = false; };
   }, [name]);
+
+  useEffect(() => {
+    if (name || !fromRun) return;
+    let live = true;
+    setLoading(true);
+    loadRunDraft(fromRun)
+      .then((got) => {
+        if (!live) return;
+        if ("savedAs" in got) navigate(`/graphs/${got.savedAs}/build`);
+        else if ("unopenable" in got) setUnopenable(got.unopenable);
+        else { dispatch({ type: "load", draft: got }); setGeneration((g) => g + 1); }
+      })
+      .catch(() => live && setUnopenable(`Could not read the draft from run ${fromRun}.`))
+      .finally(() => live && setLoading(false));
+    return () => { live = false; };
+  }, [name, fromRun]);
 
   // `taken` is the catalog, and the one fact a spec cannot carry: it turns a create that
   // would land on an existing graph into a counted problem rather than a silent save
@@ -163,7 +194,11 @@ export function GraphBuilder({ name }: { name?: string }) {
         // `intent` is DECLARED rather than inferred server-side from a stat: an unsaved draft
         // is a create, and a create landing on an existing name must be refused, not written
         // over that graph (HOW-22 review).
-        body: JSON.stringify({ spec: draft.spec, prompts: pickPrompts(draft), intent: draft.saved ? "update" : "create" }),
+        // HOW-65: `fromRun` asks the server to stamp this run's provenance; only on the create
+        body: JSON.stringify({
+          spec: draft.spec, prompts: pickPrompts(draft), intent: draft.saved ? "update" : "create",
+          ...(fromRun && !draft.saved ? { fromRun } : {}),
+        }),
       });
       const body = (await r.json().catch(() => ({}))) as { error?: string };
       if (!r.ok) {
@@ -185,9 +220,9 @@ export function GraphBuilder({ name }: { name?: string }) {
     } finally {
       setSaving(false);
     }
-  }, [draft, toast]);
+  }, [draft, toast, fromRun]);
 
-  if (loading) return <div className="runs"><LoadingBlock label={`Opening ${name}`} rows={6} /></div>;
+  if (loading) return <div className="runs"><LoadingBlock label={`Opening ${name ?? `the draft from run ${fromRun}`}`} rows={6} /></div>;
   if (unopenable) {
     return (
       <div className="runs">
@@ -217,6 +252,12 @@ export function GraphBuilder({ name }: { name?: string }) {
           <Save />{saving ? "Saving…" : draft.saved ? "Save changes" : "Save and add to the catalog"}
         </Button>
       </div>
+      {fromRun && !draft.saved && (
+        <p className="gb-from-run">
+          Editing draft from run <a href={`/run/${encodeURIComponent(fromRun)}`}>{fromRun}</a>
+          <span aria-hidden> · </span><a href={`/runs/${encodeURIComponent(fromRun)}/draft`}>back to review</a>
+        </p>
+      )}
       {error && <div className="field-error wrap-pre">{error}</div>}
 
       <ReactFlowProvider>

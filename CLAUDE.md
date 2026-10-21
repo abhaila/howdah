@@ -542,11 +542,32 @@ Break one of these and the design stops working, so check them before changing t
   `<tip>..HEAD`. A stacked publish must name its own PRs as an object, and probe:pr ignores
   `deps.prs`, or the run would finish when its BASE merged.
 
+- **A draft is a proposal; Save is the approval (HOW-56, HOW-65).** A `draft-graph` run
+  (`graphs/draft-graph.ts`) publishes `graph.draft = { spec, prompts, based_on, notes }` and
+  writes nothing else. What a draft may contain is narrower than what the builder allows: only
+  EXACT command built-ins and never `runs:launch`, no approval step, its base's `defaults`, no
+  per-step `config`, and a copy of a read-only step stays read-only (`draftRuleProblems`). It is
+  checked in the outputs check by `checkGraphDraft` — `specProblems`' blocking half plus those
+  rules plus `nameTakenProblem`, the SAME verdict Save runs — so a published draft is one that
+  would save, and a draft refused twice parks quoting every problem. A body may be
+  `{ copyOf: <prompt id> }`; it is materialised AT SAVE by `materialiseBodies`, includes
+  expanded exactly as at pin time, so what was reviewed is what a run pins. PROVENANCE IS THE
+  SERVER'S: `spec.drafted = { run, draftHash[, edited] }` is written only by `web/draft.ts` —
+  the card's Save builds it from the run log, and the builder PUT ignores any `drafted` a client
+  sends (it derives one from `fromRun`, keeps the file's own on an update, else strips it);
+  `edited: true` marks any save that went through the canvas, because `draftHashOf` ignores
+  positions on purpose. Whether a run's draft is SAVED is derived — the local graph whose
+  `drafted.run` is that run — and never stored on the run, so a reload or a second tab cannot
+  offer Save twice. The card, the review page and the builder's `?fromRun=` all read ONE diff,
+  `core/draft-diff.ts`, computed on the server; it matches steps to the base by exact id, the
+  rule `draftRuleProblems` uses, so `grantsNewWrite` (which turns the card's Save into "Review
+  and save") covers every `permission` advice by construction.
+
 ### Module map
 
 | Path | Role |
 |---|---|
-| `core/` | graph schema (`graph.ts`), path validator (`validate.ts`), context store, template/render contract (`template.ts`) + its node-free reference grammar (`template-refs.ts`), the graph-as-data model the builder writes (`graph-spec.ts`), the harness table (`harnesses.ts`), the ask-the-human model (`ask.ts`, HOW-25), the stacked-slice contract (`stack.ts`, HOW-57: the `deps` input and the two built-ins' keys), generated `prompt-ids.ts` |
+| `core/` | graph schema (`graph.ts`), path validator (`validate.ts`), context store, template/render contract (`template.ts`) + its node-free reference grammar (`template-refs.ts`), the graph-as-data model the builder writes (`graph-spec.ts`), the harness table (`harnesses.ts`), the ask-the-human model (`ask.ts`, HOW-25), the stacked-slice contract (`stack.ts`, HOW-57: the `deps` input and the two built-ins' keys), the drafter's catalog (`catalog.ts`) and a draft's diff against its base (`draft-diff.ts`, HOW-65), generated `prompt-ids.ts` |
 | `graphs/` | the runnable graphs + `index.ts` registry, `local.ts` (the operator's own, from `$HOWDAH_HOME`), `registry.ts` (merged catalog), `typecheck.ts` (tsc gate), `builder.ts` (HOW-22: renders a GraphSpec into a module and saves it transactionally over the graph AND its prompts); `implement-ticket`, `implement-slice` (design on the map → approve → build → drift), `plan-feature` (HOW-23: decompose → approve → ticket each → launch a run each) with its pure `slice-plan.ts` contract, `implement-stacked` (HOW-57: `stackedFrom(implement-ticket)` for a slice with dependencies), `improve-codebase`, `review-teammate-pr`, `write-doc`, `research`, `quick-task`; `delivery.ts` shared publish/repair half |
 | `map/` | the code-derived system map (syntactic tier): tree-sitter extraction (`extract.ts`, `facts.ts`, `adapters.ts` + `queries/`), content-addressed store, `assemble.ts` (identity keys, MountResolver), `ghosts.ts` (GhostSet validator), `drift.ts`, `neighbourhood.ts` |
 | `prompts/` | one `.md` per prompt (front-matter `id`/`version`), codegen, `store.ts` (load/list/accept with stale-base + undeclared-read guards), `proposals.ts` (lifecycle + review view), `library.ts` (read model: consumers, feedback, outcome join, render reconstruction) |
@@ -555,7 +576,7 @@ Break one of these and the design stops working, so check them before changing t
 | `engine/` | `run.ts` (loop, routing, pinning, effects, attribution), `replay.ts`, `reconcile.ts` (git probes + worktree fingerprint), `attention.ts`, `control.ts` (replies, decisions, runner lock), `slice-decision.ts`, `slice-map.ts`, `executors/` (HOW-57 adds `await.ts` `runs:await`, `restack.ts` `git:restack` and the leaf `git.ts`) |
 | `cli/` | `main.ts` verbs, `new-graph.ts` scaffolder (writes into `$HOWDAH_HOME`) |
 | `config/` | `config.json` workspaces + settings, `tuning.json` overlay, GitHub repo registration |
-| `web/` | Bun server (read model + reply/launch/control writes, SSE), `derive.ts` read model, React app in `app/`: `main.tsx` is the shell/nav/router only, screens in `app/screens/`, run-detail panes in `app/run/` (Chat is the default: `run/chat.tsx` folds the run into one conversation and carries the standing ask inline, HOW-25; HOW-27 made it ONE scrolling transcript with the composer permanently at its foot — the Transcript/Ask tab split is gone, not moved, and the composer asks the read-only route and never replies to the agent, because one box that silently changes target on whether the run is parked is a box that sends the wrong one), builder in `app/builder/` (HOW-24: `canvas.tsx` + `node-card.tsx` + `edge.tsx` + `palette.tsx` + `properties.tsx`, with `step-form.tsx`/`branching.tsx`/`fields.tsx` as the panel bodies), primitives in `app/components/ui/`, helpers in `app/lib/` |
+| `web/` | Bun server (read model + reply/launch/control writes, SSE), `derive.ts` read model, `draft.ts` (HOW-65: a draft-graph run's draft, its Save, and the builder's provenance rule), React app in `app/`: `main.tsx` is the shell/nav/router only, screens in `app/screens/` (HOW-65 adds `draft-review.tsx`, `/runs/:id/draft`), run-detail panes in `app/run/` (`draft.tsx` is the draft card and the list the review page shares; Chat is the default: `run/chat.tsx` folds the run into one conversation and carries the standing ask inline, HOW-25; HOW-27 made it ONE scrolling transcript with the composer permanently at its foot — the Transcript/Ask tab split is gone, not moved, and the composer asks the read-only route and never replies to the agent, because one box that silently changes target on whether the run is parked is a box that sends the wrong one), builder in `app/builder/` (HOW-24: `canvas.tsx` + `node-card.tsx` + `edge.tsx` + `palette.tsx` + `properties.tsx`, with `step-form.tsx`/`branching.tsx`/`fields.tsx` as the panel bodies), primitives in `app/components/ui/`, helpers in `app/lib/` |
 | `reviser/` | GEPA-method revision script, eval case, generated proposals |
 | `watchdog/` | out-of-process heartbeat/attention checker + launchd plist |
 | `research/` | Orbital spec, feedback doc, DOT exports, UI captures — the inputs this design was built from |

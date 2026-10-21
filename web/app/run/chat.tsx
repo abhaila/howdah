@@ -64,6 +64,8 @@ import { StandingAsk } from "./ask";
 import { ProgressPanel, steerableTurn } from "./progress";
 import { EvidenceStrip } from "./evidence";
 import { AcceptanceCard } from "./acceptance";
+import { DraftCard } from "./draft";
+import { DRAFT_GRAPH } from "../../../core/catalog";
 import type { LiveGit } from "../../live-git";
 import { Chip } from "@/components/ui/chip";
 import { Badge } from "@/components/ui/badge";
@@ -471,6 +473,14 @@ export function RunChat({ runId, detail, ask, onPickStep, onResolved, liveGit = 
                   )}
                 </MessageScrollerItem>
               ))}
+              {/* HOW-65: a finished draft-graph run ends on its proposal — the card sits where a
+                  standing ask would, since Save is the question this run is asking. A refused
+                  draft has no card: the park below already quotes every problem. */}
+              {detail.summary.graph === DRAFT_GRAPH && detail.summary.status === "done" && (
+                <MessageScrollerItem messageId="draft" scrollAnchor>
+                  <DraftCard runId={runId} />
+                </MessageScrollerItem>
+              )}
               {ask && (
                 <MessageScrollerItem messageId="needs-input" scrollAnchor>
                   <div className="cv-standing">

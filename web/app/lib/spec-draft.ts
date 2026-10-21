@@ -27,7 +27,7 @@
  * round trip, and still cannot be the thing that decides a graph is legal.
  */
 import {
-  SPEC_NODE_ID, coerceOperand, emittableWrites, isBlocking, nameTakenProblem, predicateLabel, promptIdFor,
+  SPEC_NODE_ID, coerceOperand, emittableWrites, isBlocking, nameTakenProblem, predicateLabel, promptIdFor, renameDraft,
   recoercePredicate, specProblems,
   type EdgeSpec, type FieldKind, type FieldSpec, type GraphSpec, type NodeSpec, type Point, type Predicate,
   type ProblemPane, type SpecProblem,
@@ -180,19 +180,10 @@ function pickEntry(nodes: NodeSpec[], current: string): string {
   return nodes.find((n) => n.kind !== "terminal")?.id ?? "";
 }
 
+/** core/graph-spec.ts renameDraft: the one rename the draft card's Save runs too (HOW-65). */
 function renameGraph(draft: Draft, name: string): Draft {
-  const old = draft.spec.name;
-  const prompts = { ...draft.prompts };
-  const nodes = draft.spec.nodes.map((n) => {
-    if (n.kind !== "agent" || n.prompt !== promptIdFor(old, n.id)) return n;
-    const next = promptIdFor(name, n.id);
-    if (prompts[n.prompt] !== undefined) {
-      prompts[next] = prompts[n.prompt]!;
-      delete prompts[n.prompt];
-    }
-    return { ...n, prompt: next };
-  });
-  return { ...draft, spec: { ...draft.spec, name, nodes }, prompts };
+  const { spec, bodies } = renameDraft(draft.spec, draft.prompts, name);
+  return { ...draft, spec, prompts: bodies };
 }
 
 /**
