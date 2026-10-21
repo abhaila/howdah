@@ -66,7 +66,7 @@ import { deleteLocalGraph, LOCAL_NAME, localGraphPath, readLocalSource, saveLoca
 import { typecheckLocalGraph } from "../graphs/typecheck";
 import { newGraph, type GraphKind } from "../cli/new-graph";
 import { readLocalPrompt, saveBuilderGraph } from "../graphs/builder";
-import { parseGraphSpec, specOf, SPEC_PROMPT_ID } from "../core/graph-spec";
+import { parseGraphSpec, specOf, SPEC_PROMPT_ID, type DraftBody } from "../core/graph-spec";
 import { ensureHowdahHome, howdahHome, loadConfig, saveConfig, typesafeKeyState } from "../config/config";
 import { listGithubRepos, registerGithubRepo } from "../config/github";
 import { loadTuning, saveTuning, pruneTuning } from "../config/tuning";
@@ -168,6 +168,10 @@ const json = (body: unknown, status = 200) =>
  * without writing) can read.
  */
 const DETAIL_CACHE_MS = 2000;
+
+/** a builder body that is a copy (HOW-63): an object whose ONLY key is a string `copyOf` */
+const isCopyBody = (v: unknown): v is { copyOf: string } =>
+  typeof v === "object" && v !== null && !Array.isArray(v) && Object.keys(v).length === 1 && typeof (v as { copyOf?: unknown }).copyOf === "string";
 
 /** loopback only: see the header — this is the LAN half of system-map 0.4 */
 const LOOPBACK = "127.0.0.1";
@@ -360,14 +364,17 @@ export function createHowdahServer(opts: ServerOpts) {
         const parsed = parseGraphSpec(body.spec);
         if (!parsed.ok) return json({ error: parsed.error }, 400);
         if (parsed.spec.name !== name) return json({ error: `the spec is named "${parsed.spec.name}" but the path says "${name}"` }, 400);
-        const prompts: Record<string, string> = {};
+        const prompts: Record<string, DraftBody> = {};
         const rawPrompts = body.prompts;
         if (rawPrompts !== undefined) {
           if (typeof rawPrompts !== "object" || rawPrompts === null || Array.isArray(rawPrompts))
             return json({ error: "prompts must be an object of id → body" }, 400);
           for (const [id, value] of Object.entries(rawPrompts as Record<string, unknown>)) {
-            if (typeof value !== "string") return json({ error: `the body of "${id}" must be text` }, 400);
-            prompts[id] = value;
+            // HOW-63: text, or `{ "copyOf": "<prompt id>" }` — saveBuilderGraph writes a copy out,
+            // and refuses (422) one naming a prompt Howdah does not have
+            if (typeof value === "string") prompts[id] = value;
+            else if (isCopyBody(value)) prompts[id] = { copyOf: value.copyOf };
+            else return json({ error: `the body of "${id}" must be text or { "copyOf": "<prompt id>" }` }, 400);
           }
         }
         // the intent is REQUIRED, not inferred from a stat: a brand-new draft that happened to

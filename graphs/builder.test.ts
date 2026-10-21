@@ -8,9 +8,12 @@ import { chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, writeFil
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promptIdFor, promptIdsOf, readLocalPrompt, renderSpecModule, saveBuilderGraph, saveVerdict } from "./builder";
-import { loadLocalGraph, localGraphPath, localPromptsDir, ensureLocalDirs } from "./local";
-import { COMMAND_BUILTINS, WORKTREE_FACTS, coerceOperand, isBlocking, keepPath, specAdvice, specOf, specProblems, type GraphSpec, type NodeSpec } from "../core/graph-spec";
-import { splitFrontMatter } from "../core/template";
+import { loadLocalGraph, localGraphPath, localPromptsDir, ensureLocalDirs, promptSearchPath } from "./local";
+import { COMMAND_BUILTINS, WORKTREE_FACTS, coerceOperand, isBlocking, keepPath, specAdvice, specOf, specProblems, unknownCopyProblem, type GraphSpec, type NodeSpec } from "../core/graph-spec";
+import { frontMatterField, splitFrontMatter, templateReads } from "../core/template";
+import { defineGraph, type NodeDef } from "../core/graph";
+import { Engine } from "../engine/run";
+import type { PromptId } from "../core/prompt-ids";
 import { GRAPHS } from "./index";
 // core/ is node-free and cannot import an executor, so the table REPEATS what the executors
 // know. This file is node-side, so it imports the executors' own constants and pins the repetition.
@@ -949,4 +952,192 @@ describe("the built-ins, checked with their real bodies (HOW-60)", () => {
       const unknown = problems.filter(isBlocking).filter((p) => !KNOWN.some((re) => re.test(p.message)));
       expect(unknown.map((p) => p.message)).toEqual([]);
     });
+});
+
+/**
+ * HOW-63: a drafted step may name its instructions as `{ copyOf: <prompt id> }`, and save writes
+ * that out as an ordinary `<graph>.<step>` prompt. The promise is that the saved text IS what a
+ * run would pin for the original — so the expected value below is taken from a real Engine's
+ * pin, never from prompts/pin.ts itself, which would only prove the function agrees with itself.
+ */
+describe("copyOf bodies are written out as the text a run pins (HOW-63)", () => {
+  const WITH_INCLUDE = "implementation.implement";
+  const WITHOUT_INCLUDE = "implementation.plan";
+
+  /** what a run started over the same search path pins for each id, read from its run dir */
+  async function pinnedByEngine(h: string, ids: PromptId[]): Promise<Record<string, string>> {
+    const dir = mkdtempSync(join(tmpdir(), "howdah-pin-"));
+    // the agent steps are never reached: pinning covers every agent node at start, and the
+    // entry command fails, so the run parks before any of them renders
+    const nodes: Record<string, NodeDef<any>> = { gate: { kind: "command", run: "true", reads: [] }, done: { kind: "terminal", outcome: "success" } };
+    ids.forEach((id, i) => { nodes[`a${i}`] = { kind: "agent", prompt: id, reads: [], writes: {} }; });
+    const chain = ["gate", ...ids.map((_, i) => `a${i}`), "done"];
+    const edges = chain.slice(1).map((to, i) => ({ from: chain[i]!, to }));
+    const engine = new Engine(defineGraph<any>({ name: "pin-probe", entry: "gate", inputs: [], nodes, edges }), {
+      dir, promptsDir: promptSearchPath(h, ROOT),
+      executors: { command: async () => ({ status: "failed", reason: "pin probe stops here", writes: {} }) },
+    });
+    await engine.start({});
+    return Object.fromEntries(ids.map((id) => [id, readFileSync(join(dir, "prompts", `${id}.md`), "utf8")]));
+  }
+
+  /** a two-step graph whose fields are exactly what the copied texts read */
+  function copySpec(name: string, texts: string[], extra: Partial<GraphSpec> = {}): GraphSpec {
+    const keys = [...new Set(texts.flatMap((t) => templateReads(t)))];
+    return {
+      version: 1, name, description: "",
+      fields: keys.map((key) => ({ key, kind: "text", scope: "sticky" })),
+      inputs: keys,
+      entry: "first",
+      nodes: [
+        { id: "first", kind: "agent", prompt: `${name}.first`, reads: [], writes: [] },
+        { id: "second", kind: "agent", prompt: `${name}.second`, reads: [], writes: [] },
+        { id: "done", kind: "terminal", outcome: "success" },
+      ],
+      edges: [{ from: "first", to: "second" }, { from: "second", to: "done" }],
+      ...extra,
+    };
+  }
+
+  const bodyOfFile = (raw: string) => splitFrontMatter(raw).body;
+  const savedRaw = (h: string, id: string) => readFileSync(join(localPromptsDir(h), `${id}.md`), "utf8");
+
+  test("the base prompts are what this test claims: one includes, one does not", () => {
+    expect(readFileSync(join(ROOT, "prompts", `${WITH_INCLUDE}.md`), "utf8")).toContain("{{>");
+    expect(readFileSync(join(ROOT, "prompts", `${WITHOUT_INCLUDE}.md`), "utf8")).not.toContain("{{>");
+  });
+
+  test("a saved copy byte-equals the pinned base body — with an include and without", async () => {
+    const h = home();
+    const pinned = await pinnedByEngine(h, [WITH_INCLUDE, WITHOUT_INCLUDE]);
+    const spec = copySpec("copied", [bodyOfFile(pinned[WITH_INCLUDE]!), bodyOfFile(pinned[WITHOUT_INCLUDE]!)]);
+    const r = await saveBuilderGraph({
+      intent: "create", home: h, repoRoot: ROOT, spec,
+      prompts: { "copied.first": { copyOf: WITH_INCLUDE }, "copied.second": { copyOf: WITHOUT_INCLUDE } },
+    });
+    expect(r.ok, r.ok ? "" : r.error).toBe(true);
+
+    for (const [id, base] of [["copied.first", WITH_INCLUDE], ["copied.second", WITHOUT_INCLUDE]] as const) {
+      const saved = savedRaw(h, id);
+      // exact, not trimmed: a normalisation in promptFile that changed the text must fail here
+      expect(bodyOfFile(saved)).toBe(bodyOfFile(pinned[base]!));
+      expect(saved).not.toContain("{{>");
+      expect(frontMatterField(splitFrontMatter(saved).frontmatter, "id")).toBe(id);
+    }
+    // the include really was expanded, not merely absent
+    expect(bodyOfFile(pinned[WITH_INCLUDE]!)).not.toBe(bodyOfFile(readFileSync(join(ROOT, "prompts", `${WITH_INCLUDE}.md`), "utf8")));
+
+    // reads are derived from the COPIED text, as for any other body
+    if (!r.ok) return;
+    const saved = specOf(r.graph)!;
+    const reads = (id: string) => (saved.nodes.find((n) => n.id === id) as Extract<NodeSpec, { kind: "agent" }>).reads;
+    expect(reads("first")).toEqual(templateReads(bodyOfFile(pinned[WITH_INCLUDE]!)));
+    expect(reads("second")).toEqual(templateReads(bodyOfFile(pinned[WITHOUT_INCLUDE]!)));
+  });
+
+  test("a copy of a LOCAL prompt resolves local-first, as a run's search path does", async () => {
+    const h = home();
+    ensureLocalDirs(h);
+    writeFileSync(join(localPromptsDir(h), "mine.base.md"), "---\nid: mine.base\nversion: 3\n---\nLocal text for {{ context.goal }}.\n");
+    const pinned = await pinnedByEngine(h, ["mine.base" as PromptId]);
+    const spec: GraphSpec = { ...copySpec("local-copy", ["{{ context.goal }}"]), nodes: [
+      { id: "first", kind: "agent", prompt: "local-copy.first", reads: [], writes: [] },
+      { id: "done", kind: "terminal", outcome: "success" },
+    ], edges: [{ from: "first", to: "done" }] };
+    const r = await saveBuilderGraph({ intent: "create", home: h, repoRoot: ROOT, spec, prompts: { "local-copy.first": { copyOf: "mine.base" } } });
+    expect(r.ok, r.ok ? "" : r.error).toBe(true);
+    expect(bodyOfFile(savedRaw(h, "local-copy.first"))).toBe(bodyOfFile(pinned["mine.base"]!));
+    // this graph's own version, not the copied file's
+    expect(frontMatterField(splitFrontMatter(savedRaw(h, "local-copy.first")).frontmatter, "version")).toBe("1");
+  });
+
+  for (const copyOf of ["no.such_prompt", "../../etc/passwd", "Implementation.Implement"])
+    test(`an unknown copyOf (${copyOf}) is refused in the operator's words and writes nothing, on create`, async () => {
+      const h = home();
+      const spec = copySpec("unknown-copy", ["{{ context.goal }}"]);
+      const r = await saveBuilderGraph({
+        intent: "create", home: h, repoRoot: ROOT, spec,
+        prompts: { "unknown-copy.first": "Do {{ context.goal }}", "unknown-copy.second": { copyOf } },
+      });
+      expect(r.ok).toBe(false);
+      if (!r.ok) {
+        expect(r.error).toBe(unknownCopyProblem("unknown-copy.second", copyOf).message);
+        expect(r.code).toBeUndefined(); // → 422 at the route
+      }
+      for (const d of [join(h, "graphs"), localPromptsDir(h)]) expect(existsSync(d) ? readdirSync(d) : []).toEqual([]);
+    });
+
+  test("an unknown copyOf on UPDATE leaves the existing graph and its prompts byte-identical", async () => {
+    const h = home();
+    const spec = copySpec("kept", ["{{ context.goal }}"]);
+    const first = { "kept.first": "One {{ context.goal }}", "kept.second": "Two {{ context.goal }}" };
+    expect((await saveBuilderGraph({ intent: "create", home: h, repoRoot: ROOT, spec, prompts: first })).ok).toBe(true);
+    const snapshot = () => Object.fromEntries(
+      [localGraphPath(h, "kept"), ...readdirSync(localPromptsDir(h)).map((f) => join(localPromptsDir(h), f))].map((p) => [p, readFileSync(p, "utf8")]),
+    );
+    const before = snapshot();
+    const r = await saveBuilderGraph({
+      intent: "update", home: h, repoRoot: ROOT, spec,
+      prompts: { "kept.first": "REWRITTEN {{ context.goal }}", "kept.second": { copyOf: "nope" } },
+    });
+    expect(r.ok).toBe(false);
+    expect(snapshot()).toEqual(before);
+  });
+
+  test("a copy whose include cannot be expanded is refused before any write", async () => {
+    const h = home();
+    ensureLocalDirs(h);
+    writeFileSync(join(localPromptsDir(h), "broken.base.md"), "---\nid: broken.base\nversion: 1\n---\nUses {{> missing._partial }}\n");
+    const spec = copySpec("broken-copy", ["{{ context.goal }}"]);
+    const r = await saveBuilderGraph({
+      intent: "create", home: h, repoRoot: ROOT, spec,
+      prompts: { "broken-copy.first": "x {{ context.goal }}", "broken-copy.second": { copyOf: "broken.base" } },
+    });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toContain('cannot include "missing._partial"');
+    expect(existsSync(localGraphPath(h, "broken-copy"))).toBe(false);
+    expect(readdirSync(localPromptsDir(h))).toEqual(["broken.base.md"]);
+  });
+
+  test("`drafted` survives save → loadLocalGraph → spec, alongside a copied body", async () => {
+    const h = home();
+    const drafted = { run: "draft-graph-abc123", draftHash: "c53:00000000000001" };
+    const pinned = await pinnedByEngine(h, [WITHOUT_INCLUDE]);
+    const spec = copySpec("drafted-one", [bodyOfFile(pinned[WITHOUT_INCLUDE]!), "{{ context.goal }}"], { drafted });
+    const r = await saveBuilderGraph({
+      intent: "create", home: h, repoRoot: ROOT, spec,
+      prompts: { "drafted-one.first": { copyOf: WITHOUT_INCLUDE }, "drafted-one.second": "Then {{ context.goal }}" },
+    });
+    expect(r.ok, r.ok ? "" : r.error).toBe(true);
+    expect(readFileSync(localGraphPath(h, "drafted-one"), "utf8")).toContain(`"draftHash": "${drafted.draftHash}"`);
+    const loaded = await loadLocalGraph(h, "drafted-one", ROOT);
+    expect(specOf(loaded)?.drafted).toEqual(drafted);
+  });
+
+  test("a copy keyed under another graph's id is still refused — the copied-FROM id is only read", async () => {
+    const h = home();
+    const victim = copySpec("victim", ["{{ context.goal }}"]);
+    expect((await saveBuilderGraph({ intent: "create", home: h, repoRoot: ROOT, spec: victim, prompts: { "victim.first": "V1 {{ context.goal }}", "victim.second": "V2 {{ context.goal }}" } })).ok).toBe(true);
+    const before = savedRaw(h, "victim.first");
+
+    const attacker: GraphSpec = { ...copySpec("attacker", ["{{ context.goal }}"]), nodes: [
+      { id: "first", kind: "agent", prompt: "victim.first", reads: [], writes: [] },
+      { id: "done", kind: "terminal", outcome: "success" },
+    ], edges: [{ from: "first", to: "done" }] };
+    const r = await saveBuilderGraph({ intent: "create", home: h, repoRoot: ROOT, spec: attacker, prompts: { "victim.first": { copyOf: WITHOUT_INCLUDE } } });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toContain("another graph's prompt");
+    expect(savedRaw(h, "victim.first")).toBe(before);
+    expect(existsSync(localGraphPath(h, "attacker"))).toBe(false);
+
+    // and a key that IS a repo prompt is still the shadowing refusal, copy or not
+    const shadow: GraphSpec = { ...attacker, name: "shadow", nodes: [
+      { id: "first", kind: "agent", prompt: WITHOUT_INCLUDE, reads: [], writes: [] },
+      { id: "done", kind: "terminal", outcome: "success" },
+    ] };
+    const s = await saveBuilderGraph({ intent: "create", home: h, repoRoot: ROOT, spec: shadow, prompts: { [WITHOUT_INCLUDE]: { copyOf: WITHOUT_INCLUDE } } });
+    expect(s.ok).toBe(false);
+    if (!s.ok) expect(s.error).toContain("shadow");
+    expect(existsSync(join(localPromptsDir(h), `${WITHOUT_INCLUDE}.md`))).toBe(false);
+  });
 });
