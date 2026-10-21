@@ -9,29 +9,41 @@
  *
  * The run name (HOW-18) is an optional display label; the server validates it with the same
  * core/run-name.ts rule the CLI uses, and its refusal shows here like any launch error.
+ *
+ * HOW-66 (HOW-56 D-1B): "Draft a graph" is not a form of the graph's inputs. draft-graph is
+ * picked like any graph, and the generic input loop becomes ONE intent box, an optional base
+ * ("Let the agent choose", or any graph the builder can open — the drafter's catalog) and the
+ * optional workspace. The body is core/draft-launch.ts draftLaunchRequest, the same builder a
+ * redraft goes through, so what a draft run is told cannot depend on where it was started.
  */
 import { useEffect, useState } from "react";
 import { Play } from "lucide-react";
 import type { GraphCatalog, GraphInfo, Workspaces } from "@/lib/types";
 import { getJSON } from "@/lib/net";
+import { DRAFT_GRAPH } from "../../../core/catalog";
+import { draftLaunchRequest } from "../../../core/draft-launch";
 import type { AgentConfigDto } from "../graph-dag";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/toast";
 import { AddWorkspace } from "./settings";
 import { ConfigFields } from "./graphs";
 
 export function StartRun() {
-  const [graphs, setGraphs] = useState<GraphInfo[]>([]);
+  const [catalog, setCatalog] = useState<GraphInfo[]>([]);
   const [workspaces, setWorkspaces] = useState<Workspaces>({ repos: [], folders: [] });
   // HOW-65: a just-saved draft's receipt says "Run it" and lands here with the graph picked
   const [graph, setGraph] = useState<string>(() => new URLSearchParams(location.search).get("graph") ?? "");
   const [name, setName] = useState<string>("");
   const [inputs, setInputs] = useState<Record<string, string>>({});
   const [workspace, setWorkspace] = useState<string>("");
+  // draft-graph only (D-1B): the request, and the graph to start from ("" = the agent chooses)
+  const [intent, setIntent] = useState<string>("");
+  const [base, setBase] = useState<string>("");
   const [overrides, setOverrides] = useState<AgentConfigDto>({});
   const [showOverrides, setShowOverrides] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -42,10 +54,14 @@ export function StartRun() {
   useEffect(() => {
     // a graph another graph starts takes inputs only its parent can fill (implement-stacked's
     // `deps` names sibling runs), so it is not offered here — the Graphs page says who starts it
-    getJSON<GraphCatalog>("/api/graphs").then((c) => setGraphs(c.graphs.filter((g) => !g.launched_by))).catch(() => {});
+    getJSON<GraphCatalog>("/api/graphs").then((c) => setCatalog(c.graphs)).catch(() => {});
     loadWorkspaces();
   }, []);
+  const graphs = catalog.filter((g) => !g.launched_by);
+  // a base is anything the drafter's catalog offers: every graph the builder can open
+  const bases = catalog.filter((g) => g.builder);
   const selected = graphs.find((g) => g.name === graph);
+  const drafting = graph === DRAFT_GRAPH;
   const options = selected?.kind === "repo" ? workspaces.repos : [...workspaces.repos, ...workspaces.folders];
 
   const launch = async () => {
@@ -55,7 +71,9 @@ export function StartRun() {
       const r = await fetch("/api/runs", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ graph, name: name.trim() || undefined, inputs, workspace: workspace || undefined, overrides }),
+        body: JSON.stringify(drafting
+          ? draftLaunchRequest({ intent, base: base || undefined, workspace: workspace || undefined, name: name.trim() || undefined, overrides })
+          : { graph, name: name.trim() || undefined, inputs, workspace: workspace || undefined, overrides }),
       });
       if (!r.ok) throw new Error((await r.json() as any).error ?? "launch failed");
       const { id } = (await r.json()) as { id: string };
@@ -88,7 +106,22 @@ export function StartRun() {
               <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="shown in the runs list instead of the goal" />
             </Label>
           )}
-          {selected?.inputs.map((k) => (
+          {selected && drafting && (
+            <>
+              <Label>
+                What should the graph do?
+                <Textarea value={intent} onChange={(e) => setIntent(e.target.value)} rows={4} placeholder="like quick-task, but with a review step before it finishes" />
+              </Label>
+              <Label>
+                Base (optional)
+                <Select value={base} onChange={(e) => setBase(e.target.value)}>
+                  <option value="">Let the agent choose</option>
+                  {bases.map((g) => <option key={g.name} value={g.name}>{g.name}</option>)}
+                </Select>
+              </Label>
+            </>
+          )}
+          {!drafting && selected?.inputs.map((k) => (
             <Label key={k}>
               {k}
               <Input value={inputs[k] ?? ""} onChange={(e) => setInputs({ ...inputs, [k]: e.target.value })} placeholder={k} />
@@ -96,7 +129,7 @@ export function StartRun() {
           ))}
           {selected && (
             <Label>
-              Workspace {selected.kind === "repo" ? "(repo required)" : ""}
+              Workspace {selected.kind === "repo" ? "(repo required)" : drafting ? "(optional)" : ""}
               <Select value={workspace} onChange={(e) => setWorkspace(e.target.value)}>
                 <option value="">{selected.kind === "repo" ? (options.length ? "choose a repo…" : "no repos registered") : "none (log-only)"}</option>
                 {options.map((w) => <option key={w.name} value={w.name}>{w.name} — {w.path}</option>)}
@@ -117,7 +150,7 @@ export function StartRun() {
           {selected && showOverrides && <ConfigFields value={overrides} onChange={setOverrides} />}
           {error && <div className="field-error">{error}</div>}
           <Button
-            disabled={busy || !selected || selected.inputs.some((k) => !(inputs[k] ?? "").trim()) || (selected.kind === "repo" && !workspace)}
+            disabled={busy || !selected || (drafting ? !intent.trim() : selected.inputs.some((k) => !(inputs[k] ?? "").trim())) || (selected.kind === "repo" && !workspace)}
             onClick={launch}
           >
             <Play />{busy ? "Launching…" : "Launch run"}

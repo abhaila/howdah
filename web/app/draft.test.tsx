@@ -46,7 +46,7 @@ function ready(over: { base?: GraphSpec | null; spec?: GraphSpec; texts?: Record
     state: "ready", run: "r1",
     draft: { spec, prompts, based_on: base?.name ?? null, notes: d.notes },
     base, texts, diff, advice: [], grantsNewWrite: diff.grantsNewWrite, draftHash: "c53:abc",
-    saved: null, baseChanged: null,
+    saved: null, baseChanged: null, discarded: null, redrafts: [],
     ...over,
   } as ReadyDraft;
 }
@@ -61,8 +61,10 @@ function readOnlyDraft(): ReadyDraft {
   return ready({ spec, texts, prompts: { "quick-task.work": { copyOf: "quick-task.work" }, "quick-task.look": texts["quick-task.look"] } });
 }
 
-/** fetch: GET /draft answers the queue in order (last one sticks); POST /save answers `save` */
-function serve(drafts: RunDraft[], save: { status: number; body: unknown } = { status: 201, body: { ok: true, name: "x" } }, catalog: string[] = []) {
+/** fetch: GET /draft answers the queue in order (last one sticks); POST /save answers `save`; HOW-66's
+ *  POST /redraft and /discard answer from `actions` by that last path segment */
+function serve(drafts: RunDraft[], save: { status: number; body: unknown } = { status: 201, body: { ok: true, name: "x" } }, catalog: string[] = [],
+  actions: Record<string, { status: number; body: unknown }> = {}) {
   const calls: Array<{ url: string; method: string; body: unknown }> = [];
   const queue = [...drafts];
   globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
@@ -71,6 +73,7 @@ function serve(drafts: RunDraft[], save: { status: number; body: unknown } = { s
     calls.push({ url, method, body: init?.body ? JSON.parse(String(init.body)) : undefined });
     const res = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
     if (url.endsWith("/draft/save")) return res(save.status, save.body);
+    for (const [action, answer] of Object.entries(actions)) if (url.endsWith(`/draft/${action}`)) return res(answer.status, answer.body);
     if (url.includes("/draft")) {
       const d = queue.length > 1 ? queue.shift()! : queue[0]!;
       return res(d.state === "ready" ? 200 : d.state === "unknown" ? 404 : 409, d);
@@ -147,7 +150,8 @@ describe("the draft card in the run's Chat — D-4A", () => {
     expect(card.querySelector(".draft-basis")?.textContent).toBe("based on quick-task · 3 steps");
     expect(card.querySelector(".draft-sum")?.textContent).toBe("⚠ 1 step can change your code · ◐ 4 changed · ⓘ 0 worth a look");
     const headings = [...card.querySelectorAll(".draft-sec h3")].map((h) => h.textContent);
-    expect(headings).toEqual(["Can change your code · 1", "What changed from quick-task · 4", "Unchanged (1)", "Worth a look · 0"]);
+    // HOW-66: Ask for changes is its own labelled section, after Worth a look
+    expect(headings).toEqual(["Can change your code · 1", "What changed from quick-task · 4", "Unchanged (1)", "Worth a look · 0", "Ask for changes"]);
   });
 
   test("empty: a draft from nothing says `New graph`, every row is added, empty sections say Nothing flagged", async () => {
@@ -271,19 +275,102 @@ describe("D-8A: every glyph has its word, every section is a region, the tab ord
     expect(el.querySelector('.draft-row[data-change][data-step="quick-review.work"]')?.textContent).toContain("Instructions unchanged from quick-task.work");
   });
 
-  test("the tab order follows the page: name → Save → Review all changes → rows → the Unchanged disclosure", async () => {
+  test("the tab order follows the page: name → Save → Review all changes → rows → the Unchanged disclosure → Ask for changes → Discard", async () => {
     serve([readOnlyDraft()]);
     const el = await mount(<DraftCard runId="r1" />);
-    const focusable = [...el.querySelectorAll<HTMLElement>("input, button, a[href], [tabindex='0']")].filter((e) => !e.closest("[hidden]"));
+    const focusable = [...el.querySelectorAll<HTMLElement>("input, textarea, button, a[href], [tabindex='0']")].filter((e) => !e.closest("[hidden]"));
     const describe = (e: HTMLElement) =>
-      e.tagName === "INPUT" ? "name" : e.tagName === "LI" ? `row:${e.getAttribute("data-step") ?? "graph"}` : e.textContent?.trim();
+      e.tagName === "INPUT" ? "name" : e.tagName === "TEXTAREA" ? "change" : e.tagName === "LI" ? `row:${e.getAttribute("data-step") ?? "graph"}` : e.textContent?.trim();
     expect(focusable.map(describe)).toEqual([
       "name", "Save", "Review all changes",
       "row:quick-task.work", // can change your code
       "row:graph", "row:look", "row:quick-task.work", // what changed: the graph's new field, the added step, the new route
 
       "Unchanged (1)",
+      "change", "Redraft", // HOW-66 (D-5A)
+      "Discard", // HOW-66 (D-10A)
     ]);
+  });
+});
+
+// ---- HOW-66: Ask for changes, Discard, and their receipts ----------------------------------
+
+const changeBox = (el: HTMLElement) => el.querySelector(".draft-card textarea") as HTMLTextAreaElement;
+const typeChange = (box: HTMLTextAreaElement, value: string) => act(() => {
+  Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(box, value);
+  box.dispatchEvent(new Event("input", { bubbles: true }));
+});
+
+describe("Ask for changes and Discard (HOW-66)", () => {
+  test("Ask for changes is a labelled region with its own box and button, and posts {change} then opens the new run", async () => {
+    const calls = serve([readOnlyDraft()], undefined, [], { redraft: { status: 202, body: { id: "draft-graph-c2" } } });
+    const el = await mount(<DraftCard runId="r1" />);
+    const region = [...el.querySelectorAll("[role=region]")].find((r) => document.getElementById(r.getAttribute("aria-labelledby")!)?.textContent === "Ask for changes")!;
+    expect(region).toBeDefined();
+    expect(region.querySelector("label")?.textContent).toContain("What should be different?");
+    expect(region.querySelector("label textarea")).toBe(changeBox(el)); // the box is labelled, and is the Textarea primitive
+    expect(changeBox(el).className).toContain("font-mono");
+    const redraft = [...region.querySelectorAll("button")].find((b) => b.textContent === "Redraft")!;
+    expect(redraft.disabled).toBe(true); // nothing to ask for yet
+    typeChange(changeBox(el), "  make the review read-only ");
+    await click(redraft);
+    expect(calls.filter((c) => c.method === "POST")).toEqual([{ url: "/api/runs/r1/draft/redraft", method: "POST", body: { change: "make the review read-only" } }]);
+    expect(location.pathname).toBe("/run/draft-graph-c2");
+  });
+
+  test("a refused redraft is shown word for word, and nothing navigates", async () => {
+    const sentence = "This draft is too large to redraft from here; open it in the builder and change it there.";
+    serve([readOnlyDraft()], undefined, [], { redraft: { status: 422, body: { error: sentence } } });
+    const el = await mount(<DraftCard runId="r1" />);
+    typeChange(changeBox(el), "x");
+    await click(buttonNamed(el, "Redraft")!);
+    expect(el.querySelector("[role=alert]")?.textContent).toBe(sentence);
+    expect(location.pathname).toBe("/");
+  });
+
+  test("the receipt: `Redrafted → run Y`, a link to each child run, and the section stays usable", async () => {
+    serve([ready({ redrafts: [{ run: "draft-graph-c1", at: "2026-10-21T10:00:00Z" }, { run: "draft-graph-c2", at: "2026-10-21T11:00:00Z" }] })]);
+    const el = await mount(<DraftCard runId="r1" />);
+    const receipts = [...el.querySelectorAll(".draft-receipt")].map((r) => r.textContent);
+    expect(receipts).toEqual(["↻ Redrafted → run draft-graph-c1", "↻ Redrafted → run draft-graph-c2"]);
+    expect(el.querySelectorAll(".draft-receipt[role=status]")).toHaveLength(2);
+    expect(linkNamed(el, "run draft-graph-c1")?.getAttribute("href")).toBe("/run/draft-graph-c1");
+    expect(changeBox(el)).not.toBeNull();
+    expect(buttonNamed(el, "Discard")).toBeDefined();
+  });
+
+  test("Discard posts, re-reads, and the card becomes a Discarded receipt with no Save, no redraft and no second Discard", async () => {
+    const calls = serve([readOnlyDraft(), { ...readOnlyDraft(), discarded: { at: "2026-10-21T10:00:00Z" } }], undefined, [], { discard: { status: 200, body: { ok: true, appended: true } } });
+    const el = await mount(<DraftCard runId="r1" />);
+    await click(buttonNamed(el, "Discard")!);
+    expect(calls.filter((c) => c.method === "POST").map((c) => c.url)).toEqual(["/api/runs/r1/draft/discard"]);
+    const receipt = el.querySelector(".draft-receipt[role=status]")!;
+    expect(receipt.textContent).toBe("✕ Discarded · this draft will not be saved");
+    for (const gone of ["Save", "Review and save", "Redraft", "Discard"]) expect(buttonNamed(el, gone)).toBeUndefined();
+    expect(changeBox(el)).toBeNull();
+    expect(nameBox(el)).toBeNull();
+    expect(buttonNamed(el, "Review all changes")).toBeDefined(); // the draft can still be read
+  });
+
+  test("a discarded draft that was redrafted shows both receipts", async () => {
+    serve([ready({ discarded: { at: "t" }, redrafts: [{ run: "c1", at: "t" }] })]);
+    const el = await mount(<DraftCard runId="r1" />);
+    expect([...el.querySelectorAll(".draft-receipt")].map((r) => r.textContent)).toEqual(["✕ Discarded · this draft will not be saved", "↻ Redrafted → run c1"]);
+  });
+
+  test("a refused discard is shown word for word", async () => {
+    const sentence = "This draft is already saved as `x` — delete the graph instead.";
+    serve([readOnlyDraft()], undefined, [], { discard: { status: 409, body: { error: sentence } } });
+    const el = await mount(<DraftCard runId="r1" />);
+    await click(buttonNamed(el, "Discard")!);
+    expect(el.querySelector("[role=alert]")?.textContent).toBe(sentence);
+  });
+
+  test("a saved draft offers no Discard, but can still be redrafted", async () => {
+    serve([{ ...readOnlyDraft(), saved: { name: "my-look", edited: false } }]);
+    const el = await mount(<DraftCard runId="r1" />);
+    expect(buttonNamed(el, "Discard")).toBeUndefined();
+    expect(changeBox(el)).not.toBeNull();
   });
 });
 

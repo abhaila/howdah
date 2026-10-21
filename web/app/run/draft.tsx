@@ -19,6 +19,13 @@
  * WORD and a name collision puts the cursor back in the name (D-9A). After Save the card is a
  * receipt, read back from the graph's own provenance (D-10A), so a reload never offers Save twice.
  *
+ * HOW-66 adds the draft's two other answers (D-5A, D-10A). "Ask for changes" is a LABELLED
+ * SECTION with its own box and button, never a second composer (HOW-27): it does not reply to
+ * the agent, it launches a new draft-graph run whose parent is this one, and the card then
+ * reads "Redrafted → run Y" for each such child — derived on the server from the child's
+ * `run-started.parent`. "Discard" appends a decision; after it the card is a Discarded receipt
+ * and offers neither Save, nor a redraft, nor a second Discard.
+ *
  * Nothing here computes the diff: core/draft-diff.ts does, on the server (web/draft.ts).
  */
 import { forwardRef, useCallback, useEffect, useId, useRef, useState } from "react";
@@ -34,6 +41,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 
 /** The run's draft, re-read on demand; `poll` re-reads every 3s while it is still drafting. */
 export function useRunDraft(runId: string, opts: { poll?: boolean } = {}): { draft: RunDraft | null; reload: () => void } {
@@ -73,6 +81,27 @@ export async function saveDraft(runId: string, name: string): Promise<{ ok: true
     return { ok: false, error: e instanceof Error ? e.message : String(e), conflict: false };
   }
 }
+
+/** A write to the draft routes: the server's own refusal, word for word, or the parsed body. */
+async function postDraft<T>(runId: string, action: "redraft" | "discard", body?: unknown): Promise<({ ok: true } & T) | { ok: false; error: string }> {
+  try {
+    const r = await fetch(`/api/runs/${encodeURIComponent(runId)}/draft/${action}`, {
+      method: "POST",
+      ...(body === undefined ? {} : { headers: { "content-type": "application/json" }, body: JSON.stringify(body) }),
+    });
+    const parsed = (await r.json().catch(() => ({}))) as T & { error?: string };
+    if (r.ok) return { ...parsed, ok: true };
+    return { ok: false, error: parsed.error ?? `the ${action} was refused (${r.status})` };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/** Ask for changes (D-5A): launches a new draft-graph run; answers its id. */
+export const redraftDraft = (runId: string, change: string) => postDraft<{ id: string }>(runId, "redraft", { change });
+
+/** Discard (D-10A): idempotent — `appended` is false when it was already discarded. */
+export const discardDraft = (runId: string) => postDraft<{ appended: boolean }>(runId, "discard");
 
 /** What the summary line counts — one function, so the line and the sections cannot disagree. */
 export function draftCounts(d: ReadyDraft): { risk: number; changed: number; advice: number } {
@@ -299,6 +328,63 @@ export function DraftReceipt({ saved }: { saved: { name: string; edited: boolean
   );
 }
 
+/** `Redrafted → run Y`, one per child draft-graph run launched from this draft (D-5A). */
+export function RedraftReceipts({ redrafts }: { redrafts: ReadyDraft["redrafts"] }) {
+  if (redrafts.length === 0) return null;
+  return (
+    <>
+      {redrafts.map((r) => (
+        <p key={r.run} className="draft-receipt" role="status">
+          <span aria-hidden className="draft-glyph">↻</span> Redrafted <span aria-hidden>→</span>{" "}
+          <a href={`/run/${encodeURIComponent(r.run)}`}>run {r.run}</a>
+        </p>
+      ))}
+    </>
+  );
+}
+
+/** `Discarded` — the decision, read back from the log (D-10A). */
+export function DiscardedReceipt() {
+  return (
+    <p className="draft-receipt" role="status">
+      <span aria-hidden className="draft-glyph">✕</span> <strong>Discarded</strong>
+      <span aria-hidden> · </span>this draft will not be saved
+    </p>
+  );
+}
+
+/**
+ * "Ask for changes" (D-5A): a labelled region with its own box and button. Not a composer —
+ * it never replies to the agent; it starts a new draft-graph run and goes to it.
+ */
+export function RedraftSection({ runId }: { runId: string }) {
+  const [change, setChange] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const heading = useId();
+  const submit = async () => {
+    setBusy(true);
+    setError(null);
+    const r = await redraftDraft(runId, change.trim());
+    setBusy(false);
+    if (r.ok) { navigate(`/run/${encodeURIComponent(r.id)}`); return; }
+    setError(r.error);
+  };
+  return (
+    <section className="draft-sec" role="region" aria-labelledby={heading}>
+      <h3 id={heading}>Ask for changes</h3>
+      <Label>
+        What should be different?
+        <Textarea value={change} onChange={(e) => setChange(e.target.value)} rows={3} placeholder="e.g. add a review step before it finishes" />
+      </Label>
+      <div className="actions">
+        <Button variant="outline" onClick={submit} disabled={busy || !change.trim()}>{busy ? "Redrafting…" : "Redraft"}</Button>
+      </div>
+      {error && <p className="field-error wrap-pre" role="alert">{error}</p>}
+    </section>
+  );
+}
+
 /**
  * The name box and the Save, with D-9A's refusal handling, shared by the card and the page.
  * `direct` is whether Save is offered at all here; when it is not, `onReview` is the primary.
@@ -332,17 +418,31 @@ export function DraftCard({ runId }: { runId: string }) {
 function ReadyCard({ runId, draft, onSaved }: { runId: string; draft: ReadyDraft; onSaved: () => void }) {
   const s = useDraftSave(runId, draft, onSaved);
   const reviewHref = `/runs/${encodeURIComponent(runId)}/draft`;
+  const [discarding, setDiscarding] = useState(false);
+  const [discardError, setDiscardError] = useState<string | null>(null);
+  const discard = async () => {
+    setDiscarding(true);
+    setDiscardError(null);
+    const r = await discardDraft(runId);
+    setDiscarding(false);
+    if (r.ok) onSaved(); // re-read: the receipt comes from the log, not from this press
+    else setDiscardError(r.error);
+  };
+  const open = !draft.saved && !draft.discarded;
   return (
     <Card className="draft-card" aria-label="the drafted graph">
       <div className="draft-head">
         <h2>Draft ready</h2>
         <p className="draft-basis">{draftBasis(draft)}</p>
       </div>
-      {draft.saved ? <DraftReceipt saved={draft.saved} /> : <DraftName ref={s.nameRef} value={s.name} onChange={s.setName} />}
+      {draft.saved && <DraftReceipt saved={draft.saved} />}
+      {draft.discarded && <DiscardedReceipt />}
+      <RedraftReceipts redrafts={draft.redrafts} />
+      {open && <DraftName ref={s.nameRef} value={s.name} onChange={s.setName} />}
       <DraftSummary draft={draft} />
       <BaseChangedBanner draft={draft} />
       {draft.draft.notes && <p className="draft-note">{draft.draft.notes}</p>}
-      {!draft.saved && (
+      {open && (
         <div className="actions">
           {draft.grantsNewWrite
             ? <Button onClick={() => navigate(reviewHref)}>Review and save</Button>
@@ -350,9 +450,16 @@ function ReadyCard({ runId, draft, onSaved }: { runId: string; draft: ReadyDraft
           <Button variant="outline" onClick={() => navigate(reviewHref)}>Review all changes</Button>
         </div>
       )}
-      {draft.saved && <div className="actions"><Button variant="outline" onClick={() => navigate(reviewHref)}>Review all changes</Button></div>}
+      {!open && <div className="actions"><Button variant="outline" onClick={() => navigate(reviewHref)}>Review all changes</Button></div>}
       {s.error && <p className="field-error wrap-pre" role="alert">{s.error}</p>}
       <DraftList draft={draft} />
+      {!draft.discarded && <RedraftSection runId={runId} />}
+      {open && (
+        <div className="actions">
+          <Button variant="outline" onClick={discard} disabled={discarding}>{discarding ? "Discarding…" : "Discard"}</Button>
+        </div>
+      )}
+      {discardError && <p className="field-error wrap-pre" role="alert">{discardError}</p>}
     </Card>
   );
 }

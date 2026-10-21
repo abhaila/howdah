@@ -693,6 +693,16 @@ export type RunEvent =
     }
   | {
       /**
+       * HOW-66 (HOW-56 D-10A): an operator DISCARDED a draft-graph run's draft — a decision,
+       * so the card reads it from the log rather than from a flag. Appended under the log lock
+       * (web/draft.ts discardRunDraft): one per run, a repeat is idempotent, and it is refused
+       * once the draft is saved as a graph. A discarded draft can no longer be saved or redrafted.
+       */
+      type: "draft-discarded";
+      by: "operator";
+    }
+  | {
+      /**
        * HOW-55: what an agent's ENVIRONMENT was, beyond the prompt `rendered_hash` proves — so
        * two runs of the same pinned prompt that behaved differently can be told apart, and an
        * A/B comparison (HOW-42) can see what the operator's setup was that day. Recorded once

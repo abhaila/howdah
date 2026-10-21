@@ -13,6 +13,7 @@ import { RunsList } from "./screens/runs";
 import { StartRun } from "./screens/start-run";
 import { RunView, OPEN_GRACE_MS } from "./run/view";
 import { ToastProvider } from "./components/ui/toast";
+import { draftLaunchRequest } from "../../core/draft-launch";
 
 let root: Root | null = null;
 let host: HTMLElement | null = null;
@@ -187,3 +188,78 @@ describe("the launch form leaves out graphs another graph starts", () => {
   });
 });
 
+
+// HOW-66 (HOW-56 D-1B): Draft a graph is one intent box, an optional base and an optional
+// workspace — and its POST body is core/draft-launch.ts's, the builder a redraft also uses
+describe("the launch form: Draft a graph (HOW-66)", () => {
+  const reads = {
+    "/api/graphs": { graphs: [
+      { name: "draft-graph", description: "Draft a new graph", inputs: ["intent"], kind: "plain", source: "builtin", builder: true },
+      { name: "quick-task", description: "d", inputs: ["goal"], kind: "plain", source: "builtin", builder: true },
+      { name: "implement-slice", description: "d", inputs: ["goal", "work"], kind: "repo", source: "builtin", builder: false },
+      { name: "implement-stacked", description: "d", inputs: ["goal", "work", "deps"], kind: "repo", source: "builtin", builder: true, launched_by: "plan-feature" },
+    ], problems: [] },
+    "/api/workspaces": { repos: [], folders: [{ name: "scratch", path: "/tmp/scratch" }] },
+  };
+  const labelled = (el: HTMLElement, text: string) => [...el.querySelectorAll("label")].find((l) => l.textContent!.startsWith(text));
+  const launchButton = (el: HTMLElement) => [...el.querySelectorAll("button")].find((b) => b.textContent!.includes("Launch run")) as HTMLButtonElement;
+  function typeArea(el: HTMLTextAreaElement, value: string) {
+    act(() => {
+      Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value")!.set!.call(el, value);
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+  }
+  async function pick(el: HTMLElement) {
+    await settle();
+    type(el.querySelector("select")!, "draft-graph");
+  }
+
+  test("one intent box, a Base defaulting to `Let the agent choose` over builder graphs, and an optional workspace — no generic input", async () => {
+    serve(reads);
+    const el = mount(<StartRun />);
+    await pick(el);
+    expect(el.querySelectorAll("textarea")).toHaveLength(1);
+    expect(labelled(el, "What should the graph do?")?.querySelector("textarea")).not.toBeNull();
+    expect(labelled(el, "intent")).toBeUndefined(); // the generic loop is replaced, not added to
+    const base = labelled(el, "Base (optional)")!.querySelector("select")!;
+    expect(base.value).toBe("");
+    expect([...base.options].map((o) => o.textContent)).toEqual(["Let the agent choose", "draft-graph", "quick-task", "implement-stacked"]);
+    const ws = labelled(el, "Workspace")!;
+    expect(ws.textContent).toContain("(optional)");
+    expect(ws.querySelector("select")!.value).toBe("");
+    expect(launchButton(el).disabled).toBe(true); // only the intent is required
+    typeArea(el.querySelector("textarea")!, "  like quick-task with a review ");
+    expect(launchButton(el).disabled).toBe(false);
+  });
+
+  test("the POST body is draftLaunchRequest's: the intent, the base as a sentence, the workspace", async () => {
+    const posted = serve(reads, { id: "draft-graph-abc" });
+    const assigned: string[] = [];
+    window.location.assign = ((u: string) => { assigned.push(u); }) as typeof window.location.assign;
+    const el = mount(<StartRun />);
+    await pick(el);
+    typeArea(el.querySelector("textarea")!, "like quick-task with a review");
+    type(labelled(el, "Base (optional)")!.querySelector("select")!, "quick-task");
+    type(labelled(el, "Workspace")!.querySelector("select")!, "scratch");
+    await act(async () => launchButton(el).click());
+    await settle();
+    expect(posted).toHaveLength(1);
+    expect(posted[0]).toEqual({
+      url: "/api/runs",
+      body: draftLaunchRequest({ intent: "like quick-task with a review", base: "quick-task", workspace: "scratch" }),
+    });
+    expect((posted[0]!.body as { inputs: { intent: string } }).inputs.intent).toBe("like quick-task with a review\n\nStart from the graph `quick-task`.");
+    expect(assigned).toEqual(["/run/draft-graph-abc"]);
+  });
+
+  test("no base and no workspace: the bare intent and nothing else", async () => {
+    const posted = serve(reads, { id: "draft-graph-abc" });
+    window.location.assign = (() => {}) as typeof window.location.assign;
+    const el = mount(<StartRun />);
+    await pick(el);
+    typeArea(el.querySelector("textarea")!, "a graph that writes release notes");
+    await act(async () => launchButton(el).click());
+    await settle();
+    expect(posted[0]!.body).toEqual({ graph: "draft-graph", inputs: { intent: "a graph that writes release notes" } });
+  });
+});

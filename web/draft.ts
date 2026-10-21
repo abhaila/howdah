@@ -15,15 +15,24 @@
  * `draftHash` is the hash of the draft as PROPOSED — with copies still copies — so T10's
  * metrics can compare it; `edited` is set by any save that went through the canvas.
  *
+ * HOW-66 adds the two other answers to a draft (D-5A, D-10A). DISCARD is a decision event,
+ * `draft-discarded`, appended under the log lock — idempotent, refused once the draft is saved,
+ * and after it neither Save nor a redraft is offered or accepted. ASK FOR CHANGES launches a NEW
+ * draft-graph run with `--parent` this one (core/draft-launch.ts builds what it is told); the old
+ * card's "Redrafted → run Y" is derived from each child's own `run-started.parent`, never stored
+ * here.
+ *
  * Never throws on a run's content: the draft is model output, and a draft that does not parse
  * is the `refused` state with the parser's reason, not a 500.
  */
-import { existsSync } from "node:fs";
+import { closeSync, existsSync, openSync, readdirSync, readSync } from "node:fs";
 import { join } from "node:path";
-import { readLog } from "../log/write";
+import { EventLog, readLog } from "../log/write";
 import type { LoggedEvent } from "../log/events";
-import { deriveStatus } from "./derive";
-import { asGraphsCatalog, DRAFT_GRAPH, GRAPH_DRAFT_KEY, GRAPHS_CATALOG_KEY } from "../core/catalog";
+import { deriveDraftDiscarded, deriveStatus } from "./derive";
+import { redraftLaunchRequest } from "../core/draft-launch";
+import type { LaunchRequest } from "../core/launch-args";
+import { asGraphsCatalog, DRAFT_GRAPH, GRAPH_DRAFT_KEY, GRAPHS_CATALOG_DEFAULT_CAP, GRAPHS_CATALOG_KEY } from "../core/catalog";
 import {
   draftHashOf, draftRuleProblems, parseGraphSpec, renameDraft, resolveDraftBodies, specOf, specProblems,
   type DraftBody, type DraftedProvenance, type GraphSpec, type SpecProblem,
@@ -50,6 +59,10 @@ export interface ReadyDraft {
   saved: { name: string; edited: boolean } | null;
   /** the base graph changed (or went) after the draft was made */
   baseChanged: { base: string; gone: boolean } | null;
+  /** HOW-66 (D-10A): the operator discarded this draft, from its `draft-discarded` event */
+  discarded: { at: string } | null;
+  /** HOW-66 (D-5A): the draft-graph runs launched as changes to this one, oldest first */
+  redrafts: Array<{ run: string; at: string }>;
 }
 
 export type RunDraft =
@@ -174,7 +187,112 @@ export function readRunDraft(opts: {
     draftHash: draftHashOf(spec, bodies),
     saved: savedAs(runId, opts.locals),
     baseChanged,
+    discarded: deriveDraftDiscarded(events),
+    redrafts: redraftsOf(opts.runsDir, runId),
   };
+}
+
+/**
+ * A run log's FIRST event (its `run-started`), read a chunk at a time up to the first newline —
+ * a redraft's intent carries a whole draft, so a fixed-size read could cut it. null when the
+ * file is missing, empty or its first line is not JSON.
+ */
+export function firstEvent(path: string): LoggedEvent | null {
+  let fd: number;
+  try { fd = openSync(path, "r"); } catch { return null; }
+  try {
+    const chunks: Buffer[] = [];
+    const buf = Buffer.alloc(64 * 1024);
+    for (let pos = 0; pos < 4 * 1024 * 1024;) {
+      const n = readSync(fd, buf, 0, buf.length, pos);
+      if (n <= 0) break;
+      const nl = buf.subarray(0, n).indexOf(10);
+      chunks.push(Buffer.from(buf.subarray(0, nl === -1 ? n : nl)));
+      if (nl !== -1) break;
+      pos += n;
+    }
+    return JSON.parse(Buffer.concat(chunks).toString("utf8")) as LoggedEvent;
+  } catch {
+    return null;
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/** Every draft-graph run whose `run-started.parent` is `runId`, oldest first (D-5A's receipt). */
+export function redraftsOf(runsDir: string, runId: string): Array<{ run: string; at: string }> {
+  let dirs: string[];
+  try { dirs = readdirSync(runsDir); } catch { return []; }
+  const out: Array<{ run: string; at: string }> = [];
+  for (const d of dirs) {
+    if (d === runId) continue;
+    const e = firstEvent(join(runsDir, d, "run.jsonl"));
+    if (e?.type === "run-started" && e.graph === DRAFT_GRAPH && e.parent === runId) out.push({ run: d, at: e.ts });
+  }
+  return out.sort((a, b) => a.at.localeCompare(b.at) || a.run.localeCompare(b.run));
+}
+
+/** the sentences a discarded draft is refused with — one copy each */
+export const draftDiscarded = "This draft was discarded.";
+export const discardSaved = (name: string) => `This draft is already saved as \`${name}\` — delete the graph instead.`;
+
+export type DiscardResult = { ok: true; appended: boolean } | { ok: false; status: number; error: string };
+
+/**
+ * Discard (D-10A): one `draft-discarded`, decided and appended under the log lock, so a second
+ * press — or a second tab — is idempotent rather than a second event. Refused for a draft that
+ * is not ready, and for one already saved: a discard receipt beside a live graph would be a lie.
+ *
+ * "Saved" is derived from the local graphs, not the log, so it is checked just BEFORE the lock;
+ * a Save landing between the two is a window this single-user tool accepts.
+ */
+export function discardRunDraft(opts: { runsDir: string; runId: string; draft: RunDraft }): DiscardResult {
+  const { draft } = opts;
+  if (draft.state !== "ready") return { ok: false, status: DRAFT_STATUS[draft.state], error: draft.reason };
+  if (draft.saved) return { ok: false, status: 409, error: discardSaved(draft.saved.name) };
+  let already = false;
+  const appended = new EventLog(join(opts.runsDir, opts.runId, "run.jsonl")).appendIf((events) => {
+    if (deriveDraftDiscarded(events)) { already = true; return null; }
+    return { type: "draft-discarded", by: "operator" };
+  });
+  return { ok: true, appended: !already && appended !== null };
+}
+
+/**
+ * The longest intent a redraft may launch with. The render (v2) elides a context value past its
+ * cap around a stub, and an elided previous draft would be redrafted from nothing without saying
+ * so — so the route refuses instead and points at the builder.
+ */
+export const REDRAFT_INTENT_CAP = GRAPHS_CATALOG_DEFAULT_CAP;
+
+export type RedraftResult = { ok: true; request: LaunchRequest } | { ok: false; status: number; error: string };
+
+/**
+ * Ask for changes (D-5A): what the child draft-graph run is launched with — this run as its
+ * parent, the operator's earlier requests plus the change, this draft as the base, and this
+ * run's workspace (`workspaceFor` maps its recorded cwd back to a registered name, or none).
+ * Pure apart from reading this run's own `run-started`; the caller spawns.
+ */
+export function redraftRunDraft(opts: {
+  runsDir: string;
+  runId: string;
+  draft: RunDraft;
+  change: unknown;
+  workspaceFor: (cwd: string) => string | null;
+}): RedraftResult {
+  const { draft } = opts;
+  const change = typeof opts.change === "string" ? opts.change.trim() : "";
+  if (!change) return { ok: false, status: 400, error: "Say what should change." };
+  if (draft.state !== "ready") return { ok: false, status: DRAFT_STATUS[draft.state], error: draft.reason };
+  if (draft.discarded) return { ok: false, status: 409, error: draftDiscarded };
+  const started = firstEvent(join(opts.runsDir, opts.runId, "run.jsonl"));
+  const intent = started?.type === "run-started" ? started.inputs.intent : undefined;
+  const parentIntent = typeof intent === "string" ? intent : "";
+  const workspace = started?.type === "run-started" && started.cwd ? opts.workspaceFor(started.cwd) ?? undefined : undefined;
+  const request = redraftLaunchRequest({ parent: opts.runId, parentIntent, change, draft: draft.draft, workspace });
+  if ((request.inputs?.intent ?? "").length > REDRAFT_INTENT_CAP)
+    return { ok: false, status: 422, error: "This draft is too large to redraft from here; open it in the builder and change it there." };
+  return { ok: true, request };
 }
 
 export type DraftSaveResult = { ok: true; name: string } | { ok: false; status: number; error: string };
@@ -197,6 +315,7 @@ export async function saveRunDraft(opts: {
   const { draft } = opts;
   if (draft.state !== "ready") return { ok: false, status: DRAFT_STATUS[draft.state], error: draft.reason };
   if (draft.saved) return { ok: false, status: 409, error: alreadySaved(draft.saved.name) };
+  if (draft.discarded) return { ok: false, status: 409, error: draftDiscarded };
   const name = typeof opts.name === "string" ? opts.name.trim() : "";
   if (!LOCAL_NAME.test(name)) return { ok: false, status: 400, error: `graph name must be kebab-case: "${name}"` };
   if (opts.builtins.includes(name)) return { ok: false, status: 409, error: builtinTaken(name) };
@@ -225,6 +344,7 @@ export function builderProvenance(opts: {
   const { fromRun } = opts;
   if (fromRun) {
     if (fromRun.state !== "ready") return { ok: false, status: DRAFT_STATUS[fromRun.state], error: fromRun.reason };
+    if (fromRun.discarded) return { ok: false, status: 409, error: draftDiscarded };
     if (fromRun.saved && fromRun.saved.name !== opts.name) return { ok: false, status: 409, error: alreadySaved(fromRun.saved.name) };
     return { ok: true, drafted: { run: fromRun.run, draftHash: fromRun.draftHash, edited: true } };
   }

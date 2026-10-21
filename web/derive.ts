@@ -287,6 +287,12 @@ export function deriveTurnStates(
   return out;
 }
 
+/** HOW-66 (D-10A): when the operator discarded this run's draft — the first decision stands — or null. */
+export function deriveDraftDiscarded(events: readonly LoggedEvent[]): { at: string } | null {
+  const e = events.find((x) => x.type === "draft-discarded");
+  return e ? { at: e.ts } : null;
+}
+
 export function deriveStatus(events: LoggedEvent[]): { status: RunStatus; ask: RunDetail["ask"]; failure: RunSummary["failure"]; paused: boolean; outcome: RunSummary["outcome"] } {
   let finished: Extract<LoggedEvent, { type: "run-finished" }> | null = null;
   let ask: RunDetail["ask"] = null;
@@ -739,6 +745,8 @@ export function deriveLogRows(events: LoggedEvent[]): LogRow[] {
         return { ...base, ...at(e.node, e.visit), kind: "operator", depth: 1, summary: "stop moot — the step finished first; pausing at the boundary" };
       case "acceptance-waived":
         return { ...base, node: null, visit: null, kind: "operator", depth: 0, summary: `waived criterion "${e.criterion_id}" · ${e.reason.slice(0, 160)}` };
+      case "draft-discarded":
+        return { ...base, node: null, visit: null, kind: "operator", depth: 0, summary: "draft discarded" };
       case "agent-environment":
         return { ...base, ...at(e.node, e.visit), kind: "engine", depth: 1,
           summary: `${e.harness} environment · ${e.setting_sources ?? "no setting-sources switch"}${e.inherits_user ? " (user settings inherited)" : ""}${e.hooks?.length ? ` · ${e.hooks.length} hook${e.hooks.length === 1 ? "" : "s"} ran` : ""}${e.skills ? ` · ${e.skills.length} skills` : ""}${e.plugins ? ` · ${e.plugins.length} plugins` : ""}` };
