@@ -14,11 +14,12 @@ import { describe, expect, test } from "bun:test";
 import { templateReads } from "./template-refs";
 import {
   COMMAND_BUILTINS, SPEC_VERSION, WORKTREE_FACTS, WORKTREE_CREATE_FACTS,
-  buildGraph, draftHashOf, draftRuleProblems, resolveDraftBodies, builtinReads, coerceOperand, compilePredicate, emittableWrites, missingBuiltinReads, parseGraphSpec, predicateLabel,
+  buildGraph, checkGraphDraft, draftHashOf, draftRuleProblems, resolveDraftBodies, builtinReads, coerceOperand, compilePredicate, emittableWrites, missingBuiltinReads, parseGraphSpec, predicateLabel,
   isBlocking, keepPath, recoercePredicate, specAdvice, specProblems, unmatchableOperand,
   type GraphSpec, type NodeSpec, type Predicate,
 } from "./graph-spec";
 import { shapeOf } from "../graphs/spec-shape";
+import { CATALOG, EDGE_CASES, cleanDraft, materialiseFake, renamed } from "./fixtures/graph-draft";
 
 /** the smallest legal graph: one agent, one terminal */
 function minimal(over: Partial<GraphSpec> = {}): GraphSpec {
@@ -1460,5 +1461,92 @@ describe("draftHashOf: an edit changes it, a rename does not (D-9A)", () => {
     const twoEdges = minimal({ edges: [{ from: "draft", to: "done", when: { op: "is-empty", key: "summary" } }, { from: "draft", to: "done" }] });
     const swapped = minimal({ edges: [...twoEdges.edges].reverse() });
     expect(hash(swapped)).not.toBe(hash(twoEdges));
+  });
+});
+
+describe("checkGraphDraft: a draft is published only if it would save (HOW-64, HOW-56 T5)", () => {
+  const check = (v: unknown) => checkGraphDraft(v, CATALOG, materialiseFake);
+
+  test("a clean draft — one copy, one new body — has nothing to say", () => {
+    expect(check(cleanDraft())).toEqual([]);
+  });
+
+  test("the same draft sent as a JSON string is read, not refused", () => {
+    expect(check(JSON.stringify(cleanDraft()))).toEqual([]);
+  });
+
+  for (const [name, c] of Object.entries(EDGE_CASES))
+    test(`${name}: refused with exactly one sentence, word for word`, () => {
+      const problems = check(c.draft());
+      expect(problems).toHaveLength(1);
+      if (name === "invalid JSON") expect(problems[0]).toStartWith(c.says);
+      else expect(problems[0]).toBe(c.says);
+    });
+
+  test("advice never refuses: a new step that can change files is a callout for review, not a refusal", () => {
+    const d = cleanDraft();
+    expect(draftRuleProblems(d.spec, CATALOG.graphs[1]!.spec, { bodies: d.prompts }).filter((p) => p.kind === "permission")).toHaveLength(1);
+    expect(check(d)).toEqual([]);
+  });
+
+  test("a copy of a read-only step must stay read-only", () => {
+    const d = cleanDraft();
+    d.spec.nodes[1] = { id: "quick-review.review", kind: "agent", prompt: "quick-review.review", reads: ["goal"], writes: ["verdict"] };
+    d.prompts["quick-review.review"] = { copyOf: "look-only.review" };
+    d.based_on = "look-only";
+    d.spec.defaults = undefined;
+    expect(check(d)).toEqual([
+      "**quick-review.review** copies the instructions of `look-only.review`, which is read-only in `look-only`, but the step is not. Make it read-only, as the original is.",
+    ]);
+  });
+
+  test("a copy's reads are judged on the COPIED text, as Save would judge them", () => {
+    const d = cleanDraft();
+    const work = d.spec.nodes[0]!;
+    if (work.kind === "agent") work.reads = ["summary"]; // quick-task.work reads goal, not summary
+    expect(check(d).join("\n")).toContain("does not match its instructions");
+  });
+
+  test("based_on must name a catalog graph, or be null", () => {
+    expect(check({ ...cleanDraft(), based_on: "no-such-graph" })).toEqual([
+      "graph.draft.based_on names `no-such-graph`, which is not a graph in the catalog. Name one of `look-only`, `quick-task`, or null.",
+    ]);
+    // null: no base, so the base's defaults are a change it may not make
+    expect(check({ ...cleanDraft(), based_on: null })).toEqual([
+      "This draft sets default agent settings. A drafted graph starts with none — set them in the builder after saving.",
+    ]);
+  });
+
+  test("every missing part of the envelope is named at once", () => {
+    expect(check({ spec: cleanDraft().spec, prompts: [], based_on: 3 })).toEqual([
+      "graph.draft.prompts must be an object of prompt id → instructions text, or { \"copyOf\": \"<prompt id>\" }.",
+      "graph.draft.based_on must be the name of the catalog graph this draft starts from, or null.",
+      "graph.draft.notes must be a short text saying what the draft changes and why.",
+    ]);
+    expect(check([1])).toEqual([`graph.draft must be an object { "spec", "prompts", "based_on", "notes" }, not a list`]);
+    expect(check({ ...cleanDraft(), spec: { version: 1, name: "Bad Name" } })).toEqual([
+      `graph.draft.spec is not a graph Howdah can read: graph name must be kebab-case: "Bad Name"`,
+    ]);
+  });
+
+  test("a copy the prompt reader cannot read is refused with the reader's own sentence", () => {
+    expect(checkGraphDraft(cleanDraft(), CATALOG, () => ({ ok: false, error: "cannot read it" }))).toEqual(["cannot read it"]);
+  });
+
+  test("several problems are all reported, in a fixed order, so one repair can fix them all", () => {
+    const d = renamed("quick-task");
+    d.prompts["quick-task.extra"] = "Nobody runs this.\n";
+    d.prompts["quick-task.work"] = { copyOf: "nope.prompt" };
+    expect(check(d)).toEqual([
+      "The instructions for `quick-task.work` are a copy of `nope.prompt`, which is not a prompt Howdah has. Copy one that exists, or write the instructions out.",
+      "There is already a graph called `quick-task`. Pick another name.",
+      // bodies unresolved: the spec is still judged against the ids it was given, minus body checks
+    ]);
+    delete d.prompts["quick-task.work"];
+    d.prompts["quick-task.work"] = { copyOf: "quick-task.work" };
+    expect(check(d)).toEqual([
+      "There is already a graph called `quick-task`. Pick another name.",
+      `Instructions are filed under "quick-task.extra", but no step uses them. Remove them, or give a step that prompt.`,
+    ]);
   });
 });

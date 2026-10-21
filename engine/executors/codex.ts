@@ -55,6 +55,7 @@ import type { TurnUsage } from "../../adapter/events";
 import { answersToReplyText, askReason, normalizeAskPayload, parseFreeTextAnswer, validateAnswers, type UserQuestion } from "../../core/ask";
 import { isDenyReply } from "./reply";
 import { buildRepairInstruction, checkWrites, parseOutputs } from "./outputs";
+import type { MaterialiseBodies } from "../../core/graph-spec";
 import { classifyHarnessExit, compactionNote, contextExhaustedFailure } from "./harness-failure";
 import { AttentionCenter, osNotifier, type Notifier } from "../attention";
 import { readLog } from "../../log/write";
@@ -64,6 +65,8 @@ import { killGroup } from "./shell";
 import { ToolWatch, TurnCeiling, stuckReason, turnTimeoutReason, type StuckThresholds } from "./stuck";
 
 export interface CodexExecutorOpts {
+  /** HOW-56 T5: copies → text, so the outputs check can judge a `graph.draft` (outputs.ts) */
+  materialise?: MaterialiseBodies;
   attentionDir: string;
   binary?: string;
   model?: string;
@@ -126,7 +129,7 @@ export function codexExecutor(opts: CodexExecutorOpts): Executor {
   return async ({ nodeId, def, visit, runId, cwd, log, renderedPrompt, agentConfig, reads }) => {
     if (def.kind !== "agent") throw new Error("codexExecutor on non-agent node");
     const writeKeys = Object.keys(def.writes ?? {});
-    const check = (w: Record<string, unknown>) => checkWrites(w, reads ?? {}); // HOW-51
+    const check = (w: Record<string, unknown>) => checkWrites(w, reads ?? {}, { materialise: opts.materialise }); // HOW-51, HOW-56 T5
     // HOW-55: codex has no switch for the operator's own config, so what it reads regardless is
     // recorded — hashed — on every attempt; a run can say what it ran with even where it cannot choose
     log.append({ type: "agent-environment", node: nodeId, visit, harness: "codex", setting_sources: null, inherits_user: true,

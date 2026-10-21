@@ -51,6 +51,7 @@ import type { Executor } from "../run";
 import { JsonlChunkParser } from "../../adapter/parse";
 import { mapClaudeEvent, buildClaudePermissionResponse, buildClaudeUserTurn, claudeArgs } from "../../adapter/claude";
 import { buildRepairInstruction, checkWrites, parseOutputs } from "./outputs";
+import type { MaterialiseBodies } from "../../core/graph-spec";
 import { classifyHarnessExit, compactionNote, contextExhaustedFailure } from "./harness-failure";
 import { AttentionCenter, osNotifier, type Notifier } from "../attention";
 import { readLog } from "../../log/write";
@@ -69,6 +70,8 @@ import {
 } from "../../core/ask";
 
 export interface ClaudeExecutorOpts {
+  /** HOW-56 T5: copies → text, so the outputs check can judge a `graph.draft` (outputs.ts) */
+  materialise?: MaterialiseBodies;
   attentionDir: string;
   binary?: string; // overridable for tests (fake-claude fixture)
   permissionMode?: string; // default auto — full Claude Code autonomy without bypass mode
@@ -110,7 +113,7 @@ export function claudeExecutor(opts: ClaudeExecutorOpts): Executor {
   return async ({ nodeId, def, visit, runId, cwd, log, renderedPrompt, agentConfig, reads }) => {
     if (def.kind !== "agent") throw new Error("claudeExecutor on non-agent node");
     const writeKeys = Object.keys(def.writes ?? {});
-    const check = (w: Record<string, unknown>) => checkWrites(w, reads ?? {}); // HOW-51
+    const check = (w: Record<string, unknown>) => checkWrites(w, reads ?? {}, { materialise: opts.materialise }); // HOW-51, HOW-56 T5
     // HOW-53: resolveAgentConfig makes a readOnly node "plan", whatever any override says
     const permissionMode = agentConfig?.permissionMode ?? opts.permissionMode ?? "auto";
     const readOnly = permissionMode === "plan";

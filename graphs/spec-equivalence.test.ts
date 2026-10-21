@@ -49,6 +49,9 @@
  * existing entry was left byte-identical (the commit's diff of the fixture is insertions only).
  * From here on it is pinned like any other: a change to implement-stacked — including one that
  * arrives through `stackedFrom(implement-ticket)` — moves its entry deliberately or fails here.
+ *
+ * A SECOND NEW GRAPH, 2026-10-21 (HOW-64, HOW-56 T5): `draft-graph` was born a GraphSpec, so it
+ * too was added by hand from `shapeOf`, insertions only, and is pinned like the rest from here.
  */
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";

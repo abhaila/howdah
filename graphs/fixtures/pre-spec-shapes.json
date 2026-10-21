@@ -1,4 +1,53 @@
 {
+  "draft-graph": {
+    "name": "draft-graph",
+    "description": "Draft a new graph from a plain-language request, checked as if it were being saved",
+    "entry": "graphs.catalog",
+    "inputs": [
+      "intent"
+    ],
+    "nodes": {
+      "done": {
+        "kind": "terminal",
+        "outcome": "success",
+        "writes": {}
+      },
+      "graph.draft": {
+        "kind": "agent",
+        "prompt": "graph.draft",
+        "reads": [
+          "graphs.catalog",
+          "intent"
+        ],
+        "writes": {
+          "graph.draft": {
+            "scope": "sticky"
+          }
+        },
+        "readOnly": true
+      },
+      "graphs.catalog": {
+        "kind": "command",
+        "run": "graphs:catalog",
+        "reads": [],
+        "writes": {
+          "graphs.catalog": {
+            "scope": "sticky"
+          }
+        }
+      }
+    },
+    "edges": [
+      {
+        "from": "graphs.catalog",
+        "to": "graph.draft"
+      },
+      {
+        "from": "graph.draft",
+        "to": "done"
+      }
+    ]
+  },
   "implement-slice": {
     "name": "implement-slice",
     "description": "Design a vertical slice on the code map, get it approved, build it and verify it against the design",

@@ -13,6 +13,7 @@ export type PromptId =
   | "doc.outline"
   | "doc.review"
   | "doc.revise"
+  | "graph.draft"
   | "implementation.implement"
   | "implementation.implement_review"
   | "implementation.local_review"
@@ -56,6 +57,7 @@ export const PROMPT_IDS = [
   "doc.outline",
   "doc.review",
   "doc.revise",
+  "graph.draft",
   "implementation.implement",
   "implementation.implement_review",
   "implementation.local_review",

@@ -15,6 +15,8 @@ import { locateOutputs } from "../../core/outputs";
 import { ACCEPTANCE_KEY, acceptanceProblem } from "../../core/acceptance";
 import { asEvidenceResult, EVIDENCE_KEY } from "../../core/evidence";
 import { VERIFY_RESULT_KEY } from "../../core/verify";
+import { asGraphsCatalog, GRAPH_DRAFT_KEY, GRAPHS_CATALOG_KEY } from "../../core/catalog";
+import { checkGraphDraft, type MaterialiseBodies } from "../../core/graph-spec";
 
 /**
  * Asked as a follow-up turn when the final message arrived without the contract. Observed
@@ -48,15 +50,23 @@ export interface ParsedOutputs {
   refused?: true;
 }
 
+/** What the outputs check may need beyond the turn's writes and reads — injected by the CLI. */
+export interface CheckDeps {
+  /** HOW-56 T5: copies → the text Save would write (graphs/builder.ts materialiseBodies) */
+  materialise?: MaterialiseBodies;
+}
+
 /**
- * HOW-51: the rules a write must satisfy beyond "the key is present". Today: `acceptance`
+ * HOW-51: the rules a write must satisfy beyond "the key is present". `acceptance`
  * (core/acceptance.ts) — the first list is all-failing, earlier rows survive, and a flip names
  * evidence that is real in this run, judged against what the node READ (its previous list, the
- * verify result, the captured screenshots). Null when every value may be accepted.
+ * verify result, the captured screenshots). HOW-56 T5: `graph.draft` — see graphDraftProblem.
+ * Null when every value may be accepted.
  */
-export function checkWrites(writes: Record<string, unknown>, reads: Record<string, unknown>): string | null {
+export function checkWrites(writes: Record<string, unknown>, reads: Record<string, unknown>, deps: CheckDeps = {}): string | null {
   const stacked = stackedPublicationProblem(writes, reads);
   if (stacked) return stacked;
+  if (GRAPH_DRAFT_KEY in writes) return graphDraftProblem(writes[GRAPH_DRAFT_KEY], reads, deps);
   if (ACCEPTANCE_KEY in writes) {
     const evidence = asEvidenceResult(reads[EVIDENCE_KEY]);
     return acceptanceProblem(writes[ACCEPTANCE_KEY], {
@@ -66,6 +76,24 @@ export function checkWrites(writes: Record<string, unknown>, reads: Record<strin
     });
   }
   return null;
+}
+
+/**
+ * HOW-56 T5 (decisions 1A, E): a drafted graph is published only if it would SAVE — the same
+ * specProblems/draftRuleProblems/nameTakenProblem verdict the builder runs, over the catalog the
+ * step was given (core/graph-spec.ts checkGraphDraft). Every blocking problem is one line, so the
+ * repair turn and, on a second refusal, the park quote each sentence word for word.
+ *
+ * Fails CLOSED: a step that did not read `graphs.catalog` (or read something that is not one)
+ * cannot be told which names are taken or which prompts may be copied, and an installation that
+ * did not wire the prompt reader cannot judge a copy — neither is a reason to publish unchecked.
+ */
+export function graphDraftProblem(draft: unknown, reads: Record<string, unknown>, deps: CheckDeps): string | null {
+  const catalog = GRAPHS_CATALOG_KEY in reads ? asGraphsCatalog(reads[GRAPHS_CATALOG_KEY]) : null;
+  if (!catalog) return `catalog not available to this step — a ${GRAPH_DRAFT_KEY} is checked against \`${GRAPHS_CATALOG_KEY}\`, which the step must read`;
+  if (!deps.materialise) return `this installation cannot read prompt bodies to check a ${GRAPH_DRAFT_KEY} — it did not wire one`;
+  const problems = checkGraphDraft(draft, catalog, deps.materialise);
+  return problems.length ? `the draft cannot be saved:\n${problems.map((p) => `- ${p}`).join("\n")}` : null;
 }
 
 /**
