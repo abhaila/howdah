@@ -28,6 +28,8 @@ import type { WorkspaceLookup } from "./launch";
 import { approvalExecutor } from "./approval";
 import type { Notifier } from "../attention";
 import type { StuckThresholds } from "./stuck";
+import type { GraphsCatalogBuiltinOpts } from "./catalog";
+import type { MaterialiseBodies } from "../../core/graph-spec";
 import { join } from "node:path";
 
 export function parseDuration(spec: string): number {
@@ -100,17 +102,21 @@ export interface LiveExecutorDeps {
   cursorBinary?: string;
   /** HOW-38: config.json `stuck` — the warn/stop streak lengths every agent executor uses */
   stuck?: StuckThresholds;
+  /** HOW-56 T4: how `graphs:catalog` reads the registry (built-ins + local) */
+  catalog?: GraphsCatalogBuiltinOpts;
+  /** HOW-56 T5: copies → text, so every agent executor's outputs check can judge a `graph.draft` */
+  materialise?: MaterialiseBodies;
 }
 
 /** the real registry: agent nodes dispatch on their declared harness (default claude) */
 export function liveExecutors(deps: LiveExecutorDeps): EngineOpts["executors"] {
-  const stuck = deps.stuck;
-  const claude = claudeExecutor({ attentionDir: deps.attentionDir, viewerBase: deps.viewerBase, notifiers: deps.notifiers, binary: deps.claudeBinary, stuck, inheritsUserSettings: deps.inheritsUserSettings });
-  const codexDeps = { attentionDir: deps.attentionDir, viewerBase: deps.viewerBase, notifiers: deps.notifiers, binary: deps.codexBinary, stuck };
+  const { stuck, materialise } = deps;
+  const claude = claudeExecutor({ attentionDir: deps.attentionDir, viewerBase: deps.viewerBase, notifiers: deps.notifiers, binary: deps.claudeBinary, stuck, inheritsUserSettings: deps.inheritsUserSettings, materialise });
+  const codexDeps = { attentionDir: deps.attentionDir, viewerBase: deps.viewerBase, notifiers: deps.notifiers, binary: deps.codexBinary, stuck, materialise };
   const codex = codexExecutor(codexDeps);
   const codexReadOnly = codexExecutor({ ...codexDeps, sandbox: "read-only" });
-  const cursor = cursorExecutor({ binary: deps.cursorBinary, stuck });
-  const cursorReadOnly = cursorExecutor({ binary: deps.cursorBinary, readOnly: true, stuck });
+  const cursor = cursorExecutor({ binary: deps.cursorBinary, stuck, materialise });
+  const cursorReadOnly = cursorExecutor({ binary: deps.cursorBinary, readOnly: true, stuck, materialise });
   // opencode has no CLI of its own yet: it runs through the claude executor, as it always
   // has (core/harnesses.ts marks it `internal` and points its binary at claude's)
   const byHarness: Record<HarnessName, Executor> = { claude, opencode: claude, codex, cursor };
@@ -135,6 +141,7 @@ export function liveExecutors(deps: LiveExecutorDeps): EngineOpts["executors"] {
         ...(deps.packageCheckFor ? { packageCheckFor: deps.packageCheckFor } : {}),
       },
       ...(deps.defaultBranchFor ? { restack: { defaultBranchFor: deps.defaultBranchFor } } : {}),
+      ...(deps.catalog ? { catalog: deps.catalog } : {}),
     }),
     worktree: worktreeExecutor({
       reposDir: deps.reposDir ?? join(deps.attentionDir, "..", "repos"),

@@ -40,6 +40,7 @@ import { probeAuth } from "../engine/executors/harness-failure";
 import { harnessNames, harnessSpec, isHarness } from "../core/harnesses";
 import { GRAPHS, graphCatalog } from "../graphs/index";
 import { loadRegistry, catalogOf } from "../graphs/registry";
+import { materialiseBodies } from "../graphs/builder";
 import { promptSearchPath } from "../graphs/local";
 import { howdahHome, loadConfig, saveConfig, resolveWorkspace, repoNameFor, workspaceNameFor, verifyCommandFor, defaultBranchFor, packageCheckFor, setPackageCheck, setVerifyCommand, stuckThresholds, diagnosticsCommandFor, setDiagnosticsCommand, diagnosticsCommandProblem, previewFor, setPreview, inheritsUserSettings, setInheritUserSettings, ensureHowdahHome } from "../config/config";
 import { loadTuning } from "../config/tuning";
@@ -84,6 +85,10 @@ function executors() {
         previewFor: (repoPath) => previewFor(loadConfig(base), repoPath),
         // HOW-55: read per attempt, so an opt-in applies to the next agent, not the next runner
         inheritsUserSettings: (path) => inheritsUserSettings(loadConfig(base), path),
+        // HOW-56 T4/T5: `graphs:catalog` lists the live registry, and a `graph.draft` is judged
+        // on the text Save would write — both read $HOWDAH_HOME, so both are wired HERE
+        catalog: { registry: () => loadRegistry(base, ROOT) },
+        materialise: (bodies) => materialiseBodies(base, ROOT, bodies),
       });
 }
 

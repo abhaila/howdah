@@ -13,6 +13,7 @@ import { reviewTeammatePr } from "./review-teammate-pr";
 import { writeDoc } from "./write-doc";
 import { research } from "./research";
 import { quickTask } from "./quick-task";
+import { draftGraph } from "./draft-graph";
 
 export const GRAPHS: Record<string, Graph<any>> = {
   [implementTicket.def.name]: implementTicket,
@@ -24,6 +25,7 @@ export const GRAPHS: Record<string, Graph<any>> = {
   [writeDoc.def.name]: writeDoc,
   [research.def.name]: research,
   [quickTask.def.name]: quickTask,
+  [draftGraph.def.name]: draftGraph,
 };
 
 for (const g of Object.values(GRAPHS)) g.validateOrThrow();

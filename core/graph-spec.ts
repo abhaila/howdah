@@ -51,7 +51,7 @@ import type { Violation } from "./validate";
 import { VERIFY_BUILTIN, VERIFY_PRODUCES } from "./verify";
 import { AWAIT_BUILTIN, AWAIT_PRODUCES, AWAIT_PROBE_PRODUCES, AWAIT_READS, RESTACK_BUILTIN, RESTACK_PRODUCES, RESTACK_READS } from "./stack";
 import { EVIDENCE_BUILTIN, EVIDENCE_PRODUCES } from "./evidence";
-import { GRAPHS_CATALOG_BUILTIN, GRAPHS_CATALOG_PRODUCES } from "./catalog";
+import { GRAPH_DRAFT_KEY, GRAPHS_CATALOG_BUILTIN, GRAPHS_CATALOG_PRODUCES, type GraphsCatalog } from "./catalog";
 import { includeRefs, templateReads } from "./template-refs";
 
 export const SPEC_VERSION = 1;
@@ -1547,5 +1547,75 @@ export function draftRuleProblems(
         message: `${who(n.id)} is a new step that can change files. Make it read-only if it only needs to look.`,
       });
   }
+  return out;
+}
+
+// ---- the drafter's check (HOW-56 T5, decisions 1A + E) ------------------------------------
+
+/**
+ * Copies → text, by prompt id. INJECTED, because finding a prompt's pinned text needs the
+ * filesystem and this module is node-free: the CLI passes graphs/builder.ts materialiseBodies,
+ * which is what Save runs — so a copy is judged on the text Save will write (5A, one verdict).
+ */
+export type MaterialiseBodies = (
+  bodies: Readonly<Record<string, DraftBody>>,
+) => { ok: true; texts: Record<string, string> } | { ok: false; error: string };
+
+/**
+ * Every BLOCKING problem with an agent's `graph.draft` — `{ spec, prompts, based_on, notes }` —
+ * as the sentences the repair turn and the park quote; empty means publish it. Never throws: the
+ * value is untrusted model output.
+ *
+ * Order is deterministic (shape, copies, name, specProblems, draft rules) and EVERY problem is
+ * reported, so the one repair turn can fix them all. Advice never refuses a draft: the
+ * `permission` callout is for the operator at review, not for the drafter. When the bodies cannot
+ * be resolved, the spec is still judged against the ids it was given, without the body checks —
+ * a missing copy would otherwise echo as "has no file yet" on top of its own sentence.
+ */
+export function checkGraphDraft(value: unknown, catalog: GraphsCatalog, materialise: MaterialiseBodies): string[] {
+  let draft = value;
+  if (typeof draft === "string") {
+    try {
+      draft = JSON.parse(draft);
+    } catch (err) {
+      return [`${GRAPH_DRAFT_KEY} is not valid JSON: ${err instanceof Error ? err.message : String(err)}`];
+    }
+  }
+  if (!isObj(draft))
+    return [`${GRAPH_DRAFT_KEY} must be an object { "spec", "prompts", "based_on", "notes" }, not ${Array.isArray(draft) ? "a list" : JSON.stringify(draft)}`];
+
+  const shape: string[] = [];
+  if (!("spec" in draft)) shape.push(`${GRAPH_DRAFT_KEY} has no "spec" — the GraphSpec of the drafted graph.`);
+  if (!isObj(draft.prompts)) shape.push(`${GRAPH_DRAFT_KEY}.prompts must be an object of prompt id → instructions text, or { "copyOf": "<prompt id>" }.`);
+  if (draft.based_on !== null && typeof draft.based_on !== "string")
+    shape.push(`${GRAPH_DRAFT_KEY}.based_on must be the name of the catalog graph this draft starts from, or null.`);
+  if (typeof draft.notes !== "string") shape.push(`${GRAPH_DRAFT_KEY}.notes must be a short text saying what the draft changes and why.`);
+  const parsed = "spec" in draft ? parseGraphSpec(draft.spec) : null;
+  if (parsed && !parsed.ok) shape.push(`${GRAPH_DRAFT_KEY}.spec is not a graph Howdah can read: ${parsed.error}`);
+  let base: GraphSpec | undefined;
+  if (typeof draft.based_on === "string") {
+    base = catalog.graphs.find((g) => g.name === draft.based_on)?.spec;
+    if (!base)
+      shape.push(`${GRAPH_DRAFT_KEY}.based_on names \`${draft.based_on}\`, which is not a graph in the catalog. Name one of ${catalog.graphs.map((g) => `\`${g.name}\``).join(", ") || "none"}, or null.`);
+  }
+  if (shape.length || !parsed?.ok || !isObj(draft.prompts)) return shape;
+  const spec = parsed.spec;
+  const prompts = draft.prompts;
+
+  const out: string[] = [];
+  const known = [...new Set(catalog.graphs.flatMap((g) => g.promptIds))];
+  const resolved = resolveDraftBodies(prompts, known);
+  let texts: Record<string, string> | undefined;
+  if (!resolved.ok) out.push(...resolved.problems.map((p) => p.message));
+  else {
+    const m = materialise(resolved.bodies);
+    if (m.ok) texts = m.texts;
+    else out.push(m.error);
+  }
+  const taken = nameTakenProblem(spec.name, catalog.takenNames);
+  if (taken) out.push(taken.message);
+  const structural = texts ? specProblems(spec, { bodies: texts }) : specProblems(spec, { knownPrompts: Object.keys(prompts) });
+  out.push(...structural.filter(isBlocking).map((p) => p.message));
+  out.push(...draftRuleProblems(spec, base, resolved.ok ? { bodies: resolved.bodies } : {}).filter(isBlocking).map((p) => p.message));
   return out;
 }

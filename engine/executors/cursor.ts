@@ -34,6 +34,7 @@ import type { Executor } from "../run";
 import { JsonlChunkParser } from "../../adapter/parse";
 import { cursorArgs, mapCursorEvent } from "../../adapter/cursor";
 import { buildRepairInstruction, checkWrites, parseOutputs } from "./outputs";
+import type { MaterialiseBodies } from "../../core/graph-spec";
 import { classifyHarnessExit } from "./harness-failure";
 import { harnessSpec } from "../../core/harnesses";
 import { effectiveCwd } from "./worktree";
@@ -41,6 +42,8 @@ import { killGroup } from "./shell";
 import { ToolWatch, TurnCeiling, stuckReason, turnTimeoutReason, type StuckThresholds } from "./stuck";
 
 export interface CursorExecutorOpts {
+  /** HOW-56 T5: copies → text, so the outputs check can judge a `graph.draft` (outputs.ts) */
+  materialise?: MaterialiseBodies;
   binary?: string; // overridable for tests (fake-cursor fixture)
   model?: string;
   /**
@@ -74,7 +77,7 @@ export function cursorExecutor(opts: CursorExecutorOpts = {}): Executor {
   return async ({ nodeId, def, visit, cwd, log, renderedPrompt, agentConfig, reads }) => {
     if (def.kind !== "agent") throw new Error("cursorExecutor on non-agent node");
     const writeKeys = Object.keys(def.writes ?? {});
-    const check = (w: Record<string, unknown>) => checkWrites(w, reads ?? {}); // HOW-51
+    const check = (w: Record<string, unknown>) => checkWrites(w, reads ?? {}, { materialise: opts.materialise }); // HOW-51, HOW-56 T5
     // HOW-55: cursor has no switch for the operator's own config, so what it reads regardless is
     // recorded — hashed — on every attempt; a run can say what it ran with even where it cannot choose
     log.append({ type: "agent-environment", node: nodeId, visit, harness: "cursor", setting_sources: null, inherits_user: true,

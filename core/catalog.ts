@@ -72,3 +72,25 @@ export interface GraphsCatalog {
    */
   omitted?: string[];
 }
+
+/** HOW-56 T5: the key a drafting step publishes its draft under (graphs/draft-graph.ts) */
+export const GRAPH_DRAFT_KEY = "graph.draft";
+
+/**
+ * A context value → the catalog it claims to be, or null. The outputs check reads the catalog
+ * the drafting step was GIVEN, and a value that is not shaped like one is refused as "no
+ * catalog" (fail closed, decision E) rather than half-read: an absent `takenNames` read as
+ * empty would wave a name collision through. Checks only what the draft check reads.
+ */
+export function asGraphsCatalog(v: unknown): GraphsCatalog | null {
+  if (typeof v !== "object" || v === null || Array.isArray(v)) return null;
+  const c = v as Record<string, unknown>;
+  const strings = (x: unknown): x is string[] => Array.isArray(x) && x.every((s) => typeof s === "string");
+  if (!strings(c.takenNames) || !Array.isArray(c.graphs)) return null;
+  for (const g of c.graphs) {
+    if (typeof g !== "object" || g === null) return null;
+    const e = g as Record<string, unknown>;
+    if (typeof e.name !== "string" || !strings(e.promptIds) || typeof e.spec !== "object" || e.spec === null) return null;
+  }
+  return v as GraphsCatalog;
+}
