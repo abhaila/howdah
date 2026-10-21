@@ -18,7 +18,10 @@
  *   POST /api/runs/:id/approval    {approved, proposal_id} → approve, or send the round's comments as feedback
  *   POST /api/runs/:id/redesign    {message} → re-extract and redraw (refused while a runner is live)
  *   POST /api/runs/:id/effects     {effect, verdict, node?} → HOW-3: attest to an ambiguous side effect
- *   PUT  /api/graphs/:name/builder {spec, prompts} → HOW-22: save a graph built in the viewer (201 new / 200 updated / 409 a built-in owns the name / 422 the gate refused)
+ *   PUT  /api/graphs/:name/builder {spec, prompts, intent, fromRun?} → HOW-22: save a graph built in the viewer (201 new / 200 updated / 409 a built-in owns the name / 422 the gate refused).
+ *                                  HOW-65: `drafted` is never taken from the client — derived from `fromRun`, kept on an update, else stripped (web/draft.ts)
+ *   GET  /api/runs/:id/draft       HOW-65: a draft-graph run's draft, diff, advice and saved state (404 unknown / 409 drafting or refused, with a reason)
+ *   POST /api/runs/:id/draft/save  {name} → HOW-65: save the draft as a local graph with provenance (201 / 409 name taken or already saved / 422 the gate refused)
  *   GET  /api/local-prompts/:id    HOW-22: the body of a prompt a builder graph owns
  *   GET  /api/attention            HOW-20: the needs-you inbox — every pending ask with its run, reason and wait
  *   (system-map 1a: the same engine/control.ts functions as the CLI verbs; 400 on a malformed
@@ -62,7 +65,8 @@ import { AttentionCenter } from "../engine/attention";
 import { inboxItems } from "../engine/attention-inbox";
 import { graphCatalog, GRAPHS } from "../graphs/index";
 import { catalogOf, loadRegistry, type Registry } from "../graphs/registry";
-import { deleteLocalGraph, LOCAL_NAME, localGraphPath, readLocalSource, saveLocalSource } from "../graphs/local";
+import { deleteLocalGraph, LOCAL_NAME, loadLocalGraph, loadLocalGraphs, localGraphPath, readLocalSource, saveLocalSource } from "../graphs/local";
+import { builderProvenance, builtinTaken, DRAFT_STATUS, readRunDraft, saveRunDraft } from "./draft";
 import { typecheckLocalGraph } from "../graphs/typecheck";
 import { newGraph, type GraphKind } from "../cli/new-graph";
 import { readLocalPrompt, saveBuilderGraph } from "../graphs/builder";
@@ -301,6 +305,17 @@ export function createHowdahServer(opts: ServerOpts) {
     const body: unknown = await req.json().catch(() => undefined);
     return typeof body === "object" && body !== null && !Array.isArray(body) ? (body as Record<string, unknown>) : null;
   };
+  /**
+   * HOW-65: a run's draft against today's registry and the operator's own graphs. With a test
+   * registry (`opts.graphs`) the locals are loaded on their own, since that registry has none.
+   */
+  const runDraft = async (rid: string) => {
+    const reg = await registry();
+    const locals = opts.graphs
+      ? (await loadLocalGraphs(home, root)).graphs
+      : Object.fromEntries(Object.entries(reg.graphs).filter(([n]) => reg.source[n] === "local"));
+    return readRunDraft({ runsDir: opts.runsDir, runId: rid, home, root, graphs: reg.graphs, locals });
+  };
   return Bun.serve({
     port: opts.port ?? 4711,
     hostname: LOOPBACK,
@@ -358,7 +373,7 @@ export function createHowdahServer(opts: ServerOpts) {
         const name = bm[1]!;
         if (req.method !== "PUT") return json({ error: "method not allowed" }, 405);
         if (!LOCAL_NAME.test(name)) return json({ error: `graph name must be kebab-case: "${name}"` }, 400);
-        if (name in GRAPHS) return json({ error: `"${name}" is one of Howdah's own graphs — pick another name` }, 409);
+        if (name in GRAPHS) return json({ error: builtinTaken(name) }, 409);
         const body = await objectBody(req);
         if (!body) return json({ error: "expected a JSON object" }, 400);
         const parsed = parseGraphSpec(body.spec);
@@ -383,7 +398,21 @@ export function createHowdahServer(opts: ServerOpts) {
         const intent = body.intent;
         if (intent !== "create" && intent !== "update")
           return json({ error: `say whether this is a new graph ("create") or an edit ("update")` }, 400);
-        const saved = await saveBuilderGraph({ home, repoRoot: root, spec: parsed.spec, prompts, intent });
+        // HOW-65 decision 2: provenance is the SERVER's — a client-sent `drafted` is dropped here
+        const fromRun = body.fromRun;
+        if (fromRun !== undefined && (typeof fromRun !== "string" || !fromRun || fromRun.includes("/")))
+          return json({ error: "fromRun must be a run id" }, 400);
+        const provenance = builderProvenance({
+          name,
+          fromRun: typeof fromRun === "string" ? await runDraft(fromRun) : null,
+          existing: intent === "update" && existsSync(localGraphPath(home, name))
+            ? await loadLocalGraph(home, name, root).then(specOf).catch(() => null)
+            : null,
+        });
+        if (!provenance.ok) return json({ error: provenance.error }, provenance.status);
+        const { drafted: _client, ...clientSpec } = parsed.spec;
+        const spec = provenance.drafted ? { ...clientSpec, drafted: provenance.drafted } : clientSpec;
+        const saved = await saveBuilderGraph({ home, repoRoot: root, spec, prompts, intent });
         if (saved.ok) return json({ ok: true, name }, intent === "create" ? 201 : 200);
         return json({ error: saved.error }, saved.code === "exists" ? 409 : saved.code === "missing" ? 404 : 422);
       }
@@ -798,6 +827,27 @@ export function createHowdahServer(opts: ServerOpts) {
         if (!existsSync(logFile)) return json({ error: "unknown run" }, 404);
         const event = runViews.event(logFile, seq);
         return event ? json(event) : json({ error: "no such event" }, 404);
+      }
+
+      /**
+       * HOW-65: a draft-graph run's draft (web/draft.ts) and the card's Save. The state decides
+       * the status — 404 for no such draft, 409 while drafting or after a refusal — and every
+       * non-ready answer carries the reason the page shows.
+       */
+      const dm = url.pathname.match(/^\/api\/runs\/([^/]+)\/draft(\/save)?$/);
+      if (dm) {
+        const rid = decodeURIComponent(dm[1]!);
+        if (rid.includes("/") || rid.startsWith(".")) return json({ state: "unknown", reason: "not a run id" }, 400);
+        if (!dm[2]) {
+          if (req.method !== "GET") return json({ error: "method not allowed" }, 405);
+          const draft = await runDraft(rid);
+          return json(draft, DRAFT_STATUS[draft.state]);
+        }
+        if (req.method !== "POST") return json({ error: "method not allowed" }, 405);
+        const body = await objectBody(req);
+        if (!body) return json({ error: "expected a JSON object" }, 400);
+        const saved = await saveRunDraft({ home, root, draft: await runDraft(rid), name: body.name, builtins: Object.keys(GRAPHS) });
+        return saved.ok ? json({ ok: true, name: saved.name }, 201) : json({ error: saved.error }, saved.status);
       }
 
       const m = url.pathname.match(/^\/api\/runs(?:\/([^/]+)(?:\/(events|reply|open-ide|open-run-folder|harness-login|resume|pause|abort|jump|steer|soft-stop|ask|comments|approval|redesign|effects|shell|transcript|logs))?)?$/);

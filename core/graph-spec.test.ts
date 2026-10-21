@@ -14,12 +14,12 @@ import { describe, expect, test } from "bun:test";
 import { templateReads } from "./template-refs";
 import {
   COMMAND_BUILTINS, SPEC_VERSION, WORKTREE_FACTS, WORKTREE_CREATE_FACTS,
-  buildGraph, checkGraphDraft, draftHashOf, draftRuleProblems, resolveDraftBodies, builtinReads, coerceOperand, compilePredicate, emittableWrites, missingBuiltinReads, parseGraphSpec, predicateLabel,
+  buildGraph, checkGraphDraft, draftHashOf, draftRuleProblems, resolveDraftBodies, builtinReads, coerceOperand, compilePredicate, emittableWrites, missingBuiltinReads, parseGraphSpec, predicateLabel, renameDraft,
   isBlocking, keepPath, recoercePredicate, specAdvice, specProblems, unmatchableOperand,
   type GraphSpec, type NodeSpec, type Predicate,
 } from "./graph-spec";
 import { shapeOf } from "../graphs/spec-shape";
-import { CATALOG, EDGE_CASES, cleanDraft, materialiseFake, renamed } from "./fixtures/graph-draft";
+import { CATALOG, EDGE_CASES, borrowedPrompt, cleanDraft, materialiseFake, renamed } from "./fixtures/graph-draft";
 
 /** the smallest legal graph: one agent, one terminal */
 function minimal(over: Partial<GraphSpec> = {}): GraphSpec {
@@ -1356,12 +1356,24 @@ describe("drafted: where a graph came from rides in the spec, never in the Graph
     expect(again).toEqual(parsed);
   });
 
-  test("anything but exactly { run, draftHash } is dropped, and the spec still parses", () => {
+  test("HOW-65: { run, draftHash, edited: true } parses and round-trips; edited is kept", () => {
+    const edited = { ...provenance, edited: true as const };
+    const parsed = parseGraphSpec(JSON.parse(JSON.stringify({ ...minimal(), drafted: edited })));
+    expect(parsed.ok && parsed.spec.drafted).toEqual(edited);
+    if (parsed.ok) expect(parseGraphSpec(JSON.parse(JSON.stringify(parsed.spec)))).toEqual(parsed);
+    expect(shapeOf(buildGraph({ ...minimal(), drafted: edited }))).toEqual(shapeOf(buildGraph(minimal())));
+  });
+
+  test("anything but exactly { run, draftHash } (+ edited: true) is dropped, and the spec still parses", () => {
     for (const bad of [
       null, "x", [], {},
       { run: "r" },
       { draftHash: "h" },
       { run: "r", draftHash: "h", extra: 1 },
+      { run: "r", draftHash: "h", edited: false },
+      { run: "r", draftHash: "h", edited: "yes" },
+      { run: "r", edited: true },
+      { run: "r", draftHash: "h", edited: true, extra: 1 },
       { run: 3, draftHash: "h" },
       { run: "r", draftHash: "" },
       { run: "", draftHash: "h" },
@@ -1383,6 +1395,36 @@ describe("drafted: where a graph came from rides in the spec, never in the Graph
 
   test("...and it is not a problem to report", () => {
     expect(specProblems(withDrafted())).toEqual(specProblems(minimal()));
+  });
+});
+
+describe("renameDraft: the graph's name moves every prompt it owns (HOW-65)", () => {
+  test("prompt ids and body keys under <old>. move; copies keep their target; step ids stay", () => {
+    const d = cleanDraft();
+    const { spec, bodies } = renameDraft(d.spec, d.prompts, "my-review");
+    expect(spec.name).toBe("my-review");
+    expect(spec.nodes.map((n) => n.id)).toEqual(d.spec.nodes.map((n) => n.id));
+    expect(spec.nodes.flatMap((n) => (n.kind === "agent" ? [n.prompt] : []))).toEqual(["my-review.work", "my-review.review"]);
+    expect(bodies).toEqual({
+      "my-review.work": { copyOf: "quick-task.work" },
+      "my-review.review": d.prompts["quick-review.review"]!,
+    });
+    expect(d.spec.name).toBe("quick-review"); // not mutated
+  });
+
+  test("a prompt filed under another prefix, and a body no step names, are left alone", () => {
+    const d = borrowedPrompt();
+    d.prompts["quick-review.orphan"] = "x";
+    const { spec, bodies } = renameDraft(d.spec, d.prompts, "other");
+    expect(spec.nodes.flatMap((n) => (n.kind === "agent" ? [n.prompt] : []))).toEqual(["other.work", "quick-task.review"]);
+    expect(Object.keys(bodies).sort()).toEqual(["other.work", "quick-review.orphan", "quick-task.review"]);
+  });
+
+  test("renaming an unnamed draft moves its `.<step>` ids, as the builder's name box needs", () => {
+    const spec: GraphSpec = { ...minimal(), name: "", nodes: minimal().nodes.map((n) => (n.kind === "agent" ? { ...n, prompt: `.${n.id}` } : n)) };
+    const agentIds = spec.nodes.flatMap((n) => (n.kind === "agent" ? [n.id] : []));
+    const out = renameDraft(spec, Object.fromEntries(agentIds.map((id) => [`.${id}`, "t"])), "x");
+    expect(out.spec.nodes.flatMap((n) => (n.kind === "agent" ? [n.prompt] : []))).toEqual(agentIds.map((id) => `x.${id}`));
   });
 });
 

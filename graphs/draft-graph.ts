@@ -15,10 +15,11 @@
  * graph runs on a plain folder; the drafter only reads.
  */
 import { buildGraph, type GraphSpec } from "../core/graph-spec";
+import { DRAFT_GRAPH } from "../core/catalog";
 
 export const spec: GraphSpec = {
   version: 1,
-  name: "draft-graph",
+  name: DRAFT_GRAPH,
   description: "Draft a new graph from a plain-language request, checked as if it were being saved",
   entry: "graphs.catalog",
   inputs: ["intent"],

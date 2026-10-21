@@ -1163,3 +1163,52 @@ main { flex: 1; min-width: 0; min-height: 0; overflow: hidden; display: flex; fl
 .ac-waive > :first-child { flex: 1 1 160px; min-width: 0; }
 /* no inline padding: the label lines up with the criterion text above it */
 .ac-waive-open { align-self: flex-start; height: auto; margin-top: 2px; padding: 2px 0; }
+
+/* ---- HOW-65: the draft card (run/draft.tsx) and its review page (screens/draft-review.tsx) ----
+   Risk first, then what changed, then what did not, then advice (HOW-56 D-2A). Every glyph has
+   its word beside it, so no colour or symbol carries meaning alone (D-8A). */
+.draft-card { display: flex; flex-direction: column; gap: 12px; padding: 16px; border-radius: var(--radius-card); }
+.draft-head { display: flex; flex-direction: column; gap: 2px; }
+.draft-head h2, .draft-head h1 { margin: 0; }
+.draft-card .actions, .draft-page-main .actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.draft-basis { margin: 0; font-size: var(--type-sm); color: var(--fg-muted); }
+.draft-name { display: flex; flex-direction: column; gap: 4px; max-width: 360px; }
+.draft-sum { display: flex; flex-wrap: wrap; gap: 4px; margin: 0; font-size: var(--type-sm); color: var(--fg); }
+.draft-glyph { display: inline-block; min-width: 1ch; font-family: var(--font-mono); color: var(--fg-muted); }
+.draft-glyph.risk { color: var(--attention); }
+.draft-glyph.ok { color: var(--status-running); }
+.draft-banner { margin: 0; padding: 8px 12px; border-left: 2px solid var(--attention); border-radius: var(--radius-sm); background: var(--attention-bg); font-size: var(--type-sm); }
+.draft-note { margin: 0; font-size: var(--type-sm); color: var(--fg-muted); overflow-wrap: anywhere; }
+.draft-receipt { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px; margin: 0; font-size: var(--type-sm); }
+.draft-list { display: flex; flex-direction: column; gap: 16px; }
+.draft-sec { display: flex; flex-direction: column; gap: 6px; }
+.draft-sec h3 { margin: 0; font-size: var(--type-xs); text-transform: uppercase; letter-spacing: 0.06em; color: var(--fg-muted); }
+.draft-sec ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.draft-none { margin: 0; font-size: var(--type-sm); color: var(--fg-faint); }
+.draft-row { display: flex; flex-direction: column; gap: 4px; padding: 8px 10px; border-radius: var(--radius-sm); }
+.draft-row + .draft-row { border-top: 1px solid var(--border); }
+.draft-row:hover, .draft-row:focus-visible { background: var(--bg-raised); }
+.draft-row.risk .draft-tag { color: var(--attention); }
+.draft-row[data-change="removed"] strong { text-decoration: line-through; color: var(--fg-muted); }
+.draft-row[data-change="removed"] .draft-glyph { color: var(--diff-del); }
+.draft-row[data-change="added"] .draft-glyph { color: var(--diff-add); }
+.draft-row-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; font-size: var(--type-sm); }
+.draft-tag, .draft-kind, .draft-id { font-family: var(--font-mono); font-size: var(--type-xs); color: var(--fg-muted); }
+.draft-kind { margin-left: auto; color: var(--fg-faint); }
+.draft-sec .draft-facts { list-style: disc; padding-left: 18px; font-size: var(--type-sm); color: var(--fg-muted); }
+.draft-diff pre { margin: 0; padding: 6px 0; overflow-x: auto; font-family: var(--font-mono); font-size: var(--type-xs); line-height: 1.5; white-space: pre-wrap; }
+.draft-diff del, .draft-diff ins, .draft-diff span { display: block; padding: 0 8px; text-decoration: none; }
+.draft-diff del { color: var(--diff-del); background: color-mix(in srgb, var(--diff-del) 10%, transparent); }
+.draft-diff del::before { content: "− "; }
+.draft-diff ins { color: var(--diff-add); background: color-mix(in srgb, var(--diff-add) 12%, transparent); }
+.draft-diff ins::before { content: "+ "; }
+.draft-diff span::before { content: "  "; white-space: pre; }
+.draft-page { display: grid; grid-template-columns: minmax(0, 1fr) 420px; gap: 24px; align-items: start; }
+.draft-page-main { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.draft-picture { width: 420px; max-width: 100%; position: sticky; top: 0; }
+.draft-picture-below { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+@media (max-width: 1279px) { .draft-page { grid-template-columns: minmax(0, 1fr); } }
+.dag-node.removed rect:first-of-type { stroke-dasharray: 5 4; fill: transparent; }
+.dag-node.removed .dag-title { text-decoration: line-through; fill: var(--fg-faint); }
+.dag-node.highlight rect:first-of-type { stroke: var(--attention); stroke-width: 2.2; }
+.gb-from-run { margin: 0; font-size: var(--type-sm); color: var(--fg-muted); }

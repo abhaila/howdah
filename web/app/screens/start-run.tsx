@@ -27,7 +27,8 @@ import { ConfigFields } from "./graphs";
 export function StartRun() {
   const [graphs, setGraphs] = useState<GraphInfo[]>([]);
   const [workspaces, setWorkspaces] = useState<Workspaces>({ repos: [], folders: [] });
-  const [graph, setGraph] = useState<string>("");
+  // HOW-65: a just-saved draft's receipt says "Run it" and lands here with the graph picked
+  const [graph, setGraph] = useState<string>(() => new URLSearchParams(location.search).get("graph") ?? "");
   const [name, setName] = useState<string>("");
   const [inputs, setInputs] = useState<Record<string, string>>({});
   const [workspace, setWorkspace] = useState<string>("");

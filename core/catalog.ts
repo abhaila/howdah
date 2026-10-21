@@ -73,6 +73,9 @@ export interface GraphsCatalog {
   omitted?: string[];
 }
 
+/** HOW-65: the built-in that drafts a graph — node-free, so the browser can tell a draft run */
+export const DRAFT_GRAPH = "draft-graph";
+
 /** HOW-56 T5: the key a drafting step publishes its draft under (graphs/draft-graph.ts) */
 export const GRAPH_DRAFT_KEY = "graph.draft";
 

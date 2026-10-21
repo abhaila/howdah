@@ -36,6 +36,7 @@ import { PromptsScreen } from "./screens/prompts";
 import { ProposalsScreen } from "./screens/proposals";
 import { Settings } from "./screens/settings";
 import { AttentionInbox } from "./screens/attention";
+import { DraftReview } from "./screens/draft-review";
 
 const THEMES = ["dark", "light", "system"] as const;
 type Theme = (typeof THEMES)[number];
@@ -106,7 +107,10 @@ function App() {
     return m ? { name: m[1]! } : null;
   })();
   const isAttention = path === "/attention";
-  const isRuns = !runMatch && !isNew && !isGraphs && !buildMatch && !isSettings && !promptMatch && !proposalMatch && !isAttention;
+  // HOW-65: a draft-graph run's review page. `/runs/…` never matches `/run/:id`, so the two cannot clash
+  const draftMatch = path.match(/^\/runs\/([^/]+)\/draft$/);
+  const fromRun = buildMatch && !buildMatch.name ? new URLSearchParams(location.search).get("fromRun") : null;
+  const isRuns = !runMatch && !draftMatch && !isNew && !isGraphs && !buildMatch && !isSettings && !promptMatch && !proposalMatch && !isAttention;
 
   // how many drafts are waiting for you to look — R2's whole point is that you look, so a
   // count that goes stale after an accept is worse than no count: it is a live-looking lie
@@ -164,11 +168,12 @@ function App() {
         </nav>
         <main>
           {runMatch ? <RunView id={runMatch[1]!} />
+            : draftMatch ? <DraftReview runId={decodeURIComponent(draftMatch[1]!)} />
             : isAttention ? <div className="runs"><AttentionInbox /></div>
             : isNew ? <StartRun />
             : isSettings ? <Settings />
             : isGraphs ? <GraphsList />
-            : buildMatch ? <GraphBuilder name={buildMatch.name} />
+            : buildMatch ? <GraphBuilder name={buildMatch.name} fromRun={fromRun ?? undefined} />
             : promptMatch ? <PromptsScreen selected={promptMatch[1] ? decodeURIComponent(promptMatch[1]) : null} />
             : proposalMatch ? <ProposalsScreen selected={proposalMatch[1] ? decodeURIComponent(proposalMatch[1]) : null} />
             : <div className="runs"><RunsList /></div>}
