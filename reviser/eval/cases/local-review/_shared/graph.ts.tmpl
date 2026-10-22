@@ -1,0 +1,61 @@
+/**
+ * eval-review (HOW-53) — implement-ticket's REVIEW half, for the A/B harness, so a reviewer
+ * prompt can be scored on planted defects: create_worktree → criteria → verify.run → evidence →
+ * local_review → done. The builder never runs: the worktree branches from the case repo's HEAD,
+ * which is the case's pre-made branch carrying the defective commit, and the plan and the
+ * builder's (falsely confident) summary arrive as run INPUTS, so the review is the only step
+ * the variants change. The criteria step is the stock ticket.acceptance in both arms, because
+ * only a read-only agent may write `acceptance` (core/graph.ts) — a case cannot seed it.
+ *
+ * It STOPS after the review, whatever the verdict: an eval must never open a pull request, and
+ * the run has to finish for the oracle (reviser/eval/ab.ts judgeReview) to score it. Installed
+ * by ab.ts into an isolated $HOWDAH_HOME, with __HOWDAH_ROOT__ replaced by this checkout (a
+ * local graph cannot use a relative import); ticket.acceptance, ticket.local_review and the
+ * review._verify_result partial resolve from this checkout's prompts/ unless a variant shadows one.
+ */
+import { defineGraph } from "__HOWDAH_ROOT__/core/graph";
+
+interface Ctx {
+  goal: string;
+  work: string;
+  implementation_plan: string;
+  implementation_summary: string;
+  "worktree.verify_command": string;
+  "worktree.preview_paths": unknown;
+  "verify.result": unknown;
+  "evidence.items": unknown;
+  acceptance: unknown;
+  review_verdict: "pass" | "reject";
+  review_findings: unknown;
+}
+
+export const evalReview = defineGraph<Ctx>({
+  name: "eval-review",
+  description: "implement-ticket's review half over a pre-made branch, stopping before delivery (A/B eval of the reviewer)",
+  defaults: { permissionMode: "auto" },
+  entry: "create_worktree",
+  inputs: ["goal", "work", "implementation_plan", "implementation_summary"],
+  nodes: {
+    create_worktree: { kind: "worktree", action: "create", writes: { "worktree.verify_command": { scope: "sticky" }, "worktree.preview_paths": { scope: "sticky" } } },
+    "implementation.criteria": {
+      kind: "agent", prompt: "ticket.acceptance" as never, readOnly: true,
+      reads: ["goal", "work", "implementation_plan", "worktree.verify_command", "worktree.preview_paths"],
+      writes: { acceptance: { scope: "sticky" } },
+    },
+    "verify.run": { kind: "command", run: "verify:run", writes: { "verify.result": { scope: "per-visit" } } },
+    "implementation.evidence": { kind: "command", run: "evidence:screenshot", writes: { "evidence.items": { scope: "per-visit" } } },
+    "implementation.local_review": {
+      kind: "agent", prompt: "ticket.local_review" as never, readOnly: true,
+      reads: ["goal", "work", "implementation_plan", "implementation_summary", "verify.result", "evidence.items", "acceptance"],
+      writes: { review_verdict: { scope: "cleared" }, review_findings: { scope: "cleared" }, acceptance: { scope: "sticky" } },
+    },
+    done: { kind: "terminal", outcome: "success" },
+  },
+  edges: [
+    { from: "create_worktree", to: "implementation.criteria" },
+    { from: "implementation.criteria", to: "verify.run" },
+    { from: "verify.run", to: "implementation.evidence" },
+    { from: "implementation.evidence", to: "implementation.local_review" },
+    { from: "implementation.local_review", to: "done" },
+  ],
+});

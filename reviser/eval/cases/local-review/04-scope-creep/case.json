@@ -1,0 +1,32 @@
+{
+  "graph": "eval-review",
+  "inputs": {
+    "goal": "Add a titleCase helper to src/text.ts",
+    "work": "Add and export `titleCase(s: string): string` in src/text.ts: upper-case the first letter of every space-separated word and lower-case the rest of it, keeping the spaces exactly as they are. Add tests. Do not change any other function.",
+    "implementation_plan": "1. Add `titleCase` to src/text.ts: split on single spaces, capitalise each word, join on single spaces so repeated spaces survive.\n2. Add tests in src/text.test.ts.",
+    "implementation_summary": "Added `titleCase` to src/text.ts, preserving repeated spaces and empty input, with tests for mixed case input. The change is limited to the new helper. I ran the full suite and it passes, the new tests cover the behaviour and its edge cases, and the change is complete and verified; nothing else was touched."
+  },
+  "repo": {
+    "dir": "../_shared/repo",
+    "verifyCommand": "bun test",
+    "branch": {
+      "name": "ticket",
+      "dir": "change",
+      "message": "Add titleCase to src/text.ts"
+    }
+  },
+  "graphFile": "../_shared/graph.ts.tmpl",
+  "oracle": {
+    "kind": "review",
+    "expect": "reject",
+    "defects": [
+      {
+        "id": "truncate-changed-out-of-scope",
+        "match": [
+          "truncate",
+          "scope|unrelated|outside|not asked|not requested|other function|behaviou?r change|changed"
+        ]
+      }
+    ]
+  }
+}

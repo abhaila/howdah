@@ -8,6 +8,10 @@
  *                          [--repeat k] [--stamp <proposal.md>] [--json] [--out <file>]
  *                          [--include-fallback]
  *
+ *   # a REVIEWER under test (HOW-53): planted-defect cases, judged from the review's own writes
+ *   bun reviser/eval/ab.ts --cases reviser/eval/cases/local-review \
+ *                          --a prompts/ticket.local_review.md --b reviser/proposals/<id>.vN.proposal.md
+ *
  * A VARIANT is one of
  *   - a prompt file (prompts/<id>.md, the current text) or a reviser proposal
  *     (reviser/proposals/<id>.vN.proposal.md) — written as `<id>.md` into the isolated
@@ -20,8 +24,12 @@
  * A CASE is a directory with case.json: the graph, its inputs, an optional repo (copied and
  * committed at a fixed date, so every arm starts from the same commit) and a pass ORACLE —
  * `command` (exit 0 in the worktree; `files` are copied in first, so the oracle's tests can be
- * hidden from the agent), `schema` (a context value of the right shape) or `rubric` (a
- * separate judge call). The oracle kind is recorded with every result.
+ * hidden from the agent), `schema` (a context value of the right shape), `rubric` (a
+ * separate judge call) or `review` (HOW-53: the verdict and findings a REVIEW step wrote, matched
+ * deterministically against the case's planted defects — see judgeReview). The oracle kind is
+ * recorded with every result. A case's repo may carry a `branch`: a second commit on top of the
+ * baseline, left checked out, so a worktree (which branches from HEAD when there is no origin)
+ * starts at that commit and its diff against main is exactly the change under review.
  *
  * Every run is the REAL engine through the CLI in its own fresh HOWDAH_HOME, and the arms are
  * INTERLEAVED (case 1 A, case 1 B, case 2 A, …) so allowance or rate-limit drift lands on both
@@ -44,7 +52,7 @@
  * HOWDAH_STUB=1 runs the whole pipeline without spending a token: every agent node parks, so
  * the report is all `parked` — which is exactly the bucket a dry run should exercise.
  */
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { splitFrontMatter, frontMatterField } from "../../core/template";
@@ -95,7 +103,30 @@ function configVariant(json: unknown, label: string): Variant {
 export type Oracle =
   | { kind: "command"; run: string; files?: Record<string, string>; timeoutMs?: number }
   | { kind: "schema"; key: string; type?: "string" | "object" | "array" | "number" | "boolean"; required?: string[] }
-  | { kind: "rubric"; rubric: string; key?: string };
+  | { kind: "rubric"; rubric: string; key?: string }
+  | ReviewOracle;
+
+/**
+ * HOW-53: a REVIEWER is scored, not a builder. `expect` is the verdict the review must return;
+ * each defect is planted in the branch commit and must be NAMED by one finding (judgeReview).
+ */
+export interface ReviewOracle {
+  kind: "review";
+  /** the review step (default implementation.local_review) */
+  node?: string;
+  expect: "pass" | "reject";
+  defects?: Array<{ id: string; match: string[] }>;
+}
+
+/** the change under review: committed on `name` on top of the baseline, and left checked out */
+export interface RepoBranch {
+  name: string;
+  /** a directory copied OVER the baseline (relative to the case dir) */
+  dir: string;
+  message: string;
+  /** baseline paths the change deletes */
+  delete?: string[];
+}
 
 export interface EvalCase {
   name: string;
@@ -104,7 +135,7 @@ export interface EvalCase {
   graph: string;
   inputs: Record<string, string>;
   /** a repo to run against: copied, and committed at a fixed date unless it already is a repo */
-  repo?: { dir: string; verifyCommand?: string; diagnosticsCommand?: string };
+  repo?: { dir: string; verifyCommand?: string; diagnosticsCommand?: string; branch?: RepoBranch };
   /** a local graph to install (placeholder __HOWDAH_ROOT__ → this checkout), e.g. one that stops before publish */
   graphFile?: string;
   /** a directory of extra prompt files the graph needs */
@@ -122,9 +153,34 @@ export function loadCases(dir: string): EvalCase[] {
       const caseDir = join(dir, d.name);
       const raw = JSON.parse(readFileSync(join(caseDir, "case.json"), "utf8")) as Omit<EvalCase, "dir" | "name"> & { name?: string };
       if (!raw.graph || !raw.oracle) throw new Error(`${caseDir}/case.json needs "graph" and "oracle"`);
+      if (raw.oracle.kind === "review") checkReviewOracle(raw.oracle, `${caseDir}/case.json`);
+      if (raw.repo?.branch && (!raw.repo.branch.name || !raw.repo.branch.dir || !raw.repo.branch.message))
+        throw new Error(`${caseDir}/case.json: repo.branch needs "name", "dir" and "message"`);
       return { ...raw, name: raw.name ?? d.name, dir: caseDir, inputs: raw.inputs ?? {} };
     })
     .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/** refuse a review oracle that could not judge what it claims to — named, at load time */
+export function checkReviewOracle(o: ReviewOracle, where: string): void {
+  if (o.expect !== "pass" && o.expect !== "reject") throw new Error(`${where}: a review oracle's "expect" must be "pass" or "reject", not ${JSON.stringify(o.expect)}`);
+  const defects = o.defects ?? [];
+  if (o.expect === "reject" && defects.length === 0) throw new Error(`${where}: a review oracle expecting "reject" must list the planted defects`);
+  if (o.expect === "pass" && defects.length > 0) throw new Error(`${where}: a review oracle expecting "pass" (a clean control) cannot list defects`);
+  const seen = new Set<string>();
+  for (const d of defects) {
+    if (!d.id) throw new Error(`${where}: every defect needs an "id"`);
+    if (seen.has(d.id)) throw new Error(`${where}: defect "${d.id}" is listed twice`);
+    seen.add(d.id);
+    if (!Array.isArray(d.match) || d.match.length === 0) throw new Error(`${where}: defect "${d.id}" needs a non-empty "match" list`);
+    for (const m of d.match) {
+      try {
+        new RegExp(m, "i");
+      } catch (err) {
+        throw new Error(`${where}: defect "${d.id}" has a regex that does not compile (${m}): ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+  }
 }
 
 // ---- running one arm of one case ---------------------------------------------------------------
@@ -141,18 +197,35 @@ export type Runner = (c: EvalCase, v: Variant, repeat: number) => Promise<ArmRun
 
 const FIXED_DATE = "2026-01-01T00:00:00Z";
 
-/** copy a repo dir into the home and commit it at a fixed date — every arm starts identical */
-function materialiseRepo(src: string, dest: string): void {
-  cpSync(src, dest, { recursive: true });
-  if (existsSync(join(dest, ".git"))) return;
+/** git in `cwd`, as the eval identity at the fixed date — every commit is byte-identical across arms */
+function evalGit(cwd: string): (...args: string[]) => void {
   const env = { ...process.env, GIT_AUTHOR_DATE: FIXED_DATE, GIT_COMMITTER_DATE: FIXED_DATE, GIT_AUTHOR_NAME: "howdah-eval", GIT_AUTHOR_EMAIL: "eval@howdah", GIT_COMMITTER_NAME: "howdah-eval", GIT_COMMITTER_EMAIL: "eval@howdah" };
-  const git = (...args: string[]) => {
-    const r = Bun.spawnSync(["git", "-c", "commit.gpgsign=false", ...args], { cwd: dest, env, stdout: "pipe", stderr: "pipe" });
+  return (...args: string[]) => {
+    const r = Bun.spawnSync(["git", "-c", "commit.gpgsign=false", ...args], { cwd, env, stdout: "pipe", stderr: "pipe" });
     if (r.exitCode !== 0) throw new Error(`git ${args.join(" ")}: ${new TextDecoder().decode(r.stderr)}`);
   };
+}
+
+/**
+ * copy a repo dir into the home and commit it at a fixed date — every arm starts identical. With
+ * a `branch`, the change under review is committed on top and left checked out (HOW-53).
+ */
+function materialiseRepo(src: string, dest: string, branch?: { dir: string } & Omit<RepoBranch, "dir">): void {
+  cpSync(src, dest, { recursive: true });
+  if (existsSync(join(dest, ".git"))) {
+    if (branch) throw new Error(`${src} is already a git repo: a repo.branch needs a plain directory to commit onto`);
+    return;
+  }
+  const git = evalGit(dest);
   git("init", "-q", "-b", "main");
   git("add", "-A");
   git("commit", "-q", "-m", "eval case baseline");
+  if (!branch) return;
+  git("checkout", "-q", "-b", branch.name);
+  cpSync(branch.dir, dest, { recursive: true, force: true });
+  for (const p of branch.delete ?? []) rmSync(join(dest, p), { recursive: true });
+  git("add", "-A");
+  git("commit", "-q", "-m", branch.message);
 }
 
 /** set up a fresh HOWDAH_HOME for one arm of one case; returns the home and the workspace name */
@@ -164,7 +237,8 @@ export function prepareHome(c: EvalCase, v: Variant): { home: string; workspace:
   if (c.repo) {
     const path = join(home, "src", c.name);
     mkdirSync(dirname(path), { recursive: true });
-    materialiseRepo(resolve(c.dir, c.repo.dir), path);
+    const branch = c.repo.branch;
+    materialiseRepo(resolve(c.dir, c.repo.dir), path, branch ? { ...branch, dir: resolve(c.dir, branch.dir) } : undefined);
     workspace = "eval";
     config.repos[workspace] = {
       path, defaultBranch: "main",
@@ -237,8 +311,43 @@ function latestWrite(events: readonly LoggedEvent[], key: string): unknown {
   return e?.type === "node-finished" ? e.writes[key] : undefined;
 }
 
+/**
+ * HOW-53: score a REVIEW from the log — deterministic, no LLM judge. The rule:
+ *
+ *   1. The review is the LAST succeeded `node-finished` of `oracle.node` (default
+ *      implementation.local_review) that wrote `review_verdict`. None → fail ("never finished").
+ *   2. Its `review_verdict` must equal `oracle.expect`, or the case fails.
+ *   3. `expect: "pass"` (a clean control) is decided by the verdict alone — findings are ignored,
+ *      because a passing review may carry non-blocking notes.
+ *   4. `expect: "reject"`: every element of `review_findings` becomes ONE text (a string as is,
+ *      anything else JSON.stringify'd; a non-array value is a single text). A defect is NAMED when
+ *      ONE finding's text matches EVERY regex in its `match` list, each compiled case-insensitive —
+ *      terms spread across different findings do not name it. The case passes only when every
+ *      planted defect is named. Extra findings are not penalised: the clean controls are what
+ *      penalise a reviewer that rejects everything.
+ */
+export function judgeReview(o: ReviewOracle, events: readonly LoggedEvent[]): OracleResult {
+  const node = o.node ?? "implementation.local_review";
+  const e = events.findLast((x) => x.type === "node-finished" && x.node === node && x.status === "succeeded" && "review_verdict" in x.writes);
+  if (e?.type !== "node-finished") return { kind: "review", passed: false, detail: `the review (${node}) never finished` };
+  const verdict = e.writes.review_verdict;
+  if (verdict !== o.expect) return { kind: "review", passed: false, detail: `verdict ${typeof verdict === "string" ? verdict : JSON.stringify(verdict)}, expected ${o.expect}` };
+  if (o.expect === "pass") return { kind: "review", passed: true, detail: "verdict pass, as expected" };
+  const findings = e.writes.review_findings;
+  const texts = (Array.isArray(findings) ? findings : [findings]).map((f) => (typeof f === "string" ? f : JSON.stringify(f) ?? ""));
+  const defects = o.defects ?? [];
+  const missed = defects.filter((d) => {
+    const res = d.match.map((m) => new RegExp(m, "i"));
+    return !texts.some((t) => res.every((r) => r.test(t)));
+  });
+  return missed.length
+    ? { kind: "review", passed: false, detail: `verdict reject, but the findings miss ${missed.map((d) => d.id).join(", ")}` }
+    : { kind: "review", passed: true, detail: `verdict reject, naming all ${defects.length} planted defect${defects.length === 1 ? "" : "s"}` };
+}
+
 export async function judge(c: EvalCase, run: ArmRun, judgeFn: Judge): Promise<OracleResult> {
   const o = c.oracle;
+  if (o.kind === "review") return judgeReview(o, run.events);
   if (o.kind === "command") {
     if (!run.workdir || !existsSync(run.workdir)) return { kind: o.kind, passed: false, detail: "no worktree to run the oracle in" };
     for (const [dest, src] of Object.entries(o.files ?? {})) {

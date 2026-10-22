@@ -1,0 +1,31 @@
+{
+  "graph": "eval-review",
+  "inputs": {
+    "goal": "Fix wordCount on repeated whitespace",
+    "work": "`wordCount` in src/text.ts counts empty strings between separators as words: \"one   two\" gives 4. Fix it so any run of whitespace (spaces, tabs, newlines), including leading and trailing whitespace, separates words: \"  one   two\\tthree\\n\" is 3 and a string of only whitespace is 0. Add regression tests.",
+    "implementation_plan": "1. Change `wordCount` in src/text.ts to split on runs of whitespace and ignore empty pieces.\n2. Add regression tests in src/text.test.ts for repeated spaces, tabs, newlines, leading and trailing whitespace, and whitespace-only input.",
+    "implementation_summary": "Fixed `wordCount` in src/text.ts so runs of whitespace, tabs, newlines and leading or trailing whitespace no longer produce empty words, and added regression tests for each of those cases. I ran the full suite and it passes, the new tests cover the behaviour and its edge cases, and the change is complete and verified; nothing else was touched."
+  },
+  "repo": {
+    "dir": "../_shared/repo",
+    "verifyCommand": "bun test",
+    "branch": {
+      "name": "ticket",
+      "dir": "change",
+      "message": "Fix wordCount on repeated whitespace"
+    }
+  },
+  "graphFile": "../_shared/graph.ts.tmpl",
+  "oracle": {
+    "kind": "review",
+    "expect": "reject",
+    "defects": [
+      {
+        "id": "failing-test-skipped",
+        "match": [
+          "skip|disabled|removed|not run"
+        ]
+      }
+    ]
+  }
+}
