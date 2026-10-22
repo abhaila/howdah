@@ -1,0 +1,23 @@
+{
+  "graph": "eval-review",
+  "inputs": {
+    "goal": "Add a clamp helper to src/stats.ts",
+    "work": "Add and export `clamp(x: number, lo: number, hi: number): number` in src/stats.ts: return x limited to the closed range [lo, hi]. When lo is greater than hi, throw a RangeError. Add tests, including both bounds and a single-point range.",
+    "implementation_plan": "1. Add `clamp` to src/stats.ts: throw a RangeError when lo > hi, else return Math.min(hi, Math.max(lo, x)).\n2. Add tests in src/stats.test.ts for inside, below, above, both bounds, a single-point range, negative and fractional bounds, and the RangeError.",
+    "implementation_summary": "Added `clamp(x, lo, hi)` to src/stats.ts. It throws a RangeError when lo > hi and otherwise limits x to [lo, hi] inclusive. Tests cover values inside, below and above the range, both bounds exactly, a single-point range, negative and fractional bounds, and the RangeError. I ran the full suite and it passes, the new tests cover the behaviour and its edge cases, and the change is complete and verified; nothing else was touched."
+  },
+  "repo": {
+    "dir": "../_shared/repo",
+    "verifyCommand": "bun test",
+    "branch": {
+      "name": "ticket",
+      "dir": "change",
+      "message": "Add clamp to src/stats.ts"
+    }
+  },
+  "graphFile": "../_shared/graph.ts.tmpl",
+  "oracle": {
+    "kind": "review",
+    "expect": "pass"
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "graph": "eval-review",
+  "inputs": {
+    "goal": "Add a slugify helper to src/text.ts",
+    "work": "Add and export `slugify(s: string): string` in src/text.ts: lower-case, every run of characters that are not a-z or 0-9 becomes a single hyphen, and the result never starts or ends with a hyphen (\"  Hello, World!  \" → \"hello-world\"). Add tests.",
+    "implementation_plan": "1. Add `slugify` to src/text.ts: lower-case, replace each run of non-alphanumerics with one hyphen, strip any hyphen at either end.\n2. Add tests in src/text.test.ts, including punctuation at both ends.",
+    "implementation_summary": "Added `slugify` to src/text.ts: it lower-cases, collapses every run of non-alphanumeric characters into a single hyphen and never leaves a hyphen at either end. Tests cover ordinary titles and collapsed separators. I ran the full suite and it passes, the new tests cover the behaviour and its edge cases, and the change is complete and verified; nothing else was touched."
+  },
+  "repo": {
+    "dir": "../_shared/repo",
+    "verifyCommand": "bun test",
+    "branch": {
+      "name": "ticket",
+      "dir": "change",
+      "message": "Add slugify to src/text.ts"
+    }
+  },
+  "graphFile": "../_shared/graph.ts.tmpl",
+  "oracle": {
+    "kind": "review",
+    "expect": "reject",
+    "defects": [
+      {
+        "id": "no-edge-hyphen-trim",
+        "match": [
+          "leading|trailing|starts? with|ends? with|strip|trim|-[`'\"]|[`'\"]-",
+          "hyphen|dash|-[`'\"]|[`'\"]-"
+        ]
+      }
+    ]
+  }
+}

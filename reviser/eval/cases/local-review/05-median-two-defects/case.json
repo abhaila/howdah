@@ -1,0 +1,40 @@
+{
+  "graph": "eval-review",
+  "inputs": {
+    "goal": "Add a median helper to src/stats.ts",
+    "work": "Add and export `median(xs: readonly number[]): number` in src/stats.ts. The input may be in any order and must not be mutated. For an odd-length list return the middle value of the sorted list; for an even-length list return the mean of the two middle values. An empty list throws a RangeError. Add tests.",
+    "implementation_plan": "1. Add `median` to src/stats.ts: copy and sort the input numerically, take the middle value, or average the two middle values when the length is even; throw a RangeError on an empty list.\n2. Add tests in src/stats.test.ts for odd, even, single-element and empty input.",
+    "implementation_summary": "Added `median` to src/stats.ts. It works on unsorted input without mutating it, averages the two middle values for even-length lists and throws a RangeError on an empty list. Tests cover odd, even, single-element and empty input. I ran the full suite and it passes, the new tests cover the behaviour and its edge cases, and the change is complete and verified; nothing else was touched."
+  },
+  "repo": {
+    "dir": "../_shared/repo",
+    "verifyCommand": "bun test",
+    "branch": {
+      "name": "ticket",
+      "dir": "change",
+      "message": "Add median to src/stats.ts"
+    }
+  },
+  "graphFile": "../_shared/graph.ts.tmpl",
+  "oracle": {
+    "kind": "review",
+    "expect": "reject",
+    "defects": [
+      {
+        "id": "input-not-sorted",
+        "match": [
+          "sort",
+          "\\bnot\\b|never|n't|missing|lacks|assum|forg[eo]t|instead|wrong|incorrect|fails|upper|only one"
+        ]
+      },
+      {
+        "id": "even-length-not-averaged",
+        "match": [
+          "even",
+          "average|mean|two middle|middle two|both middle",
+          "\\bnot\\b|never|n't|missing|lacks|assum|forg[eo]t|instead|wrong|incorrect|fails|upper|only one"
+        ]
+      }
+    ]
+  }
+}

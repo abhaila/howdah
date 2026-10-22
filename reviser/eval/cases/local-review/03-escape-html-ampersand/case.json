@@ -1,0 +1,31 @@
+{
+  "graph": "eval-review",
+  "inputs": {
+    "goal": "Add an escapeHtml helper to src/html.ts",
+    "work": "Add and export `escapeHtml(s: string): string` in src/html.ts so untrusted text can be placed in HTML text or a quoted attribute. It must escape all five special characters: & as &amp;, < as &lt;, > as &gt;, \" as &quot; and ' as &#39;. Add tests.",
+    "implementation_plan": "1. Add an entity table and `escapeHtml` to src/html.ts, replacing each of the five characters in one pass.\n2. Add tests in src/html.test.ts for markup, both quote kinds and plain text.",
+    "implementation_summary": "Added `escapeHtml` to src/html.ts. It escapes every HTML-special character in a single pass through an entity table, so untrusted input is safe in text and quoted attributes. Tests cover script tags, both quote kinds and plain text. I ran the full suite and it passes, the new tests cover the behaviour and its edge cases, and the change is complete and verified; nothing else was touched."
+  },
+  "repo": {
+    "dir": "../_shared/repo",
+    "verifyCommand": "bun test",
+    "branch": {
+      "name": "ticket",
+      "dir": "change",
+      "message": "Add escapeHtml to src/html.ts"
+    }
+  },
+  "graphFile": "../_shared/graph.ts.tmpl",
+  "oracle": {
+    "kind": "review",
+    "expect": "reject",
+    "defects": [
+      {
+        "id": "ampersand-not-escaped",
+        "match": [
+          "ampersand|&amp;|[`'\"(]&[`'\")]|\\s&\\s"
+        ]
+      }
+    ]
+  }
+}
