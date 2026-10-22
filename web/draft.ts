@@ -22,6 +22,14 @@
  * card's "Redrafted → run Y" is derived from each child's own `run-started.parent`, never stored
  * here.
  *
+ * HOW-67 (T8, D-7A) adds the QUIET inbox tier: `readyDrafts` lists every finished draft that
+ * is neither saved nor discarded, for the Needs you screen's "Ready for you" group. It is
+ * derived on every request by the same rules the card reads (`savedAs`, `deriveDraftDiscarded`),
+ * so a Save in another tab clears it on the next poll, and it is deliberately NOT an attention
+ * record: a draft can wait, and amber, the chime and the favicon belong to a run that cannot
+ * proceed without you. A twice-refused draft parks (`needs-input`, not `done`), so it never
+ * lands here and still takes the amber path.
+ *
  * Never throws on a run's content: the draft is model output, and a draft that does not parse
  * is the `refused` state with the parser's reason, not a 500.
  */
@@ -30,7 +38,7 @@ import { join } from "node:path";
 import { EventLog, readLog } from "../log/write";
 import type { LoggedEvent } from "../log/events";
 import { deriveDraftDiscarded, deriveStatus } from "./derive";
-import { redraftLaunchRequest } from "../core/draft-launch";
+import { redraftLaunchRequest, requestsOf } from "../core/draft-launch";
 import type { LaunchRequest } from "../core/launch-args";
 import { asGraphsCatalog, DRAFT_GRAPH, GRAPH_DRAFT_KEY, GRAPHS_CATALOG_DEFAULT_CAP, GRAPHS_CATALOG_KEY } from "../core/catalog";
 import {
@@ -230,6 +238,52 @@ export function redraftsOf(runsDir: string, runId: string): Array<{ run: string;
     if (e?.type === "run-started" && e.graph === DRAFT_GRAPH && e.parent === runId) out.push({ run: d, at: e.ts });
   }
   return out.sort((a, b) => a.at.localeCompare(b.at) || a.run.localeCompare(b.run));
+}
+
+/** HOW-67: one row of the quiet "Ready for you" tier */
+export interface ReadyItem {
+  run: string;
+  /** the operator's `--name` label, when the run was given one */
+  name: string | null;
+  /** the operator's own words — a redraft's intent minus the previous draft it carries */
+  intent: string;
+  finished_at: string;
+  /** the review page, where Save and Discard are */
+  href: string;
+}
+
+/**
+ * HOW-67: every draft-graph run that finished with a draft nobody has saved or discarded yet,
+ * newest first. A non-draft run costs one read of its first line (`firstEvent`); only drafts
+ * are read whole. A log that cannot be read is skipped — this tier is advisory, and the amber
+ * tier is the one that errs toward keeping.
+ */
+export function readyDrafts(opts: { runsDir: string; locals: Readonly<Record<string, Graph<any>>> }): ReadyItem[] {
+  let dirs: string[];
+  try { dirs = readdirSync(opts.runsDir); } catch { return []; }
+  const out: ReadyItem[] = [];
+  for (const run of dirs) {
+    const path = join(opts.runsDir, run, "run.jsonl");
+    const started = firstEvent(path);
+    if (started?.type !== "run-started" || started.graph !== DRAFT_GRAPH) continue;
+    let events: LoggedEvent[];
+    try { events = readLog(path); } catch { continue; }
+    if (deriveStatus(events).status !== "done") continue;
+    // a run that finished without publishing a draft has nothing to Save or Discard — listing
+    // it would be an entry no button can ever clear
+    if (!lastWrite(events, GRAPH_DRAFT_KEY).found) continue;
+    if (deriveDraftDiscarded(events) || savedAs(run, opts.locals)) continue;
+    const finished = events.findLast((e) => e.type === "run-finished");
+    const intent = started.inputs.intent;
+    out.push({
+      run,
+      name: started.name ?? null,
+      intent: typeof intent === "string" ? requestsOf(intent) : "",
+      finished_at: finished?.ts ?? started.ts,
+      href: `/runs/${encodeURIComponent(run)}/draft`,
+    });
+  }
+  return out.sort((a, b) => b.finished_at.localeCompare(a.finished_at) || a.run.localeCompare(b.run));
 }
 
 /** the sentences a discarded draft is refused with — one copy each */

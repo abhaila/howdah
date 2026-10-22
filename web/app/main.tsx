@@ -19,6 +19,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Rows3, Plus, Workflow, Settings as SettingsIcon, Library, FileDiff, BellRing, Sun, Moon, Monitor } from "lucide-react";
 import type { ProposalView } from "../../prompts/proposals";
 import type { InboxItem } from "../../engine/attention-inbox";
+import type { ReadyItem } from "../draft";
 import { PROPOSALS_CHANGED } from "@/lib/types";
 import { getJSON } from "@/lib/net";
 import { Button } from "@/components/ui/button";
@@ -136,6 +137,15 @@ function App() {
     const t = setInterval(load, 5000);
     return () => clearInterval(t);
   }, [path]);
+  // HOW-67: finished drafts waiting to be looked at — a SEPARATE, grey count, never added to
+  // `waiting`: amber means a run cannot go on without you, and a draft can wait
+  const [ready, setReady] = useState(0);
+  useEffect(() => {
+    const load = () => getJSON<ReadyItem[]>("/api/ready").then((i) => setReady(i.length)).catch(() => setReady(0));
+    load();
+    const t = setInterval(load, 5000);
+    return () => clearInterval(t);
+  }, [path]);
 
   return (
     <ToastProvider>
@@ -151,6 +161,7 @@ function App() {
           <a className={`nav ${isAttention ? "active" : ""}`} href="/attention">
             <BellRing size={15} /><span className="label">Needs you</span>
             {waiting > 0 && <span className="nav-badge">{waiting}</span>}
+            {ready > 0 && <span className="nav-badge quiet">{ready}</span>}
           </a>
           <a className={`nav ${isNew ? "active" : ""}`} href="/new"><Plus size={15} /><span className="label">New run</span></a>
           <a className={`nav ${isGraphs || buildMatch ? "active" : ""}`} href="/graphs"><Workflow size={15} /><span className="label">Graphs</span></a>
