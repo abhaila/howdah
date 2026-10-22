@@ -21,7 +21,9 @@
  *   PUT  /api/graphs/:name/builder {spec, prompts, intent, fromRun?} → HOW-22: save a graph built in the viewer (201 new / 200 updated / 409 a built-in owns the name / 422 the gate refused).
  *                                  HOW-65: `drafted` is never taken from the client — derived from `fromRun`, kept on an update, else stripped (web/draft.ts)
  *   GET  /api/runs/:id/draft       HOW-65: a draft-graph run's draft, diff, advice and saved state (404 unknown / 409 drafting or refused, with a reason)
- *   POST /api/runs/:id/draft/save  {name} → HOW-65: save the draft as a local graph with provenance (201 / 409 name taken or already saved / 422 the gate refused)
+ *   POST /api/runs/:id/draft/save  {name} → HOW-65: save the draft as a local graph with provenance (201 / 409 name taken, already saved or discarded / 422 the gate refused)
+ *   POST /api/runs/:id/draft/redraft {change} → HOW-66: launch a draft-graph run with --parent this one and this draft as its base (202 {id} / 400 no change / 409 not ready or discarded / 422 too large)
+ *   POST /api/runs/:id/draft/discard → HOW-66: append `draft-discarded` (200 {ok, appended}; idempotent / 409 not ready or saved)
  *   GET  /api/local-prompts/:id    HOW-22: the body of a prompt a builder graph owns
  *   GET  /api/attention            HOW-20: the needs-you inbox — every pending ask with its run, reason and wait
  *   (system-map 1a: the same engine/control.ts functions as the CLI verbs; 400 on a malformed
@@ -66,12 +68,12 @@ import { inboxItems } from "../engine/attention-inbox";
 import { graphCatalog, GRAPHS } from "../graphs/index";
 import { catalogOf, loadRegistry, type Registry } from "../graphs/registry";
 import { deleteLocalGraph, LOCAL_NAME, loadLocalGraph, loadLocalGraphs, localGraphPath, readLocalSource, saveLocalSource } from "../graphs/local";
-import { builderProvenance, builtinTaken, DRAFT_STATUS, readRunDraft, saveRunDraft } from "./draft";
+import { builderProvenance, builtinTaken, discardRunDraft, DRAFT_STATUS, readRunDraft, redraftRunDraft, saveRunDraft } from "./draft";
 import { typecheckLocalGraph } from "../graphs/typecheck";
 import { newGraph, type GraphKind } from "../cli/new-graph";
 import { readLocalPrompt, saveBuilderGraph } from "../graphs/builder";
 import { parseGraphSpec, specOf, SPEC_PROMPT_ID, type DraftBody } from "../core/graph-spec";
-import { ensureHowdahHome, howdahHome, loadConfig, saveConfig, typesafeKeyState } from "../config/config";
+import { ensureHowdahHome, howdahHome, loadConfig, saveConfig, typesafeKeyState, workspaceNameFor } from "../config/config";
 import { listGithubRepos, registerGithubRepo } from "../config/github";
 import { loadTuning, saveTuning, pruneTuning } from "../config/tuning";
 import {
@@ -92,7 +94,7 @@ import { acceptProposal, listProposals, proposalsDir, rejectProposal, viewPropos
 import { evidenceSource, loadFeedback } from "../reviser/revise";
 import { isPartialId } from "../core/template";
 import { normalizeRunName } from "../core/run-name";
-import { launchArgs } from "../core/launch-args";
+import { launchArgs, type LaunchRequest } from "../core/launch-args";
 
 /** POST /api/runs body — what the Start-a-run form sends */
 export interface LaunchBody {
@@ -136,6 +138,11 @@ export interface ServerOpts {
    * interactive `claude auth login`, which a test run must never do to the machine running it.
    */
   openTerminal?: (argv: string[]) => void;
+  /**
+   * HOW-66: starts a run detached with this `cli/main.ts` argv (default: `bun cli/main.ts …`,
+   * unref'd). Tests inject a recorder: the real one starts an engine that may spend tokens.
+   */
+  spawnRun?: (argv: string[]) => void;
   /** HOW-49: how often a watched live step's worktree is probed; small in tests */
   liveGitIntervalMs?: number;
 }
@@ -284,6 +291,17 @@ export function createHowdahServer(opts: ServerOpts) {
   const launchTerminal =
     opts.openTerminal ??
     ((argv: string[]) => Bun.spawn(argv, { stdout: "ignore", stderr: "ignore" }).unref());
+  /**
+   * HOW-66: the ONE way the viewer starts a run — New run and a draft's Ask for changes both
+   * come through here, so the argv is launchArgs' in both and the spawn is the same.
+   */
+  const startRun = (request: LaunchRequest, runId: string) => {
+    const args = launchArgs(request, runId);
+    if (opts.spawnRun) opts.spawnRun(args);
+    else Bun.spawn(["bun", join(import.meta.dir, "..", "cli", "main.ts"), ...args], {
+      stdout: "ignore", stderr: "ignore", env: { ...process.env },
+    }).unref();
+  };
   /** explicit operator resume: start a runner unless one is live */
   const spawnResume = (id: string) => {
     if (!runnerAlive(join(opts.runsDir, id))) launchResume(id);
@@ -760,10 +778,7 @@ export function createHowdahServer(opts: ServerOpts) {
         const harness = body.overrides?.harness;
         if (harness !== undefined && !isHarness(harness))
           return json({ error: `unknown harness "${harness}" — have: ${harnessNames().join(", ")}` }, 400);
-        const args = launchArgs({ ...body, graph: body.graph, name: named.name }, runId);
-        Bun.spawn(["bun", join(import.meta.dir, "..", "cli", "main.ts"), ...args], {
-          stdout: "ignore", stderr: "ignore", env: { ...process.env },
-        }).unref();
+        startRun({ ...body, graph: body.graph, name: named.name }, runId);
         return json({ id: runId }, 202);
       }
 
@@ -834,7 +849,7 @@ export function createHowdahServer(opts: ServerOpts) {
        * the status — 404 for no such draft, 409 while drafting or after a refusal — and every
        * non-ready answer carries the reason the page shows.
        */
-      const dm = url.pathname.match(/^\/api\/runs\/([^/]+)\/draft(\/save)?$/);
+      const dm = url.pathname.match(/^\/api\/runs\/([^/]+)\/draft(?:\/(save|redraft|discard))?$/);
       if (dm) {
         const rid = decodeURIComponent(dm[1]!);
         if (rid.includes("/") || rid.startsWith(".")) return json({ state: "unknown", reason: "not a run id" }, 400);
@@ -844,8 +859,23 @@ export function createHowdahServer(opts: ServerOpts) {
           return json(draft, DRAFT_STATUS[draft.state]);
         }
         if (req.method !== "POST") return json({ error: "method not allowed" }, 405);
+        if (dm[2] === "discard") {
+          const r = discardRunDraft({ runsDir: opts.runsDir, runId: rid, draft: await runDraft(rid) });
+          return r.ok ? json({ ok: true, appended: r.appended }) : json({ error: r.error }, r.status);
+        }
         const body = await objectBody(req);
         if (!body) return json({ error: "expected a JSON object" }, 400);
+        if (dm[2] === "redraft") {
+          const config = loadConfig(home);
+          const r = redraftRunDraft({
+            runsDir: opts.runsDir, runId: rid, draft: await runDraft(rid), change: body.change,
+            workspaceFor: (cwd) => workspaceNameFor(config, cwd),
+          });
+          if (!r.ok) return json({ error: r.error }, r.status);
+          const childId = `${r.request.graph}-${Date.now().toString(36)}`;
+          startRun(r.request, childId);
+          return json({ id: childId }, 202);
+        }
         const saved = await saveRunDraft({ home, root, draft: await runDraft(rid), name: body.name, builtins: Object.keys(GRAPHS) });
         return saved.ok ? json({ ok: true, name: saved.name }, 201) : json({ error: saved.error }, saved.status);
       }

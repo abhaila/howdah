@@ -19,7 +19,7 @@ import { predicateLabel } from "../../../core/graph-spec";
 import type { ReadyDraft } from "../../draft";
 import { GraphDag, type GraphShapeDto } from "../graph-dag";
 import {
-  BaseChangedBanner, DraftList, DraftName, DraftReceipt, DraftSummary, draftBasis, useDraftSave, useRunDraft,
+  BaseChangedBanner, DiscardedReceipt, DraftList, DraftName, DraftReceipt, DraftSummary, draftBasis, useDraftSave, useRunDraft,
 } from "../run/draft";
 import { Button } from "@/components/ui/button";
 import { navigate } from "@/lib/nav";
@@ -104,12 +104,12 @@ function ReadyReview({ runId, draft, onSaved }: { runId: string; draft: ReadyDra
           <h1>Review the draft</h1>
           <p className="draft-basis">{draftBasis(draft)} · from run <a href={`/run/${encodeURIComponent(runId)}`}>{runId}</a></p>
         </div>
-        {draft.saved ? <DraftReceipt saved={draft.saved} /> : <DraftName ref={s.nameRef} value={s.name} onChange={s.setName} />}
+        {draft.saved ? <DraftReceipt saved={draft.saved} /> : draft.discarded ? <DiscardedReceipt /> : <DraftName ref={s.nameRef} value={s.name} onChange={s.setName} />}
         <DraftSummary draft={draft} />
         <BaseChangedBanner draft={draft} />
         {draft.draft.notes && <p className="draft-note">{draft.draft.notes}</p>}
         <div className="actions">
-          {!draft.saved && <Button onClick={s.save} disabled={s.busy}>{s.busy ? "Saving…" : "Save"}</Button>}
+          {!draft.saved && !draft.discarded && <Button onClick={s.save} disabled={s.busy}>{s.busy ? "Saving…" : "Save"}</Button>}
           <Button variant="outline" onClick={() => navigate(`/run/${encodeURIComponent(runId)}`)}>Back to the chat</Button>
           <Button variant="outline" onClick={() => navigate(draft.saved ? `/graphs/${draft.saved.name}/build` : `/graphs/new?fromRun=${encodeURIComponent(runId)}`)}>
             Open on canvas
