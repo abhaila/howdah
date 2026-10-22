@@ -102,6 +102,9 @@ Unchanged from the approved brief and deliberately minimal.
 - `--ease-out-strong: cubic-bezier(0.19, 1, 0.22, 1)`, durations 120/200/350ms.
 - Exactly one authored moment: the needs-you entrance (card scale 0.98→1 with a fade, one
   amber pulse, then steady) plus the favicon trunk-raise and the chime.
+- Ready for you (HOW-67): a finished, unsaved, undiscarded draft is listed under Needs you in
+  a quiet tier — neutral glyph, muted count, no amber, no pulse, no chime, no favicon raise.
+  Amber is reserved for a run that cannot proceed without you; a draft can wait.
 - The load splash is silent, and belongs to an actual load, never to navigation.
 - Everything else is a crossfade. `prefers-reduced-motion` keeps opacity and colour, drops
   travel — the tokens already collapse to 0ms.

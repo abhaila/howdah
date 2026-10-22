@@ -26,6 +26,7 @@
  *   POST /api/runs/:id/draft/discard → HOW-66: append `draft-discarded` (200 {ok, appended}; idempotent / 409 not ready or saved)
  *   GET  /api/local-prompts/:id    HOW-22: the body of a prompt a builder graph owns
  *   GET  /api/attention            HOW-20: the needs-you inbox — every pending ask with its run, reason and wait
+ *   GET  /api/ready                HOW-67: the quiet "Ready for you" tier — finished drafts neither saved nor discarded
  *   (system-map 1a: the same engine/control.ts functions as the CLI verbs; 400 on a malformed
  *   body, 409 {error, code} on a refusal)
  *
@@ -68,7 +69,7 @@ import { inboxItems } from "../engine/attention-inbox";
 import { graphCatalog, GRAPHS } from "../graphs/index";
 import { catalogOf, loadRegistry, type Registry } from "../graphs/registry";
 import { deleteLocalGraph, LOCAL_NAME, loadLocalGraph, loadLocalGraphs, localGraphPath, readLocalSource, saveLocalSource } from "../graphs/local";
-import { builderProvenance, builtinTaken, discardRunDraft, DRAFT_STATUS, readRunDraft, redraftRunDraft, saveRunDraft } from "./draft";
+import { builderProvenance, builtinTaken, discardRunDraft, DRAFT_STATUS, readRunDraft, readyDrafts, redraftRunDraft, saveRunDraft } from "./draft";
 import { typecheckLocalGraph } from "../graphs/typecheck";
 import { newGraph, type GraphKind } from "../cli/new-graph";
 import { readLocalPrompt, saveBuilderGraph } from "../graphs/builder";
@@ -329,10 +330,13 @@ export function createHowdahServer(opts: ServerOpts) {
    */
   const runDraft = async (rid: string) => {
     const reg = await registry();
-    const locals = opts.graphs
-      ? (await loadLocalGraphs(home, root)).graphs
-      : Object.fromEntries(Object.entries(reg.graphs).filter(([n]) => reg.source[n] === "local"));
-    return readRunDraft({ runsDir: opts.runsDir, runId: rid, home, root, graphs: reg.graphs, locals });
+    return readRunDraft({ runsDir: opts.runsDir, runId: rid, home, root, graphs: reg.graphs, locals: await localGraphs(reg) });
+  };
+  /** the operator's own graphs — who saved which draft (`savedAs`), for the card and HOW-67's tier alike */
+  const localGraphs = async (reg?: Registry) => {
+    if (opts.graphs) return (await loadLocalGraphs(home, root)).graphs;
+    const r = reg ?? (await registry());
+    return Object.fromEntries(Object.entries(r.graphs).filter(([n]) => r.source[n] === "local"));
   };
   return Bun.serve({
     port: opts.port ?? 4711,
@@ -590,6 +594,14 @@ export function createHowdahServer(opts: ServerOpts) {
        */
       if (url.pathname === "/api/attention" && req.method === "GET")
         return json(inboxItems({ runsDir: opts.runsDir, attentionDir: opts.attentionDir }));
+      /**
+       * HOW-67: the QUIET tier — finished drafts nobody has saved or discarded. A separate route
+       * on purpose: /api/attention is the list the watchdog rings by, and keeping this out of it
+       * is what proves a draft waiting to be looked at can never ring, raise the favicon or go
+       * amber. Derived per request, so a Save in another tab clears it on the next poll.
+       */
+      if (url.pathname === "/api/ready" && req.method === "GET")
+        return json(readyDrafts({ runsDir: opts.runsDir, locals: await localGraphs() }));
 
       if (url.pathname === "/api/proposals") return json(listProposals(proposalsDir(root), promptStore, root));
       const prm = url.pathname.match(/^\/api\/proposals\/([^/]+)\/(accept|reject|redraft)$/);
