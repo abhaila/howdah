@@ -42,7 +42,7 @@ import { isLaunchBuiltin, launchBuiltinExecutor, type LaunchBuiltinOpts } from "
 import { isVerifyBuiltin, verifyBuiltinExecutor, type VerifyBuiltinOpts } from "./verify";
 import { evidenceBuiltinExecutor, isEvidenceBuiltin, type EvidenceBuiltinOpts } from "./evidence";
 import { runShell } from "./shell";
-import { remoteDefaultBranch, revParse, sh } from "./git";
+import { ForgeUnreachableError, remoteDefaultBranch, revParse, sh } from "./git";
 import { awaitBuiltinExecutor, isAwaitBuiltin, type AwaitBuiltinOpts } from "./await";
 import { isRestackBuiltin, restackBuiltinExecutor, type RestackBuiltinOpts } from "./restack";
 import { graphsCatalogBuiltinExecutor, isGraphsCatalogBuiltin, type GraphsCatalogBuiltinOpts } from "./catalog";
@@ -332,7 +332,7 @@ export const ghPrProbe = (cwd: string, prRef: string): { state: PrState; url: st
   const r = sh(["gh", "pr", "view", prRef, "--json", "state,url,mergeable,reviewDecision,statusCheckRollup"], cwd);
   if (r.code !== 0) {
     if (/no pull requests? found/i.test(r.stderr + r.stdout)) return null;
-    throw new Error(`forge unreachable: ${r.stderr.trim().slice(0, 200) || "gh failed"}`);
+    throw new ForgeUnreachableError(r.stderr.trim().slice(0, 200) || "gh failed");
   }
   const j = JSON.parse(r.stdout) as { state: string; url: string; mergeable?: string; reviewDecision?: string; statusCheckRollup?: CheckRow[] };
   const failedChecks = requiredChecksFailed(cwd, j.url) ?? checksFailed(j.statusCheckRollup ?? []);

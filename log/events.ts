@@ -285,6 +285,21 @@ export type RunEvent =
     }
   | {
       /**
+       * HOW-69: a read-only forge probe (`probe:pr`) could not reach the forge, and the ENGINE
+       * retried the node itself after `delay_ms` instead of parking — a network blip is not a
+       * question for a human. `retry` of `budget` is how far into the bounded backoff this is;
+       * `reason` is the failure verbatim. Once the budget is spent the node parks as before.
+       */
+      type: "forge-retried";
+      node: string;
+      visit: number;
+      retry: number;
+      budget: number;
+      delay_ms: number;
+      reason: string;
+    }
+  | {
+      /**
        * HOW-38: the agent has called one tool with identical arguments `count` times in a row
        * (`failing` of them failed, consecutively) — logged once per streak at the warn
        * threshold. A fact, not a park: the turn carries on, and `reminded` says whether the

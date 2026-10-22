@@ -328,8 +328,13 @@ interface AskContext {
   requires: string | undefined;
 }
 
-/** what an ask resolves to: accepted, or refused naming the verb that CAN move the run */
-type Rule = (ask: AskContext) => { accept: true } | { accept: false; message: string };
+/**
+ * What an ask resolves to: accepted, or refused naming the verb that CAN move the run.
+ * HOW-69: `retry` marks a refusal whose remedy is a plain resume of the parked step ("fix the
+ * cause, then resume"), so the viewer can offer that action in place of a reply box it knows
+ * will be refused. It is set only by the rules whose own message says `resume`.
+ */
+type Rule = (ask: AskContext) => { accept: true } | { accept: false; message: string; retry?: true };
 
 const jumpVerb = (run: string) => `\`jump ${run} <node> <msg>\``;
 
@@ -345,7 +350,7 @@ const retryWithReply: Rule = ({ node, run, kind, retryOverBudget }) => {
       message: `the run's graph (or its node "${node}") is not registered in graphs/index.ts, so the run cannot move until it is`,
     };
   if (kind !== "agent")
-    return { accept: false, message: `"${node}" is a ${kind} node, so there is no prompt to carry it; fix the cause, then \`resume ${run}\`` };
+    return { accept: false, retry: true, message: `"${node}" is a ${kind} node, so there is no prompt to carry it; fix the cause, then \`resume ${run}\`` };
   if (retryOverBudget !== undefined)
     return { accept: false, message: `the retry would exceed maxVisits (${retryOverBudget}); use ${jumpVerb(run)}` };
   return { accept: true };
@@ -361,7 +366,7 @@ const retryWithReply: Rule = ({ node, run, kind, retryOverBudget }) => {
 const loginThenRetry: Rule = (ask) => {
   const r = retryWithReply(ask);
   if (r.accept) return r;
-  return { accept: false, message: `log the harness in first, then ${r.message}` };
+  return { ...r, message: `log the harness in first, then ${r.message}` };
 };
 
 const useJump: Rule = ({ run }) => ({
@@ -383,6 +388,7 @@ export const REPLY_RULES: Readonly<Record<ParkCode, Rule>> = {
   // HOW-41: words cannot give a harness a tool flag — change the node's harness or tools, then resume
   "tools-unsupported": ({ run }) => ({
     accept: false,
+    retry: true,
     message: `this harness cannot restrict tools; change the node's harness or its tools in tuning, then \`resume ${run}\``,
   }),
   // HOW-48: the agent stopped where the operator asked; a reply (or resume) retries the step,
@@ -450,6 +456,41 @@ export interface ReplyInput {
   answers?: unknown;
 }
 
+/**
+ * HOW-69: may a reply answer this run's standing ask? `null` = nothing is awaiting one.
+ * A refusal carries the exact text the reply route answers 409 with, so the viewer (which
+ * reads this through web/derive.ts, computed with the SAME graph registry the route uses)
+ * never offers a reply box the route will refuse, and never words the refusal differently.
+ */
+export type ReplyVerdict =
+  | { accept: true }
+  | { accept: false; message: string; code: ParkCode; retry: boolean };
+
+export function replyVerdict(
+  events: LoggedEvent[],
+  run: string,
+  graphs: Record<string, Graph<any>>,
+): ReplyVerdict | null {
+  return verdictOf(replayState(events), run, graphs);
+}
+
+function verdictOf(replayed: ReplayedState, run: string, graphs: Record<string, Graph<any>>): ReplyVerdict | null {
+  // replay's `parked` already drops asks a jump superseded; a finished run awaits nothing
+  const ask = replayed.finished ? null : replayed.parked;
+  if (!ask) return null;
+  if (ask.code === undefined) return { accept: true };
+  const graph = replayed.started ? graphs[replayed.started.graph] : undefined;
+  const def = graph?.def.nodes[ask.node];
+  // the engine's own check (run.ts loop): visit - floor > maxVisits parks before node-started
+  const maxVisits = def && "maxVisits" in def ? def.maxVisits : undefined;
+  const retryVisit = (replayed.visits[ask.node] ?? 0) + 1;
+  const overBudget = maxVisits !== undefined && retryVisit - (replayed.floors[ask.node] ?? 0) > maxVisits;
+  const requires = def?.kind === "agent" ? def.requires?.approvalOf : undefined;
+  const verdict = REPLY_RULES[ask.code]({ node: ask.node, run, kind: def?.kind, retryOverBudget: overBudget ? maxVisits : undefined, requires });
+  if (verdict.accept) return verdict;
+  return { accept: false, message: `reply refused (${ask.code}): ${verdict.message}`, code: ask.code, retry: verdict.retry === true };
+}
+
 /** The pure decision: the resolution to append, or why not. Runs inside appendIf. */
 export function decideReply(
   events: LoggedEvent[],
@@ -463,18 +504,9 @@ export function decideReply(
   const ask = replayed.finished ? null : replayed.parked;
   if (!ask) return { event: null, result: { ok: false, message: NOTHING_AWAITING } };
 
-  if (ask.code !== undefined) {
-    const graph = replayed.started ? graphs[replayed.started.graph] : undefined;
-    const def = graph?.def.nodes[ask.node];
-    // the engine's own check (run.ts loop): visit - floor > maxVisits parks before node-started
-    const maxVisits = def && "maxVisits" in def ? def.maxVisits : undefined;
-    const retryVisit = (replayed.visits[ask.node] ?? 0) + 1;
-    const overBudget = maxVisits !== undefined && retryVisit - (replayed.floors[ask.node] ?? 0) > maxVisits;
-    const requires = def?.kind === "agent" ? def.requires?.approvalOf : undefined;
-    const verdict = REPLY_RULES[ask.code]({ node: ask.node, run, kind: def?.kind, retryOverBudget: overBudget ? maxVisits : undefined, requires });
-    if (!verdict.accept)
-      return { event: null, result: { ok: false, message: `reply refused (${ask.code}): ${verdict.message}`, code: ask.code } };
-  }
+  const verdict = verdictOf(replayed, run, graphs);
+  if (verdict && !verdict.accept)
+    return { event: null, result: { ok: false, message: verdict.message, code: verdict.code } };
   // HOW-25: a question park takes a structured answer. It is validated against the very
   // questions this ask raised, so "pick an option that was never offered" is a refusal here
   // rather than a surprise inside the executor. `reply` is then written as the same answer in

@@ -184,6 +184,9 @@ main { flex: 1; min-width: 0; min-height: 0; overflow: hidden; display: flex; fl
   color: var(--fg-faint); margin-bottom: 5px;
 }
 .send-state { color: var(--fg-muted); font-size: var(--type-sm); }
+/* HOW-69: the reply route's own refusal, quoted on a park a reply cannot answer — kept whole
+   (it names a command to run), so it wraps rather than truncates */
+.no-reply-why { margin-top: 6px; white-space: pre-wrap; overflow-wrap: anywhere; }
 
 /* rail sections — one continuous inspector, not cards. Direct children only (HOW-58): the
    Acceptance card and the progress panel are <section>s of their own nested in a rail section,

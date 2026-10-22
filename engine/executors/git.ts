@@ -5,6 +5,20 @@
  * create (where a new branch starts) and by `git:restack` (what a merged base is replaced by).
  */
 
+/**
+ * HOW-69: the forge (gh) could not be reached — a network timeout, a 5xx, a dropped
+ * connection. Its own TYPE, not a message to grep, because the engine retries exactly this
+ * failure on a read-only probe and nothing else: "no PR" is a null answer, never this, so the
+ * two outcomes reconcile.ts keeps distinct stay distinct here too. The message is unchanged
+ * ("forge unreachable: …"), so every park and log line reads as before.
+ */
+export class ForgeUnreachableError extends Error {
+  constructor(detail: string) {
+    super(`forge unreachable: ${detail}`);
+    this.name = "ForgeUnreachableError";
+  }
+}
+
 export function sh(cmd: string[], cwd?: string, timeoutMs?: number): { code: number; stdout: string; stderr: string } {
   const r = Bun.spawnSync(cmd, {
     cwd, stdout: "pipe", stderr: "pipe",

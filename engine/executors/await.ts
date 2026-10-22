@@ -41,6 +41,7 @@ import { replayState } from "../replay";
 import { declaredWrites } from "./map";
 import { readWorktreeRecord } from "./worktree-record";
 import { runShell } from "./shell";
+import { ForgeUnreachableError } from "./git";
 import {
   AWAIT_BUILTIN, AWAIT_PRODUCES, AWAIT_PROBE_PRODUCES, AWAIT_READS, DEPS_KEY,
   parseDeps, stackBaseDep, type DepRef,
@@ -74,7 +75,7 @@ export const ghPrView: PrView = (cwd, ref) => {
   const err = new TextDecoder().decode(r.stderr);
   if (r.exitCode !== 0) {
     if (/no pull requests? found/i.test(err + out)) return null;
-    throw new Error(`forge unreachable: ${err.trim().slice(0, 200) || "gh failed"}`);
+    throw new ForgeUnreachableError(err.trim().slice(0, 200) || "gh failed");
   }
   const j = JSON.parse(out) as { state: string; url: string; headRefName: string; headRefOid: string; baseRefName?: string; reviewDecision?: string };
   const state = j.state === "MERGED" || j.state === "CLOSED" ? j.state : "OPEN";

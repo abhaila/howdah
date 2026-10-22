@@ -83,6 +83,7 @@ import { pinnableText, promptReader } from "../prompts/pin";
 import { currentProposal, findDecision, isApproved, nextSeq, pendingRedesigns, readBase } from "./slice-decision";
 import { claimRunner, releaseRunner, type RunnerHolder } from "./control";
 import { RATE_LIMIT_TEXT } from "./executors/harness-failure";
+import { ForgeUnreachableError } from "./executors/git";
 import { deriveHandoff } from "./handoff";
 
 /** thread chunks the engine writes itself sort after an attempt's own output */
@@ -184,6 +185,8 @@ export interface EngineOpts {
   harnesses?: { default?: string; fallbackChain?: string[] };
   /** operator control, read at every node boundary — pause/abort land between attempts */
   control?: () => "pause" | "abort" | null;
+  /** HOW-69: how the forge-read retry waits out its backoff — injectable so tests do not sleep */
+  sleep?: (ms: number) => Promise<void>;
   /**
    * runs with the loop's result while the runner lock is STILL held (system-map 1a review) —
    * where the CLI raises a park's durable attention, so a runner that starts right after
@@ -347,6 +350,36 @@ export function contextRetriesUsed(events: readonly LoggedEvent[], node: string)
     else if (e.type === "operator-jump") used = 0;
   }
   return used;
+}
+
+/**
+ * HOW-69: the command built-ins that only READ the forge, and so may be retried when it cannot
+ * be reached. `runs:await` is not here because it never throws for that — it already treats an
+ * unreachable forge as "not yet" and waits (engine/executors/await.ts).
+ */
+const FORGE_READ_BUILTINS: ReadonlySet<string> = new Set(["probe:pr"]);
+/** HOW-69: the waits before each automatic forge-read retry — 30s, 2m, 5m, then park */
+export const FORGE_RETRY_BACKOFF_MS: readonly number[] = [30_000, 120_000, 300_000];
+
+/**
+ * HOW-69: automatic forge-read retries of `node` in the current streak — `forge-retried`
+ * events since its last SUCCEEDED visit, the operator's last jump, or its last park (a park
+ * the operator resumed starts a fresh budget). Derived from the log, like contextRetriesUsed.
+ */
+export function forgeRetriesUsed(events: readonly LoggedEvent[], node: string): number {
+  let used = 0;
+  for (const e of events) {
+    if (e.type === "forge-retried" && e.node === node) used++;
+    else if (e.type === "node-finished" && e.node === node && e.status === "succeeded") used = 0;
+    else if (e.type === "attention-raised" && e.node === node) used = 0;
+    else if (e.type === "operator-jump") used = 0;
+  }
+  return used;
+}
+
+/** "30s", "2m" — the forge-retry note's wording */
+function formatDelay(ms: number): string {
+  return ms % 60_000 === 0 ? `${ms / 60_000}m` : `${Math.round(ms / 1000)}s`;
 }
 
 /** A prompt file's front-matter version (1 when absent — the pre-versioning default). */
@@ -593,6 +626,11 @@ export class Engine {
         // the reason must be readable in the thread, not only in the (resolvable) ask
         this.log.append({ type: "chunk", node: current, visit, turn: 1, index: ENGINE_FAILURE_INDEX, kind: "text", content: `\n[attempt failed: ${message}]` });
         this.log.append({ type: "node-finished", node: current, visit, status: "failed", writes: {} });
+        if (def.kind === "command" && FORGE_READ_BUILTINS.has(def.run.trim()) && err instanceof ForgeUnreachableError) {
+          const decision = await this.retryForgeRead(current, visit, message);
+          if (decision.continue) continue;
+          return decision.state;
+        }
         return this.park(current, visit, "executor-threw", `executor threw: ${message}`);
       }
 
@@ -759,6 +797,36 @@ export class Engine {
       type: "chunk", node, visit, turn: 1, index: ENGINE_NOTE_INDEX + 2, kind: "text",
       content: `\n[context window filled — continuing automatically (${used + 1} of ${budget}) on a fresh visit, briefed with what this one had done]`,
     });
+    return { continue: true };
+  }
+
+  // ---- an unreachable forge on a read-only probe: back off and retry (HOW-69) --------
+
+  /**
+   * `probe:pr` threw "forge unreachable" (a GraphQL timeout, in the run that filed HOW-69).
+   * That parked, and the operator's only move was to press resume: a network blip asked a human
+   * a question with one answer. The probe only READS, so re-running it is free of side effects;
+   * the engine now retries it after 30s, 2m and 5m, logging `forge-retried` each time, and
+   * parks (exactly as before, saying how many times it tried) once that is spent, or at once if
+   * the operator has asked to pause or abort. Each retry is a new visit, like any re-entry.
+   * Shaped like continueAfterExhaustion (HOW-43): the budget is counted from the log, so a
+   * runner that dies mid-sleep leaves a failed, unparked visit that resume() simply re-attempts.
+   */
+  private async retryForgeRead(node: string, visit: number, message: string): Promise<{ continue: true } | { continue: false; state: RunState }> {
+    const reason = `executor threw: ${message}`;
+    const park = (why = reason) => ({ continue: false as const, state: this.park(node, visit, "executor-threw", why) });
+    const command = this.opts.control?.() ?? null;
+    if (command === "pause" || command === "abort") return park();
+    const budget = FORGE_RETRY_BACKOFF_MS.length;
+    const used = forgeRetriesUsed(this.log.read(), node);
+    const delay = FORGE_RETRY_BACKOFF_MS[used];
+    if (delay === undefined) return park(`${reason} — forge unreachable ${used + 1} times in a row`);
+    this.log.append({ type: "forge-retried", node, visit, retry: used + 1, budget, delay_ms: delay, reason: message });
+    this.log.append({
+      type: "chunk", node, visit, turn: 1, index: ENGINE_NOTE_INDEX + 3, kind: "text",
+      content: `\n[forge unreachable — retrying automatically in ${formatDelay(delay)} (${used + 1} of ${budget})]`,
+    });
+    await (this.opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms))))(delay);
     return { continue: true };
   }
 
