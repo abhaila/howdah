@@ -121,6 +121,16 @@ describe("forge-unreachable retry on a read-only probe (HOW-69)", () => {
     const { e, slept } = engine(dir, probe({ 1: "unreachable" }), {}, agentOk, "gh pr view");
     expect(await e.start({ goal: "g" })).toMatchObject({ state: "parked", node: "probe" });
     expect(slept).toEqual([]);
+    expect(retried(events(dir))).toEqual([]);
+  });
+
+  test("the retry keys on the error's TYPE, not its words — a plain Error saying 'forge unreachable' parks", async () => {
+    const dir = tmp();
+    const plain: Executor = async () => { throw new Error(`forge unreachable: ${UNREACHABLE}`); };
+    const { e, slept } = engine(dir, plain);
+    expect(await e.start({ goal: "g" })).toMatchObject({ state: "parked", node: "probe", code: "executor-threw" });
+    expect(slept).toEqual([]);
+    expect(retried(events(dir))).toEqual([]);
   });
 
   test("an agent node's forge throw is never retried this way", async () => {
