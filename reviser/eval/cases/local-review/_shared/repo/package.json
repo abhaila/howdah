@@ -1,0 +1,6 @@
+{
+  "name": "howdah-eval-review",
+  "private": true,
+  "type": "module",
+  "scripts": { "test": "bun test" }
+}

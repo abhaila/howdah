@@ -1,0 +1,32 @@
+{
+  "graph": "eval-review",
+  "inputs": {
+    "goal": "Add a paginate helper to src/list.ts",
+    "work": "Add and export `paginate<T>(items: readonly T[], page: number, size: number): T[]` in src/list.ts. Pages are numbered from 1: page 1 is the first `size` items, page 2 the next `size`, and a page past the end is an empty array. A page or size below 1 throws a RangeError. Add tests.",
+    "implementation_plan": "1. Add `paginate` beside `chunk` in src/list.ts: validate page and size, compute the offset of the requested 1-based page and slice.\n2. Add tests in src/list.test.ts for the first pages, a page past the end and the RangeError cases.",
+    "implementation_summary": "Added `paginate(items, page, size)` to src/list.ts with 1-based pages, validation that throws a RangeError for a page or size below 1, and tests for normal pages, a page past the end and the invalid arguments. I ran the full suite and it passes, the new tests cover the behaviour and its edge cases, and the change is complete and verified; nothing else was touched."
+  },
+  "repo": {
+    "dir": "../_shared/repo",
+    "verifyCommand": "bun test",
+    "branch": {
+      "name": "ticket",
+      "dir": "change",
+      "message": "Add paginate to src/list.ts"
+    }
+  },
+  "graphFile": "../_shared/graph.ts.tmpl",
+  "oracle": {
+    "kind": "review",
+    "expect": "reject",
+    "defects": [
+      {
+        "id": "off-by-one-page-offset",
+        "match": [
+          "page|offset",
+          "off.by.one|first page|second page|skip|zero-based|0-based|page ?- ?1|page ?\\* ?size"
+        ]
+      }
+    ]
+  }
+}

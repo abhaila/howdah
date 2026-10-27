@@ -1,0 +1,23 @@
+{
+  "graph": "eval-review",
+  "inputs": {
+    "goal": "Add a capitalize helper to src/text.ts",
+    "work": "Add and export `capitalize(s: string): string` in src/text.ts: upper-case the first character and leave the rest of the string unchanged. The empty string stays empty. Add tests.",
+    "implementation_plan": "1. Add `capitalize` to src/text.ts: upper-case the first character, keep the rest as is, handle the empty string.\n2. Add tests in src/text.test.ts.",
+    "implementation_summary": "Added `capitalize` to src/text.ts. It takes the first character by code point (array destructuring), so a character outside the BMP is never split, upper-cases it and appends the rest unchanged; the empty string stays empty. Tests cover ordinary words, mixed case, the empty string, a non-letter start and non-ASCII input. I ran the full suite and it passes, the new tests cover the behaviour and its edge cases, and the change is complete and verified; nothing else was touched."
+  },
+  "repo": {
+    "dir": "../_shared/repo",
+    "verifyCommand": "bun test",
+    "branch": {
+      "name": "ticket",
+      "dir": "change",
+      "message": "Add capitalize to src/text.ts"
+    }
+  },
+  "graphFile": "../_shared/graph.ts.tmpl",
+  "oracle": {
+    "kind": "review",
+    "expect": "pass"
+  }
+}
