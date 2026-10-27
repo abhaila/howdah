@@ -49,7 +49,7 @@ in `css-contract.test.ts`'s scan list, for the same reason React Flow's sheet is
 
 ```bash
 bun install                      # required on a fresh clone (node_modules/ is gitignored)
-bun test                         # whole suite (~1900 tests, ~2 min) — bun:test, happy-dom preloaded via bunfig.toml
+bun test                         # whole suite (~2700 tests, ~10 min under load) — bun:test, happy-dom preloaded via bunfig.toml
 bun test engine/engine.test.ts   # one file
 bun test -t "resume"             # one test by name
 bun run check                    # tsc --noEmit + prompt-id codegen staleness gate
