@@ -1,0 +1,23 @@
+engine/executors/await.test.ts
+  s_17c3ac81247972::t_e742cb9c46492f 132
+  s_17c3ac81247972::t_c789786dcdfc66 127-131,133-135
+  s_17c3ac81247972::t_abbaa14849b3c3 300-309
+engine/executors/await.ts
+  s_17c3ac81247972::t_4425072a0ae335 192-202
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8d06659896f4e8ff79c67236b4149753412b4b37",
+  "prompts": {},
+  "sessions": {
+    "s_17c3ac81247972": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b2e51115-c89d-4e32-8df4-cc088277652c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "areeb.bhaila <areeb.bhaila@gmail.com>"
+    }
+  }
+}
