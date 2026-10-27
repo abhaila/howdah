@@ -189,7 +189,17 @@ export async function readDependency(
     return wait(`${status}; ${err instanceof Error ? err.message : String(err)}`);
   }
   const urls = prs.map((p) => p.url);
-  const primary = prs.find((p) => p.url === primaryAt || p.headRefName === primaryAt) ?? prs.at(-1) ?? null;
+  // The forge's head branch outranks the agent's word for which PR is the run's own: a publish
+  // agent once named a SIBLING slice's PR as its primary, and the probe then read that open PR
+  // as "the base moved" while the real base had merged and lost its branch — every restack
+  // threw. The worktree record is gone once a run finishes, so the branch is also derived the
+  // way engine/executors/worktree.ts names it.
+  const ownBranches = new Set([record?.branch, `howdah/${dep.run_id}`].filter((b): b is string => !!b));
+  const primary =
+    prs.find((p) => ownBranches.has(p.headRefName)) ??
+    prs.find((p) => p.url === primaryAt || p.headRefName === primaryAt) ??
+    prs.at(-1) ??
+    null;
   const head = primary
     ? { branch: primary.headRefName, sha: primary.headRefOid }
     : record?.branch ? { branch: record.branch, sha: "" } : undefined;

@@ -1,0 +1,6 @@
+allowBuilds:
+  '@tree-sitter-grammars/tree-sitter-kotlin': set this to true or false
+  bun: set this to true or false
+  tree-sitter-java: set this to true or false
+  tree-sitter-javascript: set this to true or false
+  tree-sitter-typescript: set this to true or false

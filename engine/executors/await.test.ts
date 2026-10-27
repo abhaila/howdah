@@ -124,6 +124,15 @@ describe("runs:await — every dependency state", () => {
     expect(writes).toMatchObject({ "deps.base": "fe-1-part-2", "deps.base_tip": "2".repeat(40), "deps.prs": [lower.url, tip.url] });
   });
 
+  test("a sibling's PR named as primary loses to the dependency's OWN branch PR, even with no worktree record left", async () => {
+    const h = home();
+    const own = pr({ url: PR1, headRefName: "howdah/plan-1--fe-1", state: "MERGED", headRefOid: "1".repeat(40) });
+    const sibling = pr({ url: "https://github.com/acme/web/pull/7", headRefName: "howdah/plan-1--fe-3", headRefOid: "7".repeat(40) });
+    h.run(`${PARENT}--fe-1`, [started(), ...published({ pr_urls: [own.url, sibling.url], primary_pr_url: sibling.url })]);
+    const { writes } = await awaitAs(h, [dep("fe-1", "published")], { prView: forge(own, sibling) });
+    expect(writes).toMatchObject({ "deps.ready": true, "deps.base": "howdah/plan-1--fe-1", "deps.base_tip": "1".repeat(40) });
+  });
+
   test("G7: a prose summary with no link is probed by the dependency's worktree branch", async () => {
     const h = home();
     h.run(`${PARENT}--fe-1`, [started(), ...published("published, see the branch")], { branch: "howdah/plan-1--fe-1" });
@@ -286,6 +295,16 @@ describe("runs:await probe mode — did the base move or merge?", () => {
 
   test("merged → restack, approved or not (the merge is what changes what lands)", async () => {
     expect((await probe(setup(pr({ state: "MERGED", headRefOid: "b".repeat(40) }), [], { approved: true }))).writes).toEqual({ "deps.base_moved": false, "deps.base_merged": true, "deps.restack": true });
+  });
+
+  test("a base that names a sibling's open PR as primary still reads as MERGED by its own branch's PR", async () => {
+    const h = home();
+    const sibling = pr({ url: "https://github.com/acme/web/pull/7", headRefName: "howdah/plan-1--fe-3", headRefOid: "7".repeat(40) });
+    h.run(`${PARENT}--fe-1`, [started(), ...published({ pr_urls: [PR1, sibling.url], primary_pr_url: sibling.url })]);
+    const self = h.run(`${PARENT}--fe-2`, [started({ graph: "implement-stacked" })], { branch: "howdah/plan-1--fe-2", base_sha: "a".repeat(40) });
+    const prView = forge(pr({ state: "MERGED", headRefOid: "b".repeat(40) }), sibling, pr({ url: OWN, headRefName: "howdah/plan-1--fe-2", approved: false }));
+    const { writes } = await awaitAs(h, [dep("fe-1", "published")], { prView, self, writes: PROBE_WRITES, reads: { "deps.base": "howdah/plan-1--fe-1" } });
+    expect(writes).toEqual({ "deps.base_moved": false, "deps.base_merged": true, "deps.restack": true });
   });
 
   test("after the merge was restacked away (deps.base is \"\") nothing is stacked any more", async () => {
