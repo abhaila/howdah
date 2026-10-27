@@ -13,7 +13,7 @@
  * added in one place and every pane gets it.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Send } from "lucide-react";
+import { RotateCcw, Send } from "lucide-react";
 import type { RunDetail } from "../../derive";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -460,9 +460,86 @@ export function EffectCard({
 }
 
 /**
+ * HOW-69 — a park a reply cannot answer. The operator saw a command node (`probe:pr`) park on
+ * "forge unreachable", drew the reply box, typed into it, and got back a refusal the server had
+ * known all along: a command node has no prompt to carry a reply. So whether the box is drawn
+ * is now the READ MODEL's answer (`detail.ask_reply`, engine/control.ts replyVerdict — the very
+ * function the reply route runs), never a rule re-derived here. This card draws no composer:
+ * it says why, quoting the route's refusal VERBATIM, and offers the action that does work.
+ * Where the refusal's own remedy is "fix the cause, then resume" that is "Retry this step" —
+ * the same POST the run's Resume button makes — with AskCard's sending → delivered →
+ * collapsing moment and `id="needs-input"`, so a notification's deep link still lands here.
+ * Every other refusal (approval, routing, acceptance) already names its verb in the text.
+ */
+export function NoReplyCard({ runId, ask, detail, refusal, retry, onResolved }: {
+  runId: string;
+  ask: NonNullable<RunDetail["ask"]>;
+  detail: RunDetail;
+  refusal: string;
+  retry: boolean;
+  onResolved: () => void;
+}) {
+  const [state, setState] = useState<"idle" | "sending" | "delivered" | "failed">("idle");
+  const [error, setError] = useState<string | null>(null);
+  const { toast } = useToast();
+  const context = attentionContext(detail, ask);
+
+  const resume = useCallback(async () => {
+    setState("sending");
+    setError(null);
+    try {
+      const r = await fetch(`/api/runs/${runId}/resume`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+      if (!r.ok) {
+        const body = (await r.json().catch(() => ({}))) as { error?: string };
+        const why = body.error ?? `resume failed (${r.status})`;
+        setError(why);
+        setState("failed");
+        toast(why, "error");
+        return;
+      }
+      setState("delivered");
+      toast(`retrying ${ask.node}@${ask.visit}`);
+      setTimeout(onResolved, 420); // the collapse plays, then the thread takes over — the motion moment
+    } catch {
+      setError("the retry did not reach the runner");
+      setState("failed");
+      toast("the retry did not reach the runner", "error");
+    }
+  }, [runId, onResolved, toast, ask.node, ask.visit]);
+
+  return (
+    <div className={`ask-card ${state === "delivered" ? "collapsing" : ""}`} id="needs-input">
+      <h3>Needs you — {ask.node}@{ask.visit}</h3>
+      <div>{ask.reason}</div>
+      {context && <div className="field-error">{context}</div>}
+      <div className="field-hint">
+        {retry
+          ? "A reply can't help here — this step has no agent to read one. Fix the cause if there is one, then retry the step."
+          : "A reply can't move this run. Here is what can:"}
+      </div>
+      <div className="send-state no-reply-why">{refusal}</div>
+      {retry && (
+        <div className="actions">
+          <Button onClick={resume} disabled={state === "sending" || state === "delivered"}>
+            <RotateCcw />{state === "sending" ? "Retrying…" : state === "delivered" ? "Retry requested" : "Retry this step"}
+          </Button>
+          {state === "failed" && (
+            <span className="send-state">
+              failed — <Button variant="link" size="inline" onClick={resume}>retry</Button>
+            </span>
+          )}
+        </div>
+      )}
+      {state === "failed" && error && <div className="send-state" role="alert">{error}</div>}
+    </div>
+  );
+}
+
+/**
  * The park, drawn as whatever it actually is. The ONE place that maps an ask to its card:
- * a question gets the question card, an ambiguous side effect gets the effect card, and
- * everything else is answered in prose. Every pane that shows a standing ask calls this.
+ * a question gets the question card, an ambiguous side effect gets the effect card, a park a
+ * reply would be refused for gets the no-reply card (HOW-69), and everything else is answered
+ * in prose. Every pane that shows a standing ask calls this.
  */
 export function StandingAsk({ runId, detail, ask, onResolved }: {
   runId: string;
@@ -476,6 +553,11 @@ export function StandingAsk({ runId, detail, ask, onResolved }: {
     return <AskQuestionCard runId={runId} ask={ask} questions={detail.ask_questions} onResolved={onResolved} />;
   if (ask.code === "ambiguous-effect")
     return <EffectCard runId={runId} ask={ask} effects={detail.ambiguous_effects} onResolved={onResolved} />;
+  // HOW-69: the read model already knows whether the reply route would accept a reply to THIS
+  // park; where it would not, drawing the box only invites a refusal
+  const verdict = detail.ask_reply;
+  if (verdict && !verdict.accept && askIsCurrent(detail, ask))
+    return <NoReplyCard runId={runId} ask={ask} detail={detail} refusal={verdict.message} retry={verdict.retry} onResolved={onResolved} />;
   return <AskCard runId={runId} ask={ask} detail={detail} onResolved={onResolved} />;
 }
 

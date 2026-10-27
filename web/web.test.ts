@@ -287,6 +287,51 @@ describe("server API", () => {
   });
 
   /**
+   * HOW-69 — the card is drawn from `ask_reply`, so GET and POST /reply must agree: the
+   * operator saw a `probe:pr` park offer a reply box the route then refused. Both read the
+   * server's one registry, so the verdict and the 409 are the same sentence.
+   */
+  describe("ask_reply agrees with the reply route (HOW-69)", () => {
+    function seedPark(id: string, node: string, code: string, reason: string) {
+      const log = new EventLog(join(runsDir, id, "run.jsonl"), fixedClock());
+      log.append({ type: "run-started", graph: "implement-ticket", inputs: { goal: "g" }, pinned_prompts: {} });
+      log.append({ type: "node-started", node, visit: 257, attempt_id: `${node}#257` });
+      log.append({ type: "node-finished", node, visit: 257, status: "failed", writes: {} });
+      log.append({ type: "attention-raised", node, visit: 257, reason, code } as never);
+    }
+    const reply = (id: string) =>
+      fetch(url(`/api/runs/${id}/reply`), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: "hi" }) });
+
+    test("a command-node park: refused with Retry, and the 409 body IS ask_reply.message", async () => {
+      seedPark("how69-cmd", "delivery.probe_pr", "executor-threw", "executor threw: forge unreachable: Post https://api.github.com/graphql: operation timed out");
+      for (const path of ["/api/runs/how69-cmd", "/api/runs/how69-cmd/shell"]) {
+        const d = (await (await fetch(url(path))).json()) as any;
+        expect(d.ask_reply).toEqual({
+          accept: false, code: "executor-threw", retry: true,
+          message: 'reply refused (executor-threw): "delivery.probe_pr" is a command node, so there is no prompt to carry it; fix the cause, then `resume how69-cmd`',
+        });
+      }
+      const d = (await (await fetch(url("/api/runs/how69-cmd"))).json()) as any;
+      const r = await reply("how69-cmd");
+      expect(r.status).toBe(409);
+      expect(((await r.json()) as { error: string }).error).toBe(d.ask_reply.message);
+    });
+
+    test("an agent-node park: accepted on both sides", async () => {
+      seedPark("how69-agent", "delivery.fix_ci", "attempt-failed", "attempt failed");
+      const d = (await (await fetch(url("/api/runs/how69-agent"))).json()) as any;
+      expect(d.ask_reply).toEqual({ accept: true });
+      expect((await reply("how69-agent")).status).toBe(200);
+    });
+
+    test("no standing ask: ask_reply is null", async () => {
+      const log = new EventLog(join(runsDir, "how69-none", "run.jsonl"), fixedClock());
+      log.append({ type: "run-started", graph: "implement-ticket", inputs: { goal: "g" }, pinned_prompts: {} });
+      expect(((await (await fetch(url("/api/runs/how69-none"))).json()) as any).ask_reply).toBeNull();
+    });
+  });
+
+  /**
    * HOW-25 — answering a question over the API. The shape check lives in core/ask.ts and runs
    * under the log lock; what this pins is that the route SURFACES it correctly: a body that
    * does not fit the questions is the caller's 400, a park that cannot take a reply is still

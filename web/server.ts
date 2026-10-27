@@ -1235,6 +1235,7 @@ export function createHowdahServer(opts: ServerOpts) {
           try { declarations = graph ? graph.declarations() : {}; } catch { /* the rest of the view still renders */ }
           const derived = deriveDetail(id, view.shellEvents, declarations, {
             turns: view.turns, omitTurns: true, skipLogRows: true, snapshot: baseIndex(runDir, view.shellEvents), runnerAlive: alive,
+            graphs, // HOW-69: the reply route's registry, so the card and the route agree
           });
           derived.log_rows = view.notices;
           derived.summary = withRunnerLiveness(derived.summary, view.shellEvents, runDir);
@@ -1279,7 +1280,7 @@ export function createHowdahServer(opts: ServerOpts) {
       const runDir = join(opts.runsDir, id);
       // probed ONCE: the rail's "runner alive" and the turn states (HOW-46) must read the same answer
       const alive = runnerAlive(runDir);
-      const detail = deriveDetail(id, events, declarations, { snapshot: baseIndex(runDir, events), runnerAlive: alive });
+      const detail = deriveDetail(id, events, declarations, { snapshot: baseIndex(runDir, events), runnerAlive: alive, graphs });
       detail.summary = withRunnerLiveness(detail.summary, events, runDir);
       const target = effectiveCwd(path, detail.identity.cwd ?? undefined);
       const wt = readWorktreeRecord(runDir);

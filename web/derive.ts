@@ -24,6 +24,8 @@ import { evidenceSources, latestAcceptance, unmetCriteria, unprovable, waivedCri
 import type { LoggedEvent, RunOutcome } from "../log/events";
 import { currentProposal, decisionAnswers, decisionKind, findDecision } from "../engine/slice-decision";
 import { replayState } from "../engine/replay";
+import { replyVerdict, type ReplyVerdict } from "../engine/control";
+import type { Graph } from "../core/graph";
 import { softStopState, steerStates, type SoftStopState, type SteerState } from "../engine/steer-state";
 import type { Scope } from "../core/context";
 import { coalesce, outcomesByHash, type CoalescedTurn, type JoinedOutcome } from "../log/coalesce";
@@ -116,6 +118,14 @@ export interface RunDetail {
    * and a component should never be the thing parsing `unknown`.
    */
   ask_questions: UserQuestion[] | null;
+  /**
+   * HOW-69: would the reply route ACCEPT a reply to `ask`? engine/control.ts replyVerdict —
+   * the very function the route runs, over the same graph registry the server hands it — so
+   * the card never offers a reply box the route will refuse. A refusal carries the route's own
+   * 409 text, and `retry` when a plain resume of the parked step is the remedy. Null when
+   * nothing is awaiting, or when the caller passed no graphs (the composer stays, as before).
+   */
+  ask_reply: ReplyVerdict | null;
   pinned_prompts: Record<string, number>;
   /** latest reconciler observation (repo runs) — the GIT rail section */
   git: Extract<LoggedEvent, { type: "reconciled" }> | null;
@@ -470,6 +480,8 @@ export function deriveDetail(
     omitTurns?: boolean;
     /** the caller supplies log rows (the shell keeps only the few the chat notices) */
     skipLogRows?: boolean;
+    /** HOW-69: the registry the reply route resolves nodes in — decides `ask_reply` */
+    graphs?: Record<string, Graph<any>>;
   } = {},
 ): RunDetail {
   const summary = deriveSummary(id, events);
@@ -542,6 +554,7 @@ export function deriveDetail(
     allowance: [...allowanceByHarness.values()],
     ask,
     ask_questions: askQuestions(ask),
+    ask_reply: ask && opts.graphs ? replyVerdict(events, id, opts.graphs) : null,
     pinned_prompts: pinned,
     git,
     pull_requests: [...prs.values()],
@@ -698,6 +711,9 @@ export function deriveLogRows(events: LoggedEvent[]): LogRow[] {
       case "context-continued":
         return { ...base, ...at(e.node, e.visit), kind: "engine", depth: 0,
           summary: `context window filled · continued automatically (${e.retry} of ${e.budget})${e.head ? ` at ${e.head.slice(0, 12)}` : ""}` };
+      case "forge-retried":
+        return { ...base, ...at(e.node, e.visit), kind: "engine", depth: 0,
+          summary: `forge unreachable · retrying automatically in ${Math.round(e.delay_ms / 1000)}s (${e.retry} of ${e.budget}) · ${e.reason.slice(0, 160)}` };
       case "stuck-warning":
         return { ...base, ...at(e.node, e.visit), kind: "attention", depth: 1,
           summary: `stuck? ${e.tool_name} ×${e.count} with identical arguments${e.failing ? ` · failing ×${e.failing}` : ""}${e.reminded ? " · reminded" : ""} · ${e.input_summary.slice(0, 160)}` };

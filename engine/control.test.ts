@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { defineGraph } from "../core/graph";
 import { Engine, type EngineOpts } from "./run";
-import { readControl, writeControl, clearControl, resolveReply, resolveEffect, NOTHING_AWAITING } from "./control";
+import { readControl, writeControl, clearControl, resolveReply, resolveEffect, replyVerdict, NOTHING_AWAITING } from "./control";
 import { EventLog, readLog } from "../log/write";
 import { replayState } from "./replay";
 import { processStart } from "../log/lockfile";
@@ -452,6 +452,52 @@ describe("resolveReply refuses what a reply cannot fix (system-map 0.2)", () => 
       expect(unchanged()).toBe(true);
     });
   }
+
+  // HOW-69: the viewer draws its card from replyVerdict, so it must say EXACTLY what the route
+  // says — accept where the route accepts, and the very 409 text where it refuses
+  const verdictCases: Array<[string, string, string, boolean | null]> = [
+    ["agent attempt-failed", "one", "attempt-failed", null],
+    ["agent executor-threw", "one", "executor-threw", null],
+    ["command executor-threw", "cmd", "executor-threw", true],
+    ["worktree attempt-failed", "wt", "attempt-failed", true],
+    ["agent harness-unauthenticated", "one", "harness-unauthenticated", null],
+    ["command harness-unauthenticated", "cmd", "harness-unauthenticated", true],
+    ["tools-unsupported", "one", "tools-unsupported", true],
+    ["no-edge", "one", "no-edge", false],
+    ["awaiting-approval", "one", "awaiting-approval", false],
+    ["acceptance-unmet", "one", "acceptance-unmet", false],
+    ["ambiguous-effect", "cmd", "ambiguous-effect", false],
+  ];
+  for (const [label, node, code, retry] of verdictCases) {
+    test(`replyVerdict agrees with resolveReply: ${label} (HOW-69)`, () => {
+      const { dir } = parkedOn(node, code);
+      const verdict = replyVerdict(readLog(join(dir, "run.jsonl")), basename(dir), REPLY_GRAPHS);
+      const r = resolveReply(dir, "x", { graphs: REPLY_GRAPHS });
+      expect(verdict?.accept).toBe(r.ok);
+      if (retry === null) return expect(verdict).toEqual({ accept: true });
+      expect(r.ok).toBe(false);
+      expect(verdict).toEqual({ accept: false, message: (r as { message: string }).message, code: code as never, retry });
+    });
+  }
+
+  test("replyVerdict: an over-budget agent retry is refused with no Retry, the 409 text unchanged (HOW-69)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "howdah-reply-"));
+    const log = new EventLog(join(dir, "run.jsonl"));
+    log.append({ type: "run-started", graph: "ctl-reply", inputs: { goal: "g" }, pinned_prompts: {} });
+    for (const visit of [1, 2]) log.append({ type: "node-started", node: "last", visit, attempt_id: `last#${visit}` });
+    log.append({ type: "attention-raised", node: "last", visit: 2, reason: "r", code: "attempt-failed" } as never);
+    const verdict = replyVerdict(readLog(join(dir, "run.jsonl")), basename(dir), REPLY_GRAPHS);
+    const r = resolveReply(dir, "x", { graphs: REPLY_GRAPHS });
+    expect(r).toMatchObject({ ok: false, message: "reply refused (attempt-failed): the retry would exceed maxVisits (2); use `jump " + basename(dir) + " <node> <msg>`" });
+    expect(verdict).toEqual({ accept: false, code: "attempt-failed", retry: false, message: (r as { message: string }).message });
+  });
+
+  test("replyVerdict: nothing awaiting is null; an unregistered graph is refused without Retry (HOW-69)", () => {
+    const { dir } = parkedOn("one", "attempt-failed");
+    const events = readLog(join(dir, "run.jsonl"));
+    expect(replyVerdict(events, basename(dir), {})).toMatchObject({ accept: false, retry: false });
+    expect(replyVerdict(events.slice(0, 2), basename(dir), REPLY_GRAPHS)).toBeNull();
+  });
 
   test("every refusal names this run's id in its command", () => {
     const { dir } = parkedOn("one", "max-visits");

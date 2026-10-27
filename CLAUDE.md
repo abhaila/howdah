@@ -49,7 +49,7 @@ in `css-contract.test.ts`'s scan list, for the same reason React Flow's sheet is
 
 ```bash
 bun install                      # required on a fresh clone (node_modules/ is gitignored)
-bun test                         # whole suite (~1900 tests, ~2 min) — bun:test, happy-dom preloaded via bunfig.toml
+bun test                         # whole suite (~2700 tests, ~10 min under load) — bun:test, happy-dom preloaded via bunfig.toml
 bun test engine/engine.test.ts   # one file
 bun test -t "resume"             # one test by name
 bun run check                    # tsc --noEmit + prompt-id codegen staleness gate
@@ -325,7 +325,12 @@ Break one of these and the design stops working, so check them before changing t
   leaves each check's superseded run CANCELLED beside the new run still in progress, and read
   flat that was `CI_FAILED` ninety seconds after a publish — fix_ci on a verdict CI had not
   given, seven times on one run. Rows group by name, a pending run means no verdict, the newest
-  run decides, and a cancelled run is waited on like a reviewer, never repaired.
+  run decides, and a cancelled run is waited on like a reviewer, never repaired. AN UNREACHABLE
+  FORGE ON A READ IS RETRIED, NOT ASKED (HOW-69): `probe:pr` throws a typed
+  `ForgeUnreachableError` (engine/executors/git.ts; "no PR" stays a null answer), and the engine
+  re-runs that node after 30s, 2m and 5m (`FORGE_RETRY_BACKOFF_MS`), logging `forge-retried`
+  each time and counting the budget from the log, before it parks `executor-threw` as before.
+  The operator's pause or abort wins at once. `runs:await` needs none of this — it already waits.
 - **Nothing dead-ends silently.** A failed attempt, an exhausted condition set, `maxVisits`,
   or an ambiguous effect all *park* the run with a reason (`attention-raised`) and wait for a
   human. Parking is normal control flow, not an error path.
@@ -637,8 +642,13 @@ served an entire old UI.
 UI conventions worth preserving: one canonical `RunStatus` enum with one renderer, and
 **needs-input outranks failed** — a parked run waiting on a human is never shown as merely
 failed. Which card a park gets is decided by the ask's OWN kind where the cards are drawn
-(`run/chat.tsx` StandingAsk): a question gets `AskQuestionCard`, an ambiguous effect gets
-`EffectCard`, everything else is answered in prose by `AskCard`. All three keep the same
+(`run/ask.tsx` StandingAsk): a question gets `AskQuestionCard`, an ambiguous effect gets
+`EffectCard`, a park the reply route would REFUSE gets `NoReplyCard` (HOW-69: no composer, the
+route's refusal verbatim, and "Retry this step" — the run's resume — where that is the remedy),
+and everything else is answered in prose by `AskCard`. Whether a reply would be refused is
+`RunDetail.ask_reply`, computed on the server by `replyVerdict` (engine/control.ts) — the same
+function `decideReply` runs, over the same graph registry the route uses — never re-derived in
+the browser. All four keep the same
 contract — the sending → delivered → collapsing motion moment, a refusal shown VERBATIM rather
 than collapsed into "failed", and `id="needs-input"` so a notification's deep link lands on the
 control. Design tokens (palette, type scale, motion) live in `web/public/tokens.css` +
