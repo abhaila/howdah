@@ -341,7 +341,10 @@ describe("Tooltip — hover AND focus AND tap, tied by aria-describedby (P1.4)",
 
     // awaited: the positioner measures and re-renders after the popup mounts, and an
     // un-awaited act() leaves that update outside the test's act scope (React says so, loudly)
-    await act(async () => { trigger.dispatchEvent(new window.Event("focusin", { bubbles: true })); });
+    // and a REAL focus, not a bare focusin: off macOS, Base UI opens only on `:focus-visible`,
+    // which happy-dom matches for document.activeElement alone (it passed on a Mac, failed on CI)
+    await act(async () => { trigger.focus(); });
+    expect(document.activeElement).toBe(trigger);
     const tip = document.querySelector('[role="tooltip"]') as HTMLElement;
     expect(tip).not.toBeNull();
     expect(tip.textContent).toBe("Folder is gone");

@@ -115,7 +115,13 @@ describe("G4: route order out of probe_pr — restack first", () => {
   test("a restack conflict goes to the agent that is given the --onto command; a clean one waits", () => {
     const out = implementStacked.def.edges.filter((e) => e.from === "delivery.restack").map(edgeKey);
     expect(out).toEqual(["delivery.restack → delivery.resolve_restack [restack.conflict is set]", "delivery.restack → delivery.wait"]);
-    expect(implementStacked.def.nodes["delivery.resolve_restack"]).toMatchObject({ prompt: "stacked.resolve_restack", reads: expect.arrayContaining(["restack.conflict"]), maxVisits: 3 });
+    // no toMatchObject + expect.arrayContaining here: bun's matcher overwrites the RECEIVED array
+    // with {}, and this node is the registry's own, so every later test file that validated
+    // implement-stacked threw "Spread syntax requires ...iterable" (CI's ext4 file order)
+    const node = implementStacked.def.nodes["delivery.resolve_restack"] as { prompt: string; reads: string[]; maxVisits: number };
+    expect(node.prompt).toBe("stacked.resolve_restack");
+    expect(node.reads).toContain("restack.conflict");
+    expect(node.maxVisits).toBe(3);
   });
 });
 
