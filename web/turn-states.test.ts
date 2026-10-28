@@ -12,6 +12,7 @@ function streaming(): FakeLog {
   const log = new FakeLog();
   log.add({ type: "run-started", graph: "quick-task", inputs: { goal: "g" }, pinned_prompts: {} });
   log.add({ type: "node-started", node: "do", visit: 1, attempt_id: "do#1" });
+  log.add({ type: "prompt-rendered", node: "do", visit: 1, prompt: "doc.draft", prompt_version: 1, rendered_hash: "h", context_read: {} });
   log.add({ type: "chunk", node: "do", visit: 1, turn: 1, index: 0, kind: "text", content: "half a thou" });
   return log;
 }
@@ -68,6 +69,7 @@ describe("deriveTurnStates", () => {
   test("un-finalised turn on an earlier visit while a later visit runs → died", () => {
     const log = streaming();
     log.add({ type: "node-started", node: "do", visit: 2, attempt_id: "do#2" });
+    log.add({ type: "prompt-rendered", node: "do", visit: 2, prompt: "doc.draft", prompt_version: 1, rendered_hash: "h", context_read: {} });
     log.add({ type: "chunk", node: "do", visit: 2, turn: 1, index: 0, kind: "text", content: "again" });
     const d = deriveDetail("r", log.events, {}, { runnerAlive: true });
     expect(d.turn_states["do@1"]).toBe("died");
@@ -90,5 +92,56 @@ describe("deriveTurnStates", () => {
     log.add({ type: "reconciled", node: "do", git: { repo: true, branch: "b", head: "h", uncommitted: 0, unpushed: 0 }, disagreements: [] });
     expect(deriveDetail("r", log.events).last_agent_event_at).toBe(chunkTs);
     expect(deriveDetail("r", new FakeLog().events).last_agent_event_at).toBeNull();
+  });
+});
+
+/**
+ * HOW-70 — a command step's pseudo-turn. probe:pr logs its gh call and output as chunks and has
+ * never logged a `turn-finalized`, so this is the shape of every probe visit in every log, old
+ * and new: 491 such visits on one run, each drawn "the process died inside this turn".
+ */
+function probing(): FakeLog {
+  const log = new FakeLog();
+  log.add({ type: "run-started", graph: "implement-ticket", inputs: { goal: "g" }, pinned_prompts: {} });
+  log.add({ type: "node-started", node: "delivery.probe_pr", visit: 1, attempt_id: "delivery.probe_pr#1" });
+  log.add({ type: "chunk", node: "delivery.probe_pr", visit: 1, turn: 1, index: 0, kind: "tool_call", content: "gh pr view" });
+  log.add({ type: "chunk", node: "delivery.probe_pr", visit: 1, turn: 1, index: 1, kind: "tool_result", content: "OPEN" });
+  return log;
+}
+
+describe("HOW-70: a command step is never `died`", () => {
+  test("a finished probe visit with chunks and no turn-finalized is done", () => {
+    const log = probing();
+    log.add({ type: "node-finished", node: "delivery.probe_pr", visit: 1, status: "succeeded", writes: { "pr.state": "OPEN" } });
+    log.add({ type: "node-started", node: "delivery.wait", visit: 1, attempt_id: "delivery.wait#1" });
+    expect(deriveDetail("r", log.events, {}, { runnerAlive: true }).turn_states["delivery.probe_pr@1"]).toBe("done");
+  });
+
+  test("overtaken, on a stopped run whose runner is dead, it is still done", () => {
+    const log = probing();
+    log.add({ type: "node-finished", node: "delivery.probe_pr", visit: 1, status: "succeeded", writes: {} });
+    log.add({ type: "node-started", node: "delivery.probe_pr", visit: 2, attempt_id: "delivery.probe_pr#2" });
+    log.add({ type: "chunk", node: "delivery.probe_pr", visit: 2, turn: 1, index: 0, kind: "tool_call", content: "gh pr view" });
+    log.add({ type: "node-finished", node: "delivery.probe_pr", visit: 2, status: "failed", writes: {} });
+    log.add({ type: "run-finished", outcome: "failed" });
+    const d = deriveDetail("r", log.events, {}, { runnerAlive: false });
+    expect(d.turn_states["delivery.probe_pr@1"]).toBe("done");
+    expect(d.turn_states["delivery.probe_pr@2"]).toBe("done");
+  });
+
+  test("a probe still running on a live runner is live; on a dead one it is not called a death", () => {
+    expect(deriveDetail("r", probing().events, {}, { runnerAlive: true }).turn_states["delivery.probe_pr@1"]).toBe("live");
+    expect(deriveDetail("r", probing().events, {}, { runnerAlive: false }).turn_states["delivery.probe_pr@1"]).toBe("done");
+  });
+
+  test("a truly died agent turn beside it still reads died", () => {
+    const log = streaming();
+    log.add({ type: "node-finished", node: "do", visit: 1, status: "failed", writes: {} });
+    log.add({ type: "node-started", node: "delivery.probe_pr", visit: 1, attempt_id: "delivery.probe_pr#1" });
+    log.add({ type: "chunk", node: "delivery.probe_pr", visit: 1, turn: 1, index: 0, kind: "tool_call", content: "gh pr view" });
+    log.add({ type: "node-finished", node: "delivery.probe_pr", visit: 1, status: "succeeded", writes: {} });
+    const d = deriveDetail("r", log.events, {}, { runnerAlive: true });
+    expect(d.turn_states["do@1"]).toBe("died");
+    expect(d.turn_states["delivery.probe_pr@1"]).toBe("done");
   });
 });

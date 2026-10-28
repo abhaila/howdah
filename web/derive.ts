@@ -267,6 +267,12 @@ export function derivePlan(events: readonly LoggedEvent[], node: string, visit: 
  */
 export type TurnState = "live" | "waiting" | "died" | "done";
 
+/** `node@visit` of every visit that rendered a prompt — an AGENT visit. A command, worktree or
+ * wait step never logs `prompt-rendered`, in old logs and new alike. */
+export function agentVisits(events: readonly LoggedEvent[]): Set<string> {
+  return new Set(events.flatMap((e) => (e.type === "prompt-rendered" ? [`${e.node}@${e.visit}`] : [])));
+}
+
 /**
  * HOW-46: the "died" rule used to be decided twice, in two panes, and neither excluded the
  * turn streaming on a live runner — so "the process died inside this turn" sat under EVERY
@@ -274,13 +280,21 @@ export type TurnState = "live" | "waiting" | "died" | "done";
  * warning that matters. `runnerAlive` is the server's proven-runner check (`runnerAlive()`,
  * the same one the rail shows); it is undefined where nobody probed (tests, digests), and an
  * unknown runner is not evidence of a death — status alone decides there.
+ *
+ * HOW-70: the rule is for AGENT turns only. A command step (probe:pr, verify:run…) logs its
+ * output as chunks of a pseudo-turn and never a `turn-finalized` — finalising one would invent a
+ * usage-bearing turn in `log/usage.ts` — so every finished probe visit read `died` (491 of them
+ * on one run). A visit that rendered no prompt (`agentVisits`) is judged by its row instead:
+ * live while it is the newest running step on a live run, otherwise done — its success or
+ * failure is already the row's own `node-finished` status. It reads only events every log has.
  */
 export function deriveTurnStates(
   turns: readonly CoalescedTurn[],
   timeline: readonly TimelineRow[],
   ask: RunDetail["ask"],
   status: RunStatus,
-  runnerAlive?: boolean,
+  runnerAlive: boolean | undefined,
+  agents: ReadonlySet<string>,
 ): Record<string, TurnState> {
   const out: Record<string, TurnState> = {};
   const newest = timeline.at(-1);
@@ -289,6 +303,10 @@ export function deriveTurnStates(
     const mine = turns.filter((t) => t.node === row.node && t.visit === row.visit);
     if (mine.length === 0) continue;
     if (mine.every((t) => t.finalized)) { out[key] = "done"; continue; }
+    if (!agents.has(key)) {
+      out[key] = row.status === "running" && row === newest && status === "running" && runnerAlive !== false ? "live" : "done";
+      continue;
+    }
     if (row.status !== "running" || row !== newest) out[key] = "died"; // finished without it, or overtaken
     else if (ask?.node === row.node && ask.visit === row.visit) out[key] = "waiting";
     else if (status !== "running" || runnerAlive === false) out[key] = "died";
@@ -404,7 +422,7 @@ export function deriveTimeline(events: LoggedEvent[]): TimelineRow[] {
   if (rows.length === 0) return rows;
   const usage = new Map(usageByVisit(events).map((u) => [`${u.node}@${u.visit}`, u]));
   for (const r of rows) r.usage = usage.get(`${r.node}@${r.visit}`) ?? null;
-  const agentRows = new Set(events.flatMap((e) => (e.type === "prompt-rendered" ? [`${e.node}@${e.visit}`] : [])));
+  const agentRows = agentVisits(events);
   const verifyCommand = verifyCommandFromLog(events);
   for (const r of rows)
     if (agentRows.has(`${r.node}@${r.visit}`)) r.profile = deriveProfile(events, r.node, r.visit, verifyCommand ? { verifyCommand } : {});
@@ -520,7 +538,7 @@ export function deriveDetail(
     summary: summaryRest,
     turns: opts.omitTurns ? [] : turns,
     timeline,
-    turn_states: deriveTurnStates(turns, timeline, ask, summary.status, opts.runnerAlive),
+    turn_states: deriveTurnStates(turns, timeline, ask, summary.status, opts.runnerAlive, agentVisits(events)),
     plan: timeline.length ? derivePlan(events, timeline.at(-1)!.node, timeline.at(-1)!.visit) : null,
     steers: steerStates(events),
     soft_stop: timeline.length ? softStopState(events, timeline.at(-1)!.node, timeline.at(-1)!.visit) : null,

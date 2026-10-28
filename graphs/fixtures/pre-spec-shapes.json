@@ -127,7 +127,8 @@
           "review_verdict",
           "review_findings",
           "slice.ghosts",
-          "slice.drift"
+          "slice.drift",
+          "pr.review_activity"
         ],
         "writes": {
           "repair_summary": {
@@ -193,6 +194,9 @@
         ],
         "writes": {
           "pr.state": {
+            "scope": "per-visit"
+          },
+          "pr.review_activity": {
             "scope": "per-visit"
           }
         },
@@ -780,7 +784,8 @@
           "work",
           "publication_summary",
           "review_verdict",
-          "review_findings"
+          "review_findings",
+          "pr.review_activity"
         ],
         "writes": {
           "repair_summary": {
@@ -818,6 +823,9 @@
             "scope": "per-visit"
           },
           "pr.state": {
+            "scope": "per-visit"
+          },
+          "pr.review_activity": {
             "scope": "per-visit"
           }
         },
@@ -1462,7 +1470,8 @@
           "work",
           "publication_summary",
           "review_verdict",
-          "review_findings"
+          "review_findings",
+          "pr.review_activity"
         ],
         "writes": {
           "repair_summary": {
@@ -1496,6 +1505,9 @@
         ],
         "writes": {
           "pr.state": {
+            "scope": "per-visit"
+          },
+          "pr.review_activity": {
             "scope": "per-visit"
           }
         },
@@ -1946,7 +1958,8 @@
           "work",
           "publication_summary",
           "review_verdict",
-          "review_findings"
+          "review_findings",
+          "pr.review_activity"
         ],
         "writes": {
           "repair_summary": {
@@ -1980,6 +1993,9 @@
         ],
         "writes": {
           "pr.state": {
+            "scope": "per-visit"
+          },
+          "pr.review_activity": {
             "scope": "per-visit"
           }
         },

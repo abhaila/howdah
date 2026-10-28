@@ -309,6 +309,7 @@ describe("the run reads as one conversation", () => {
     const log = new FakeLog();
     log.add({ type: "run-started", graph: "quick-task", inputs: { goal: "g" }, pinned_prompts: {} });
     log.add({ type: "node-started", node: "do", visit: 1, attempt_id: "do#1" });
+    log.add({ type: "prompt-rendered", node: "do", visit: 1, prompt: "doc.draft", prompt_version: 1, rendered_hash: "h", context_read: {} });
     log.add({ type: "chunk", node: "do", visit: 1, turn: 1, index: 0, kind: "text", content: "half a thou" });
     return log;
   };

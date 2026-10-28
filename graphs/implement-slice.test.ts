@@ -115,8 +115,10 @@ describe("deliveryGraph extraction keeps implement-ticket identical", () => {
     //           reads it and `worktree.verify_command`, so it asks only for provable evidence
     //   (repair scope) delivery.review_repairs declares `reviewsWorkOf` — the four code-changing
     //           repairs — so it is briefed to judge the repairs' diff, not the whole branch again
+    //   HOW-70  delivery.probe_pr also publishes `pr.review_activity` (per-visit) and
+    //           delivery.address_reviews reads it
     const s = JSON.stringify(sortDeep(shapeOf(implementTicket)));
-    expect(createHash("sha256").update(s).digest("hex")).toBe("1bfe95ad92a3a9913e86b9a5022e339d7931e3d8aac034234fa211762d94202d");
+    expect(createHash("sha256").update(s).digest("hex")).toBe("27c82f40fe062f912d766f722dc1075978ef4ba70f624d191d637735a93925a4");
   });
 ;
 

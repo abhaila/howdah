@@ -73,7 +73,9 @@ describe("implement-stacked is implement-ticket, stacked — never a silent fork
     expect(d.nodes["delivery.publish"]).toMatchObject({ prompt: "stacked.publish", requiresAcceptance: true, maxVisits: 5 });
     expect((d.nodes["delivery.publish"] as { reads: string[] }).reads).toEqual(expect.arrayContaining(["deps.base", "deps.prs"]));
     expect((d.nodes["delivery.probe_pr"] as { reads: string[] }).reads).toContain("deps.prs");
-    expect(Object.keys((d.nodes["delivery.probe_pr"] as { writes: object }).writes)).toEqual(["pr.state", "pr.approved"]);
+    expect(Object.keys((d.nodes["delivery.probe_pr"] as { writes: object }).writes)).toEqual(["pr.state", "pr.review_activity", "pr.approved"]);
+    // HOW-70: the stacked repair is handed the review activity of every PR in the stack too
+    expect((d.nodes["delivery.address_reviews"] as { reads: string[] }).reads).toContain("pr.review_activity");
   });
 
   test("the base is re-read before EVERY PR probe: publish and the wait both go through deps.probe", () => {

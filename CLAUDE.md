@@ -331,6 +331,12 @@ Break one of these and the design stops working, so check them before changing t
   re-runs that node after 30s, 2m and 5m (`FORGE_RETRY_BACKOFF_MS`), logging `forge-retried`
   each time and counting the budget from the log, before it parks `executor-threw` as before.
   The operator's pause or abort wins at once. `runs:await` needs none of this — it already waits.
+  A REVIEW COMMENT IS A REVIEW (HOW-70): the operator opens every Howdah PR and so can never
+  request changes on it, so `probe:pr` also reads reviews, PR comments and unresolved threads
+  (one `gh api graphql`) and routes CHANGES_REQUIRED on any newer than the last address_reviews
+  start — a cutoff read from the log, never stored (`core/review-activity.ts`). Howdah's own
+  replies end with `REVIEW_REPLY_MARKER` (the address_reviews prompt says so) and bots never
+  count; a failed read is `ForgeUnreachableError`, never "no new activity".
 - **Nothing dead-ends silently.** A failed attempt, an exhausted condition set, `maxVisits`,
   or an ambiguous effect all *park* the run with a reason (`attention-raised`) and wait for a
   human. Parking is normal control flow, not an error path.
