@@ -87,10 +87,12 @@ describe("B1: converting a built-in to a GraphSpec changes nothing (HOW-31)", ()
   });
 
   test("every registered graph validates", () => {
-    const broken = Object.entries(GRAPHS).filter(([, g]) => {
-      try { g.validate(); return false; } catch { return true; }
+    // the reason travels with the name: a graph that validates alone and not after another
+    // file ran (one shared GRAPHS registry per bun process) is undebuggable from a bare name
+    const broken = Object.entries(GRAPHS).flatMap(([name, g]) => {
+      try { g.validate(); return []; } catch (e) { return [`${name}: ${e instanceof Error ? e.message : String(e)}`]; }
     });
-    expect(broken.map(([name]) => name)).toEqual([]);
+    expect(broken).toEqual([]);
   });
 
   test("a converted graph carries its spec back for an exact round trip", () => {

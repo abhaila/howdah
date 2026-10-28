@@ -115,7 +115,13 @@ describe("G4: route order out of probe_pr — restack first", () => {
   test("a restack conflict goes to the agent that is given the --onto command; a clean one waits", () => {
     const out = implementStacked.def.edges.filter((e) => e.from === "delivery.restack").map(edgeKey);
     expect(out).toEqual(["delivery.restack → delivery.resolve_restack [restack.conflict is set]", "delivery.restack → delivery.wait"]);
-    expect(implementStacked.def.nodes["delivery.resolve_restack"]).toMatchObject({ prompt: "stacked.resolve_restack", reads: expect.arrayContaining(["restack.conflict"]), maxVisits: 3 });
+    // field by field, never toMatchObject with an asymmetric matcher: bun writes the matcher
+    // INTO the received object, and this is the shared registry's node — every later file in
+    // the process then saw `reads` as an ExpectArrayContaining (CI only, by file order)
+    const node = implementStacked.def.nodes["delivery.resolve_restack"];
+    expect(node?.kind === "agent" && node.prompt).toBe("stacked.resolve_restack");
+    expect(node && "reads" in node ? node.reads : []).toContain("restack.conflict");
+    expect(node && "maxVisits" in node ? node.maxVisits : undefined).toBe(3);
   });
 });
 
