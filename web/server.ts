@@ -550,8 +550,11 @@ export function createHowdahServer(opts: ServerOpts) {
             maxVisits: "maxVisits" in n ? n.maxVisits : undefined,
             outcome: n.kind === "terminal" ? n.outcome : undefined,
             duration: n.kind === "wait" ? n.duration : undefined,
+            // HOW-73: a parallel step's branches, join and width, for its subtitle
+            ...(n.kind === "parallel" ? { branches: [...n.branches], join: n.join, concurrency: n.concurrency ?? n.branches.length } : {}),
           })),
-          edges: g.def.edges.map((e) => ({ from: e.from, to: e.to, label: e.condition?.label, weight: e.weight })),
+          // HOW-73: the fork and join edges a parallel step implies are drawn too (kind fork|join)
+          edges: g.flowEdges().map((e) => ({ from: e.from, to: e.to, label: e.edge?.condition?.label, weight: e.edge?.weight, ...(e.kind ? { kind: e.kind } : {}) })),
         });
       }
       // ---- prompt library + proposal review (T21) --------------------------------
@@ -1097,7 +1100,7 @@ export function createHowdahServer(opts: ServerOpts) {
         if (!body.node) return json({ error: "node required" }, 400);
         // refuse in-process (the same precheck `howdah jump` runs) — the jump itself is spawned
         // detached, so a refusal from it would never reach the operator
-        const check = jumpRefusal(join(opts.runsDir, id), body.node, graphs);
+        const check = jumpRefusal(join(opts.runsDir, id), body.node, graphs, body.message);
         if (!check.ok) return json({ error: check.message }, 400);
         const cli = join(import.meta.dir, "..", "cli", "main.ts");
         const args = ["bun", cli, "jump", id, body.node, ...(body.message ? [body.message] : [])];
@@ -1112,8 +1115,9 @@ export function createHowdahServer(opts: ServerOpts) {
        * CLI shares. 409: the request is fine, the run is not in a state that can take it.
        */
       if (sub === "steer" && req.method === "POST") {
-        const body = (await req.json().catch(() => ({}))) as { text?: unknown };
-        const sent = steer(join(opts.runsDir, id), typeof body.text === "string" ? body.text : "");
+        const body = (await req.json().catch(() => ({}))) as { text?: unknown; node?: unknown };
+        // HOW-73: `node` names the branch's own turn when several steps run at once
+        const sent = steer(join(opts.runsDir, id), typeof body.text === "string" ? body.text : "", typeof body.node === "string" ? body.node : undefined);
         if (!sent.ok) return json({ error: sent.message }, 409);
         return json({ ok: true, seq: sent.seq, node: sent.node, visit: sent.visit }, 202);
       }
@@ -1124,7 +1128,8 @@ export function createHowdahServer(opts: ServerOpts) {
        * precheck's words. Asking twice for one turn is idempotent.
        */
       if (sub === "soft-stop" && req.method === "POST") {
-        const sent = softStop(join(opts.runsDir, id));
+        const body = (await req.json().catch(() => ({}))) as { node?: unknown };
+        const sent = softStop(join(opts.runsDir, id), typeof body.node === "string" ? body.node : undefined);
         if (!sent.ok) return json({ error: sent.message }, 409);
         return json({ ok: true, node: sent.node, visit: sent.visit, already: sent.already }, 202);
       }

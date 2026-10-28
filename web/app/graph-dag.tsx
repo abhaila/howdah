@@ -76,11 +76,14 @@ export interface GraphShapeDto {
     kind: string; class?: string; prompt?: string; run?: string;
     model?: string; harness?: string; effort?: string; maxVisits?: number; outcome?: string; duration?: string;
     baseline?: AgentConfigDto; node_tuning?: AgentConfigDto; effective?: AgentConfigDto;
+    /** HOW-73: a parallel step's branches, join and how many run at once */
+    branches?: string[]; join?: string; concurrency?: number;
   }>;
-  edges: Array<{ from: string; to: string; label?: string; weight?: number }>;
+  /** `kind` (HOW-73): an edge a parallel step implies — fork (to a branch) or join (from one) */
+  edges: Array<{ from: string; to: string; label?: string; weight?: number; kind?: "fork" | "join" }>;
 }
 
-const KIND_GLYPH: Record<string, string> = { agent: "◆", command: "▮", worktree: "⎇", wait: "◔", terminal: "●" };
+const KIND_GLYPH: Record<string, string> = { agent: "◆", command: "▮", worktree: "⎇", wait: "◔", parallel: "⫴", terminal: "●" };
 
 /** what the node's second line says — one reading, used by the box AND by its spoken label */
 function subtitle(n: GraphShapeDto["nodes"][number]): string {
@@ -88,6 +91,10 @@ function subtitle(n: GraphShapeDto["nodes"][number]): string {
   if (n.kind === "command") return n.run ?? "";
   if (n.kind === "wait") return n.duration ?? "";
   if (n.kind === "terminal") return n.outcome ?? "";
+  if (n.kind === "parallel") {
+    const count = n.branches?.length ?? 0;
+    return `parallel · ${Math.min(n.concurrency ?? count, count)} at once`;
+  }
   return n.kind;
 }
 
@@ -251,6 +258,9 @@ export function GraphDag({
                 /* the draw-in delay IS this edge's depth in the layout — data, not style */
                 style={{ ["--dag-delay" as string]: `${140 + delay}ms` }}
                 fill="none" stroke="var(--fg-faint)" strokeWidth="1.2" markerEnd="url(#arrow)" opacity={back ? 0.7 : 1}
+                /* HOW-73: a fork/join edge is the parallel step's, not a route — drawn dashed */
+                strokeDasharray={e.kind ? "4 3" : undefined}
+                data-edge-kind={e.kind}
               />
               {e.label && (
                 <text x={midX} y={midY} className="dag-edge-label" style={{ ["--dag-delay" as string]: `${300 + delay}ms` }} textAnchor="middle">{e.label}</text>

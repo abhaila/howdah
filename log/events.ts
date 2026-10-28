@@ -141,7 +141,15 @@ export type RunEvent =
        */
       pinned_includes?: Record<string, Record<string, number>>;
     }
-  | { type: "node-started"; node: string; visit: number; attempt_id: string }
+  | {
+      type: "node-started"; node: string; visit: number; attempt_id: string;
+      /**
+       * HOW-73: set on a BRANCH's start — the parallel step and ITS visit this attempt belongs
+       * to. Replay keeps the run's position on the parallel step and derives each branch's
+       * progress from these (engine/replay.ts parallelProgress), so no sidecar is needed.
+       */
+      parallel?: { node: string; visit: number };
+    }
   | {
       type: "prompt-rendered";
       node: string;

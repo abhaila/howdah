@@ -41,9 +41,9 @@ import {
   Background, Controls, ReactFlow, useReactFlow, useStore,
   MarkerType, type Edge, type Node, type NodeChange, type OnConnect, type OnNodesChange,
 } from "@xyflow/react";
-import { isBlocking, point, predicateLabel, type GraphSpec, type Point, type SpecProblem } from "../../../core/graph-spec";
+import { isBlocking, point, predicateLabel, specFlowEdges, type GraphSpec, type Point, type SpecProblem } from "../../../core/graph-spec";
 import { autoLayout } from "@/lib/layout";
-import type { Draft, DraftAction, StepKind } from "@/lib/spec-draft";
+import type { Draft, DraftAction, PaletteKind } from "@/lib/spec-draft";
 import { STEP_KINDS } from "@/lib/spec-draft";
 import { StepNode, stepSummary, type StepNodeData } from "./node-card";
 import { ConditionEdge, type ConditionEdgeData } from "./edge";
@@ -67,7 +67,7 @@ const NODE_WIDTH = 180;
 /** ...and its rough height, for the one thing that has to guess: centring a card on a point. */
 const NODE_HEIGHT = 64;
 
-const isStepKind = (v: string): v is StepKind => STEP_KINDS.some((k) => k.kind === v);
+const isStepKind = (v: string): v is PaletteKind => STEP_KINDS.some((k) => k.kind === v);
 
 /**
  * The draft as React Flow sees it. Pure, and the only place the two vocabularies meet.
@@ -122,7 +122,20 @@ export function specToFlow(
       onOpen: () => open({ kind: "edge", index: i }),
     } satisfies ConditionEdgeData,
   }));
-  return { nodes, edges };
+  // HOW-73: the fork and join wires a parallel step implies. They belong to that step, not to
+  // `spec.edges`, so they carry no index, no caption and cannot be selected or removed — the
+  // picture draws them (dashed) and the source is where they are edited, for now.
+  const implied: Edge[] = specFlowEdges(laid).filter((e) => e.kind).map((e, i) => ({
+    id: `${e.kind}${i}`,
+    source: e.from,
+    target: e.to,
+    markerEnd: { type: MarkerType.ArrowClosed },
+    deletable: false,
+    selectable: false,
+    focusable: false,
+    style: { strokeDasharray: "4 3" },
+  }));
+  return { nodes, edges: [...edges, ...implied] };
 }
 
 /**
@@ -181,7 +194,7 @@ export function GraphCanvas({ draft, dispatch, problems, selection, onSelect, on
   problems: SpecProblem[];
   selection: Selection;
   onSelect: (sel: Selection) => void;
-  onAdd: (kind: StepKind, at?: Point) => void;
+  onAdd: (kind: PaletteKind, at?: Point) => void;
   /** bumped when the WHOLE draft is replaced (a preset, a graph read back) — see below */
   generation: number;
 }) {
