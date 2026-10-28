@@ -1,6 +1,6 @@
 ---
 id: graph.draft
-version: 1
+version: 2
 ---
 You are drafting a Howdah graph — a workflow of steps an operator will review in the builder and
 save. You do not save anything and you change no files: your whole job is one draft, returned as
@@ -46,10 +46,12 @@ fix it:
 1. `name` is NEW: kebab-case, and not in the catalog's `takenNames`.
 2. Every agent step's `prompt` is `<name>.<step id>` — a graph owns only the prompts filed under
    its own name, even when the body is a copy of another graph's prompt.
-3. A step's `reads` are exactly the context keys its instructions reference, written as a
-   double-brace reference to `context.` followed by the field key — no more, no fewer. For a
-   copy, they are the keys the copied prompt references (the base step's `reads`). Do not use
-   `{{> … }}` includes; write the text out instead.
+3. A step's `reads` are the context keys its instructions reference, written as a
+   double-brace reference to `context.` followed by the field key, plus `acceptance` on any step
+   with `requiresAcceptance: true` (the publish gate reads it, not the text). A step whose prompt
+   is a copy keeps the base step's `reads` unchanged — they may include keys the text does not
+   name. Never drop a read that a refusal did not name. Do not use `{{> … }}` includes in text
+   you write; write the text out instead.
 4. Every key a step reads or writes, and every launch input, is declared in `fields` with a kind
    from the catalog's `fieldKinds` and a scope (`sticky`, `cleared` or `per-visit`). Every key a
    step reads must be written on every path to it, or be a launch input.

@@ -244,6 +244,26 @@ describe("the draft keeps itself consistent, because the edits are coupled", () 
     expect((after.spec.nodes.find((n) => n.id === "clean-up") as Extract<NodeSpec, { kind: "worktree" }>).writes).toEqual([]);
   });
 
+  test("requiresAcceptance carries its `acceptance` read, through a toggle and a body edit (HOW-74)", () => {
+    // the publish gate reads `acceptance`, not the body, so `reads` is the body's refs PLUS it —
+    // and validate() refuses a gated step without it. The reducer keeps the two in step.
+    const base = apply(doc(), { type: "add-field", patch: { key: "acceptance", kind: "json", scope: "sticky" } });
+    const step = () => base.spec.nodes.find((n) => n.id === "draft") as Extract<NodeSpec, { kind: "agent" }>;
+    const readsOf = (d: Draft) => (d.spec.nodes.find((n) => n.id === "draft") as Extract<NodeSpec, { kind: "agent" }>).reads;
+    const body = base.prompts[step().prompt]!;
+    expect(readsOf(base)).toEqual(templateReads(body));
+
+    const gated = apply(base, { type: "update-step", id: "draft", node: { ...step(), requiresAcceptance: true } });
+    expect(readsOf(gated)).toEqual([...templateReads(body), "acceptance"]);
+
+    const edited = apply(gated, { type: "set-prompt", id: step().prompt, body: `${body}\nAgain.` });
+    expect(readsOf(edited)).toEqual([...templateReads(body), "acceptance"]);
+
+    const { requiresAcceptance: _gate, ...ungatedStep } = edited.spec.nodes.find((n) => n.id === "draft") as Extract<NodeSpec, { kind: "agent" }>;
+    const ungated = apply(edited, { type: "update-step", id: "draft", node: ungatedStep });
+    expect(readsOf(ungated)).toEqual(templateReads(body));
+  });
+
   test("switching a command to another built-in drops produced keys the new one cannot emit", () => {
     const base = apply(doc(), {
       type: "add-step",

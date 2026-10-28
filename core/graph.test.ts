@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { defineGraph, GraphError } from "./graph";
+import { buildGraph, derivedReads, type GraphSpec } from "./graph-spec";
 import { implementTicket } from "../graphs/implement-ticket";
 import { improveCodebase } from "../graphs/improve-codebase";
 import { reviewTeammatePr } from "../graphs/review-teammate-pr";
@@ -302,5 +303,19 @@ describe("approval node (system-map 1a)", () => {
     expect(approvalGraph({ decision: "feedback" }).validate().structural).toContain(
       'approval node "approve" uses "feedback" as both its decision and feedback key',
     );
+  });
+});
+
+describe("requiresAcceptance and the spec's derived reads agree (HOW-74)", () => {
+  test("a gated spec whose reads came from derivedReads validates with no acceptance problem", () => {
+    const step = { id: "publish", kind: "agent" as const, title: "Publish", prompt: "gated.publish", reads: [] as string[], writes: [], requiresAcceptance: true as const };
+    const spec: GraphSpec = {
+      version: 1, name: "gated", description: "", entry: "publish",
+      fields: [{ key: "goal", kind: "text", scope: "sticky" }, { key: "acceptance", kind: "json", scope: "sticky" }],
+      inputs: ["goal", "acceptance"],
+      nodes: [{ ...step, reads: derivedReads(step, "Ship {{ context.goal }}.") }, { id: "done", kind: "terminal", outcome: "success" }],
+      edges: [{ from: "publish", to: "done" }],
+    };
+    expect(buildGraph(spec).validate().structural.filter((p) => p.includes("acceptance"))).toEqual([]);
   });
 });
