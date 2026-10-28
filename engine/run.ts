@@ -59,10 +59,16 @@
  *     `up`, a decision route and a manual resume racing on one run start exactly one loop.
  *   - A graph with an approval node only runs in a git work tree: the fingerprint is what
  *     an approval binds to, and "no fingerprint" must never compare equal.
+ *
+ * Parallel steps (HOW-73): one attempt of a step is `runStep` — shared by the sequential loop
+ * and every branch of a `parallel` node, so a branch has exactly a sequential step's budgets,
+ * gates, effects and retries. `runStep` RETURNS a park rather than appending it; the loop
+ * appends at once (a sequential run logs exactly what it did before), `runParallel` once for
+ * the whole step after the running siblings have finished. See runParallel for resume.
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { agentConfigOf, hasTools, nodeReads, resolveAgentConfigLayers, type Graph, type NodeDef, type EdgeDef, type AgentConfig, type ApprovalNodeDef, type Harness } from "../core/graph";
+import { agentConfigOf, hasTools, nodeReads, resolveAgentConfigLayers, type Graph, type NodeDef, type EdgeDef, type AgentConfig, type ApprovalNodeDef, type Harness, type ParallelNodeDef } from "../core/graph";
 import { basename } from "node:path";
 import { ContextStore, type Scope } from "../core/context";
 import { DEFAULT_CONTEXT_CAP, RENDER_VERSION, SUFFIX_VERSION, assemblePrompt, renderTemplate, renderedHash, skillsForHarness, splitFrontMatter } from "../core/template";
@@ -74,7 +80,7 @@ import { waivedCriteria } from "./acceptance-decision";
 import { repairScope } from "./repair-scope";
 import { softStopState, stopResumeFor, undeliveredSteers } from "./steer-state";
 import { previousTree } from "./no-progress";
-import { replayState, effectKey } from "./replay";
+import { replayState, effectKey, parallelProgress } from "./replay";
 import type { PromptId } from "../core/prompt-ids";
 import { proposalHash } from "../core/proposal";
 import { describeFingerprintChange, fingerprint, worktreeTree, type Fingerprint } from "./reconcile";
@@ -203,6 +209,17 @@ export type RunState =
   | { state: "busy"; holder: RunnerHolder };
 
 export class EngineError extends Error {}
+
+/** a park decided but not yet logged — runStep returns one, its caller appends it (HOW-73) */
+interface Park {
+  node: string;
+  visit: number;
+  code: ParkCode;
+  reason: string;
+}
+
+/** what one attempt of a step came to (Engine.runStep) */
+type StepOutcome = { kind: "done" } | { kind: "retry" } | { kind: "park"; park: Park };
 
 /** a proposal a node just wrote, validated, waiting to be logged as a round */
 interface ProposalRound {
@@ -542,27 +559,26 @@ export class Engine {
   /** HOW-48: a moot soft stop — pause at the next node boundary (set after the step, read at the loop top) */
   private pauseAtBoundary = false;
 
+  /** steps taken by this loop — every non-wait node, and every branch attempt of a parallel step (HOW-73) */
+  private steps = 0;
+
   private async loop(startAt: string): Promise<RunState> {
     let current = startAt;
     const maxSteps = this.opts.maxSteps ?? 1000;
     // HOW-57 (G5): a WAIT is time passing, not work — counting it would park a stack that waits
     // days on a reviewer (1000 steps at 5m is ~41h). Every other node still counts, so a
     // loop of real work (or a poll, whose command step is real) still stops at maxSteps.
-    let steps = 0;
+    this.steps = 0;
     for (;;) {
       const def = this.graph.def.nodes[current];
       if (!def) throw new EngineError(`unknown node: ${current}`);
       if (def.kind !== "wait") {
-        if (steps >= maxSteps) break;
-        steps++;
+        if (this.steps >= maxSteps) break;
+        this.steps++;
       }
 
       const command = this.opts.control?.() ?? null;
-      if (command === "abort") {
-        this.log.append({ type: "run-finished", outcome: "aborted" });
-        this.attributeTerminal("aborted");
-        return { state: "finished", outcome: "aborted" };
-      }
+      if (command === "abort") return this.finishAborted();
       // HOW-48: a soft stop the step finished before reaching is not dropped — the run holds at
       // this boundary exactly as a pause would, so "stop" still means stop. Not before a terminal:
       // the run is done, and holding it one step short of finishing would only cost a resume.
@@ -578,115 +594,19 @@ export class Engine {
         return { state: "finished", outcome: def.outcome };
       }
 
-      // visit numbers only climb (they are attempt identity); the BUDGET is counted above the
-      // floor an operator jump set (system-map 0.3), so a jump buys exactly maxVisits more
-      const visit = (this.visits[current] = (this.visits[current] ?? 0) + 1);
-      const fallbackVisit = this.pendingFallbackNodes.delete(current);
-      const maxVisits = "maxVisits" in def ? def.maxVisits : undefined;
-      const floor = this.floors[current] ?? 0;
-      // the fallback retry (f8c8d96) is the same attempt on another harness: not charged
-      if (maxVisits !== undefined && visit - floor > maxVisits && !fallbackVisit)
-        return this.park(
-          current,
-          visit,
-          "max-visits",
-          floor > 0
-            ? `maxVisits exceeded (${visit - floor} > ${maxVisits} since the operator jump at visit ${floor})`
-            : `maxVisits exceeded (${visit} > ${maxVisits})`,
-        );
-
-      // system-map 1a: pre-start, like maxVisits — a refusal logs no node-started, consumes no visit
-      const gate = await this.requiresGate(current, def, visit);
-      if (gate) return this.park(current, visit, gate.code, gate.reason);
-      // HOW-41: a tool restriction the resolved harness cannot honour refuses the node — this
-      // also catches a fallback hop onto such a harness, because the hop re-resolves first
-      const tools = this.toolsGate(current, def);
-      if (tools) return this.park(current, visit, "tools-unsupported", tools);
-
-      if (this.opts.beforeNode) await this.opts.beforeNode(current, def);
-      const attemptId = `${current}#${visit}`;
-      this.log.append({ type: "node-started", node: current, visit, attempt_id: attemptId });
-      this.ctx.beginAttempt(current, visit);
-
-      let result: AttemptResult;
-      let rounds: ProposalRound[] = [];
-      try {
-        result = await this.execute(current, def, visit, attemptId);
-        if (result.status === "awaiting" && def.kind !== "approval")
-          throw new EngineError(`a ${def.kind} executor returned "awaiting" — only approval nodes wait for a decision`);
-        if (result.status === "succeeded") {
-          const checked = await this.checkProposals(current, visit, result);
-          result = checked.result;
-          rounds = checked.rounds;
-        }
-        if (result.status === "succeeded") result = this.seedRedesignFeedback(current, result);
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        this.ctx.endAttempt("failed");
-        // the reason must be readable in the thread, not only in the (resolvable) ask
-        this.log.append({ type: "chunk", node: current, visit, turn: 1, index: ENGINE_FAILURE_INDEX, kind: "text", content: `\n[attempt failed: ${message}]` });
-        this.log.append({ type: "node-finished", node: current, visit, status: "failed", writes: {} });
-        if (def.kind === "command" && FORGE_READ_BUILTINS.has(def.run.trim()) && err instanceof ForgeUnreachableError) {
-          const decision = await this.retryForgeRead(current, visit, message);
-          if (decision.continue) continue;
-          return decision.state;
-        }
-        return this.park(current, visit, "executor-threw", `executor threw: ${message}`);
+      // HOW-73: a fork/join — every branch runs (concurrently), then the run continues at the join
+      if (def.kind === "parallel") {
+        const stopped = await this.runParallel(current, def, maxSteps);
+        if (stopped) return stopped;
+        current = def.join;
+        continue;
       }
 
-      if (result.status === "awaiting") {
-        // D4/3A: no node-finished — replay keeps this node mid-flight and resume re-attempts
-        // the SAME visit; the failed end restores any cleared keys this attempt veiled
-        this.ctx.endAttempt("failed");
-        return this.park(current, visit, "awaiting-approval", result.reason ?? "awaiting a decision");
-      }
-      if (result.reason)
-        this.log.append({ type: "chunk", node: current, visit, turn: 1, index: ENGINE_NOTE_INDEX, kind: "text", content: `\n[${result.status}: ${result.reason}]` });
+      const outcome = await this.runStep(current, def);
+      if (outcome.kind === "retry") continue;
+      if (outcome.kind === "park") return this.parkOn(outcome.park);
 
-      for (const [k, v] of Object.entries(result.writes)) this.ctx.set(k, v);
-      this.ctx.endAttempt(result.status);
-      for (const round of rounds) this.openRound(current, round);
-      // HOW-54: what the worktree holds now, for the steps whose visits must make progress
-      const tree = this.progressChecked.has(current) ? worktreeTree(this.workCwd()) ?? undefined : undefined;
-      this.log.append({
-        type: "node-finished", node: current, visit, status: result.status, writes: result.writes,
-        ...(result.refused !== undefined ? { refused: result.refused } : {}),
-        ...(tree !== undefined ? { tree } : {}),
-      });
-      if (result.status === "succeeded" && tree !== undefined) {
-        const stalled = this.noProgress(current, visit, tree);
-        if (stalled) return this.park(current, visit, "no-progress", stalled);
-      }
-
-      if (result.status === "failed") {
-        // HOW-14: a full context window is not an allowance problem, whatever the attempt's
-        // text happens to say — hopping would start a fresh harness from nothing and still
-        // overflow. Park instead; the retry gets the re-entry briefing.
-        // HOW-38: nor is a stuck call or a hung turn — another harness would not unstick it
-        const hop = def.kind === "agent" && !NO_HOP_CODES.has(result.code ?? "attempt-failed") ? this.nextFallbackHarness(current, visit) : undefined;
-        if (hop) {
-          this.hoppedAwayFrom.add(hop.from);
-          this.pendingFallbackNodes.add(current);
-          this.log.append({
-            type: "chunk",
-            node: current,
-            visit,
-            turn: 1,
-            index: 10000,
-            kind: "text",
-            content: `\n[${hop.from} allowance exhausted: retrying this node with ${hop.to}]`,
-          });
-          continue;
-        }
-        if (def.kind === "agent" && result.code === "context-exhausted") {
-          const decision = await this.continueAfterExhaustion(current, def, visit, result.reason ?? "attempt failed");
-          if (decision.continue) continue;
-          return decision.state;
-        }
-        return this.park(current, visit, result.code ?? "attempt-failed", result.reason ?? "attempt failed");
-      }
-
-      if (def.kind === "agent" && softStopState(this.log.read(), current, visit)) this.pauseAtBoundary = true;
+      const visit = this.visits[current] ?? 1;
       const next = this.route(current, visit);
       if (!next) return this.park(current, visit, "no-edge", "no edge matched (conditions exhausted)");
       this.log.append({ type: "edge-taken", from: current, to: next.to, label: next.condition?.label });
@@ -694,6 +614,198 @@ export class Engine {
       current = next.to;
     }
     return this.park(current, this.visits[current] ?? 0, "max-steps", `maxSteps reached (${maxSteps})`);
+  }
+
+  private finishAborted(): RunState {
+    this.log.append({ type: "run-finished", outcome: "aborted" });
+    this.attributeTerminal("aborted");
+    return { state: "finished", outcome: "aborted" };
+  }
+
+  /**
+   * ONE attempt of one step — visit, budget, gates, node-started, execute, publish, node-finished
+   * and the failure handling — shared by the sequential loop and every branch of a parallel step
+   * (HOW-73). It never routes and never APPENDS a park: it returns one, and the caller logs it —
+   * at once for a sequential step (so its log is byte-identical to before), and once for the whole
+   * parallel step after the siblings have finished their attempts. `retry` is an automatic re-run
+   * of the same step (an allowance hop, a context continuation, a forge-read retry).
+   */
+  private async runStep(current: string, def: Exclude<NodeDef<any>, { kind: "terminal" | "parallel" }>, parallel?: { node: string; visit: number }): Promise<StepOutcome> {
+    const park = (node: string, visit: number, code: ParkCode, reason: string): StepOutcome => ({ kind: "park", park: { node, visit, code, reason } });
+    // visit numbers only climb (they are attempt identity); the BUDGET is counted above the
+    // floor an operator jump set (system-map 0.3), so a jump buys exactly maxVisits more
+    const visit = (this.visits[current] = (this.visits[current] ?? 0) + 1);
+    const fallbackVisit = this.pendingFallbackNodes.delete(current);
+    const maxVisits = "maxVisits" in def ? def.maxVisits : undefined;
+    const floor = this.floors[current] ?? 0;
+    // the fallback retry (f8c8d96) is the same attempt on another harness: not charged
+    if (maxVisits !== undefined && visit - floor > maxVisits && !fallbackVisit)
+      return park(
+        current,
+        visit,
+        "max-visits",
+        floor > 0
+          ? `maxVisits exceeded (${visit - floor} > ${maxVisits} since the operator jump at visit ${floor})`
+          : `maxVisits exceeded (${visit} > ${maxVisits})`,
+      );
+
+    // system-map 1a: pre-start, like maxVisits — a refusal logs no node-started, consumes no visit
+    const gate = await this.requiresGate(current, def, visit);
+    if (gate) return park(current, visit, gate.code, gate.reason);
+    // HOW-41: a tool restriction the resolved harness cannot honour refuses the node — this
+    // also catches a fallback hop onto such a harness, because the hop re-resolves first
+    const tools = this.toolsGate(current, def);
+    if (tools) return park(current, visit, "tools-unsupported", tools);
+
+    if (this.opts.beforeNode) await this.opts.beforeNode(current, def);
+    const attemptId = `${current}#${visit}`;
+    this.log.append({ type: "node-started", node: current, visit, attempt_id: attemptId, ...(parallel ? { parallel } : {}) });
+    this.ctx.beginAttempt(current, visit);
+
+    let result: AttemptResult;
+    let rounds: ProposalRound[] = [];
+    try {
+      result = await this.execute(current, def, visit, attemptId);
+      if (result.status === "awaiting" && def.kind !== "approval")
+        throw new EngineError(`a ${def.kind} executor returned "awaiting" — only approval nodes wait for a decision`);
+      if (result.status === "succeeded") {
+        const checked = await this.checkProposals(current, visit, result);
+        result = checked.result;
+        rounds = checked.rounds;
+      }
+      if (result.status === "succeeded") result = this.seedRedesignFeedback(current, result);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.ctx.endAttemptOf(current, "failed");
+      // the reason must be readable in the thread, not only in the (resolvable) ask
+      this.log.append({ type: "chunk", node: current, visit, turn: 1, index: ENGINE_FAILURE_INDEX, kind: "text", content: `\n[attempt failed: ${message}]` });
+      this.log.append({ type: "node-finished", node: current, visit, status: "failed", writes: {} });
+      if (def.kind === "command" && FORGE_READ_BUILTINS.has(def.run.trim()) && err instanceof ForgeUnreachableError) {
+        const decision = await this.retryForgeRead(current, visit, message);
+        return decision.continue ? { kind: "retry" } : { kind: "park", park: decision.park };
+      }
+      return park(current, visit, "executor-threw", `executor threw: ${message}`);
+    }
+
+    if (result.status === "awaiting") {
+      // D4/3A: no node-finished — replay keeps this node mid-flight and resume re-attempts
+      // the SAME visit; the failed end restores any cleared keys this attempt veiled
+      this.ctx.endAttemptOf(current, "failed");
+      return park(current, visit, "awaiting-approval", result.reason ?? "awaiting a decision");
+    }
+    if (result.reason)
+      this.log.append({ type: "chunk", node: current, visit, turn: 1, index: ENGINE_NOTE_INDEX, kind: "text", content: `\n[${result.status}: ${result.reason}]` });
+
+    for (const [k, v] of Object.entries(result.writes)) this.ctx.setFor(current, k, v);
+    this.ctx.endAttemptOf(current, result.status);
+    for (const round of rounds) this.openRound(current, round);
+    // HOW-54: what the worktree holds now, for the steps whose visits must make progress
+    const tree = this.progressChecked.has(current) ? worktreeTree(this.workCwd()) ?? undefined : undefined;
+    this.log.append({
+      type: "node-finished", node: current, visit, status: result.status, writes: result.writes,
+      ...(result.refused !== undefined ? { refused: result.refused } : {}),
+      ...(tree !== undefined ? { tree } : {}),
+    });
+    if (result.status === "succeeded" && tree !== undefined) {
+      const stalled = this.noProgress(current, visit, tree);
+      if (stalled) return park(current, visit, "no-progress", stalled);
+    }
+
+    if (result.status === "failed") {
+      // HOW-14: a full context window is not an allowance problem, whatever the attempt's
+      // text happens to say — hopping would start a fresh harness from nothing and still
+      // overflow. Park instead; the retry gets the re-entry briefing.
+      // HOW-38: nor is a stuck call or a hung turn — another harness would not unstick it
+      const hop = def.kind === "agent" && !NO_HOP_CODES.has(result.code ?? "attempt-failed") ? this.nextFallbackHarness(current, visit) : undefined;
+      if (hop) {
+        this.hoppedAwayFrom.add(hop.from);
+        this.pendingFallbackNodes.add(current);
+        this.log.append({
+          type: "chunk",
+          node: current,
+          visit,
+          turn: 1,
+          index: 10000,
+          kind: "text",
+          content: `\n[${hop.from} allowance exhausted: retrying this node with ${hop.to}]`,
+        });
+        return { kind: "retry" };
+      }
+      if (def.kind === "agent" && result.code === "context-exhausted") {
+        const decision = await this.continueAfterExhaustion(current, def, visit, result.reason ?? "attempt failed");
+        return decision.continue ? { kind: "retry" } : { kind: "park", park: decision.park };
+      }
+      return park(current, visit, result.code ?? "attempt-failed", result.reason ?? "attempt failed");
+    }
+
+    if (def.kind === "agent" && softStopState(this.log.read(), current, visit)) this.pauseAtBoundary = true;
+    return { kind: "done" };
+  }
+
+  /**
+   * HOW-73: one visit of a parallel step. Every branch that has not already SUCCEEDED in this
+   * visit runs — up to `concurrency` at once, in this one process — each through runStep, with
+   * its own automatic retries. Derived from the log (parallelProgress), so a resume in a fresh
+   * process re-enters the same visit, skips the finished branches and re-attempts an in-flight
+   * one on the SAME visit number, exactly as a sequential step that died mid-flight.
+   *
+   * A branch that parks stops any further branch from STARTING; the ones already running finish
+   * their attempt and keep what they published. Then the run parks once, on the first branch that
+   * parked. Pause and abort are read before every branch start (and a live turn is interrupted by
+   * the runner's process group being signalled, engine/control.ts interruptRunner). Only when
+   * every branch has succeeded does the step finish and route to its join. Returns null to
+   * continue at the join, or the state the run stops in.
+   */
+  private async runParallel(id: string, def: ParallelNodeDef, maxSteps: number): Promise<RunState | null> {
+    const visit = (this.visits[id] = (this.visits[id] ?? 0) + 1);
+    if (this.opts.beforeNode) await this.opts.beforeNode(id, def);
+    this.log.append({ type: "node-started", node: id, visit, attempt_id: `${id}#${visit}` });
+    const progress = parallelProgress(this.log.read(), id, visit);
+    // an attempt that never finished (the runner died inside it) is re-attempted on its own visit
+    for (const [b, v] of progress.inFlight) this.visits[b] = v - 1;
+    const queue = def.branches.filter((b) => !progress.succeeded.has(b));
+    const parks: Park[] = [];
+    let halted: "pause" | "abort" | null = null;
+    let thrown: unknown = undefined;
+
+    const worker = async (): Promise<void> => {
+      while (parks.length === 0 && halted === null && thrown === undefined) {
+        const branch = queue.shift();
+        if (branch === undefined) return;
+        const bdef = this.graph.def.nodes[branch];
+        if (!bdef || bdef.kind === "terminal" || bdef.kind === "parallel") throw new EngineError(`parallel step "${id}" has an unrunnable branch "${branch}"`);
+        for (;;) {
+          const command = this.opts.control?.() ?? null;
+          if (command) { halted ??= command; return; }
+          if (this.steps >= maxSteps) {
+            parks.push({ node: branch, visit: this.visits[branch] ?? 0, code: "max-steps", reason: `maxSteps reached (${maxSteps})` });
+            return;
+          }
+          this.steps++;
+          const outcome = await this.runStep(branch, bdef, { node: id, visit });
+          if (outcome.kind === "retry") continue;
+          if (outcome.kind === "park") parks.push(outcome.park);
+          break;
+        }
+      }
+    };
+    const width = Math.max(1, Math.min(def.concurrency ?? def.branches.length, queue.length));
+    await Promise.all(Array.from({ length: width }, () => worker().catch((err) => { thrown ??= err; })));
+    if (thrown !== undefined) throw thrown;
+
+    const [first, ...others] = parks;
+    if (first) {
+      const also = others.length ? ` — also parked: ${others.map((p) => `${p.node} (${p.code}: ${p.reason})`).join("; ")}` : "";
+      return this.park(first.node, first.visit, first.code, `${first.reason}${also}`);
+    }
+    if (halted === "abort") return this.finishAborted();
+    if (halted === "pause") {
+      this.log.append({ type: "run-paused", by: "operator" });
+      return { state: "paused", node: id };
+    }
+    this.log.append({ type: "node-finished", node: id, visit, status: "succeeded", writes: {} });
+    this.log.append({ type: "edge-taken", from: id, to: def.join });
+    return null;
   }
 
   private async execute(nodeId: string, def: NodeDef<any>, visit: number, attemptId: string): Promise<AttemptResult> {
@@ -768,15 +880,15 @@ export class Engine {
     def: Extract<NodeDef<any>, { kind: "agent" }>,
     visit: number,
     reason: string,
-  ): Promise<{ continue: true } | { continue: false; state: RunState }> {
-    const park = (why = reason) => ({ continue: false as const, state: this.park(node, visit, "context-exhausted", why) });
+  ): Promise<{ continue: true } | { continue: false; park: Park }> {
+    const park = (why = reason) => ({ continue: false as const, park: { node, visit, code: "context-exhausted" as const, reason: why } });
     const command = this.opts.control?.() ?? null;
     if (command === "pause" || command === "abort") return park();
 
     // (b) the same probe resume() runs, over this node's still-ambiguous intents
     const pending = replayState(this.log.read()).pendingIntents.filter((i) => i.node === node);
-    const ambiguous = await this.probeIntents(pending);
-    if (ambiguous) return { continue: false, state: ambiguous };
+    const ambiguous = await this.probeIntentsPark(pending);
+    if (ambiguous) return { continue: false, park: ambiguous };
 
     const events = this.log.read();
     const budget = this.resolveAgentConfig(def, node).contextRetries ?? 1;
@@ -812,9 +924,9 @@ export class Engine {
    * Shaped like continueAfterExhaustion (HOW-43): the budget is counted from the log, so a
    * runner that dies mid-sleep leaves a failed, unparked visit that resume() simply re-attempts.
    */
-  private async retryForgeRead(node: string, visit: number, message: string): Promise<{ continue: true } | { continue: false; state: RunState }> {
+  private async retryForgeRead(node: string, visit: number, message: string): Promise<{ continue: true } | { continue: false; park: Park }> {
     const reason = `executor threw: ${message}`;
-    const park = (why = reason) => ({ continue: false as const, state: this.park(node, visit, "executor-threw", why) });
+    const park = (why = reason) => ({ continue: false as const, park: { node, visit, code: "executor-threw" as const, reason: why } });
     const command = this.opts.control?.() ?? null;
     if (command === "pause" || command === "abort") return park();
     const budget = FORGE_RETRY_BACKOFF_MS.length;
@@ -836,6 +948,12 @@ export class Engine {
    * settled (a `happened` is recorded as done; a `not-happened` is left for the retry to claim).
    */
   private async probeIntents(intents: readonly Extract<LoggedEvent, { type: "side-effect-intent" }>[]): Promise<RunState | null> {
+    const park = await this.probeIntentsPark(intents);
+    return park ? this.parkOn(park) : null;
+  }
+
+  /** probeIntents, returning the park instead of appending it — for a caller that logs it later */
+  private async probeIntentsPark(intents: readonly Extract<LoggedEvent, { type: "side-effect-intent" }>[]): Promise<Park | null> {
     for (const intent of intents) {
       const verdict = this.opts.probe
         ? await this.opts.probe(intent.node, intent.effect, intent.attempt_id)
@@ -851,7 +969,7 @@ export class Engine {
         });
         this.completedEffects.add(effectKey(intent.node, intent.effect));
       } else if (verdict === "unknown") {
-        return this.park(intent.node, intent.visit, "ambiguous-effect", `ambiguous side effect "${intent.effect}" — probe could not decide`);
+        return { node: intent.node, visit: intent.visit, code: "ambiguous-effect", reason: `ambiguous side effect "${intent.effect}" — probe could not decide` };
       }
     }
     return null;
@@ -1295,7 +1413,10 @@ export class Engine {
     // HOW-47: a steer whose turn ended before another tool call never reached it. The executor
     // that could have delivered it has returned by now, so it is carried into THIS render —
     // the run's next agent prompt — and its seq is logged so reconstruction reads the same text
-    const carried = undeliveredSteers(logged);
+    // HOW-73: but never a steer to a SIBLING branch whose turn is still live — that one can still
+    // be delivered; only a steer whose turn has finished (or this step's own) is carried
+    const carried = undeliveredSteers(logged).filter((st) =>
+      st.node === nodeId || logged.some((e) => e.type === "node-finished" && e.node === st.node && e.visit === st.visit));
     // HOW-48: the previous visit stopped where the operator asked — brief this one from its words
     const stopResume = stopResumeFor(logged, nodeId, visit);
     // HOW-36: what that visit had done, derived from the log — reconstruction re-derives it
@@ -1426,6 +1547,10 @@ export class Engine {
       this.ctx.set(k, inputs[k]);
     }
     this.ctx.endAttempt("succeeded");
+  }
+
+  private parkOn(p: Park): RunState {
+    return this.park(p.node, p.visit, p.code, p.reason);
   }
 
   private park(node: string, visit: number, code: ParkCode, reason: string): RunState {

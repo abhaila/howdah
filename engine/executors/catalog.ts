@@ -139,7 +139,8 @@ export function computeCatalog(registry: Registry, cap: number): GraphsCatalog {
   // the FLOOR cap: a cap of 0 or a negative/NaN means "default", never "publish nothing"
   const limit = Number.isFinite(cap) && cap > 0 ? cap : GRAPHS_CATALOG_DEFAULT_CAP;
   const base: GraphsCatalog = {
-    nodeKinds: [...NODE_KINDS].sort(),
+    // HOW-73: a drafted graph may not run steps at once (draftRuleProblems), so it is not offered
+    nodeKinds: NODE_KINDS.filter((k) => k !== "parallel").sort(),
     fieldKinds: [...FIELD_KINDS].sort(),
     commandBuiltins,
     graphs,

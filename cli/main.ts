@@ -296,7 +296,7 @@ export async function jumpCommand(runId: string, node: string, message?: string)
   const path = join(runDir, "run.jsonl");
   // the precheck (live runner, finished, unknown node, missing reads) is shared with the
   // viewer's jump route — engine/control.ts jumpRefusal
-  const check = jumpRefusal(runDir, node, GRAPHS);
+  const check = jumpRefusal(runDir, node, GRAPHS, message);
   if (!check.ok) throw new Error(check.message);
   const { replayed } = check;
 
@@ -315,18 +315,29 @@ export async function jumpCommand(runId: string, node: string, message?: string)
  * composer refuse the same runs in the same words. Delivery is the runner's job: this only
  * records the steer, and the claude executor writes it to the agent at its next tool call.
  */
-export function steerCommand(runId: string, text: string): void {
-  const sent = steer(join(runsDir, runId), text);
+export function steerCommand(runId: string, text: string, node?: string): void {
+  const sent = steer(join(runsDir, runId), text, node);
   if (!sent.ok) throw new Error(sent.message);
   console.log(`steer #${sent.seq} sent to ${sent.node}@${sent.visit} — it reaches the agent at its next tool call`);
+}
+
+/** HOW-73: pull `--node <step>` out of a verb's arguments */
+export function takeNodeFlag(rest: readonly string[]): { node?: string; args: string[] } {
+  const args = [...rest];
+  const at = args.indexOf("--node");
+  if (at < 0) return { args };
+  const node = args[at + 1];
+  if (node === undefined || node.startsWith("--")) throw new Error("--node needs a step id");
+  args.splice(at, 2);
+  return { node, args };
 }
 
 /**
  * HOW-48: `howdah stop <run>` — ask the running agent to stop at its next tool call, leave the
  * work consistent and say where it is. The soft pause; `pause` is still the hard one.
  */
-export function softStopCommand(runId: string): void {
-  const sent = softStop(join(runsDir, runId));
+export function softStopCommand(runId: string, node?: string): void {
+  const sent = softStop(join(runsDir, runId), node);
   if (!sent.ok) throw new Error(sent.message);
   console.log(sent.already
     ? `a stop is already on its way to ${sent.node}@${sent.visit}`
@@ -658,8 +669,9 @@ if (import.meta.main) {
     }
     else if (verb === "abort") { writeControl(join(runsDir, rest[0] ?? ""), "abort"); console.log("abort requested — lands at the next node boundary"); }
     else if (verb === "jump") await jumpCommand(rest[0] ?? "", rest[1] ?? "", rest.slice(2).join(" ") || undefined);
-    else if (verb === "steer") steerCommand(rest[0] ?? "", rest.slice(1).join(" "));
-    else if (verb === "stop") softStopCommand(rest[0] ?? "");
+    // HOW-73: `--node <step>` names the branch when several steps are running at once
+    else if (verb === "steer") { const { node, args } = takeNodeFlag(rest); steerCommand(args[0] ?? "", args.slice(1).join(" "), node); }
+    else if (verb === "stop") { const { node, args } = takeNodeFlag(rest); softStopCommand(args[0] ?? "", node); }
     else if (verb === "waive") await waiveCommand(rest[0] ?? "", rest[1] ?? "", rest.slice(2).join(" "));
     else if (verb === "approve" || verb === "send-feedback" || verb === "comment") {
       const { proposalId, rest: args } = splitProposalFlag(rest, verb === "comment" ? 2 : Infinity);

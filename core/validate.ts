@@ -19,6 +19,12 @@
  *   are its proposal + base keys and whose writes are its decision + feedback keys — is
  *   projected to reads/writes by Graph.toShape() (core/graph.ts nodeReads/nodeWrites).
  *
+ *   HOW-73 — parallel steps. A node with `branches` forks: each branch's in-set is out(P)
+ *   (its only predecessor), so a branch never sees a sibling's writes; and what P contributes
+ *   to any OTHER successor (its join) is out(P) ∪ writes(every branch), because the join is
+ *   reached only once every branch has succeeded. That union is the whole of join semantics
+ *   for a MUST analysis.
+ *
  *   Note on scopes: this proves a writer EXISTS on every path. Scope freshness (veiled /
  *   invalidated values inside loops) is a runtime property of ContextStore — a `per-visit`
  *   read inside a loop can still fail legally; declare such reads with that in mind.
@@ -28,7 +34,8 @@ export interface GraphShape {
   entry: string;
   /** run inputs: available at entry (shaping: `inputs="work,notes?"` — required ones only) */
   inputs: string[];
-  nodes: Record<string, { reads: string[]; writes: string[] }>;
+  /** `branches` (HOW-73): this node is a parallel fork over these nodes — see the header */
+  nodes: Record<string, { reads: string[]; writes: string[]; branches?: string[] }>;
   /** condition reads are evaluated AFTER `from` completes: checked against out(from) */
   edges: Array<{ from: string; to: string; reads?: string[] }>;
 }
@@ -55,6 +62,17 @@ export function validateGraph(g: GraphShape): Violation[] {
   const allKeys = new Set<string>(g.inputs);
   for (const n of Object.values(g.nodes)) for (const w of n.writes) allKeys.add(w);
 
+  // HOW-73: what a parallel step hands a non-branch successor (its join): out(P) ∪ every branch's writes
+  const joinWrites = new Map<string, string[]>();
+  for (const [id, n] of Object.entries(g.nodes))
+    if (n.branches) joinWrites.set(id, n.branches.flatMap((b) => g.nodes[b]?.writes ?? []));
+  const contribution = (p: string, to: string): Set<string> => {
+    const base = out.get(p)!;
+    const extra = joinWrites.get(p);
+    if (!extra || g.nodes[p]!.branches!.includes(to)) return base;
+    return new Set([...base, ...extra]);
+  };
+
   // ⊤-initialised MUST analysis
   const TOP = new Set(allKeys);
   const out = new Map<string, Set<string>>(ids.map((id) => [id, new Set(TOP)]));
@@ -71,9 +89,9 @@ export function validateGraph(g: GraphShape): Violation[] {
       } else if (ps.length === 0) {
         inSet = new Set(); // unreachable-from-entry gets ⊥; reads there will be flagged
       } else {
-        inSet = new Set(out.get(ps[0]!)!);
+        inSet = new Set(contribution(ps[0]!, id));
         for (const p of ps.slice(1)) {
-          const po = out.get(p)!;
+          const po = contribution(p, id);
           for (const k of inSet) if (!po.has(k)) inSet.delete(k);
         }
       }
@@ -111,7 +129,10 @@ export function validateGraph(g: GraphShape): Violation[] {
 /** BFS from entry to `target` avoiding writers of `key` — the path that proves the hole. */
 function witnessPath(g: GraphShape, target: string, key: string): string[] {
   if (g.inputs.includes(key)) return []; // shouldn't happen: inputs are always available
-  const writers = new Set(Object.entries(g.nodes).filter(([, n]) => n.writes.includes(key)).map(([id]) => id));
+  // HOW-73: a parallel step counts as a writer of whatever one of its branches writes
+  const writes = (n: GraphShape["nodes"][string]): boolean =>
+    n.writes.includes(key) || (n.branches ?? []).some((b) => g.nodes[b]?.writes.includes(key));
+  const writers = new Set(Object.entries(g.nodes).filter(([, n]) => writes(n)).map(([id]) => id));
   const queue: string[][] = [[g.entry]];
   const seen = new Set([g.entry]);
   while (queue.length) {
