@@ -3,6 +3,7 @@ import { chmodSync, mkdtempSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { execSync } from "node:child_process";
+import { newReviewActivity } from "../../core/review-activity";
 import { worktreeExecutor, commandExecutor, effectiveCwd, readWorktreeRecord, derivePrState, ghPrProbe, stackPrState, publicationPrRefs, checksFailed, type PrState } from "./worktree";
 import { EventLog } from "../../log/write";
 import { REVIEW_REPLY_MARKER } from "../../core/review-activity";
@@ -513,6 +514,10 @@ exit 1
         approved: false, // HOW-57: REVIEW_REQUIRED is not an approval
         activity: [], // HOW-70: an empty list is "no new activity", never "forge unreachable"
         skipped: { bot: 0, howdah: 0 },
+        // HOW-75: what a repair-stalled park would name
+        reviewDecision: "REVIEW_REQUIRED",
+        awaiting: [],
+        lastReviewAt: null,
       });
     } finally {
       process.env.PATH = priorPath;
@@ -549,10 +554,10 @@ describe("HOW-70: probe:pr picks up review comments", () => {
   const iso = () => { nap(); const t = new Date().toISOString(); nap(); return t; };
 
   /** a gh that answers pr view with an open PR and api graphql with `activity` — or fails it */
-  function fakeGh(activity: object | "unreachable"): string {
+  function fakeGh(activity: object | "unreachable", viewer?: string): string {
     const binDir = mkdtempSync(join(tmpdir(), "howdah-gh-"));
     const payload = join(binDir, "activity.json");
-    if (activity !== "unreachable") writeFileSync(payload, JSON.stringify({ data: { repository: { pullRequest: activity } } }));
+    if (activity !== "unreachable") writeFileSync(payload, JSON.stringify({ data: { repository: { pullRequest: activity }, ...(viewer ? { viewer: { login: viewer } } : {}) } }));
     writeFileSync(join(binDir, "gh"), `#!/usr/bin/env bash
 if [[ "$1 $2" == "pr view" ]]; then
   printf '%s\\n' '{"state":"OPEN","url":"${PR}","mergeable":"MERGEABLE","reviewDecision":"REVIEW_REQUIRED","statusCheckRollup":[]}'
@@ -580,8 +585,8 @@ exit 1
     return { log, repoDir, runDir };
   }
 
-  async function probeWith(activity: object | "unreachable", log: EventLog, repoDir: string) {
-    const binDir = fakeGh(activity);
+  async function probeWith(activity: object | "unreachable", log: EventLog, repoDir: string, viewer?: string) {
+    const binDir = fakeGh(activity, viewer);
     const priorPath = process.env.PATH;
     process.env.PATH = `${binDir}:${priorPath ?? ""}`;
     try {
@@ -693,5 +698,79 @@ exit 1
     const exec = commandExecutor({ prProbe: () => ({ state: "OPEN", url: PR, activity: [] }) });
     const r = await exec(args({ def: { kind: "command", run: "probe:pr", writes: { "pr.state": { scope: "per-visit" } } } as any, log, cwd: repoDir }));
     expect(r.writes).toEqual({ "pr.state": "OPEN" });
+  });
+});
+
+// HOW-75: a thread we answered last waits on the reviewer — through the real gh query shape
+describe("HOW-75: answered threads waiting on the reviewer are not CHANGES_REQUIRED", () => {
+  const PR = "https://github.com/areeb/x/pull/7";
+  const prDef = { kind: "command", run: "probe:pr", reads: ["publication_summary"], writes: { "pr.state": { scope: "per-visit" }, "pr.review_activity": { scope: "per-visit" } } } as any;
+  const operator = { __typename: "User", login: "areeb" };
+  const reviewer = { __typename: "User", login: "rita" };
+  // every comment is after the cutoff (publish's start, now) — what is under test is who spoke last
+  const base = Date.now() + 60_000;
+  const at = (min: number) => new Date(base + min * 60_000).toISOString();
+  const c = (author: object, min: number, body: string) => ({ author, body, createdAt: at(min), url: `${PR}#c${min}` });
+  const thread = (path: string, ...comments: object[]) => ({ isResolved: false, path, line: 3, comments: { nodes: comments } });
+
+  async function probe(threads: object[], viewer?: string) {
+    const repoDir = repo();
+    const runDir = mkdtempSync(join(tmpdir(), "howdah-pr-"));
+    const log = new EventLog(join(runDir, "run.jsonl"));
+    log.append({ type: "node-started", node: "delivery.publish", visit: 1, attempt_id: "delivery.publish#1" });
+    const binDir = mkdtempSync(join(tmpdir(), "howdah-gh-"));
+    const payload = join(binDir, "activity.json");
+    writeFileSync(payload, JSON.stringify({ data: { repository: { pullRequest: { author: { login: "areeb" }, reviews: { nodes: [] }, comments: { nodes: [] }, reviewThreads: { nodes: threads } } }, ...(viewer ? { viewer: { login: viewer } } : {}) } }));
+    writeFileSync(join(binDir, "gh"), `#!/usr/bin/env bash
+if [[ "$1 $2" == "pr view" ]]; then
+  printf '%s\\n' '{"state":"OPEN","url":"${PR}","mergeable":"MERGEABLE","reviewDecision":"REVIEW_REQUIRED","statusCheckRollup":[]}'
+  exit 0
+fi
+if [[ "$1 $2" == "api graphql" ]]; then cat "${payload}"; exit 0; fi
+exit 1
+`);
+    chmodSync(join(binDir, "gh"), 0o755);
+    const priorPath = process.env.PATH;
+    process.env.PATH = `${binDir}:${priorPath ?? ""}`;
+    try {
+      const r = await commandExecutor()(args({ def: prDef, reads: { publication_summary: { pr_url: PR } }, log, cwd: repoDir }));
+      return { r, chunks: log.read().flatMap((e) => (e.type === "chunk" ? [e.content] : [])) };
+    } finally {
+      process.env.PATH = priorPath;
+    }
+  }
+
+  test("our reply last (the PR author's, unmarked) → OPEN, and the probe says why it did not count", async () => {
+    const { r, chunks } = await probe([thread("a.ts", c(reviewer, 1, "release or reverse?"), c(operator, 10, "release — on purpose"))]);
+    expect(r.writes).toEqual({ "pr.state": "OPEN", "pr.review_activity": [] });
+    expect(chunks.some((t) => t.includes("1 answered and waiting on the reviewer"))).toBe(true);
+  });
+
+  test("our reply last as the gh viewer (a bot account Howdah runs as) → OPEN", async () => {
+    const howdah = { __typename: "User", login: "howdah-runner" };
+    const { r } = await probe([thread("a.ts", c(reviewer, 1, "why?"), c(howdah, 10, "because"))], "howdah-runner");
+    expect(r.writes["pr.state"]).toBe("OPEN");
+  });
+
+  test("the reviewer replying after ours → CHANGES_REQUIRED, handed the reviewer's reply", async () => {
+    const { r } = await probe([thread("a.ts", c(reviewer, 1, "why?"), c(operator, 10, "because"), c(reviewer, 20, "not convinced"))]);
+    expect(r.writes["pr.state"]).toBe("CHANGES_REQUIRED");
+    expect((r.writes["pr.review_activity"] as { body: string }[]).map((i) => i.body)).toEqual(["not convinced"]);
+  });
+
+  test("a mix → CHANGES_REQUIRED on the reviewer-last thread only", async () => {
+    const { r, chunks } = await probe([
+      thread("answered.ts", c(reviewer, 1, "rename"), c(operator, 10, "kept, see ADR")),
+      thread("open.ts", c(reviewer, 2, "leak"), c(operator, 10, "fixed"), c(reviewer, 20, "still leaks")),
+    ]);
+    expect(r.writes["pr.state"]).toBe("CHANGES_REQUIRED");
+    expect((r.writes["pr.review_activity"] as { path: string }[]).map((i) => i.path)).toEqual(["open.ts"]);
+    expect(chunks.some((t) => t.includes("1 answered and waiting on the reviewer"))).toBe(true);
+  });
+
+  test("derivePrState composed with newReviewActivity: a standing CHANGES_REQUESTED still wins over answered threads", () => {
+    const { items } = newReviewActivity({ author: { login: "areeb" }, reviewThreads: { nodes: [thread("a.ts", c(reviewer, 1, "x"), c(operator, 10, "y")) as any] } }, PR, at(5), { logins: ["areeb"] });
+    expect(derivePrState({ state: "OPEN", newReviewActivity: items.length > 0 })).toBe("OPEN");
+    expect(derivePrState({ state: "OPEN", reviewDecision: "CHANGES_REQUESTED", newReviewActivity: items.length > 0 })).toBe("CHANGES_REQUIRED");
   });
 });

@@ -157,3 +157,19 @@ describe("replies that retry a step are rendered into it", () => {
       expect(rendersReply(ask(code), { node: "n", reply: "do it differently", source: "operator" })).toBe("do it differently");
   });
 });
+
+// HOW-75: the park says what the operator can DO — the bare "another review would judge the same
+// code" left them with nothing to act on
+describe("the no-progress park names the ways on", () => {
+  test("reply, jump to the step, or abort — after the unchanged prefix and the findings", async () => {
+    const { engine, dir } = setup((visit, cwd) => { if (visit === 1) writeFileSync(join(cwd, "feature.ts"), "export const f = 2;\n"); }, ["reject", "reject", "reject"]);
+    const res = await engine().start({ goal: "g" });
+    const reason = (res as { reason: string }).reason;
+    const run = dir.split("/").at(-1)!;
+    expect(reason).toStartWith("repair@2 changed nothing in the worktree since visit 1");
+    expect(reason).toContain("reply to tell the next attempt what to change (or reply empty to retry as-is)");
+    expect(reason).toContain(`\`jump ${run} repair "<what to change>"\``);
+    expect(reason).toContain(`\`abort ${run}\``);
+    expect(reason).not.toContain("another review would judge the same code");
+  });
+});

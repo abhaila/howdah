@@ -21,6 +21,8 @@ import { GRAPHS } from "./index";
 import { Engine, resolveAgentConfig, type AttemptResult, type Executor } from "../engine/run";
 import { approvalExecutor } from "../engine/executors/approval";
 import { commandExecutor } from "../engine/executors/worktree";
+import { Reconciler } from "../engine/reconcile";
+import type { NodeDef } from "../core/graph";
 import { approve, pinComment, redesign, sendFeedback } from "../engine/control";
 import { reconstructRender } from "../prompts/library";
 import type { LoggedEvent } from "../log/events";
@@ -117,8 +119,11 @@ describe("deliveryGraph extraction keeps implement-ticket identical", () => {
     //           repairs — so it is briefed to judge the repairs' diff, not the whole branch again
     //   HOW-70  delivery.probe_pr also publishes `pr.review_activity` (per-visit) and
     //           delivery.address_reviews reads it
+    //   HOW-75  resolve_conflicts / fix_ci / address_reviews declare `changesFiles: false` and go
+    //           to `delivery.repair_check` (repair:changed): unchanged → delivery.wait, else
+    //           review_repairs
     const s = JSON.stringify(sortDeep(shapeOf(implementTicket)));
-    expect(createHash("sha256").update(s).digest("hex")).toBe("27c82f40fe062f912d766f722dc1075978ef4ba70f624d191d637735a93925a4");
+    expect(createHash("sha256").update(s).digest("hex")).toBe("65444914aa3f76446cb72f7a1d9a6175e3602343ba7a91b4e7a597c85e786dad");
   });
 ;
 
@@ -140,10 +145,15 @@ describe("deliveryGraph extraction keeps implement-ticket identical", () => {
 
   test("with verifyAfterRepair every code-changing repair goes through reextract → drift, never straight to review or publish", () => {
     const { edges, nodes } = deliveryGraph({ verifyAfterRepair: true });
+    // HOW-75: the probe-driven repairs reach reextract through repair_check, once it has seen a change
     for (const repair of CODE_CHANGING_REPAIRS)
       expect(edges.filter((e) => e.from === repair).map((e) => e.to)).toEqual([
-        repair === "delivery.revise_repairs" ? "delivery.reextract_revision" : "delivery.reextract",
+        repair === "delivery.revise_repairs" ? "delivery.reextract_revision" : "delivery.repair_check",
       ]);
+    expect(edgeList(edges.filter((e) => e.from === "delivery.repair_check"))).toEqual([
+      "delivery.repair_check -> delivery.wait [repair.changed == false] reads=repair.changed w=1",
+      "delivery.repair_check -> delivery.reextract",
+    ]);
     expect(edges.filter((e) => e.from === "delivery.reextract").map((e) => e.to)).toEqual(["delivery.drift"]);
     expect(edgeList(edges.filter((e) => e.from === "delivery.drift"))).toEqual([
       "delivery.drift -> delivery.revise_repairs [slice.drift has new problems (missing / changed-unexpectedly / still-present / unchanged)] reads=slice.drift w=1",
@@ -198,6 +208,8 @@ interface Script {
   storeDir?: string;
   /** HOW-12: the workspace's verify command for the fixture repo (default: none configured) */
   verifyCommand?: string;
+  /** HOW-75: run the CLI's reconciler seat (git probed before every node), as a real run does */
+  reconcile?: boolean;
 }
 
 function sliceRun(script: Script) {
@@ -230,8 +242,18 @@ function sliceRun(script: Script) {
     if (nodeId === "create_worktree") script.onCreate?.(repo);
     return ok(nodeId.startsWith("cleanup") ? { "worktree.clean": true } : { "worktree.verify_command": script.verifyCommand ?? "" });
   };
-  const engine = () =>
-    new Engine(implementSlice, { dir: runDir, cwd: repo, folderKind: "repo", promptsDir: PROMPTS, executors: { agent, command, worktree, approval: approvalExecutor, wait: async () => ok() } });
+  const engine = (): Engine => {
+    const e: Engine = new Engine(implementSlice, {
+      dir: runDir, cwd: repo, folderKind: "repo", promptsDir: PROMPTS, executors: { agent, command, worktree, approval: approvalExecutor, wait: async () => ok() },
+      ...(script.reconcile
+        ? { beforeNode: async (nodeId: string, def: NodeDef<any>) => {
+            const r = await new Reconciler(repo).reconcile(def);
+            e.log.append({ type: "reconciled", node: nodeId, git: r.git, intended: undefined, disagreements: r.disagreements });
+          } }
+        : {}),
+    });
+    return e;
+  };
   return { repo, home, runDir, engine, prompts, events: () => engine().log.read() };
 }
 
@@ -276,8 +298,9 @@ describe("verifyAfterRepair: a CI fix that breaks a ghost surfaces drift before 
     const order = started(events);
     const fixAt = order.indexOf("delivery.fix_ci");
     // the revision is verified on its own path and then published (f8c8d96: revise → publish)
-    expect(order.slice(fixAt, fixAt + 7)).toEqual([
-      "delivery.fix_ci", "delivery.reextract", "delivery.drift", "delivery.revise_repairs",
+    // HOW-75: repair_check sits between the repair and the map (no reconciler here → "changed")
+    expect(order.slice(fixAt, fixAt + 8)).toEqual([
+      "delivery.fix_ci", "delivery.repair_check", "delivery.reextract", "delivery.drift", "delivery.revise_repairs",
       "delivery.reextract_revision", "delivery.drift_revision", "delivery.publish",
     ]);
 
@@ -584,10 +607,39 @@ describe("resolve_conflicts and address_reviews are re-verified too", () => {
     expect(await run.engine().resume()).toEqual({ state: "finished", outcome: "success" });
     const taken = edgesTaken(run.events());
     for (const repair of ["delivery.resolve_conflicts", "delivery.address_reviews"]) {
-      expect(taken).toContain(`${repair} -> delivery.reextract`);
+      // HOW-75: through repair_check, which saw a change and sent each on to the map
+      expect(taken).toContain(`${repair} -> delivery.repair_check`);
       expect(taken).not.toContain(`${repair} -> delivery.review_repairs`);
     }
+    expect(taken.filter((t) => t === "delivery.repair_check -> delivery.reextract")).toHaveLength(2);
     expect(taken.filter((t) => t === "delivery.drift -> delivery.review_repairs")).toHaveLength(2);
+  });
+
+  // HOW-75: a review repair that rightly changes nothing has nothing to re-verify, review or push
+  test("an address_reviews that changes nothing skips reextract, review and publish and waits for the PR", async () => {
+    const run = sliceRun({
+      reconcile: true,
+      pr: ["CHANGES_REQUIRED", "OPEN", "MERGED"],
+      agents: {
+        "implementation.implement": (_v, repo) => (applyEdits(repo, implementedV2(repo)), commitAll(repo, "implement"), { implementation_summary: "built" }),
+        "implementation.local_review": () => ({ review_verdict: "pass", review_findings: [] }),
+        "delivery.publish": () => ({ publication_summary: "PR" }),
+        "delivery.address_reviews": () => ({ repair_summary: "Every thread already fixed; replied on the naming one.\nDetails…" }),
+        complete_ticket: () => ({ completion_summary: "done" }),
+      },
+    });
+    await run.engine().start(START);
+    approve(run.runDir);
+    expect(await run.engine().resume()).toEqual({ state: "finished", outcome: "success" });
+    const events = run.events();
+    const taken = edgesTaken(events);
+    expect(taken).toContain("delivery.address_reviews -> delivery.repair_check");
+    expect(taken).toContain("delivery.repair_check -> delivery.wait");
+    expect(taken).not.toContain("delivery.repair_check -> delivery.reextract");
+    const order = started(events);
+    expect(order.filter((n) => n === "delivery.publish")).toHaveLength(1);
+    expect(order).not.toContain("delivery.review_repairs");
+    expect(events.filter((e) => e.type === "attention-raised").map((e) => e.type === "attention-raised" && e.code)).toEqual(["awaiting-approval"]);
   });
 });
 

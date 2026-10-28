@@ -32,11 +32,22 @@ describe("cycleNodes", () => {
 });
 
 describe("which steps are progress-checked in the built-ins", () => {
-  test("implement-ticket: the repairs — not the reviewers, the planner, the publisher or the first build", () => {
+  // HOW-75: the three probe-driven repairs dropped out on purpose — changing nothing can be the
+  // right answer for them, and delivery.repair_check routes on it (core/repair-stall.ts parks the
+  // repeat). revise_repairs answers a reject of this very code, so it stays checked.
+  test("implement-ticket: the reviewed repairs — not the probe-driven ones, the reviewers, the planner, the publisher or the first build", () => {
     expect([...GRAPHS["implement-ticket"]!.progressChecked()].sort()).toEqual([
-      "delivery.address_reviews", "delivery.fix_ci", "delivery.resolve_conflicts", "delivery.revise_repairs",
+      "delivery.revise_repairs",
       "implementation.implement_review",
     ]);
+  });
+
+  test("HOW-75: no built-in progress-checks a probe-driven repair", () => {
+    for (const name of ["implement-ticket", "implement-slice", "implement-stacked", "improve-codebase"]) {
+      const checked = GRAPHS[name]!.progressChecked();
+      for (const repair of ["delivery.address_reviews", "delivery.fix_ci", "delivery.resolve_conflicts"]) expect(checked.has(repair), `${name} ${repair}`).toBe(false);
+      expect(checked.has("delivery.revise_repairs"), name).toBe(true);
+    }
   });
 
   test("implement-slice: the build sits on its review loop, so it is checked too", () => {

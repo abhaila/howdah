@@ -944,7 +944,10 @@ export class Engine {
         if (text && text !== "[]") findings = ` The findings it was answering: ${text.length > 600 ? `${text.slice(0, 597)}…` : text}`;
       }
     } catch { /* unreadable: the park still says what happened */ }
-    return `${node}@${visit} changed nothing in the worktree since visit ${previous.visit} — another review would judge the same code.${findings}`;
+    // HOW-75: say what the operator can DO, not only what happened
+    const run = basename(this.opts.dir);
+    return `${node}@${visit} changed nothing in the worktree since visit ${previous.visit}, so the loop would judge the same code again.${findings} ` +
+      `To go on: reply to tell the next attempt what to change (or reply empty to retry as-is), \`jump ${run} ${node} "<what to change>"\`, or \`abort ${run}\`.`;
   }
 
   /**

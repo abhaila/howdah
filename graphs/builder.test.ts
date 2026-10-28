@@ -23,6 +23,7 @@ import { VERIFY_BUILTIN, VERIFY_PRODUCES } from "../engine/executors/verify";
 import { AWAIT_BUILTIN } from "../engine/executors/await";
 import { RESTACK_BUILTIN } from "../engine/executors/restack";
 import { AWAIT_PRODUCES, AWAIT_PROBE_PRODUCES, AWAIT_READS, RESTACK_PRODUCES, RESTACK_READS } from "../core/stack";
+import { REPAIR_CHECK_BUILTIN, REPAIR_CHECK_PRODUCES, REPAIR_CHECK_READS } from "../core/repair-stall";
 import { EVIDENCE_BUILTIN } from "../engine/executors/evidence";
 import { GRAPHS_CATALOG_BUILTIN } from "../engine/executors/catalog";
 // the reducer is plain data over core/ — no React, no DOM — so the browser's verdict can be
@@ -385,7 +386,7 @@ describe("what an executor can emit — the table checked against the executors 
    * returns undefined, which MEANS "anything the operator declares is legal".
    */
   test("every built-in the command executor dispatches is in the table", () => {
-    expect([...MAP_BUILTINS, LAUNCH_BUILTIN, VERIFY_BUILTIN, EVIDENCE_BUILTIN, AWAIT_BUILTIN, RESTACK_BUILTIN, GRAPHS_CATALOG_BUILTIN, "probe:pr"].sort()).toEqual(COMMAND_BUILTINS.map((b) => b.run).sort());
+    expect([...MAP_BUILTINS, LAUNCH_BUILTIN, VERIFY_BUILTIN, EVIDENCE_BUILTIN, AWAIT_BUILTIN, RESTACK_BUILTIN, GRAPHS_CATALOG_BUILTIN, REPAIR_CHECK_BUILTIN, "probe:pr"].sort()).toEqual(COMMAND_BUILTINS.map((b) => b.run).sort());
   });
 
   // HOW-56 T4. core/catalog.ts carries the key the row produces, so what is pinned here is
@@ -414,6 +415,18 @@ describe("what an executor can emit — the table checked against the executors 
     const byMode = calls.map((c) => keysOf(c[1]!)).sort((a, b) => a.length - b.length);
     expect(byMode).toEqual([[...AWAIT_PROBE_PRODUCES].sort(), [...AWAIT_PRODUCES].sort()]);
     expect(executor("worktree.ts")).toContain("if (isAwaitBuiltin(def.run)) return awaitBuiltin(args);");
+  });
+
+  // HOW-75: repair:changed reads core/repair-stall.ts's contract; pin the executor to it
+  test("repair:changed publishes — and works from — exactly what the table claims", () => {
+    const row = COMMAND_BUILTINS.find((b) => b.run === REPAIR_CHECK_BUILTIN)!;
+    expect(row.produces).toEqual([...REPAIR_CHECK_PRODUCES]);
+    expect(row.reads).toEqual([...REPAIR_CHECK_READS]);
+    const src = executor("repair-check.ts");
+    const m = src.match(/declaredWrites\(\s*REPAIR_CHECK_BUILTIN\s*,\s*def\s*,\s*\{\s*\[([A-Z_]+)\]\s*:/);
+    expect(m, "no declaredWrites(REPAIR_CHECK_BUILTIN, def, { [KEY]: … }) call found").not.toBeNull();
+    expect(m![1]).toBe("REPAIR_CHANGED_KEY");
+    expect(executor("worktree.ts")).toContain("if (isRepairCheckBuiltin(def.run)) return repairCheckBuiltin(args);");
   });
 
   test("git:restack publishes — and works from — exactly what the table claims", () => {

@@ -29,7 +29,8 @@
  * THROWS (parks the run) rather than reading as "no PR". The map built-ins (map:extract,
  * map:reextract, map:drift — system-map 1c, engine/executors/map.ts) dispatch from here too,
  * as does `runs:launch` (HOW-23, engine/executors/launch.ts), `verify:run` (HOW-12,
- * engine/executors/verify.ts) and HOW-57's `runs:await` / `git:restack` (await.ts, restack.ts). The spawn/stream/timeout half lives in ./shell.ts, shared with
+ * engine/executors/verify.ts), HOW-57's `runs:await` / `git:restack` (await.ts, restack.ts) and
+ * HOW-75's `repair:changed` (repair-check.ts). The spawn/stream/timeout half lives in ./shell.ts, shared with
  * verify:run.
  */
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
@@ -45,7 +46,9 @@ import { runShell } from "./shell";
 import { ForgeUnreachableError, remoteDefaultBranch, revParse, sh } from "./git";
 import { awaitBuiltinExecutor, isAwaitBuiltin, type AwaitBuiltinOpts } from "./await";
 import { isRestackBuiltin, restackBuiltinExecutor, type RestackBuiltinOpts } from "./restack";
-import { newReviewActivity, parsePrUrl, reviewCutoff, REVIEW_ACTIVITY_QUERY, type RawReviewActivity, type ReviewItem, type ReviewSkips } from "../../core/review-activity";
+import { newReviewActivity, parsePrUrl, reviewCutoff, REVIEW_ACTIVITY_QUERY, type AwaitingThread, type RawReviewActivity, type ReviewItem, type ReviewSkips } from "../../core/review-activity";
+import { repairStall, type RepairStall } from "../../core/repair-stall";
+import { isRepairCheckBuiltin, repairCheckBuiltinExecutor } from "./repair-check";
 import { graphsCatalogBuiltinExecutor, isGraphsCatalogBuiltin, type GraphsCatalogBuiltinOpts } from "./catalog";
 
 export { type WorktreeRecord, worktreeRecordPath, readWorktreeRecord, effectiveCwd } from "./worktree-record";
@@ -336,7 +339,7 @@ function requiredChecksFailed(cwd: string, prRef: string): boolean | null {
  * the forge being unreachable, exactly like `pr view` — never "no new activity", which is an
  * empty list — so the HOW-69 retry covers it and a quiet probe is never a guess.
  */
-function reviewActivity(cwd: string, prUrl: string): RawReviewActivity {
+function reviewActivity(cwd: string, prUrl: string): { pr: RawReviewActivity; viewer: string | null } {
   const ref = parsePrUrl(prUrl);
   if (ref === null) throw new Error(`probe:pr: cannot read review activity — "${prUrl}" is not a PR url`);
   const r = sh([
@@ -344,7 +347,7 @@ function reviewActivity(cwd: string, prUrl: string): RawReviewActivity {
     "-f", `query=${REVIEW_ACTIVITY_QUERY}`, "-F", `owner=${ref.owner}`, "-F", `name=${ref.name}`, "-F", `number=${ref.number}`,
   ], cwd);
   if (r.code !== 0) throw new ForgeUnreachableError(r.stderr.trim().slice(0, 200) || "gh api graphql failed");
-  let j: { data?: { repository?: { pullRequest?: RawReviewActivity | null } | null } | null };
+  let j: { data?: { repository?: { pullRequest?: RawReviewActivity | null } | null; viewer?: { login?: string | null } | null } | null };
   try {
     j = JSON.parse(r.stdout);
   } catch {
@@ -352,7 +355,7 @@ function reviewActivity(cwd: string, prUrl: string): RawReviewActivity {
   }
   const pr = j.data?.repository?.pullRequest;
   if (!pr) throw new ForgeUnreachableError(`gh api graphql found no pull request at ${prUrl}`);
-  return pr;
+  return { pr, viewer: j.data?.viewer?.login ?? null };
 }
 
 export interface PrProbeResult {
@@ -362,6 +365,12 @@ export interface PrProbeResult {
   /** HOW-70: review activity after `since`, oldest first; absent from a stub that does not model it */
   activity?: ReviewItem[];
   skipped?: ReviewSkips;
+  /** HOW-75: GitHub's own decision, verbatim — what a repair-stalled park names */
+  reviewDecision?: string;
+  /** HOW-75: unresolved threads we answered last, waiting on the reviewer */
+  awaiting?: AwaitingThread[];
+  /** HOW-75: the newest review by somebody other than us — new input when after the cutoff */
+  lastReviewAt?: string | null;
 }
 
 /**
@@ -377,13 +386,20 @@ export const ghPrProbe = (cwd: string, prRef: string, since: string | null = nul
   const j = JSON.parse(r.stdout) as { state: string; url: string; mergeable?: string; reviewDecision?: string; statusCheckRollup?: CheckRow[] };
   const failedChecks = requiredChecksFailed(cwd, j.url) ?? checksFailed(j.statusCheckRollup ?? []);
   // a landed or closed PR has nothing left to address: no second call, and nothing to throw on
-  const { items, skipped } = j.state === "OPEN" ? newReviewActivity(reviewActivity(cwd, j.url), j.url, since) : { items: [], skipped: { bot: 0, howdah: 0 } };
+  // HOW-75: "ours" is the PR's author (the operator opens every Howdah PR) and whoever gh runs as
+  const fetched = j.state === "OPEN" ? reviewActivity(cwd, j.url) : null;
+  const { items, skipped, awaiting, lastReviewAt } = fetched
+    ? newReviewActivity(fetched.pr, j.url, since, { logins: [fetched.pr.author?.login ?? "", fetched.viewer ?? ""] })
+    : { items: [], skipped: { bot: 0, howdah: 0 }, awaiting: [], lastReviewAt: null };
   return {
     state: derivePrState({ ...j, failedChecks, newReviewActivity: items.length > 0 }),
     url: j.url,
     approved: j.reviewDecision === "APPROVED",
     activity: items,
     skipped,
+    ...(j.reviewDecision ? { reviewDecision: j.reviewDecision } : {}),
+    awaiting,
+    lastReviewAt,
   };
 };
 
@@ -407,6 +423,37 @@ export interface CommandExecutorOpts {
   catalog?: GraphsCatalogBuiltinOpts;
 }
 
+/**
+ * HOW-75: has anything arrived on the PR(s) the last repair has not seen? New review items, or
+ * a review (of any state) submitted after the cutoff by somebody other than us. A failing check
+ * or a conflict has no such input: nothing was pushed, so nothing about them can have moved.
+ */
+export function hasNewInput(prs: readonly PrProbeResult[], since: string | null): boolean {
+  return prs.some((p) => (p.activity ?? []).length > 0
+    || (typeof p.lastReviewAt === "string" && (since === null || Date.parse(p.lastReviewAt) > Date.parse(since))));
+}
+
+/** HOW-75: the repair-stalled park's words — what is outstanding, where, and every way on */
+export function repairStalledReason(o: { runId: string; state: PrState; decider: PrProbeResult; prs: readonly PrProbeResult[]; stall: RepairStall }): string {
+  const { runId, state, decider, prs, stall } = o;
+  const repair = stall.repair ? `${stall.repair.node}@${stall.repair.visit}` : "the last repair";
+  const why =
+    state === "CI_FAILED" ? `a required check is still failing (${decider.url}/checks)`
+    : state === "CONFLICTS" ? "it still has merge conflicts with its base"
+    : decider.reviewDecision === "CHANGES_REQUESTED" ? "GitHub's review decision is still CHANGES_REQUESTED"
+    : "review activity is still outstanding";
+  const awaiting = prs.flatMap((p) => p.awaiting ?? []);
+  const outstanding = awaiting.length > 0
+    ? ` Outstanding: ${awaiting.map((a) => `${a.path ? `${a.path}${a.line !== undefined ? `:${a.line}` : ""} ` : ""}${a.url}, answered and waiting on ${a.reviewer}`).join("; ")}.`
+    : "";
+  const act =
+    state === "CI_FAILED" ? "re-run the failing check on the PR or push a fix yourself"
+    : state === "CONFLICTS" ? "resolve the conflicts on the branch yourself"
+    : "reply on the PR, or re-request review or dismiss the stale review";
+  return `${decider.url} still reads ${state} (${why}), but ${repair} made no change and nothing new has arrived on the PR since.${outstanding} ` +
+    `To go on: ${act}, then Retry this step (\`resume ${runId}\`); or \`jump ${runId} ${stall.repair?.node ?? "<repair-step>"} "<what to change>"\` to make a change; or \`abort ${runId}\`.`;
+}
+
 export function commandExecutor(opts: CommandExecutorOpts = {}): Executor {
   const mapBuiltins = mapBuiltinExecutor(opts.map);
   const launchBuiltin = launchBuiltinExecutor(opts.launch);
@@ -415,6 +462,7 @@ export function commandExecutor(opts: CommandExecutorOpts = {}): Executor {
   const awaitBuiltin = awaitBuiltinExecutor(opts.await);
   const restackBuiltin = restackBuiltinExecutor(opts.restack);
   const catalogBuiltin = graphsCatalogBuiltinExecutor(opts.catalog);
+  const repairCheckBuiltin = repairCheckBuiltinExecutor();
   return async (args) => {
     const { nodeId, def, visit, cwd, log, reads } = args;
     if (def.kind !== "command") throw new Error("commandExecutor on non-command node");
@@ -435,6 +483,8 @@ export function commandExecutor(opts: CommandExecutorOpts = {}): Executor {
     if (isRestackBuiltin(def.run)) return restackBuiltin(args);
     // HOW-56 T4: `graphs:catalog` reads the registry and publishes what a drafter may use
     if (isGraphsCatalogBuiltin(def.run)) return catalogBuiltin(args);
+    // HOW-75: `repair:changed` — did the repair that just ran change the worktree at all?
+    if (isRepairCheckBuiltin(def.run)) return repairCheckBuiltin(args);
     const workDir = effectiveCwd(log.path, cwd);
     const declared = Object.keys(def.writes ?? {});
     let index = 0;
@@ -467,6 +517,7 @@ export function commandExecutor(opts: CommandExecutorOpts = {}): Executor {
         const skips = [
           ...(pr.skipped?.bot ? [`${pr.skipped.bot} by a bot`] : []),
           ...(pr.skipped?.howdah ? [`${pr.skipped.howdah} of Howdah's own replies`] : []),
+          ...(pr.skipped?.awaiting ? [`${pr.skipped.awaiting} answered and waiting on the reviewer`] : []),
         ];
         if (skips.length) chunk("text", `not counted as review activity: ${skips.join(", ")} (core/review-activity.ts)`);
         return pr;
@@ -475,6 +526,13 @@ export function commandExecutor(opts: CommandExecutorOpts = {}): Executor {
       const decider = prs[decidedBy];
       if (decider === undefined) throw new Error(`probe:pr: no PR at stack index ${decidedBy}`);
       if (prs.length > 1) chunk("text", `stack of ${prs.length} PRs → ${state} (decided by ${decider.url})`);
+      // HOW-75: the same repair demanded again, after it changed nothing, with nothing new on the PR
+      const stall = repairStall(log.read(), nodeId, visit, state, hasNewInput(prs, since));
+      if (stall !== null) {
+        const reason = repairStalledReason({ runId: args.runId, state, decider, prs, stall });
+        chunk("tool_result", reason);
+        return { status: "failed", code: "repair-stalled", reason, writes: {} };
+      }
       log.append({
         type: "reconciled", node: nodeId,
         git: probeGit(workDir),

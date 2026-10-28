@@ -53,6 +53,7 @@ import { AWAIT_BUILTIN, AWAIT_PRODUCES, AWAIT_PROBE_PRODUCES, AWAIT_READS, RESTA
 import { EVIDENCE_BUILTIN, EVIDENCE_PRODUCES } from "./evidence";
 import { GRAPH_DRAFT_KEY, GRAPHS_CATALOG_BUILTIN, GRAPHS_CATALOG_PRODUCES, type GraphsCatalog } from "./catalog";
 import { includeRefs, templateReads } from "./template-refs";
+import { REPAIR_CHECK_BUILTIN, REPAIR_CHECK_PRODUCES, REPAIR_CHECK_READS } from "./repair-stall";
 
 export const SPEC_VERSION = 1;
 
@@ -230,7 +231,11 @@ export type NodeSpec =
       requires?: string;
       /** HOW-51: may not start while a live acceptance criterion is unmet and unwaived */
       requiresAcceptance?: true;
-      /** HOW-54: never changes the worktree (it plans or publishes) — not progress-checked on a cycle */
+      /**
+       * HOW-54: never changes the worktree (it plans or publishes) — not progress-checked on a cycle.
+       * HOW-75: also the opt-out for a step whose "no change" is checked some other way — the
+       * delivery repairs, which `repair:changed` follows and routes on instead.
+       */
       changesFiles?: false;
       /** the agent steps whose work this step reviews — it is briefed to judge only their diff (core/graph.ts) */
       reviewsWorkOf?: string[];
@@ -331,6 +336,8 @@ export const COMMAND_BUILTINS: Array<{ run: string; label: string; produces: str
   // HOW-56 T4 (decision 2A): what a drafter MAY USE — ids, not bodies. Reads nothing (the
   // registry it reads is this installation's, not something an earlier step produces).
   { run: GRAPHS_CATALOG_BUILTIN, label: "List the graphs and built-ins a drafter may use", produces: [...GRAPHS_CATALOG_PRODUCES] },
+  // HOW-75: did the repair that just ran change anything? false = nothing to review or push, wait
+  { run: REPAIR_CHECK_BUILTIN, label: "Check whether the repair changed anything", produces: [...REPAIR_CHECK_PRODUCES], reads: [...REPAIR_CHECK_READS] },
 ];
 
 /** A worktree CLEAN-UP step emits these two facts and no others (engine/executors/worktree.ts). */
