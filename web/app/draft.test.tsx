@@ -446,6 +446,7 @@ describe("the builder opens a draft from its run", () => {
     const calls = serve([ready()]);
     const el = await mount(<GraphBuilder fromRun="r1" />);
     expect(el.querySelector(".gb-from-run")?.textContent).toBe("Editing draft from run r1 · back to review");
+    expect(el.querySelector(".gb-draft-hint")).toBeNull(); // HOW-71: already a draft, so no offer to draft
     expect(linkNamed(el, "back to review")?.getAttribute("href")).toBe("/runs/r1/draft");
     await click(buttonNamed(el, "Save and add to the catalog")!);
     const put = calls.find((c) => c.method === "PUT")!;

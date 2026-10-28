@@ -262,4 +262,49 @@ describe("the launch form: Draft a graph (HOW-66)", () => {
     await settle();
     expect(posted[0]!.body).toEqual({ graph: "draft-graph", inputs: { intent: "a graph that writes release notes" } });
   });
+
+  // HOW-71: the Graphs page's "Draft a graph" arrives as ?graph=draft-graph&base=<selected graph>
+  describe("arriving from the Graphs page (HOW-71)", () => {
+    const withTicket = {
+      ...reads,
+      "/api/graphs": { ...reads["/api/graphs"], graphs: [
+        ...reads["/api/graphs"].graphs,
+        { name: "implement-ticket", description: "d", inputs: ["goal", "work"], kind: "repo", source: "local", builder: true },
+      ] },
+    };
+    const realUrl = location.pathname + location.search;
+    afterEach(() => history.replaceState(null, "", realUrl));
+
+    test("?graph=draft-graph&base=implement-ticket: draft-graph picked, that base selected, and that base sent", async () => {
+      history.replaceState(null, "", "/new?graph=draft-graph&base=implement-ticket");
+      const posted = serve(withTicket, { id: "draft-graph-abc" });
+      window.location.assign = (() => {}) as typeof window.location.assign;
+      const el = mount(<StartRun />);
+      await settle();
+      expect(labelled(el, "Graph")!.querySelector("select")!.value).toBe("draft-graph");
+      expect(labelled(el, "Base (optional)")!.querySelector("select")!.value).toBe("implement-ticket");
+      typeArea(el.querySelector("textarea")!, "like implement-ticket without CI");
+      await act(async () => launchButton(el).click());
+      await settle();
+      expect(posted[0]!.body).toEqual(draftLaunchRequest({ intent: "like implement-ticket without CI", base: "implement-ticket" }));
+    });
+
+    test("a ?base= that is not a builder graph reads as `Let the agent choose` and is never sent", async () => {
+      for (const bogus of ["nope", "implement-slice"]) {
+        history.replaceState(null, "", `/new?graph=draft-graph&base=${bogus}`);
+        const posted = serve(withTicket, { id: "draft-graph-abc" });
+        window.location.assign = (() => {}) as typeof window.location.assign;
+        const el = mount(<StartRun />);
+        await settle();
+        expect(labelled(el, "Base (optional)")!.querySelector("select")!.value).toBe("");
+        typeArea(el.querySelector("textarea")!, "a graph that writes release notes");
+        await act(async () => launchButton(el).click());
+        await settle();
+        expect(posted[0]!.body).toEqual({ graph: "draft-graph", inputs: { intent: "a graph that writes release notes" } });
+        act(() => root!.unmount());
+        host?.remove();
+        root = host = null;
+      }
+    });
+  });
 });

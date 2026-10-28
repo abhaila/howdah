@@ -7,15 +7,21 @@
  * rows were `<div onClick>`s with no role, tabIndex or key handler and are `Row`s (P2.8);
  * and saving tuning reports through a toast rather than by relabelling the Save button for
  * 1.5s, which nothing but a sighted operator watching that button could perceive.
+ *
+ * HOW-71: the way in is "Draft a graph" (HOW-56 D-1B), not the hand builder. It opens New run
+ * with draft-graph picked and, when the selected graph is one the builder can open, that graph
+ * as the base — `builder === true` is the same rule New run's Base list applies, so the link
+ * never names a base the form would not offer. "Build by hand" stays, secondary.
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { GitBranch, FolderGit2, SlidersHorizontal, Pencil, Plus, RotateCcw as ResetIcon } from "lucide-react";
+import { GitBranch, FolderGit2, SlidersHorizontal, Pencil, Plus, Sparkles, RotateCcw as ResetIcon } from "lucide-react";
 import type { GraphCatalog } from "@/lib/types";
 import { navigate } from "@/lib/nav";
 import { useTypedText } from "@/lib/hooks";
 import { getJSON } from "@/lib/net";
 import { GraphDag, useGraphShape, type GraphShapeDto, type AgentConfigDto } from "../graph-dag";
 import { modelFitsHarness } from "../../../core/graph";
+import { DRAFT_GRAPH } from "../../../core/catalog";
 import { defaultHarness, effortFor, harnessNames, harnessSpec, isHarness } from "../../../core/harnesses";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -493,6 +499,7 @@ export function GraphsList() {
   // built from. A hand-written one — or a built one since hand-edited past recognition —
   // is false, and gets told so rather than opened half-understood.
   const isBuilder = current?.builder === true;
+  const draftHref = `/new?${new URLSearchParams({ graph: DRAFT_GRAPH, ...(isBuilder && selected ? { base: selected } : {}) })}`;
 
   return (
     <div className="runs">
@@ -515,7 +522,8 @@ export function GraphsList() {
             </Row>
           ))}
           <div className="actions">
-            <Button onClick={() => navigate("/graphs/new")}><Plus />Build a graph</Button>
+            <Button onClick={() => navigate(draftHref)}><Sparkles />Draft a graph</Button>
+            <Button variant="outline" onClick={() => navigate("/graphs/new")}><Plus />Build by hand</Button>
           </div>
           <div className="field-hint">
             Built graphs are saved under <code>$HOWDAH_HOME/graphs</code>, not in the Howdah
