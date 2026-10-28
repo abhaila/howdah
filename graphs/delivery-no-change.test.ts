@@ -192,4 +192,42 @@ describe("HOW-75: a probe that keeps demanding the repair that changed nothing p
     expect(ask?.reason).toContain(`${PR}/checks`);
     expect(ask?.reason).toContain("delivery.fix_ci@1 made no change");
   });
+
+  // review finding f-1: the cutoff only moves on address_reviews, so review activity beside a CI
+  // or conflict state used to read as "new" on every probe and the no-change loop never stopped
+  const after = (since: string | null) => new Date(Date.parse(since!) + 1000).toISOString();
+
+  test("CI_FAILED beside a review submitted after the cutoff (an approval) still parks after one no-change fix_ci", async () => {
+    const run = deliveryRun({
+      probes: [
+        () => ({ state: "CHANGES_REQUIRED", reviewDecision: "CHANGES_REQUESTED" }),
+        (since) => ({ state: "CI_FAILED", reviewDecision: "APPROVED", lastReviewAt: after(since) }),
+      ],
+      repairCommits: (node) => node === "delivery.address_reviews",
+    });
+    expect((await run.engine().start(START)).state).toBe("parked");
+    const events = run.events();
+    const order = started(events);
+    // address_reviews changed something and was published, so the cutoff sits before the approval
+    expect(order.filter((n) => n === "delivery.publish")).toHaveLength(2);
+    expect(order.filter((n) => n === "delivery.fix_ci")).toHaveLength(1);
+    const [ask] = asks(events);
+    expect(ask?.code).toBe("repair-stalled");
+    expect(ask?.node).toBe("delivery.probe_pr");
+    expect(ask?.reason).toContain(`${PR}/checks`);
+    expect(ask?.reason).toContain("delivery.fix_ci@1 made no change");
+  });
+
+  test("CONFLICTS beside standing review activity still parks after one no-change resolve_conflicts", async () => {
+    const item = { pr: PR, kind: "comment" as const, author: "rita", at: "2099-01-01T00:00:00Z", url: `${PR}#c1`, body: "nit" };
+    const run = deliveryRun({ probes: [(since) => ({ state: "CONFLICTS", activity: [item], lastReviewAt: after(since) })] });
+    expect((await run.engine().start(START)).state).toBe("parked");
+    const events = run.events();
+    expect(started(events).filter((n) => n === "delivery.resolve_conflicts")).toHaveLength(1);
+    const [ask] = asks(events);
+    expect(ask?.code).toBe("repair-stalled");
+    expect(ask?.node).toBe("delivery.probe_pr");
+    expect(ask?.reason).toContain("merge conflicts");
+    expect(ask?.reason).toContain("delivery.resolve_conflicts@1 made no change");
+  });
 });

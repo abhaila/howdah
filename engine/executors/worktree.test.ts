@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { execSync } from "node:child_process";
 import { newReviewActivity } from "../../core/review-activity";
-import { worktreeExecutor, commandExecutor, effectiveCwd, readWorktreeRecord, derivePrState, ghPrProbe, stackPrState, publicationPrRefs, checksFailed, type PrState } from "./worktree";
+import { worktreeExecutor, commandExecutor, effectiveCwd, readWorktreeRecord, derivePrState, ghPrProbe, stackPrState, publicationPrRefs, checksFailed, hasNewInput, type PrProbeResult, type PrState } from "./worktree";
 import { EventLog } from "../../log/write";
 import { REVIEW_REPLY_MARKER } from "../../core/review-activity";
 import { ForgeUnreachableError } from "./git";
@@ -772,5 +772,30 @@ exit 1
     const { items } = newReviewActivity({ author: { login: "areeb" }, reviewThreads: { nodes: [thread("a.ts", c(reviewer, 1, "x"), c(operator, 10, "y")) as any] } }, PR, at(5), { logins: ["areeb"] });
     expect(derivePrState({ state: "OPEN", newReviewActivity: items.length > 0 })).toBe("OPEN");
     expect(derivePrState({ state: "OPEN", reviewDecision: "CHANGES_REQUESTED", newReviewActivity: items.length > 0 })).toBe("CHANGES_REQUIRED");
+  });
+});
+
+describe("HOW-75: hasNewInput only judges the state whose repair review activity answers", () => {
+  const PRU = "https://github.com/acme/app/pull/9";
+  const cutoff = "2026-01-01T00:00:00Z";
+  const later = "2026-01-01T00:00:01Z";
+  const earlier = "2025-12-31T23:59:59Z";
+  const item = { pr: PRU, kind: "comment" as const, author: "rita", at: later, url: `${PRU}#c1`, body: "please rename" };
+  const pr = (p: Partial<PrProbeResult>): PrProbeResult => ({ state: "OPEN", url: PRU, ...p });
+
+  test("CI_FAILED beside a review submitted after the cutoff (an APPROVED one) is not new input — the cutoff never moves on fix_ci", () => {
+    expect(hasNewInput("CI_FAILED", [pr({ state: "CI_FAILED", lastReviewAt: later })], cutoff)).toBe(false);
+  });
+
+  test("CONFLICTS beside new review items and a later review is not new input for resolve_conflicts", () => {
+    expect(hasNewInput("CONFLICTS", [pr({ state: "CONFLICTS", activity: [item], lastReviewAt: later })], cutoff)).toBe(false);
+  });
+
+  test("CHANGES_REQUIRED: items or a later review are new input; an older review alone is not; no cutoff means any review is", () => {
+    expect(hasNewInput("CHANGES_REQUIRED", [pr({ activity: [item] })], cutoff)).toBe(true);
+    expect(hasNewInput("CHANGES_REQUIRED", [pr({ lastReviewAt: later })], cutoff)).toBe(true);
+    expect(hasNewInput("CHANGES_REQUIRED", [pr({ lastReviewAt: earlier })], cutoff)).toBe(false);
+    expect(hasNewInput("CHANGES_REQUIRED", [pr({})], cutoff)).toBe(false);
+    expect(hasNewInput("CHANGES_REQUIRED", [pr({ lastReviewAt: earlier })], null)).toBe(true);
   });
 });

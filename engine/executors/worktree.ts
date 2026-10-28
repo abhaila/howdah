@@ -424,11 +424,18 @@ export interface CommandExecutorOpts {
 }
 
 /**
- * HOW-75: has anything arrived on the PR(s) the last repair has not seen? New review items, or
- * a review (of any state) submitted after the cutoff by somebody other than us. A failing check
- * or a conflict has no such input: nothing was pushed, so nothing about them can have moved.
+ * HOW-75: has anything arrived on the PR(s) that answers the repair `state` demands, since the
+ * last repair saw it? Only CHANGES_REQUIRED has such input: new review items, or a review (of any
+ * state) submitted after the cutoff by somebody other than us — the cutoff is the last
+ * address_reviews start, so each review counts once. A failing check or a conflict has none.
+ * Nothing was pushed, so nothing about them moved, and review activity beside them (an APPROVED
+ * review, a comment on a conflicted PR) is not input for fix_ci or resolve_conflicts — the cutoff
+ * does not move on their visits, so counting it would make every probe "new" and the no-change
+ * loop unbounded. An operator who re-runs CI or resolves the conflict changes the state (no
+ * stall) or asks for a retry after the park, which the park's words offer.
  */
-export function hasNewInput(prs: readonly PrProbeResult[], since: string | null): boolean {
+export function hasNewInput(state: PrState, prs: readonly PrProbeResult[], since: string | null): boolean {
+  if (state !== "CHANGES_REQUIRED") return false;
   return prs.some((p) => (p.activity ?? []).length > 0
     || (typeof p.lastReviewAt === "string" && (since === null || Date.parse(p.lastReviewAt) > Date.parse(since))));
 }
@@ -527,7 +534,7 @@ export function commandExecutor(opts: CommandExecutorOpts = {}): Executor {
       if (decider === undefined) throw new Error(`probe:pr: no PR at stack index ${decidedBy}`);
       if (prs.length > 1) chunk("text", `stack of ${prs.length} PRs → ${state} (decided by ${decider.url})`);
       // HOW-75: the same repair demanded again, after it changed nothing, with nothing new on the PR
-      const stall = repairStall(log.read(), nodeId, visit, state, hasNewInput(prs, since));
+      const stall = repairStall(log.read(), nodeId, visit, state, hasNewInput(state, prs, since));
       if (stall !== null) {
         const reason = repairStalledReason({ runId: args.runId, state, decider, prs, stall });
         chunk("tool_result", reason);
