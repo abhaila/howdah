@@ -215,7 +215,9 @@ export class AttentionCenter {
     return readdirSync(this.dir)
       .filter((f) => f.endsWith(".json"))
       .map((f) => JSON.parse(readFileSync(join(this.dir, f), "utf8")) as AttentionRecord)
-      .sort((a, b) => a.raised_at.localeCompare(b.raised_at));
+      // raised_at ties within a millisecond, and readdir order is the filesystem's (APFS sorts,
+      // ext4 does not) — the id breaks the tie so the inbox reads the same everywhere
+      .sort((a, b) => a.raised_at.localeCompare(b.raised_at) || a.id.localeCompare(b.id));
   }
 
   /**
