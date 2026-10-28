@@ -266,6 +266,7 @@ describe("HOW-46: the Steps pane reads the derived turn state", () => {
     const log = new FakeLog();
     log.add({ type: "run-started", graph: "quick-task", inputs: { goal: "g" }, pinned_prompts: {} });
     log.add({ type: "node-started", node: "do", visit: 1, attempt_id: "do#1" });
+    log.add({ type: "prompt-rendered", node: "do", visit: 1, prompt: "doc.draft", prompt_version: 1, rendered_hash: "h", context_read: {} });
     log.add({ type: "chunk", node: "do", visit: 1, turn: 1, index: 0, kind: "text", content: "half a thou" });
     return log;
   };
@@ -283,5 +284,19 @@ describe("HOW-46: the Steps pane reads the derived turn state", () => {
     activity(el);
     expect(el.querySelector(".act-note")!.textContent).toContain("died inside this turn");
     expect(el.querySelector(".act-live")).toBeNull();
+  });
+
+  test("HOW-70: a finished probe step has no \"process died\" note", () => {
+    const log = new FakeLog();
+    log.add({ type: "run-started", graph: "implement-ticket", inputs: { goal: "g" }, pinned_prompts: {} });
+    log.add({ type: "node-started", node: "delivery.probe_pr", visit: 1, attempt_id: "delivery.probe_pr#1" });
+    log.add({ type: "chunk", node: "delivery.probe_pr", visit: 1, turn: 1, index: 0, kind: "tool_call", content: "gh pr view 7" });
+    log.add({ type: "chunk", node: "delivery.probe_pr", visit: 1, turn: 1, index: 1, kind: "tool_result", content: "OPEN" });
+    log.add({ type: "node-finished", node: "delivery.probe_pr", visit: 1, status: "succeeded", writes: { "pr.state": "OPEN" } });
+    log.add({ type: "node-started", node: "delivery.wait", visit: 1, attempt_id: "delivery.wait#1" });
+    const el = renderStep(log, "delivery.probe_pr", 1, 0, false);
+    activity(el);
+    expect(el.textContent).toContain("gh pr view 7");
+    expect(el.textContent).not.toContain("died inside this turn");
   });
 });

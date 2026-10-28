@@ -27,6 +27,7 @@
  */
 import { buildGraph, type GraphSpec } from "../core/graph-spec";
 import type { PrState } from "./implement-ticket";
+import type { ReviewItem } from "../core/review-activity";
 
 export interface ImproveCodebaseCtx {
   goal: string;
@@ -39,6 +40,8 @@ export interface ImproveCodebaseCtx {
   publication_summary: string;
   repair_summary: string;
   "pr.state": PrState;
+  /** HOW-70: new review activity on the PR(s), handed to address_reviews */
+  "pr.review_activity": ReviewItem[];
   "worktree.clean": boolean;
   outcome: "removed" | "failed";
 }
@@ -70,6 +73,8 @@ export const spec: GraphSpec = {
       scope: "per-visit",
       choices: ["OPEN", "MERGED", "CLOSED", "CONFLICTS", "CI_FAILED", "CHANGES_REQUIRED"],
     },
+    // HOW-70: the review items probe_pr found newer than the last address_reviews, for that step
+    { key: "pr.review_activity", kind: "json", scope: "per-visit" },
     { key: "worktree.clean", kind: "boolean", scope: "per-visit" },
     { key: "outcome", kind: "choice", scope: "per-visit", choices: ["removed", "failed"] },
   ],
@@ -87,8 +92,9 @@ export const spec: GraphSpec = {
 
     // v2, shared with implement-ticket
     { id: "delivery.publish", kind: "agent", prompt: "delivery.publish", reads: ["goal", "work"], writes: ["publication_summary"], changesFiles: false, class: deliv },
-    { id: "delivery.probe_pr", kind: "command", run: "probe:pr", reads: ["publication_summary"], writes: ["pr.state"], class: deliv },
-    { id: "delivery.address_reviews", kind: "agent", prompt: "delivery.address_reviews", reads: ["goal", "work", "publication_summary", "review_verdict", "review_findings"], writes: ["repair_summary"], class: deliv },
+    // HOW-70: also publishes the review activity newer than the last address_reviews (core/review-activity.ts)
+    { id: "delivery.probe_pr", kind: "command", run: "probe:pr", reads: ["publication_summary"], writes: ["pr.state", "pr.review_activity"], class: deliv },
+    { id: "delivery.address_reviews", kind: "agent", prompt: "delivery.address_reviews", reads: ["goal", "work", "publication_summary", "review_verdict", "review_findings", "pr.review_activity"], writes: ["repair_summary"], class: deliv },
     { id: "delivery.fix_ci", kind: "agent", prompt: "delivery.fix_ci", reads: ["goal", "work", "publication_summary", "review_verdict", "review_findings"], writes: ["repair_summary"], class: deliv },
     { id: "delivery.resolve_conflicts", kind: "agent", prompt: "delivery.resolve_conflicts", reads: ["goal", "work", "publication_summary"], writes: ["repair_summary"], class: deliv },
     // HOW-53: the review nodes are read-only — a reviewer that can edit can pass its own fix

@@ -318,7 +318,7 @@ export interface DraftedProvenance {
  * repeated, since core/ may import core/.
  */
 export const COMMAND_BUILTINS: Array<{ run: string; label: string; produces: string[]; reads?: string[] }> = [
-  { run: "probe:pr", label: "Check the pull request", produces: ["pr.state", "pr.approved"] },
+  { run: "probe:pr", label: "Check the pull request", produces: ["pr.state", "pr.approved", "pr.review_activity"] },
   { run: "map:extract", label: "Extract the system map", produces: ["map.base", "map.neighbourhood", "slice.drift", "review_findings"] },
   { run: "map:reextract", label: "Re-extract the system map", produces: ["map.after"] },
   { run: "map:drift", label: "Compare the map against the approved design", produces: ["slice.drift"] },

@@ -45,6 +45,7 @@ import { runShell } from "./shell";
 import { ForgeUnreachableError, remoteDefaultBranch, revParse, sh } from "./git";
 import { awaitBuiltinExecutor, isAwaitBuiltin, type AwaitBuiltinOpts } from "./await";
 import { isRestackBuiltin, restackBuiltinExecutor, type RestackBuiltinOpts } from "./restack";
+import { newReviewActivity, parsePrUrl, reviewCutoff, REVIEW_ACTIVITY_QUERY, type RawReviewActivity, type ReviewItem, type ReviewSkips } from "../../core/review-activity";
 import { graphsCatalogBuiltinExecutor, isGraphsCatalogBuiltin, type GraphsCatalogBuiltinOpts } from "./catalog";
 
 export { type WorktreeRecord, worktreeRecordPath, readWorktreeRecord, effectiveCwd } from "./worktree-record";
@@ -221,12 +222,15 @@ export function worktreeExecutor(opts: WorktreeExecutorOpts): Executor {
 
 export type PrState = "OPEN" | "MERGED" | "CLOSED" | "CONFLICTS" | "CI_FAILED" | "CHANGES_REQUIRED";
 
-/** derive the routing state the graphs consume from gh's PR view */
-export function derivePrState(pr: { state: string; mergeable?: string; reviewDecision?: string; failedChecks?: boolean }): PrState {
+/**
+ * derive the routing state the graphs consume from gh's PR view. HOW-70: review activity newer
+ * than the run's last address_reviews (core/review-activity.ts) ranks with CHANGES_REQUESTED.
+ */
+export function derivePrState(pr: { state: string; mergeable?: string; reviewDecision?: string; failedChecks?: boolean; newReviewActivity?: boolean }): PrState {
   if (pr.state === "MERGED") return "MERGED";
   if (pr.state === "CLOSED") return "CLOSED";
   if (pr.mergeable === "CONFLICTING") return "CONFLICTS";
-  if (pr.reviewDecision === "CHANGES_REQUESTED") return "CHANGES_REQUIRED";
+  if (pr.reviewDecision === "CHANGES_REQUESTED" || pr.newReviewActivity) return "CHANGES_REQUIRED";
   if (pr.failedChecks) return "CI_FAILED";
   return "OPEN";
 }
@@ -327,8 +331,44 @@ function requiredChecksFailed(cwd: string, prRef: string): boolean | null {
   }
 }
 
-/** gh probe with the fields routing needs; unreachable THROWS — absence of evidence parks */
-export const ghPrProbe = (cwd: string, prRef: string): { state: PrState; url: string; approved?: boolean } | null => {
+/**
+ * HOW-70: the PR's reviews, plain comments and inline threads in ONE GraphQL call. A failure is
+ * the forge being unreachable, exactly like `pr view` — never "no new activity", which is an
+ * empty list — so the HOW-69 retry covers it and a quiet probe is never a guess.
+ */
+function reviewActivity(cwd: string, prUrl: string): RawReviewActivity {
+  const ref = parsePrUrl(prUrl);
+  if (ref === null) throw new Error(`probe:pr: cannot read review activity — "${prUrl}" is not a PR url`);
+  const r = sh([
+    "gh", "api", "graphql", ...(ref.host === "github.com" ? [] : ["--hostname", ref.host]),
+    "-f", `query=${REVIEW_ACTIVITY_QUERY}`, "-F", `owner=${ref.owner}`, "-F", `name=${ref.name}`, "-F", `number=${ref.number}`,
+  ], cwd);
+  if (r.code !== 0) throw new ForgeUnreachableError(r.stderr.trim().slice(0, 200) || "gh api graphql failed");
+  let j: { data?: { repository?: { pullRequest?: RawReviewActivity | null } | null } | null };
+  try {
+    j = JSON.parse(r.stdout);
+  } catch {
+    throw new ForgeUnreachableError(`gh api graphql answered something that is not JSON: ${r.stdout.trim().slice(0, 120)}`);
+  }
+  const pr = j.data?.repository?.pullRequest;
+  if (!pr) throw new ForgeUnreachableError(`gh api graphql found no pull request at ${prUrl}`);
+  return pr;
+}
+
+export interface PrProbeResult {
+  state: PrState;
+  url: string;
+  approved?: boolean;
+  /** HOW-70: review activity after `since`, oldest first; absent from a stub that does not model it */
+  activity?: ReviewItem[];
+  skipped?: ReviewSkips;
+}
+
+/**
+ * gh probe with the fields routing needs; unreachable THROWS — absence of evidence parks.
+ * `since` is the review cutoff the caller read from the run's log (reviewCutoff).
+ */
+export const ghPrProbe = (cwd: string, prRef: string, since: string | null = null): PrProbeResult | null => {
   const r = sh(["gh", "pr", "view", prRef, "--json", "state,url,mergeable,reviewDecision,statusCheckRollup"], cwd);
   if (r.code !== 0) {
     if (/no pull requests? found/i.test(r.stderr + r.stdout)) return null;
@@ -336,7 +376,15 @@ export const ghPrProbe = (cwd: string, prRef: string): { state: PrState; url: st
   }
   const j = JSON.parse(r.stdout) as { state: string; url: string; mergeable?: string; reviewDecision?: string; statusCheckRollup?: CheckRow[] };
   const failedChecks = requiredChecksFailed(cwd, j.url) ?? checksFailed(j.statusCheckRollup ?? []);
-  return { state: derivePrState({ ...j, failedChecks }), url: j.url, approved: j.reviewDecision === "APPROVED" };
+  // a landed or closed PR has nothing left to address: no second call, and nothing to throw on
+  const { items, skipped } = j.state === "OPEN" ? newReviewActivity(reviewActivity(cwd, j.url), j.url, since) : { items: [], skipped: { bot: 0, howdah: 0 } };
+  return {
+    state: derivePrState({ ...j, failedChecks, newReviewActivity: items.length > 0 }),
+    url: j.url,
+    approved: j.reviewDecision === "APPROVED",
+    activity: items,
+    skipped,
+  };
 };
 
 export interface CommandExecutorOpts {
@@ -406,11 +454,21 @@ export function commandExecutor(opts: CommandExecutorOpts = {}): Executor {
       if (foreign.size) chunk("text", `ignoring ${foreign.size} dependency PR${foreign.size === 1 ? "" : "s"} (deps.prs)`);
       const prRefs = refs.length > 0 ? refs : [branch];
       const probe = opts.prProbe ?? ghPrProbe;
+      // HOW-70: "new" review activity is newer than this, read from the log — never a cursor
+      const since = reviewCutoff(log.read());
       const prs = prRefs.map((prRef) => {
         chunk("tool_call", `gh pr view ${prRef}`);
-        const pr = probe(record?.repo ?? workDir, prRef);
+        const pr = probe(record?.repo ?? workDir, prRef, since);
         if (pr === null) throw new Error(`no PR exists for "${prRef}" — was publish skipped?`);
         chunk("tool_result", `${pr.state} ${pr.url}`);
+        const activity = pr.activity ?? [];
+        if (activity.length > 0)
+          chunk("tool_result", `${activity.length} new review item${activity.length === 1 ? "" : "s"} since ${since ?? "the PR opened"}: ${activity.map((a) => `${a.kind} by ${a.author}`).join(", ")}`);
+        const skips = [
+          ...(pr.skipped?.bot ? [`${pr.skipped.bot} by a bot`] : []),
+          ...(pr.skipped?.howdah ? [`${pr.skipped.howdah} of Howdah's own replies`] : []),
+        ];
+        if (skips.length) chunk("text", `not counted as review activity: ${skips.join(", ")} (core/review-activity.ts)`);
         return pr;
       });
       const { state, decidedBy } = stackPrState(prs.map((p) => p.state));
@@ -429,6 +487,8 @@ export function commandExecutor(opts: CommandExecutorOpts = {}): Executor {
           ...(declared.includes("pr.state") ? { "pr.state": state } : {}),
           // HOW-57: every PR of this run approved — what decides whether a moved base restacks it
           ...(declared.includes("pr.approved") ? { "pr.approved": prs.every((p) => p.approved === true) } : {}),
+          // HOW-70: every PR's new review activity, base of the stack first — what address_reviews is handed
+          ...(declared.includes("pr.review_activity") ? { "pr.review_activity": prs.flatMap((p) => p.activity ?? []) } : {}),
         },
       };
     }

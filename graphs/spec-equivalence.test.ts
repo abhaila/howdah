@@ -42,6 +42,9 @@
  *   (repair scope) implement-ticket, implement-slice, implement-stacked, improve-codebase:
  *           delivery.review_repairs declares `reviewsWorkOf` (the four code-changing repairs),
  *           so it is briefed to judge the repairs' diff rather than the whole branch again.
+ *   HOW-70  implement-ticket, implement-slice, implement-stacked (through stackedFrom),
+ *           improve-codebase: delivery.probe_pr also publishes `pr.review_activity` (per-visit),
+ *           and delivery.address_reviews reads it — the review comments the probe found new.
  *
  * ONE ENTRY WAS ADDED BY HAND, 2026-10-13 (HOW-57, decision G9): `implement-stacked` is a NEW
  * graph, not a conversion, so it has no pre-conversion shape to be faithful to. Its entry was

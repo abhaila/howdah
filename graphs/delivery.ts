@@ -13,6 +13,13 @@
  *        ├──────── pass ── review_repairs ─ reject ─▶ revise_repairs     [verifyAfterRepair: false]
  *        └─────────────────────────────────────────────────┘
  *
+ * CHANGES_REQUIRED is GitHub's `reviewDecision` OR review activity newer than the last
+ * address_reviews (HOW-70, core/review-activity.ts) — a COMMENTED review, a PR comment, an
+ * unresolved thread — since the operator who opens every Howdah PR cannot request changes on
+ * it. probe_pr hands the items over as `pr.review_activity`. It cannot loop on itself: the
+ * cutoff moves to each address_reviews start (read from the log), Howdah's replies carry
+ * `REVIEW_REPLY_MARKER`, bots never count, and HOW-54's no-progress park is the backstop.
+ *
  * A rejected repair is revised ONCE and published (f8c8d96): the next probe decides, and the
  * next repair reads the previous review's verdict and findings (address_reviews / fix_ci), so
  * a finding stays blocking across rounds instead of spinning review ⇄ revise.
@@ -49,6 +56,7 @@ import type { EdgeDef, NodeDef, OutputSpec } from "../core/graph";
 import type { BaseSnapshot } from "../engine/slice-decision";
 import type { MapAfter, SliceDrift } from "../engine/slice-map";
 import type { GhostSet } from "../map/ghosts";
+import type { ReviewItem } from "../core/review-activity";
 
 export type PrState = "OPEN" | "MERGED" | "CLOSED" | "CONFLICTS" | "CI_FAILED" | "CHANGES_REQUIRED";
 
@@ -62,6 +70,8 @@ export interface DeliveryCtx {
   repair_summary: string;
   completion_summary: string;
   "pr.state": PrState;
+  /** HOW-70: new review activity on the PR(s), handed to address_reviews */
+  "pr.review_activity": ReviewItem[];
   "worktree.clean": boolean;
 }
 
@@ -106,11 +116,12 @@ function plainDelivery(): DeliveryParts<DeliveryCtx> {
         changesFiles: false,
       },
       // no maxVisits: probe_pr ⇄ wait polls on a human reviewer (system-map 0.3)
-      "delivery.probe_pr": { kind: "command", run: "probe:pr", reads: ["publication_summary"], writes: { "pr.state": perVisit }, class: "delivery" },
+      // HOW-70: per-visit like pr.state — each probe supersedes the last one's review activity
+      "delivery.probe_pr": { kind: "command", run: "probe:pr", reads: ["publication_summary"], writes: { "pr.state": perVisit, "pr.review_activity": perVisit }, class: "delivery" },
       "delivery.address_reviews": {
         kind: "agent",
         prompt: "delivery.address_reviews",
-        reads: ["goal", "work", "publication_summary", "review_verdict", "review_findings"],
+        reads: ["goal", "work", "publication_summary", "review_verdict", "review_findings", "pr.review_activity"],
         writes: { repair_summary: sticky },
         class: "delivery",
       },
@@ -251,7 +262,7 @@ function verifiedDelivery(): DeliveryParts<VerifiedDeliveryCtx> {
   const reviewAwareRepairReads = ["goal", "work", "publication_summary", "review_verdict", "review_findings", ...design] as const;
   const nodes: Record<string, NodeDef<VerifiedDeliveryCtx>> = {
     ...plain.nodes,
-    "delivery.address_reviews": { kind: "agent", prompt: "slice.address_reviews", reads: [...reviewAwareRepairReads], writes: { repair_summary: sticky }, class: "delivery" },
+    "delivery.address_reviews": { kind: "agent", prompt: "slice.address_reviews", reads: [...reviewAwareRepairReads, "pr.review_activity"], writes: { repair_summary: sticky }, class: "delivery" },
     "delivery.fix_ci": { kind: "agent", prompt: "slice.fix_ci", reads: [...reviewAwareRepairReads], writes: { repair_summary: sticky }, class: "delivery" },
     "delivery.resolve_conflicts": { kind: "agent", prompt: "slice.resolve_conflicts", reads: [...repairReads], writes: { repair_summary: sticky }, class: "delivery" },
     "delivery.review_repairs": {

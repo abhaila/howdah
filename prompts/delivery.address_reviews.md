@@ -1,6 +1,6 @@
 ---
 id: delivery.address_reviews
-version: 2
+version: 3
 tags: [implement-ticket]
 provenance: ported from Orbital implement-ticket
 ---
@@ -26,6 +26,12 @@ Previous delivery review findings:
 
 {{ context.review_findings | dump }}
 
+New review activity since the last pass (reviews, PR comments and unresolved inline threads, oldest first; `[]` when the probe found none):
+
+{{ context.pr.review_activity | dump }}
+
+Address every item of new review activity: each one is a reviewer, usually the operator, asking for something. Treat a comment as feedback even when it is phrased as a question.
+
 Inspect the current PR, its published head, review decisions and unresolved threads. Read the affected code and applicable repository instructions.
 
 If the publication summary lists more than one PR, the change was published as a stack: inspect the review decisions and unresolved threads on every PR in it, and address each one that has feedback. Work through the stack from its base upward, since a correction in a lower branch must be carried up through every branch built on it using the repository’s conventions. Wherever this step says “the PR”, apply it to each PR in the stack.
@@ -34,7 +40,7 @@ Address feedback within the work scope and goal. Make the required local changes
 
 If the previous delivery review verdict is `reject`, treat every previous review finding as still blocking unless you verify it is already corrected in the current published head. Do not return a no-op or thread-only summary while any previous finding remains unaddressed. Repair those findings, reply only with evidence, and keep unresolved blockers visible in `repair_summary`.
 
-For feedback already satisfied by the published change, reply with supporting evidence and resolve the thread. For feedback requiring a new local change, keep the thread unresolved until that correction is published and verified. Check existing replies before posting to avoid duplicates.
+For feedback already satisfied by the published change, reply with supporting evidence and resolve the thread. For feedback requiring a new local change, keep the thread unresolved until that correction is published and verified. Check existing replies before posting to avoid duplicates. End every comment or reply you post on a PR with the line `<!-- howdah -->`, so the next probe recognises it as yours and does not mistake it for new review activity.
 
 Explain with evidence when a requested change is unnecessary or outside scope.
 
