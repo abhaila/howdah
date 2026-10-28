@@ -334,14 +334,19 @@ describe("Tooltip — hover AND focus AND tap, tied by aria-describedby (P1.4)",
    * is what stops that wiring being dropped as "the library handles it".
    */
   test("it is closed until something opens it, and opening it names the trigger's description", async () => {
-    const el = renderPrimitive(<Tooltip content="Folder is gone"><span>Open in IDE</span></Tooltip>);
+    const el = renderPrimitive(<Tooltip content="Folder is gone"><span tabIndex={0}>Open in IDE</span></Tooltip>);
     const trigger = $(el, '[data-slot="tooltip-trigger"]')!;
     expect(document.querySelector('[role="tooltip"]')).toBeNull();
     expect(trigger.hasAttribute("aria-describedby")).toBe(false);
 
     // awaited: the positioner measures and re-renders after the popup mounts, and an
     // un-awaited act() leaves that update outside the test's act scope (React says so, loudly)
-    await act(async () => { trigger.dispatchEvent(new window.Event("focusin", { bubbles: true })); });
+    // REALLY focused, not a synthetic focusin: off macOS, Base UI's useFocus opens only when the
+    // target matches :focus-visible, which happy-dom answers from activeElement. On macOS it
+    // takes an isMacSafari branch that skips the check, which is why a bare event passed there
+    // and failed on Linux CI.
+    const focusable = trigger.querySelector<HTMLElement>("[tabindex]")!;
+    await act(async () => { focusable.focus(); });
     const tip = document.querySelector('[role="tooltip"]') as HTMLElement;
     expect(tip).not.toBeNull();
     expect(tip.textContent).toBe("Folder is gone");
