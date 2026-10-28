@@ -36,6 +36,10 @@
  * Its Save is the ordinary create, carrying `fromRun` so the SERVER stamps the provenance
  * (`drafted`, marked edited); nothing here sends a `drafted` of its own. A draft that is
  * already a graph opens that graph instead, so a second tab cannot save it twice.
+ *
+ * HOW-71: a blank `/graphs/new` offers drafting in one quiet line, since hand building is now
+ * the secondary way in. Never on `/graphs/:name/build` or `?fromRun=`: both are deliberate
+ * hand edits, and the line goes once the first save turns the route into `/build`.
  */
 import { useCallback, useEffect, useMemo, useReducer, useState } from "react";
 import type { RunDraft } from "../../draft";
@@ -47,6 +51,7 @@ import { getJSON } from "@/lib/net";
 import { autoLayout } from "@/lib/layout";
 import type { GraphSpec, Point } from "../../../core/graph-spec";
 import { parseGraphSpec } from "../../../core/graph-spec";
+import { DRAFT_GRAPH } from "../../../core/catalog";
 import {
   PRESETS, bySeverity, draftProblems, draftReducer, newStep, pickPrompts, type Draft, type StepKind,
 } from "@/lib/spec-draft";
@@ -256,6 +261,11 @@ export function GraphBuilder({ name, fromRun }: { name?: string; fromRun?: strin
         <p className="gb-from-run">
           Editing draft from run <a href={`/run/${encodeURIComponent(fromRun)}`}>{fromRun}</a>
           <span aria-hidden> · </span><a href={`/runs/${encodeURIComponent(fromRun)}/draft`}>back to review</a>
+        </p>
+      )}
+      {!name && !fromRun && !draft.saved && (
+        <p className="gb-draft-hint">
+          Rather describe it? <a href={`/new?${new URLSearchParams({ graph: DRAFT_GRAPH })}`}>Draft a graph</a>
         </p>
       )}
       {error && <div className="field-error wrap-pre">{error}</div>}

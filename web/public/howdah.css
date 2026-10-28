@@ -271,6 +271,7 @@ main { flex: 1; min-width: 0; min-height: 0; overflow: hidden; display: flex; fl
 .dag-node rect.dag-visits { fill: var(--status-running); stroke: none; }
 .dag-visits-text { fill: var(--on-alarm); font-size: var(--type-2xs); font-weight: 700; font-family: var(--font-mono); }
 .graphs-layout { display: grid; grid-template-columns: 300px 1fr; gap: 28px; align-items: start; }
+.graphs-layout .actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; }
 .graph-description { margin-bottom: 8px; }
 /* the moved static inline styles (HOW-16 P3.13) */
 .topbar-back { text-decoration: none; color: var(--fg-muted); }
@@ -1220,4 +1221,5 @@ main { flex: 1; min-width: 0; min-height: 0; overflow: hidden; display: flex; fl
 .dag-node.removed rect:first-of-type { stroke-dasharray: 5 4; fill: transparent; }
 .dag-node.removed .dag-title { text-decoration: line-through; fill: var(--fg-faint); }
 .dag-node.highlight rect:first-of-type { stroke: var(--attention); stroke-width: 2.2; }
-.gb-from-run { margin: 0; font-size: var(--type-sm); color: var(--fg-muted); }
+.gb-from-run, .gb-draft-hint { margin: 0; font-size: var(--type-sm); color: var(--fg-muted); }
+.gb-from-run a, .gb-draft-hint a { text-decoration: underline; text-underline-offset: 2px; }
