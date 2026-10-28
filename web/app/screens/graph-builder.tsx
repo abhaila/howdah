@@ -48,7 +48,7 @@ import { autoLayout } from "@/lib/layout";
 import type { GraphSpec, Point } from "../../../core/graph-spec";
 import { parseGraphSpec } from "../../../core/graph-spec";
 import {
-  PRESETS, bySeverity, draftProblems, draftReducer, newStep, pickPrompts, type Draft, type StepKind,
+  PRESETS, bySeverity, draftProblems, draftReducer, newStep, pickPrompts, type Draft, type PaletteKind,
 } from "@/lib/spec-draft";
 import { GraphCanvas, type Selection } from "../builder/canvas";
 import { Palette } from "../builder/palette";
@@ -169,7 +169,7 @@ export function GraphBuilder({ name, fromRun }: { name?: string; fromRun?: strin
   const onSelect = useCallback((sel: Selection) => setSelection(sel), []);
 
   /** One way to add a step, whichever gesture asked for it (D7) — palette click or drop. */
-  const addStep = useCallback((kind: StepKind, at?: Point) => {
+  const addStep = useCallback((kind: PaletteKind, at?: Point) => {
     // the OPERATOR'S name seeds the id, not the palette's label (HOW-26). It is passed raw:
     // `newStep` and the palette's preview both hand it to the same `nextNodeId`, so what the
     // box promised is what the step gets — including for a box left empty.

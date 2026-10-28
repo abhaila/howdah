@@ -26,6 +26,7 @@ import { PRESETS, bySeverity, type Draft, type DraftAction } from "@/lib/spec-dr
 import { ConfigFields } from "../screens/graphs";
 import { FieldsPane } from "./fields";
 import { StepFields } from "./step-form";
+import { stepSummary } from "./node-card";
 import { ConditionEditor, StepRoutes } from "./branching";
 import { ProblemText } from "./problem";
 import type { Selection } from "./canvas";
@@ -56,6 +57,29 @@ export function Properties({ draft, dispatch, problems, selection, onSelect, onP
     const node = spec.nodes.find((n) => n.id === selection.id);
     if (!node) return <GraphPanel draft={draft} dispatch={dispatch} problems={problems} onSelect={onSelect} onPreset={onPreset} />;
     const mine = problemsOfStep(problems, node.id);
+    // HOW-73: a parallel step is opened and drawn, not edited here yet — say what it does, say
+    // where it is changed, and still list what is wrong with it
+    if (node.kind === "parallel")
+      return (
+        <div className="gb-panel">
+          <BackToGraph onSelect={onSelect} />
+          <Card>
+            <CardHeader>
+              <CardTitle>{node.title?.trim() || node.id}</CardTitle>
+              <CardDescription>Runs these steps at the same time, then continues at {node.join || "—"}.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <p>{stepSummary(spec, node)}</p>
+              <p>Editing a step that runs others at once is not supported here yet — edit the graph's source.</p>
+            </CardContent>
+          </Card>
+          {mine.map((p, i) => (
+            <div key={i} className={`${isBlocking(p) ? "field-error" : "field-advice"} builder-problem`}>
+              <ProblemText message={p.message} />
+            </div>
+          ))}
+        </div>
+      );
     return (
       <div className="gb-panel">
         <BackToGraph onSelect={onSelect} />

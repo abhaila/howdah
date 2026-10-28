@@ -103,7 +103,7 @@ describe("computeCatalog: content", () => {
     expect(json).not.toContain("defineGraph");
   });
 
-  test("node and field kinds come from the live tables", () => {
+  test("node and field kinds come from the live tables — never `parallel`, which a draft may not use (HOW-73)", () => {
     const cat = computeCatalog(fakeRegistry([]), 1_000_000);
     expect(cat.nodeKinds.sort()).toEqual(["agent", "approval", "command", "terminal", "wait", "worktree"].sort());
     expect(cat.fieldKinds.sort()).toEqual(["boolean", "choice", "json", "number", "text"]);

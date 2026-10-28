@@ -361,7 +361,7 @@ describe("every native node kind can be built from the forms' own defaults (AC1)
         edges: [],
       },
     };
-    const add = (kind: NodeSpec["kind"], title: string, over: (n: NodeSpec) => NodeSpec = (n) => n) => {
+    const add = (kind: Exclude<NodeSpec["kind"], "parallel">, title: string, over: (n: NodeSpec) => NodeSpec = (n) => n) => {
       const made = newStep(draft.spec, kind, title);
       draft = apply(draft, { type: "add-step", ...made, node: over(made.node) });
       return over(made.node).id;

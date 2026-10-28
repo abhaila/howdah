@@ -15,7 +15,7 @@
  * page fills in by itself when the drafter finishes (D-4A).
  */
 import { useEffect, useMemo, useState } from "react";
-import { predicateLabel } from "../../../core/graph-spec";
+import { predicateLabel, specFlowEdges } from "../../../core/graph-spec";
 import type { ReadyDraft } from "../../draft";
 import { GraphDag, type GraphShapeDto } from "../graph-dag";
 import {
@@ -51,7 +51,7 @@ export function draftShape(d: ReadyDraft): GraphShapeDto {
     description: spec.description,
     entry: spec.entry,
     nodes: [...spec.nodes.map(node), ...removed.map(node)],
-    edges: spec.edges.map((e) => ({ from: e.from, to: e.to, ...(e.when ? { label: predicateLabel(e.when) } : {}) })),
+    edges: specFlowEdges(spec).map((e) => ({ from: e.from, to: e.to, ...(e.when ? { label: predicateLabel(e.when) } : {}), ...(e.kind ? { kind: e.kind } : {}) })),
   };
 }
 

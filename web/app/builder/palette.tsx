@@ -27,7 +27,7 @@
  * its own form (step-form.tsx RenameStep) rather than removed and re-made.
  */
 import { Plus } from "lucide-react";
-import { STEP_KINDS, nextNodeId, type StepKind } from "@/lib/spec-draft";
+import { STEP_KINDS, nextNodeId, type PaletteKind } from "@/lib/spec-draft";
 import { freeSpotNear } from "@/lib/layout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -42,7 +42,7 @@ export function Palette({ draft, name, onName, onAdd }: {
    *  lands on the canvas, and both gestures have to read the same box */
   name: string;
   onName: (name: string) => void;
-  onAdd: (kind: StepKind, at?: Point) => void;
+  onAdd: (kind: PaletteKind, at?: Point) => void;
 }) {
   const centre = useCanvasCentre();
   // the id the step WILL get, seeded with the RAW name and nothing else, because the add does

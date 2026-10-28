@@ -587,6 +587,9 @@ main { flex: 1; min-width: 0; min-height: 0; overflow: hidden; display: flex; fl
    Inngest's shape: one row per node visit on a shared axis. Status is carried by the
    glyph; colour only ever seconds it, and `done` carries no hue at all. */
 .steps { padding-top: 4px; }
+/* HOW-73: the branches of one parallel step's visit — concurrent rows, grouped and indented */
+.step-group { margin-left: 8px; border-left: 2px solid var(--border-strong); }
+.step-row.branch .step-node { padding-left: 4px; }
 .step-row {
   display: flex; align-items: center; gap: 10px;
   height: 26px; padding: 0 4px; border-bottom: 1px solid var(--border);

@@ -63,12 +63,14 @@ type DetailDto = RunDetail & { cwd_exists?: boolean; editor_configured?: boolean
  * becomes "Stop now" in a menu, with a line saying how the two differ. A soft stop that has not
  * taken effect after `escalateMs` (the agent may be inside one long tool call) offers Stop now.
  */
-export function RunControls({ runId, summary, onAction, softStoppable = false, softStop = null, escalateMs = SOFT_STOP_ESCALATE_MS, now = Date.now() }: {
+export function RunControls({ runId, summary, onAction, softStoppable = false, softStopNode, softStop = null, escalateMs = SOFT_STOP_ESCALATE_MS, now = Date.now() }: {
   runId: string;
   summary: RunDetail["summary"];
   onAction: () => void;
   /** a live turn on a harness with a steer channel (progress.tsx steerableTurn) */
   softStoppable?: boolean;
+  /** HOW-73: the step whose turn a soft stop names — several branches can be live at once */
+  softStopNode?: string;
   softStop?: RunDetail["soft_stop"];
   escalateMs?: number;
   now?: number;
@@ -83,7 +85,9 @@ export function RunControls({ runId, summary, onAction, softStoppable = false, s
     setError(null);
     setMenuOpen(false);
     try {
-      const r = await fetch(`/api/runs/${runId}/${verb}`, { method: "POST" });
+      const r = await fetch(`/api/runs/${runId}/${verb}`, verb === "soft-stop" && softStopNode
+        ? { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ node: softStopNode }) }
+        : { method: "POST" });
       if (!r.ok) throw new Error(((await r.json().catch(() => null)) as any)?.error ?? `${verb} failed`);
       toast(verb === "soft-stop" ? "stop sent — the agent stops at its next tool call" : `${verb} accepted — the runner is acting on it`);
       setTimeout(onAction, 300);
@@ -651,7 +655,7 @@ export function RunView({ id, graceMs = OPEN_GRACE_MS }: { id: string; graceMs?:
           />
           <RunControls
             runId={id} summary={summary} onAction={reload} now={now}
-            softStoppable={steerableTurn(detail) !== null} softStop={detail.soft_stop}
+            softStoppable={steerableTurn(detail) !== null} softStopNode={steerableTurn(detail)?.node} softStop={detail.soft_stop}
             escalateMs={detail.soft_stop_escalate_ms ?? SOFT_STOP_ESCALATE_MS}
           />
           <OpenIdeButton runId={id} detail={detail} />

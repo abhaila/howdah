@@ -47,8 +47,14 @@ export interface Draft {
 
 export type StepKind = NodeSpec["kind"];
 
+/**
+ * The kinds the builder can ADD. HOW-73: a parallel step can be opened and drawn, but editing
+ * one is not supported yet (it is written in the source), so it is not offered here.
+ */
+export type PaletteKind = Exclude<StepKind, "parallel">;
+
 /** The Add-a-step menu, in the operator's words rather than the schema's. */
-export const STEP_KINDS: Array<{ kind: StepKind; label: string; help: string }> = [
+export const STEP_KINDS: Array<{ kind: PaletteKind; label: string; help: string }> = [
   { kind: "agent", label: "Ask an agent", help: "Give an agent instructions and collect what it produces." },
   { kind: "command", label: "Run a command", help: "Run a script, or one of Howdah's built-in probes." },
   { kind: "worktree", label: "Make or clean up a worktree", help: "An isolated checkout on its own branch." },
@@ -865,7 +871,7 @@ export const PRESETS: Preset[] = PRESET_DEFS.map((p) => ({
 }));
 
 /** A new step of one kind, with the defaults its form would otherwise make you fill in. */
-export function newStep(spec: GraphSpec, kind: StepKind, name: string): { node: NodeSpec; body?: string; fields?: FieldSpec[] } {
+export function newStep(spec: GraphSpec, kind: PaletteKind, name: string): { node: NodeSpec; body?: string; fields?: FieldSpec[] } {
   const id = nextNodeId(spec, name);
   // a name that says nothing is stored as NO name rather than as an empty one: stepTitle()
   // falls back to the id, and an empty string would be rendered into the saved module as
