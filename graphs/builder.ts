@@ -15,9 +15,10 @@
  *   prompts are snapshotted and restored too, and the whole save is one transaction.
  *
  *   WHAT AN AGENT IS GIVEN IS WHAT ITS PROMPT ASKS FOR. A node's `reads` is never taken from
- *   the client: it is recomputed here with `templateReads()` over the body being written, so
- *   the declaration and the text cannot disagree. (The builder computes the same thing live
- *   with the same function, for the "This step will be given…" line.)
+ *   the client: it is recomputed here with `derivedReads()` over the body being written — the
+ *   body's template refs plus what the engine consumes for the step (HOW-74: `acceptance` on a
+ *   `requiresAcceptance` step) — so the declaration, the text and validate() cannot disagree.
+ *   (The builder computes the same thing live with the same function.)
  *
  *   A GRAPH WRITES ONLY ITS OWN PROMPTS. Every local prompt lives in one directory, so the
  *   `<graph>.<step>` prefix is all that keeps two graphs' instructions apart. The loop below
@@ -53,8 +54,8 @@
  */
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { isBlocking, nameTakenProblem, promptIdFor, specProblems, SPEC_PROMPT_ID, unknownCopyProblem, type DraftBody, type GraphSpec, type NodeSpec, type SpecProblem } from "../core/graph-spec";
-import { frontMatterField, IncludeError, splitFrontMatter, templateReads } from "../core/template";
+import { derivedReads, isBlocking, nameTakenProblem, promptIdFor, specProblems, SPEC_PROMPT_ID, unknownCopyProblem, type DraftBody, type GraphSpec, type NodeSpec, type SpecProblem } from "../core/graph-spec";
+import { frontMatterField, IncludeError, splitFrontMatter } from "../core/template";
 import { pinnableText, promptReader } from "../prompts/pin";
 import { ensureLocalDirs, findPromptFile, LOCAL_NAME, loadLocalGraph, localGraphPath, localPromptsDir, promptSearchPath } from "./local";
 import type { Graph } from "../core/graph";
@@ -192,7 +193,7 @@ export function saveVerdict(opts: { home: string; spec: GraphSpec; prompts: Reco
     nodes: opts.spec.nodes.map((n) => {
       if (n.kind !== "agent") return n;
       const body = bodyOf(n.prompt);
-      return body === null ? n : { ...n, reads: templateReads(body) };
+      return body === null ? n : { ...n, reads: derivedReads(n, body) };
     }),
   };
   const bodies: Record<string, string> = {};

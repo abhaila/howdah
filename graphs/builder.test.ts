@@ -900,6 +900,22 @@ describe("the bodies are checked on both sides, and both sides agree (HOW-60)", 
     }
   });
 
+  test("a requiresAcceptance step keeps `acceptance` though its body never names it (HOW-74)", () => {
+    const d = PRESETS.find((p) => p.id === "doc")!.build("gated");
+    const spec: GraphSpec = {
+      ...d.spec,
+      fields: [...d.spec.fields, { key: "acceptance", kind: "json", scope: "sticky" }],
+      inputs: [...d.spec.inputs, "acceptance"],
+      nodes: d.spec.nodes.map((n) => (n.kind === "agent" && n.id === "draft" ? { ...n, requiresAcceptance: true as const, reads: [] } : n)),
+    };
+    const prompts = pickPrompts(d);
+    const draftStep = spec.nodes.find((n) => n.id === "draft") as Extract<NodeSpec, { kind: "agent" }>;
+    expect(templateReads(prompts[draftStep.prompt]!)).not.toContain("acceptance");
+    const v = saveVerdict({ home: home(), spec, prompts });
+    expect(v.problems).toEqual([]);
+    expect((v.spec.nodes.find((n) => n.id === "draft") as Extract<NodeSpec, { kind: "agent" }>).reads).toContain("acceptance");
+  });
+
   test("a shadowed row is ADVICE: the browser notes it and the save still goes through", async () => {
     const h = home();
     const d = PRESETS.find((p) => p.id === "doc")!.build("shadowed");

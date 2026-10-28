@@ -14,7 +14,7 @@ import { describe, expect, test } from "bun:test";
 import { templateReads } from "./template-refs";
 import {
   COMMAND_BUILTINS, SPEC_VERSION, WORKTREE_FACTS, WORKTREE_CREATE_FACTS,
-  buildGraph, checkGraphDraft, draftHashOf, draftRuleProblems, resolveDraftBodies, builtinReads, coerceOperand, compilePredicate, emittableWrites, missingBuiltinReads, parseGraphSpec, predicateLabel, renameDraft,
+  buildGraph, checkGraphDraft, derivedReads, draftHashOf, structuralReads, draftRuleProblems, resolveDraftBodies, builtinReads, coerceOperand, compilePredicate, emittableWrites, missingBuiltinReads, parseGraphSpec, predicateLabel, renameDraft,
   isBlocking, keepPath, recoercePredicate, specAdvice, specProblems, unmatchableOperand,
   type GraphSpec, type NodeSpec, type Predicate,
 } from "./graph-spec";
@@ -1197,6 +1197,76 @@ describe("a step and its instructions are checked together when the bodies are g
     expect(specProblems(stale).filter(isBlocking)).toEqual([]);
     expect(specProblems(minimal(), { knownPrompts: ["my-review.draft"] })).toEqual([]);
     expect(specProblems(minimal(), { knownPrompts: [] })[0]!.message).toContain("has no file yet");
+  });
+});
+
+/**
+ * HOW-74: a read the ENGINE consumes for a step (requiresAcceptance → `acceptance`) is declared
+ * structurally, not out of the body — so the body check and validate() agree, rather than one
+ * refusing what the other demands.
+ */
+describe("structural reads: what the engine consumes for a step is never 'unused' (HOW-74)", () => {
+  type Agent = Extract<NodeSpec, { kind: "agent" }>;
+  const body = "Draft it.\n\nGoal: {{ context.goal }}";
+  const gatedSpec = (reads: string[]): GraphSpec => {
+    const m = minimal();
+    return {
+      ...m,
+      fields: [...m.fields, { key: "acceptance", kind: "json", scope: "sticky" }],
+      inputs: ["goal", "acceptance"],
+      nodes: m.nodes.map((n) => (n.kind === "agent" ? { ...n, requiresAcceptance: true as const, reads } : n)),
+    };
+  };
+  const blocking = (spec: GraphSpec, opts: Parameters<typeof specProblems>[1]) => specProblems(spec, opts).filter(isBlocking);
+  const draftOf = (spec: GraphSpec) => spec.nodes.find((n) => n.id === "draft") as Agent;
+
+  test("structuralReads and derivedReads", () => {
+    const plain = draftOf(minimal());
+    expect(structuralReads(plain)).toEqual([]);
+    expect(derivedReads(plain, body)).toEqual(["goal"]);
+    const gated = draftOf(gatedSpec([]));
+    expect(structuralReads(gated)).toEqual(["acceptance"]);
+    expect(derivedReads(gated, body)).toEqual(["goal", "acceptance"]);
+    // a body that names it too does not list it twice
+    expect(derivedReads(gated, `${body} {{ context.acceptance }}`)).toEqual(["acceptance", "goal"]);
+  });
+
+  test("a gated step whose body never mentions acceptance, reading it, is clean — and validates", () => {
+    const spec = gatedSpec(["goal", "acceptance"]);
+    expect(specProblems(spec, { bodies: { "my-review.draft": body } })).toEqual([]);
+    expect(buildGraph(spec).validate()).toEqual({ structural: [], paths: [] });
+  });
+
+  test("the same step WITHOUT acceptance is one does-not-list refusal, and validate() agrees", () => {
+    const spec = gatedSpec(["goal"]);
+    const problems = blocking(spec, { bodies: { "my-review.draft": body } });
+    expect(problems).toHaveLength(1);
+    expect(problems[0]!.message).toBe(
+      "**Draft the doc** does not match its instructions: its instructions use `acceptance`, which the step does not list. Save the instructions again so the step is given what they ask for.",
+    );
+    expect(buildGraph(spec).validate().structural).toContain('node "draft" requires acceptance but does not read "acceptance"');
+  });
+
+  test("copiedReads lets an inherited read through, and only that one", () => {
+    const m = minimal();
+    const spec: GraphSpec = {
+      ...m,
+      fields: [...m.fields, { key: "work", kind: "text", scope: "sticky" }, { key: "extra", kind: "text", scope: "sticky" }],
+      inputs: ["goal", "work", "extra"],
+      nodes: m.nodes.map((n) => (n.kind === "agent" ? { ...n, reads: ["goal", "work", "extra"] } : n)),
+    };
+    const bodies = { "my-review.draft": body };
+    const problems = blocking(spec, { bodies, copiedReads: { "my-review.draft": ["goal", "work"] } });
+    expect(problems).toHaveLength(1);
+    expect(problems[0]!.message).toContain("it lists `extra`, which its instructions never use");
+    expect(problems[0]!.message).not.toContain("`work`");
+    expect(blocking(spec, { bodies, copiedReads: { "my-review.draft": ["goal", "work", "extra"] } })).toEqual([]);
+    // the other direction is unchanged: a body reference the step does not list is refused even for a copy
+    const unlisted = blocking({ ...spec, nodes: spec.nodes.map((n) => (n.kind === "agent" ? { ...n, reads: ["work"] } : n)) }, {
+      bodies, copiedReads: { "my-review.draft": ["goal", "work"] },
+    });
+    expect(unlisted).toHaveLength(1);
+    expect(unlisted[0]!.message).toContain("its instructions use `goal`, which the step does not list");
   });
 });
 

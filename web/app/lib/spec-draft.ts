@@ -13,7 +13,8 @@
  * Two invariants every action must leave standing, because they are what stops the browser's
  * verdict and the server's gate from disagreeing (HOW-22 review):
  *
- *   For every agent step, `reads` === templateReads(the body it names). graphs/builder.ts
+ *   For every agent step, `reads` === derivedReads(step, the body it names) — the body's
+ *   template refs plus the engine's structural reads (HOW-74). graphs/builder.ts
  *   derives exactly that when it writes the file, so any action that edits one without the
  *   other ships a draft that looks clean here and is refused there.
  *
@@ -27,7 +28,7 @@
  * round trip, and still cannot be the thing that decides a graph is legal.
  */
 import {
-  SPEC_NODE_ID, coerceOperand, emittableWrites, isBlocking, nameTakenProblem, predicateLabel, promptIdFor, renameDraft,
+  SPEC_NODE_ID, coerceOperand, derivedReads, emittableWrites, isBlocking, nameTakenProblem, predicateLabel, promptIdFor, renameDraft,
   recoercePredicate, specProblems,
   type EdgeSpec, type FieldKind, type FieldSpec, type GraphSpec, type NodeSpec, type Point, type Predicate,
   type ProblemPane, type SpecProblem,
@@ -323,7 +324,7 @@ export function draftReducer(draft: Draft, action: DraftAction): Draft {
           fields,
           inputs: renamed ? spec.inputs.map(rename) : spec.inputs,
           // ...and `reads` comes back off the rewritten body, not off the swap above, so the
-          // invariant holds after every action: reads === templateReads(its body)
+          // invariant holds after every action: reads === derivedReads(step, its body)
           nodes: renamedNodes.map((n) => (n.kind === "agent" ? withDerivedReads(n, prompts[n.prompt]) : n)),
           edges: spec.edges.map((e) => {
             if (!e.when || e.when.key !== action.key) return e;
@@ -371,7 +372,19 @@ export function draftReducer(draft: Draft, action: DraftAction): Draft {
       return { ...draft, prompts, spec: { ...spec, nodes, entry, fields } };
     }
     case "update-step":
-      return { ...draft, spec: { ...spec, nodes: spec.nodes.map((n) => (n.id === action.id ? withEmittableWrites(action.node) : n)) } };
+      // a step edit can flip a structural read (requiresAcceptance → `acceptance`), so reads are
+      // re-derived here too, from the body the step names after the edit
+      return {
+        ...draft,
+        spec: {
+          ...spec,
+          nodes: spec.nodes.map((n) =>
+            n.id === action.id
+              ? withEmittableWrites(withDerivedReads(action.node, action.node.kind === "agent" ? draft.prompts[action.node.prompt] : undefined))
+              : n,
+          ),
+        },
+      };
     case "rename-step":
       return renameStep(draft, action.id, action.to);
     case "remove-step": {
@@ -528,7 +541,7 @@ function titleFor(spec: GraphSpec, id: string): string {
 }
 
 function withDerivedReads(n: NodeSpec, body: string | undefined): NodeSpec {
-  return n.kind === "agent" && body !== undefined ? { ...n, reads: templateReads(body) } : n;
+  return n.kind === "agent" && body !== undefined ? { ...n, reads: derivedReads(n, body) } : n;
 }
 
 /**
