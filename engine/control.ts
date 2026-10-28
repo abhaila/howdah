@@ -245,6 +245,8 @@ export function jumpRefusal(
   runDir: string,
   node: string,
   graphs: Record<string, Graph<any>>,
+  /** the instruction the jump carries, if any — refused on a parallel step, which has no prompt (HOW-73) */
+  message?: string,
 ): { ok: false; message: string } | { ok: true; replayed: ReplayedState; graph: Graph<any> } {
   const path = join(runDir, "run.jsonl");
   if (!existsSync(path)) return { ok: false, message: `unknown run: ${basename(runDir)}` };
@@ -257,6 +259,11 @@ export function jumpRefusal(
   const def = graph.def.nodes[node];
   if (!def) return { ok: false, message: `unknown node "${node}" — have: ${Object.keys(graph.def.nodes).join(", ")}` };
   if (def.kind === "terminal") return { ok: false, message: "cannot jump to a terminal node" };
+  // HOW-73: a branch runs only inside its parallel step's visit, beside its siblings
+  const owner = graph.parallelOf(node);
+  if (owner) return { ok: false, message: `"${node}" is one of the steps "${owner}" runs at once — jump to "${owner}" instead` };
+  if (def.kind === "parallel" && message?.trim())
+    return { ok: false, message: `"${node}" runs steps at once and has no prompt of its own to carry an instruction — jump without one` };
   // the target's declared reads must be satisfiable from the replayed context, otherwise the
   // jump is refused with the missing keys named — never a runtime surprise
   const missing = jumpMissingReads(graph, replayed, node);

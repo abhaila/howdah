@@ -93,6 +93,8 @@ export interface TimelineRow {
   usage: VisitUsage | null;
   /** HOW-35: what the agent did (log/trajectory.ts) — null for a step that rendered no prompt */
   profile: TrajectoryProfile | null;
+  /** HOW-73: this row is a BRANCH of a parallel step's visit — its siblings run beside it */
+  parallel?: { node: string; visit: number };
 }
 
 export interface RunDetail {
@@ -297,19 +299,28 @@ export function deriveTurnStates(
   agents: ReadonlySet<string>,
 ): Record<string, TurnState> {
   const out: Record<string, TurnState> = {};
-  const newest = timeline.at(-1);
+  // HOW-73: a branch is overtaken only by a row that is not one of its siblings — the branches
+  // of one parallel visit start one after another and run side by side
+  const sameGroup = (a: TimelineRow, b: TimelineRow) =>
+    !!a.parallel && !!b.parallel && a.parallel.node === b.parallel.node && a.parallel.visit === b.parallel.visit;
+  const overtaken = (row: TimelineRow) => timeline.slice(timeline.indexOf(row) + 1).some((later) => !sameGroup(row, later));
+  const siblingAsking = (row: TimelineRow) =>
+    status === "needs-input" && !!ask && ask.code === undefined &&
+    timeline.some((r) => r !== row && sameGroup(r, row) && r.node === ask.node && r.visit === ask.visit);
   for (const row of timeline) {
     const key = `${row.node}@${row.visit}`;
     const mine = turns.filter((t) => t.node === row.node && t.visit === row.visit);
     if (mine.length === 0) continue;
     if (mine.every((t) => t.finalized)) { out[key] = "done"; continue; }
     if (!agents.has(key)) {
-      out[key] = row.status === "running" && row === newest && status === "running" && runnerAlive !== false ? "live" : "done";
+      out[key] = row.status === "running" && !overtaken(row) && status === "running" && runnerAlive !== false ? "live" : "done";
       continue;
     }
-    if (row.status !== "running" || row !== newest) out[key] = "died"; // finished without it, or overtaken
+    if (row.status !== "running" || overtaken(row)) out[key] = "died"; // finished without it, or overtaken
     else if (ask?.node === row.node && ask.visit === row.visit) out[key] = "waiting";
-    else if (status !== "running" || runnerAlive === false) out[key] = "died";
+    // HOW-73: a SIBLING branch waiting on a mid-turn question makes the run needs-input, but
+    // this branch's turn is still streaming beside it
+    else if ((status !== "running" && !siblingAsking(row)) || runnerAlive === false) out[key] = "died";
     else out[key] = "live";
   }
   return out;
@@ -323,32 +334,51 @@ export function deriveDraftDiscarded(events: readonly LoggedEvent[]): { at: stri
 
 export function deriveStatus(events: LoggedEvent[]): { status: RunStatus; ask: RunDetail["ask"]; failure: RunSummary["failure"]; paused: boolean; outcome: RunSummary["outcome"] } {
   let finished: Extract<LoggedEvent, { type: "run-finished" }> | null = null;
-  let ask: RunDetail["ask"] = null;
+  // asks still standing, oldest first — the same rule as engine/replay.ts: an engine park (with
+  // a code) replaces everything, a mid-turn ask stands beside other steps' (HOW-73)
+  let asks: Array<Extract<LoggedEvent, { type: "attention-raised" }>> = [];
   let sawStart = false;
   let lastFailed: { node: string; visit: number; at: string } | null = null;
+  // HOW-73: every failed attempt still awaiting its park — a parallel step parks only after the
+  // siblings of the failed branch have finished, so "the attempt just before" is not the one
+  const failedAttempts = new Set<string>();
   let failure: RunSummary["failure"] = null;
   let paused = false;
   for (const e of events) {
     if (e.type === "run-started") sawStart = true;
     else if (e.type === "run-finished") finished = e;
     else if (e.type === "attention-raised") {
-      ask = e;
+      asks = e.code !== undefined ? [e] : [...asks.filter((a) => a.node !== e.node), e];
       // a park right after a failed attempt carries the WHY — keep it past resolution
-      if (lastFailed && e.node === lastFailed.node && e.visit === lastFailed.visit)
+      if (failedAttempts.has(`${e.node}@${e.visit}`))
         failure = { node: e.node, visit: e.visit, reason: e.reason, at: e.ts };
-    } else if (e.type === "attention-resolved" || e.type === "operator-jump") ask = null; // a jump supersedes the park (replay.ts does the same)
+    } else if (e.type === "attention-resolved") {
+      const before = asks.length;
+      asks = asks.filter((a) => !(a.node === e.node && a.visit === e.visit));
+      if (asks.length === before) asks = [];
+    } else if (e.type === "operator-jump") asks = []; // a jump supersedes the park (replay.ts does the same)
     else if (e.type === "run-paused") paused = true;
     else if (e.type === "run-resumed") paused = false;
     else if (e.type === "node-finished") {
       if (e.status === "failed") {
         lastFailed = { node: e.node, visit: e.visit, at: e.ts };
+        failedAttempts.add(`${e.node}@${e.visit}`);
         failure = { node: e.node, visit: e.visit, reason: null, at: e.ts }; // reason may follow
-      } else lastFailed = null;
+      } else if (lastFailed?.node === e.node || !lastFailed?.node) lastFailed = null;
+      // (a SIBLING branch succeeding does not clear a failure: the run is about to park on it)
     } else if (e.type === "node-started") {
-      lastFailed = null;
-      if (ask) ask = null;
+      if (e.parallel) {
+        // a branch starting moves nothing on for its siblings — only its own ask and failure
+        asks = asks.filter((a) => a.node !== e.node);
+        if (lastFailed?.node === e.node) lastFailed = null;
+      } else {
+        lastFailed = null;
+        failedAttempts.clear();
+        asks = [];
+      }
     }
   }
+  let ask: RunDetail["ask"] = asks[0] ?? null;
   if (ask && decisionAnswers(events, ask)) ask = null; // D17: the decision alone answers it
   // needs-input outranks everything except a completed run
   if (finished)
@@ -398,14 +428,21 @@ export function deriveTimeline(events: LoggedEvent[]): TimelineRow[] {
   const open = new Map<string, TimelineRow>();
   for (const e of events) {
     if (e.type === "node-started") {
-      for (const previous of open.values()) {
+      // HOW-73: a BRANCH starting is concurrent with its siblings and inside its parallel step's
+      // row, so it closes nothing — only the next ordinary step does (a re-attempt of the same
+      // branch still closes its own unfinished row, which is what a crash leaves)
+      for (const [key, previous] of open) {
+        if (e.parallel && previous.node !== e.node) continue;
         previous.finished_at = e.ts;
         previous.status = "failed";
         previous.duration_ms = new Date(e.ts).getTime() - new Date(previous.started_at).getTime();
+        open.delete(key);
       }
-      open.clear();
       const key = `${e.node}@${e.visit}`;
-      const row: TimelineRow = { node: e.node, visit: e.visit, started_at: e.ts, finished_at: null, status: "running", duration_ms: null, offset_ms: 0, run_span_ms: 0, waiting_ms: 0, usage: null, profile: null };
+      const row: TimelineRow = {
+        node: e.node, visit: e.visit, started_at: e.ts, finished_at: null, status: "running", duration_ms: null, offset_ms: 0, run_span_ms: 0, waiting_ms: 0, usage: null, profile: null,
+        ...(e.parallel ? { parallel: { ...e.parallel } } : {}),
+      };
       rows.push(row);
       open.set(key, row);
     } else if (e.type === "node-finished") {

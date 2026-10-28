@@ -171,3 +171,45 @@ describe("HOW-48: the soft-stop precheck", () => {
     } finally { server2.stop(true); }
   });
 });
+
+describe("HOW-73: steer and soft stop name the branch when several turns are live", () => {
+  /** a parallel step `fan` whose two read-only branches are both live claude turns */
+  function parallelRun() {
+    const home = mkdtempSync(join(tmpdir(), "howdah-steer-par-"));
+    const runDir = join(home, "runs", "r1");
+    const log = new EventLog(join(runDir, "run.jsonl"));
+    log.append({ type: "run-started", graph: "g", inputs: {}, pinned_prompts: {} });
+    log.append({ type: "node-started", node: "fan", visit: 1, attempt_id: "fan#1" });
+    for (const b of ["ra", "rb"]) {
+      log.append({ type: "node-started", node: b, visit: 1, attempt_id: `${b}#1`, parallel: { node: "fan", visit: 1 } });
+      log.append({ type: "prompt-rendered", node: b, visit: 1, prompt: "doc.draft", prompt_version: 1, rendered_hash: `h${b}`, context_read: {}, harness: "claude" } as never);
+    }
+    claimRunner(runDir); claimed.push(runDir);
+    return { home, runDir, path: join(runDir, "run.jsonl") };
+  }
+
+  test("no node: refused naming both; with a node: that branch's turn — for steer and for stop", () => {
+    const { runDir, path } = parallelRun();
+    expect(steer(runDir, "x")).toEqual({ ok: false, message: "2 steps are running at once (ra, rb) — name one with --node" });
+    expect(steer(runDir, "look at auth", "rb")).toMatchObject({ ok: true, node: "rb", visit: 1 });
+    expect(readLog(path).at(-1)).toMatchObject({ type: "operator-steered", node: "rb" });
+    expect(softStop(runDir)).toMatchObject({ ok: false });
+    expect(softStop(runDir, "ra")).toMatchObject({ ok: true, node: "ra", already: false });
+  });
+
+  test("the routes take `node` from the body", async () => {
+    const r = parallelRun();
+    const server = createHowdahServer({ runsDir: join(r.home, "runs"), attentionDir: join(r.home, "attention"), port: 0, graphs: {} });
+    const post = (body: unknown) => ({ method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    try {
+      const refused = await fetch(`http://localhost:${server.port}/api/runs/r1/steer`, post({ text: "x" }));
+      expect(refused.status).toBe(409);
+      const sent = await fetch(`http://localhost:${server.port}/api/runs/r1/steer`, post({ text: "x", node: "ra" }));
+      expect(sent.status).toBe(202);
+      expect(await sent.json()).toMatchObject({ node: "ra" });
+      const stop = await fetch(`http://localhost:${server.port}/api/runs/r1/soft-stop`, post({ node: "rb" }));
+      expect(stop.status).toBe(202);
+      expect(await stop.json()).toMatchObject({ node: "rb" });
+    } finally { server.stop(true); }
+  });
+});

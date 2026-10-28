@@ -109,7 +109,7 @@ the reviser script as the first artifact — which restores differentiator-first
 |------|-----------|:----:|
 | **A0** | 🟡 **Graph definition (was unspecified)** | |
 | A0.1 | 🟡 Graphs are TypeScript-native objects; `bun` type-checks them — no DOT/TOML parser, no custom validator. A small `toDot()` exporter provides graphviz rendering (D2) | |
-| A0.2 | 🟡 Node types at v1: agent, command, wait, terminal, **worktree** (pulled forward — concurrent code runs need isolation, D11). Fan-out/join stays deferred | |
+| A0.2 | 🟡 Node types at v1: agent, command, wait, terminal, **worktree** (pulled forward — concurrent code runs need isolation, D11). Fan-out/join: v1 built (HOW-73) as the `parallel` node — read-only branches only | |
 | A0.3 | 🟡 Strict typed context: every node declares typed outputs; reads are compile-checked; every-path-has-a-writer proven by the type system (D3). Visit-scoping is explicit per output: sticky, cleared, or per-visit — loop freshness is never ambiguous (OV-4) | |
 | **A1** | **Prompt store** | |
 | A1.1 | One file per prompt, `prompts/<id>.md`, front-matter `{id, version, tags}`, body is the template. Git is the version history | |
@@ -244,7 +244,7 @@ every decision folded into Shape A above (marked 🟡, with D/OV references).
 
 ## NOT in scope (v1)
 
-- **Fan-out/join node** — no current workflow uses parallel branches; add when one does.
+- **Fan-out/join node** — v1 built (HOW-73), read-only branches only; writing branches with their own worktrees are the follow-up.
 - 🟡 ~~Web UI deferred~~ — REVERSED at design review: the shadcn web app IS the v1 surface. What is dropped instead: the CLI as a designed surface (it remains as thin scripting verbs).
 - **Orbital import/compat** — graphs are ported by hand once; no DOT parser exists to maintain.
 - **Slack/Notion/Drive as agent tools (R8.3)** — nice-to-have; agents reach them via existing MCP/skills, not harness-native integrations.

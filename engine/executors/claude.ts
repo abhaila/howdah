@@ -240,7 +240,7 @@ export function claudeExecutor(opts: ClaudeExecutorOpts): Executor {
       try {
         for (;;) {
           await Bun.sleep(opts.askPollMs ?? 400);
-          const resolved = readLog(log.path).find((e) => e.type === "attention-resolved" && e.seq > raised.seq);
+          const resolved = readLog(log.path).find((e) => e.type === "attention-resolved" && e.seq > raised.seq && e.node === nodeId && e.visit === visit); // HOW-73: a sibling branch may be asking too
           if (resolved && resolved.type === "attention-resolved") {
             ceiling.start();
             return { ok: true, reply: (resolved.reply ?? "").trim(), answers: resolved.answers };

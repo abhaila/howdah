@@ -22,7 +22,7 @@
  * covering nothing. The second is for "the middle of the view, unless a card is already
  * there", which is what a palette CLICK means (review finding 3).
  */
-import type { GraphSpec, NodeSpec, Point } from "../../../core/graph-spec";
+import { specFlowEdges, type GraphSpec, type NodeSpec, type Point } from "../../../core/graph-spec";
 
 /** How far apart the boxes go. `stagger` shifts every other layer sideways, so a long chain
  *  does not read as one straight column. */
@@ -79,7 +79,8 @@ export function layout(shape: Placeable, pitch: Pitch = SVG_PITCH): Map<string, 
 /** The spec with a position filled in for every step that has none, and nothing else touched. */
 export function autoLayout(spec: GraphSpec): GraphSpec {
   if (spec.nodes.every((n) => n.position)) return spec;
-  const pos = layout(spec, CANVAS_PITCH);
+  // HOW-73: a parallel step's branches and join are placed through its fork/join edges
+  const pos = layout({ ...spec, edges: specFlowEdges(spec) }, CANVAS_PITCH);
   return { ...spec, nodes: spec.nodes.map((n) => (n.position ? n : { ...n, position: pos.get(n.id) ?? ORIGIN })) };
 }
 

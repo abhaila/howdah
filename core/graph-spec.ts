@@ -74,7 +74,7 @@ export type FieldKind = "text" | "choice" | "number" | "boolean" | "json";
  * the SAME list the parser and the step form see — one source, nothing hand-listed to drift
  * when a kind is added or removed.
  */
-export const NODE_KINDS = ["agent", "command", "worktree", "wait", "approval", "terminal"] as const;
+export const NODE_KINDS = ["agent", "command", "worktree", "wait", "approval", "parallel", "terminal"] as const;
 export type NodeKind = (typeof NODE_KINDS)[number];
 
 export interface FieldSpec {
@@ -241,7 +241,11 @@ export type NodeSpec =
       reviewsWorkOf?: string[];
       config?: AgentConfig;
     })
-  | (NodeBase & { kind: "command"; run: string; reads: string[]; writes: string[]; timeoutMs?: number; maxVisits?: number })
+  | (NodeBase & {
+      kind: "command"; run: string; reads: string[]; writes: string[]; timeoutMs?: number; maxVisits?: number;
+      /** HOW-73: never changes the worktree — what lets a command be a parallel branch */
+      changesFiles?: false;
+    })
   | (NodeBase & {
       kind: "worktree";
       action: "create" | "remove";
@@ -256,6 +260,8 @@ export type NodeSpec =
       backoff?: string[];
     })
   | (NodeBase & { kind: "approval"; proposal: string; base: string; decision: string; feedback: string; redesignTo: string })
+  /** HOW-73: run `branches` at once, then go to `join` (core/graph.ts ParallelNodeDef) */
+  | (NodeBase & { kind: "parallel"; branches: string[]; join: string; concurrency?: number })
   | (NodeBase & { kind: "terminal"; outcome: "success" | "failed" | "aborted"; label?: string });
 
 export interface EdgeSpec {
@@ -381,6 +387,8 @@ export function emittableWrites(n: NodeSpec): readonly string[] | undefined {
       return n.action === "remove" ? WORKTREE_FACTS : WORKTREE_CREATE_FACTS;
     case "command":
       return commandBuiltin(n.run)?.produces;
+    case "parallel":
+      return []; // HOW-73: a parallel step publishes nothing — its branches do
     default:
       return undefined;
   }
@@ -512,6 +520,7 @@ function compileNode(n: NodeSpec, scopes: Record<string, Scope>, fields: FieldSp
         writes: writesOf(n.writes, scopes, fields),
         ...(n.timeoutMs !== undefined ? { timeoutMs: n.timeoutMs } : {}),
         ...(n.maxVisits !== undefined ? { maxVisits: n.maxVisits } : {}),
+        ...(n.changesFiles === false ? { changesFiles: false as const } : {}),
         ...cls,
       };
     case "worktree":
@@ -525,6 +534,8 @@ function compileNode(n: NodeSpec, scopes: Record<string, Scope>, fields: FieldSp
       return { kind: "wait", duration: n.duration, ...(n.backoff?.length ? { backoff: [...n.backoff] } : {}), ...cls };
     case "approval":
       return { kind: "approval", proposal: n.proposal, base: n.base, decision: n.decision, feedback: n.feedback, redesignTo: n.redesignTo, ...cls };
+    case "parallel":
+      return { kind: "parallel", branches: [...n.branches], join: n.join, ...(n.concurrency !== undefined ? { concurrency: n.concurrency } : {}), ...cls };
     case "terminal":
       return { kind: "terminal", outcome: n.outcome, ...(n.label ? { label: n.label } : {}) };
   }
@@ -567,6 +578,28 @@ export function buildGraph(spec: GraphSpec): Graph<any> {
     edges: compileEdges(spec),
     spec,
   });
+}
+
+/**
+ * HOW-73: every edge a spec's PICTURE has — its own `edges`, plus the ones a parallel step
+ * implies: a `fork` from it to each branch and a `join` from each branch to its join step. The
+ * builder canvas draws these (never deletable: they are the parallel step's, not a route), and
+ * reachability and loop detection walk them, because a branch and a join are reached through a
+ * parallel step and no `edges` row says so. Endpoints that do not exist are skipped — the
+ * picture never asserts.
+ */
+export function specFlowEdges(spec: GraphSpec): Array<EdgeSpec & { kind?: "fork" | "join" }> {
+  const ids = new Set(spec.nodes.map((n) => n.id));
+  const out: Array<EdgeSpec & { kind?: "fork" | "join" }> = [...spec.edges];
+  for (const n of spec.nodes) {
+    if (n.kind !== "parallel") continue;
+    for (const b of n.branches) {
+      if (!ids.has(b) || b === n.id) continue;
+      out.push({ from: n.id, to: b, kind: "fork" });
+      if (ids.has(n.join)) out.push({ from: b, to: n.join, kind: "join" });
+    }
+  }
+  return out;
 }
 
 // ---- problems, in the operator's words ---------------------------------------------------
@@ -665,6 +698,9 @@ const violationNode = (v: Violation): string => v.node.split(" ")[0] ?? v.node;
  * operator, never be swallowed for not matching a pattern.
  */
 function rewriteStructural(spec: GraphSpec, raw: string): SpecProblem {
+  // HOW-73 first: its sentences share words ("has outgoing edges") with the older ones below
+  const parallel = parallelProblem(spec, raw);
+  if (parallel) return parallel;
   const id = firstQuoted(raw);
   const who = id ? `**${titleOf(spec, id)}**` : "This graph";
   if (/has no outgoing edge/.test(raw))
@@ -684,6 +720,50 @@ function rewriteStructural(spec: GraphSpec, raw: string): SpecProblem {
   if (/requires approval of/.test(raw))
     return { node: id, where: "steps", message: `${who} waits for an approval step that is not one. Point it at a "Get my approval" step, or clear it.` };
   return { node: id, where: "steps", message: raw };
+}
+
+/**
+ * HOW-73: core/graph.ts parallelProblems(), in the operator's words. Every one of its sentences
+ * opens with the quoted ids it is about, which is what these patterns read.
+ */
+function parallelProblem(spec: GraphSpec, raw: string): SpecProblem | null {
+  const q = [...raw.matchAll(/"([^"]+)"/g)].map((m) => m[1]!);
+  const t = (id: string | undefined) => `**${id === undefined ? "This step" : titleOf(spec, id)}**`;
+  const step = (node: string | undefined, message: string, where: ProblemPane = "steps"): SpecProblem => ({ ...(node ? { node } : {}), where, message });
+  const [a, b, c] = q;
+  if (/^parallel node "[^"]+" names \d+ branch/.test(raw))
+    return step(a, `${t(a)} runs steps at once, and needs between 2 and 8 of them. ${raw.replace(/^.*names /, "It names ").replace(/ — .*$/, "")}.`);
+  if (/names the same branch twice/.test(raw)) return step(a, `${t(a)} lists the same step twice. Each step it runs at once must be different.`);
+  if (/has concurrency/.test(raw)) return step(a, `${t(a)} runs ${raw.match(/concurrency (\S+)/)?.[1]} at once, which is not a whole number from 1 to the number of steps it runs. Change how many run at once.`);
+  if (/^parallel node "[^"]+" has outgoing edges/.test(raw))
+    return step(a, `${t(a)} has its own "go to" rows, but after running its steps at once it always continues at ${t(b)}. Remove its rows in Branching; branch from ${t(b)} instead.`, "branching");
+  if (/joins to itself/.test(raw)) return step(a, `${t(a)} continues at itself once its steps finish. Pick the step that comes after them.`);
+  if (/joins to unknown node/.test(raw)) return step(a, `${t(a)} continues at a step that does not exist ("${b}"). Pick the step that comes after them.`);
+  if (/which is one of its own branches/.test(raw)) return step(a, `${t(a)} continues at ${t(b)}, which is one of the steps it runs at once. Pick a step that comes after them.`);
+  if (/has unknown branch/.test(raw)) return step(a, `${t(a)} runs a step that does not exist ("${b}"). Remove it, or pick a step that does.`);
+  if (/names itself as a branch/.test(raw)) return step(a, `${t(a)} lists itself among the steps it runs at once. Remove it.`);
+  if (/belongs to both parallel nodes/.test(raw)) return step(a, `${t(a)} is run at once by both ${t(b)} and ${t(c)}. A step can belong to one of them only.`);
+  if (/nested parallel steps are not supported/.test(raw))
+    return step(a, `${t(a)} runs steps at once itself, so ${t(b)} cannot run it as one of its steps — running steps at once inside steps run at once is not supported yet.`);
+  if (/a branch must be one agent or command step/.test(raw))
+    return step(a, `${t(a)} cannot be run at once with other steps by ${t(b)} — only an agent or a command step can. ${raw.match(/is an? (\w+) step/)?.[1] === "terminal" ? "A Finish step" : "This kind of step"} cannot.`);
+  if (/an agent branch must be readOnly/.test(raw))
+    return step(a, `${t(a)} runs at the same time as other steps in one worktree, so it must not change files. Make it read-only.`);
+  if (/a command branch must declare changesFiles: false/.test(raw))
+    return step(a, `${t(a)} runs at the same time as other steps in one worktree, so it must not change files. Declare that it changes no files.`);
+  if (/gates are not supported on branches/.test(raw))
+    return step(a, `${t(a)} waits for an approval or for the acceptance criteria before it starts, which a step run at once with others cannot do yet. Clear the wait, or move the step out of ${t(b)}.`);
+  if (/^branch "[^"]+" of parallel node "[^"]+" is the entry/.test(raw))
+    return { where: "basics", node: a, message: `${t(a)} is the starting step, but it is one of the steps ${t(b)} runs at once. Start at ${t(b)} or before it.` };
+  if (/^branch "[^"]+" of parallel node "[^"]+" has outgoing edges/.test(raw))
+    return step(a, `${t(a)} has its own "go to" rows, but it is run at once by ${t(b)} and always continues at ${t(q[2])}. Remove its rows in Branching.`, "branching");
+  if (/^branch "[^"]+" of parallel node "[^"]+" has incoming edges/.test(raw))
+    return step(a, `Another step goes to ${t(a)}, but it is run at once by ${t(b)} and can only be reached through it. Point that "go to" at ${t(b)} instead.`, "branching");
+  if (/both write "/.test(raw))
+    return step(b, `${t(a)} and ${t(b)} both produce \`${q[3]}\`, and they run at the same time in ${t(c)}. Give each its own field.`);
+  if (/which its sibling "/.test(raw))
+    return step(a, `${t(a)} is given \`${c}\`, but ${t(q[3])} produces it at the same time, in ${t(b)} — one cannot see the other's answer. Read it in the step after them instead.`);
+  return null;
 }
 
 /**
@@ -926,9 +1006,10 @@ export function specProblems(
   // bigger blast radius than this change earns (all seven built-ins are in fact clean).
   const seen = new Set([spec.entry]);
   const queue = [spec.entry];
+  const flow = specFlowEdges(spec); // HOW-73: a branch and a join are reached through their parallel step
   while (queue.length) {
     const cur = queue.shift()!;
-    for (const e of spec.edges) if (e.from === cur && !seen.has(e.to)) { seen.add(e.to); queue.push(e.to); }
+    for (const e of flow) if (e.from === cur && !seen.has(e.to)) { seen.add(e.to); queue.push(e.to); }
   }
   for (const n of spec.nodes)
     if (!seen.has(n.id))
@@ -995,7 +1076,7 @@ function covers(a: Predicate, b: Predicate): boolean {
 function loops(spec: GraphSpec): string[][] {
   const ids = spec.nodes.map((n) => n.id);
   const next = new Map<string, string[]>();
-  for (const e of spec.edges) next.set(e.from, [...(next.get(e.from) ?? []), e.to]);
+  for (const e of specFlowEdges(spec)) next.set(e.from, [...(next.get(e.from) ?? []), e.to]);
   const reach = new Map<string, Set<string>>();
   for (const id of ids) {
     const seen = new Set<string>();
@@ -1282,6 +1363,7 @@ function parseNode(v: unknown): NodeSpec | undefined {
         ...base, kind: "command", run, reads: strArray(v.reads), writes: strArray(v.writes),
         ...(timeoutMs !== undefined ? { timeoutMs } : {}),
         ...(maxVisits !== undefined ? { maxVisits } : {}),
+        ...(v.changesFiles === false ? { changesFiles: false as const } : {}),
       };
     }
     case "worktree": {
@@ -1299,6 +1381,12 @@ function parseNode(v: unknown): NodeSpec | undefined {
       const [proposal, snapshot, decision, feedback, redesignTo] = [str(v.proposal), str(v.base), str(v.decision), str(v.feedback), str(v.redesignTo)];
       if (!proposal || !snapshot || !decision || !feedback || !redesignTo) return undefined;
       return { ...base, kind: "approval", proposal, base: snapshot, decision, feedback, redesignTo };
+    }
+    case "parallel": {
+      const join = str(v.join);
+      if (join === undefined || !Array.isArray(v.branches)) return undefined;
+      const concurrency = posInt(v.concurrency);
+      return { ...base, kind: "parallel", branches: strArray(v.branches), join, ...(concurrency !== undefined ? { concurrency } : {}) };
     }
     case "terminal": {
       const outcome = oneOf(v.outcome, OUTCOMES);
@@ -1551,6 +1639,12 @@ export function draftRuleProblems(
       out.push({
         node: n.id, where: "steps",
         message: `${who(n.id)} is an approval step. A drafted graph cannot contain one — remove it; Save is the approval for a draft.`,
+      });
+    // HOW-73 v1: running steps at once is built by hand, not drafted
+    if (n.kind === "parallel")
+      out.push({
+        node: n.id, where: "steps",
+        message: `${who(n.id)} runs steps at the same time. A drafted graph cannot do that yet — run them one after another, and make them parallel in the source after saving.`,
       });
     if (n.kind === "command") {
       const run = n.run.trim();

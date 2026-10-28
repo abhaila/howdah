@@ -47,33 +47,71 @@ export function undeliveredSteers(events: readonly LoggedEvent[]): SteerState[] 
   return steerStates(events).filter((s) => !s.delivered && !s.carried);
 }
 
-/** the live agent turn a steer would go to, or why there is none */
+/**
+ * the live agent turn a steer would go to, or why there is none.
+ *
+ * HOW-73: the branches of a parallel step run at once, so more than one turn can be live. With
+ * no `node`, a steer reaches the ONE live turn and is refused when there are several, naming
+ * them (`name one with --node`); with a `node`, it reaches that step's live turn. Asks are
+ * judged per step too: a sibling's question does not hold this turn.
+ */
 export function steerTarget(
   events: readonly LoggedEvent[],
-  opts: { allowMidTurnAsk?: boolean } = {},
+  opts: { allowMidTurnAsk?: boolean; node?: string } = {},
 ): { ok: true; node: string; visit: number } | { ok: false; message: string } {
   if (!events.some((e) => e.type === "run-started")) return { ok: false, message: "the run has not started" };
   const finished = events.findLast((e) => e.type === "run-finished");
   if (finished?.type === "run-finished") return { ok: false, message: `the run already finished (${finished.outcome}) — there is no agent to steer` };
-  let started: Extract<LoggedEvent, { type: "node-started" }> | null = null;
+  // the latest start per step, the open asks per step (an engine park, with a code, stands for every step)
+  const started = new Map<string, Extract<LoggedEvent, { type: "node-started" }>>();
+  let latest: Extract<LoggedEvent, { type: "node-started" }> | null = null;
   let paused = false;
-  let ask: Extract<LoggedEvent, { type: "attention-raised" }> | null = null;
+  let enginePark: Extract<LoggedEvent, { type: "attention-raised" }> | null = null;
+  const asks = new Map<string, Extract<LoggedEvent, { type: "attention-raised" }>>();
   for (const e of events) {
-    if (e.type === "node-started") { started = e; ask = null; }
-    else if (e.type === "run-paused") paused = true;
+    if (e.type === "node-started") {
+      started.set(e.node, e);
+      latest = e;
+      asks.delete(e.node);
+      enginePark = null; // a step starting means the run moved on from whatever was standing
+    } else if (e.type === "run-paused") paused = true;
     else if (e.type === "run-resumed") paused = false;
-    else if (e.type === "attention-raised") ask = e;
-    else if (e.type === "attention-resolved" || e.type === "operator-jump") ask = null;
+    else if (e.type === "attention-raised") {
+      if (e.code !== undefined) enginePark = e;
+      else asks.set(e.node, e);
+    } else if (e.type === "attention-resolved") {
+      enginePark = null;
+      asks.delete(e.node);
+    } else if (e.type === "operator-jump") { enginePark = null; asks.clear(); }
   }
   if (paused) return { ok: false, message: "the run is paused — resume it first; a steer only reaches a running turn" };
-  if (!started) return { ok: false, message: "no step has started yet" };
-  const s = started;
+  if (!latest) return { ok: false, message: "no step has started yet" };
+  if (enginePark) return { ok: false, message: "the run is waiting on you — answer it with a reply, which reaches the agent directly" };
+  const finishedTurn = (s: { node: string; visit: number }) =>
+    events.some((e) => e.type === "node-finished" && e.node === s.node && e.visit === s.visit);
+  let s: Extract<LoggedEvent, { type: "node-started" }>;
+  if (opts.node !== undefined) {
+    const named = started.get(opts.node);
+    if (!named) return { ok: false, message: `"${opts.node}" has not started — there is no turn of it to steer` };
+    s = named;
+  } else {
+    // the live branch turns of the parallel visit the run is in, when it is in one
+    const group = latest.parallel;
+    const live = group
+      ? [...started.values()].filter((x) => x.parallel?.node === group.node && x.parallel.visit === group.visit && !finishedTurn(x) &&
+          events.some((e) => e.type === "prompt-rendered" && e.node === x.node && e.visit === x.visit))
+      : [];
+    if (live.length > 1)
+      return { ok: false, message: `${live.length} steps are running at once (${live.map((x) => x.node).join(", ")}) — name one with --node` };
+    s = live[0] ?? latest;
+  }
   // HOW-48: a MID-TURN ask (no park code, on this very turn) holds the turn open; a soft stop
   // may be queued behind it and applies after the answer. An engine park never may.
-  const midTurnAsk = ask !== null && ask.code === undefined && ask.node === s.node && ask.visit === s.visit;
+  const ask = asks.get(s.node);
+  const midTurnAsk = ask !== undefined && ask.visit === s.visit;
   if (ask && !(opts.allowMidTurnAsk && midTurnAsk))
     return { ok: false, message: "the run is waiting on you — answer it with a reply, which reaches the agent directly" };
-  if (events.some((e) => e.type === "node-finished" && e.node === s.node && e.visit === s.visit))
+  if (finishedTurn(s))
     return { ok: false, message: `${s.node}@${s.visit} has finished — there is no live turn to steer` };
   const render = events.findLast((e) => e.type === "prompt-rendered" && e.node === s.node && e.visit === s.visit);
   if (!render || render.type !== "prompt-rendered") return { ok: false, message: `${s.node}@${s.visit} is not an agent turn — there is nothing to steer` };

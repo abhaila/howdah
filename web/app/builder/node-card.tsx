@@ -27,12 +27,14 @@ import { Button } from "@/components/ui/button";
 
 /** the same glyph vocabulary the DAG draws with, so the canvas and the picture agree */
 export const GLYPH: Record<StepKind, string> = {
-  agent: "◆", command: "▮", worktree: "⎇", wait: "◔", approval: "✓", terminal: "●",
+  agent: "◆", command: "▮", worktree: "⎇", wait: "◔", approval: "✓", parallel: "⫴", terminal: "●",
 };
 
-export const KIND_LABEL: Record<StepKind, string> = Object.fromEntries(
-  STEP_KINDS.map((k) => [k.kind, k.label]),
-) as Record<StepKind, string>;
+export const KIND_LABEL: Record<StepKind, string> = {
+  ...(Object.fromEntries(STEP_KINDS.map((k) => [k.kind, k.label])) as Record<Exclude<StepKind, "parallel">, string>),
+  // HOW-73: drawn and opened, never added from the palette
+  parallel: "Run steps at once",
+};
 
 /** One line saying what this step actually does, in the same words its form uses. */
 export function stepSummary(spec: GraphSpec, n: NodeSpec): string {
@@ -49,6 +51,8 @@ export function stepSummary(spec: GraphSpec, n: NodeSpec): string {
       return `pauses for ${n.duration}`;
     case "approval":
       return `you decide on ${n.proposal || "— nothing chosen yet"}${n.redesignTo ? ` · changes go back to ${n.redesignTo}` : ""}`;
+    case "parallel":
+      return `runs ${n.branches.join(", ") || "nothing yet"} at once (${Math.min(n.concurrency ?? n.branches.length, n.branches.length)} at a time) · then ${n.join || "—"}`;
     case "terminal":
       return `the run ends ${n.outcome}${n.label ? ` — ${n.label}` : ""}`;
   }
