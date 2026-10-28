@@ -75,6 +75,17 @@ describe("a park a reply cannot answer (HOW-69)", () => {
     expect(buttons(el)).toContain("Retry this step");
   });
 
+  // HOW-75: the probe asked again for a repair that changed nothing — the park says what is
+  // outstanding and how to go on, and the card offers the retry rather than a dead reply box
+  test("a repair-stalled probe: the reason verbatim, the options, and Retry this step", () => {
+    const reason = "https://github.com/a/b/pull/9 still reads CHANGES_REQUIRED (GitHub's review decision is still CHANGES_REQUESTED), but delivery.address_reviews@1 made no change and nothing new has arrived on the PR since. To go on: reply on the PR, or re-request review or dismiss the stale review, then Retry this step (`resume r1`); or `jump r1 delivery.address_reviews \"<what to change>\"` to make a change; or `abort r1`.";
+    const el = render(parked("delivery.probe_pr", "repair-stalled", reason));
+    expect(replyBox(el)).toBeNull();
+    expect(el.textContent).toContain(reason);
+    expect(el.textContent).toContain("reply refused (repair-stalled): the PR still asks for the repair that just changed nothing");
+    expect(buttons(el)).toContain("Retry this step");
+  });
+
   test("Retry this step POSTs the run's resume and plays delivered → collapsing", async () => {
     const calls = mockFetch(() => json({ ok: true }, 202));
     let resolved = 0;

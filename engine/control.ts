@@ -396,6 +396,15 @@ export const REPLY_RULES: Readonly<Record<ParkCode, Rule>> = {
   "paused-by-operator": retryWithReply,
   // HOW-54: the repair changed nothing; a reply tells its next attempt what to do differently
   "no-progress": retryWithReply,
+  // HOW-75: the PR is waiting on somebody else; act there, then retry the probe — or jump/abort
+  "repair-stalled": ({ run }) => ({
+    accept: false,
+    retry: true,
+    message:
+      `the PR still asks for the repair that just changed nothing, and nothing new has arrived on it; ` +
+      `reply on the PR, re-request review or dismiss the stale review (or re-run the check), then Retry this step ` +
+      `(\`resume ${run}\`); or \`jump ${run} <repair-step> "<what to change>"\` to make a change; or \`abort ${run}\``,
+  }),
   // HOW-51: a reply cannot meet a criterion; a waiver (a decision) or a re-review can
   "acceptance-unmet": ({ run }) => ({
     accept: false,

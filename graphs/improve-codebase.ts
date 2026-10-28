@@ -24,6 +24,11 @@
  * cannot disagree on any value the engine produces. Where they would differ — a malformed
  * non-boolean — strict is the better answer: the run parks rather than routing on a value
  * nothing declared. Pinned in `graphs/spec-equivalence.test.ts`.
+ *
+ * HOW-75, a behaviour change: the probe-driven repairs may rightly change nothing, so they
+ * declare `changesFiles: false` and `delivery.repair_check` (`repair:changed`) sends an
+ * unchanged one to the wait instead of review + publish — as in implement-ticket
+ * (graphs/delivery.ts explains the loop).
  */
 import { buildGraph, type GraphSpec } from "../core/graph-spec";
 import type { PrState } from "./implement-ticket";
@@ -42,6 +47,8 @@ export interface ImproveCodebaseCtx {
   "pr.state": PrState;
   /** HOW-70: new review activity on the PR(s), handed to address_reviews */
   "pr.review_activity": ReviewItem[];
+  /** HOW-75: did the repair that just ran change the worktree? (repair:changed) */
+  "repair.changed": boolean;
   "worktree.clean": boolean;
   outcome: "removed" | "failed";
 }
@@ -75,6 +82,8 @@ export const spec: GraphSpec = {
     },
     // HOW-70: the review items probe_pr found newer than the last address_reviews, for that step
     { key: "pr.review_activity", kind: "json", scope: "per-visit" },
+    // HOW-75: whether the repair that just ran changed anything (repair:changed)
+    { key: "repair.changed", kind: "boolean", scope: "per-visit" },
     { key: "worktree.clean", kind: "boolean", scope: "per-visit" },
     { key: "outcome", kind: "choice", scope: "per-visit", choices: ["removed", "failed"] },
   ],
@@ -94,13 +103,16 @@ export const spec: GraphSpec = {
     { id: "delivery.publish", kind: "agent", prompt: "delivery.publish", reads: ["goal", "work"], writes: ["publication_summary"], changesFiles: false, class: deliv },
     // HOW-70: also publishes the review activity newer than the last address_reviews (core/review-activity.ts)
     { id: "delivery.probe_pr", kind: "command", run: "probe:pr", reads: ["publication_summary"], writes: ["pr.state", "pr.review_activity"], class: deliv },
-    { id: "delivery.address_reviews", kind: "agent", prompt: "delivery.address_reviews", reads: ["goal", "work", "publication_summary", "review_verdict", "review_findings", "pr.review_activity"], writes: ["repair_summary"], class: deliv },
-    { id: "delivery.fix_ci", kind: "agent", prompt: "delivery.fix_ci", reads: ["goal", "work", "publication_summary", "review_verdict", "review_findings"], writes: ["repair_summary"], class: deliv },
-    { id: "delivery.resolve_conflicts", kind: "agent", prompt: "delivery.resolve_conflicts", reads: ["goal", "work", "publication_summary"], writes: ["repair_summary"], class: deliv },
+    { id: "delivery.address_reviews", kind: "agent", prompt: "delivery.address_reviews", reads: ["goal", "work", "publication_summary", "review_verdict", "review_findings", "pr.review_activity"], writes: ["repair_summary"], changesFiles: false, class: deliv },
+    { id: "delivery.fix_ci", kind: "agent", prompt: "delivery.fix_ci", reads: ["goal", "work", "publication_summary", "review_verdict", "review_findings"], writes: ["repair_summary"], changesFiles: false, class: deliv },
+    { id: "delivery.resolve_conflicts", kind: "agent", prompt: "delivery.resolve_conflicts", reads: ["goal", "work", "publication_summary"], writes: ["repair_summary"], changesFiles: false, class: deliv },
     // HOW-53: the review nodes are read-only — a reviewer that can edit can pass its own fix
     // it judges the repairs' own diff, not the whole branch again (core/graph.ts reviewsWorkOf)
     { id: "delivery.review_repairs", kind: "agent", prompt: "delivery.review_repairs", reads: ["goal", "work", "publication_summary", "repair_summary"], writes: ["review_verdict", "review_findings"], readOnly: true, reviewsWorkOf: ["delivery.resolve_conflicts", "delivery.fix_ci", "delivery.address_reviews", "delivery.revise_repairs"], class: deliv },
     { id: "delivery.revise_repairs", kind: "agent", prompt: "delivery.revise_repairs", reads: ["goal", "work", "publication_summary", "repair_summary", "review_verdict", "review_findings"], writes: ["repair_summary"], class: deliv },
+    // HOW-75: the three repairs above may rightly change nothing (`changesFiles: false`); this
+    // says whether they did, and an unchanged repair waits for the PR instead of review + publish
+    { id: "delivery.repair_check", kind: "command", run: "repair:changed", reads: ["repair_summary"], writes: ["repair.changed"], class: deliv },
     { id: "delivery.wait", kind: "wait", duration: "5m", class: deliv },
 
     { id: "cleanup", kind: "worktree", action: "remove", writes: ["worktree.clean", "outcome"] },
@@ -127,9 +139,11 @@ export const spec: GraphSpec = {
     { from: "delivery.probe_pr", to: "delivery.fix_ci", when: { op: "equals", key: "pr.state", value: "CI_FAILED" } },
     { from: "delivery.probe_pr", to: "delivery.wait" },
 
-    { from: "delivery.address_reviews", to: "delivery.review_repairs" },
-    { from: "delivery.fix_ci", to: "delivery.review_repairs" },
-    { from: "delivery.resolve_conflicts", to: "delivery.review_repairs" },
+    { from: "delivery.address_reviews", to: "delivery.repair_check" },
+    { from: "delivery.fix_ci", to: "delivery.repair_check" },
+    { from: "delivery.resolve_conflicts", to: "delivery.repair_check" },
+    { from: "delivery.repair_check", to: "delivery.wait", when: { op: "is-false", key: "repair.changed" } },
+    { from: "delivery.repair_check", to: "delivery.review_repairs" },
     { from: "delivery.review_repairs", to: "delivery.revise_repairs", when: { op: "equals", key: "review_verdict", value: "reject" } },
     { from: "delivery.review_repairs", to: "delivery.publish", when: { op: "equals", key: "review_verdict", value: "pass" } },
     { from: "delivery.revise_repairs", to: "delivery.publish" },

@@ -93,7 +93,7 @@ describe("newReviewActivity", () => {
   });
 
   test("an absent or empty payload is no activity, never a throw", () => {
-    expect(newReviewActivity(null, PR, T0)).toEqual({ items: [], skipped: { bot: 0, howdah: 0 } });
+    expect(newReviewActivity(null, PR, T0)).toEqual({ items: [], skipped: { bot: 0, howdah: 0 }, awaiting: [], lastReviewAt: null });
     expect(newReviewActivity({ reviews: null, comments: { nodes: null } }, PR, null).items).toEqual([]);
   });
 });
@@ -102,4 +102,87 @@ test("parsePrUrl reads any GitHub host, and refuses what names no PR", () => {
   expect(parsePrUrl("https://github.com/a/b/pull/12")).toEqual({ host: "github.com", owner: "a", name: "b", number: 12 });
   expect(parsePrUrl("https://ghe.corp/x/y/pull/3/files")).toEqual({ host: "ghe.corp", owner: "x", name: "y", number: 3 });
   expect(parsePrUrl("howdah/run-1")).toBeNull();
+});
+
+describe("HOW-75: a thread we answered waits on the reviewer", () => {
+  const reviewer = { __typename: "User", login: "rita" };
+  const operator = { __typename: "User", login: "areeb" };
+  const ours = { logins: ["areeb", "howdah-bot-account"] };
+  const thread = (comments: Array<{ author: typeof reviewer; body: string; createdAt: string; url: string }>, extra: { path?: string; line?: number } = {}) =>
+    ({ isResolved: false, path: extra.path ?? "src/x.ts", line: extra.line ?? 7, comments: { nodes: comments } });
+  const ask = { author: reviewer, body: "release or reverse?", createdAt: BEFORE, url: "q" };
+
+  test("our reply last — marked, an unmarked PR-author reply, or the gh viewer's — is not activity and is named as awaiting", () => {
+    for (const reply of [
+      { author: operator, body: `it is "release" — see the ADR ${REVIEW_REPLY_MARKER}`, createdAt: AFTER, url: "a" },
+      { author: operator, body: "it is release, kept on purpose", createdAt: AFTER, url: "a" },
+      { author: { __typename: "User", login: "Howdah-Bot-Account" }, body: "answered", createdAt: AFTER, url: "a" },
+    ]) {
+      const r = newReviewActivity({ reviewThreads: { nodes: [thread([ask, reply])] } }, PR, T0, ours);
+      expect(r.items).toEqual([]);
+      expect(r.skipped.awaiting).toBe(1);
+      expect(r.awaiting).toEqual([{ pr: PR, url: "a", path: "src/x.ts", line: 7, reviewer: "rita" }]);
+    }
+  });
+
+  test("whatever the cutoff: an answered thread older than it, or with no cutoff at all, still waits", () => {
+    const reply = { author: operator, body: "done", createdAt: AFTER, url: "a" };
+    expect(newReviewActivity({ reviewThreads: { nodes: [thread([ask, reply])] } }, PR, null, ours).items).toEqual([]);
+    expect(newReviewActivity({ reviewThreads: { nodes: [thread([ask, reply])] } }, PR, LATER, ours).awaiting).toHaveLength(1);
+  });
+
+  test("the reviewer replying after ours is new activity again, and it is the reviewer's comment handed over", () => {
+    const r = newReviewActivity({ reviewThreads: { nodes: [thread([
+      ask,
+      { author: operator, body: `done ${REVIEW_REPLY_MARKER}`, createdAt: AFTER, url: "a" },
+      { author: reviewer, body: "still reads as reverse to me", createdAt: LATER, url: "b" },
+    ])] } }, PR, T0, ours);
+    expect(r.items.map((i) => [i.kind, i.url, i.author])).toEqual([["thread", "b", "rita"]]);
+    expect(r.awaiting).toEqual([]);
+  });
+
+  test("a mix: only the thread the reviewer spoke last on counts; the answered one is listed as awaiting", () => {
+    const r = newReviewActivity({ reviewThreads: { nodes: [
+      thread([ask, { author: operator, body: "answered", createdAt: AFTER, url: "a1" }], { path: "a.ts", line: 1 }),
+      thread([
+        { author: reviewer, body: "nit", createdAt: BEFORE, url: "n0" },
+        { author: operator, body: "fixed", createdAt: AFTER, url: "n1" },
+        { author: reviewer, body: "not fixed", createdAt: LATER, url: "n2" },
+      ], { path: "b.ts", line: 2 }),
+    ] } }, PR, T0, ours);
+    expect(r.items.map((i) => i.url)).toEqual(["n2"]);
+    expect(r.awaiting.map((a) => a.url)).toEqual(["a1"]);
+    expect(r.skipped.awaiting).toBe(1);
+  });
+
+  test("a bot speaking last does not hand the turn back: the thread still waits on the human reviewer", () => {
+    const r = newReviewActivity({ reviewThreads: { nodes: [thread([
+      ask,
+      { author: operator, body: "answered", createdAt: AFTER, url: "a" },
+      { author: { __typename: "Bot", login: "linter" } as typeof reviewer, body: "beep", createdAt: LATER, url: "bot" },
+    ])] } }, PR, T0, ours);
+    expect(r.items).toEqual([]);
+    expect(r.awaiting.map((a) => a.url)).toEqual(["a"]);
+  });
+
+  test("a thread made only of our own comments is still activity (a self-review, HOW-70)", () => {
+    const r = newReviewActivity({ reviewThreads: { nodes: [thread([{ author: operator, body: "TODO: rename this", createdAt: AFTER, url: "self" }])] } }, PR, T0, ours);
+    expect(r.items.map((i) => i.url)).toEqual(["self"]);
+    expect(r.awaiting).toEqual([]);
+  });
+
+  test("without `ours`, only the marker makes a comment ours — an unmarked reply is the HOW-70 rule unchanged", () => {
+    const r = newReviewActivity({ reviewThreads: { nodes: [thread([ask, { author: operator, body: "answered", createdAt: AFTER, url: "a" }])] } }, PR, T0);
+    expect(r.items.map((i) => i.url)).toEqual(["a"]);
+  });
+
+  test("lastReviewAt: the newest review by somebody who is neither us nor a bot, of any state", () => {
+    const r = newReviewActivity({ reviews: { nodes: [
+      { author: reviewer, state: "CHANGES_REQUESTED", body: "", submittedAt: BEFORE, url: "r0" },
+      { author: reviewer, state: "APPROVED", body: "", submittedAt: AFTER, url: "r1" },
+      { author: operator, state: "COMMENTED", body: "self", submittedAt: LATER, url: "r2" },
+      { author: { __typename: "Bot", login: "ci" }, state: "COMMENTED", body: "x", submittedAt: LATER, url: "r3" },
+    ] } }, PR, T0, ours);
+    expect(r.lastReviewAt).toBe(AFTER);
+  });
 });

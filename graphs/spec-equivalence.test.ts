@@ -45,6 +45,11 @@
  *   HOW-70  implement-ticket, implement-slice, implement-stacked (through stackedFrom),
  *           improve-codebase: delivery.probe_pr also publishes `pr.review_activity` (per-visit),
  *           and delivery.address_reviews reads it — the review comments the probe found new.
+ *   HOW-75  implement-ticket, implement-slice, implement-stacked (through stackedFrom),
+ *           improve-codebase: resolve_conflicts / fix_ci / address_reviews declare
+ *           `changesFiles: false` and route to a new `delivery.repair_check` (repair:changed,
+ *           writes `repair.changed` per-visit), which sends an unchanged repair to delivery.wait
+ *           and everything else on to review_repairs (implement-slice: delivery.reextract).
  *
  * ONE ENTRY WAS ADDED BY HAND, 2026-10-13 (HOW-57, decision G9): `implement-stacked` is a NEW
  * graph, not a conversion, so it has no pre-conversion shape to be faithful to. Its entry was

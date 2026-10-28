@@ -12,22 +12,33 @@
 import type { LoggedEvent } from "../log/events";
 import type { RepairScope } from "../core/template";
 
+/**
+ * The git the engine observed just before the `node-started` at `startIndex` — the `reconciled`
+ * probe logged for that node between the previous `node-started` and this one. Undefined when
+ * no such probe exists (no reconciler, or a log written before it). Shared with HOW-75's
+ * `repair:changed` (engine/executors/repair-check.ts), so "where did this step start" is
+ * derived one way.
+ */
+export function startObservation(events: readonly LoggedEvent[], startIndex: number): Extract<LoggedEvent, { type: "reconciled" }>["git"] | undefined {
+  const start = events[startIndex];
+  if (start?.type !== "node-started") return undefined;
+  for (let i = startIndex - 1; i >= 0; i--) {
+    const e = events[i]!;
+    if (e.type === "node-started") return undefined;
+    if (e.type === "reconciled" && e.node === start.node) return e.git;
+  }
+  return undefined;
+}
+
 export function repairScope(events: readonly LoggedEvent[], reviewNode: string, reviewed: readonly string[]): RepairScope | undefined {
   const judged = events.findLastIndex((e) => e.type === "node-finished" && e.node === reviewNode && e.status === "succeeded");
   const set = new Set(reviewed);
   const since = events.findIndex((e, i) => i > judged && e.type === "node-started" && set.has(e.node));
   if (since === -1) return undefined;
   const start = events[since] as Extract<LoggedEvent, { type: "node-started" }>;
-  // the probe for this start sits between the previous node-started and this one
-  for (let i = since - 1; i >= 0; i--) {
-    const e = events[i]!;
-    if (e.type === "node-started") return undefined;
-    if (e.type === "reconciled" && e.node === start.node) {
-      const head = e.git?.head;
-      const branch = e.git?.branch;
-      if (typeof head !== "string" || head === "") return undefined;
-      return { node: start.node, visit: start.visit, sha: head, ...(typeof branch === "string" && branch !== "" ? { branch } : {}) };
-    }
-  }
-  return undefined;
+  const git = startObservation(events, since);
+  const head = git?.head;
+  const branch = git?.branch;
+  if (typeof head !== "string" || head === "") return undefined;
+  return { node: start.node, visit: start.visit, sha: head, ...(typeof branch === "string" && branch !== "" ? { branch } : {}) };
 }

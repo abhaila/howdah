@@ -526,7 +526,13 @@ Break one of these and the design stops working, so check them before changing t
   sat unpushed behind the loop for a day.
 - **A loop that changes nothing parks (HOW-54).** Progress-checked steps (on a cycle, not
   readOnly, not `changesFiles: false`) record `node-finished.tree`, the worktree's content tree
-  id; a visit whose tree equals its previous visit's parks `no-progress`.
+  id; a visit whose tree equals its previous visit's parks `no-progress`. HOW-75: the three
+  probe-driven delivery repairs (resolve_conflicts, fix_ci, address_reviews) may RIGHTLY change
+  nothing, so they declare `changesFiles: false` and `delivery.repair_check` (`repair:changed`)
+  routes an unchanged one to the wait instead of review + publish; a probe that then demands the
+  same repair with nothing new on the PR parks `repair-stalled` (core/repair-stall.ts) naming
+  what is outstanding. And a review thread we answered last waits on the reviewer — it is not
+  CHANGES_REQUIRED (core/review-activity.ts).
 - **The child waits; the parent still never supervises (HOW-57).** A slice's `depends_on` is
   `[{ slice, until: published | merged | package }]` (a bare id means `merged`; at most one
   `published`, same workspace — it is the stack base). A slice with dependencies is launched as

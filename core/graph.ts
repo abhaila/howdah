@@ -278,6 +278,11 @@ export type NodeDef<C extends object> =
        * it publishes — so a visit of it that changes nothing is not a stalled loop. Absent: an
        * agent that is not readOnly is expected to change files, and on a cycle a visit that
        * changes none parks `no-progress` (engine/run.ts).
+       *
+       * HOW-75: also declared by a step that MAY rightly change nothing and whose "no change" is
+       * routed on instead of parked — the delivery repairs, each followed by `repair:changed`
+       * (delivery.repair_check), which sends an unchanged repair to the wait rather than the
+       * review, and whose repeat the probe parks as `repair-stalled` (core/repair-stall.ts).
        */
       changesFiles?: false;
       /**
