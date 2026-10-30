@@ -551,6 +551,8 @@ export function deriveDetail(
       renders.push(e);
     } else if (e.type === "run-started") {
       pinned = e.pinned_prompts as Record<string, number>;
+    } else if (e.type === "prompts-pinned") {
+      pinned = { ...pinned, ...(e.pinned_prompts as Record<string, number>) };
     }
   }
 
@@ -821,6 +823,9 @@ export function deriveLogRows(events: LoggedEvent[]): LogRow[] {
       case "agent-environment":
         return { ...base, ...at(e.node, e.visit), kind: "engine", depth: 1,
           summary: `${e.harness} environment · ${e.setting_sources ?? "no setting-sources switch"}${e.inherits_user ? " (user settings inherited)" : ""}${e.hooks?.length ? ` · ${e.hooks.length} hook${e.hooks.length === 1 ? "" : "s"} ran` : ""}${e.skills ? ` · ${e.skills.length} skills` : ""}${e.plugins ? ` · ${e.plugins.length} plugins` : ""}` };
+      case "prompts-pinned":
+        return { ...base, node: null, visit: null, kind: "engine", depth: 0,
+          summary: `pinned on resume (the graph gained a step) · ${Object.entries(e.pinned_prompts).map(([id, v]) => `${id} v${v}`).join(", ")}` };
       case "harness-pinned":
         return { ...base, node: null, visit: null, kind: "operator", depth: 0, summary: `harness pinned to ${e.harness}` };
       default: {

@@ -149,6 +149,19 @@ export type RunEvent =
       pinned_includes?: Record<string, Record<string, number>>;
     }
   | {
+      /**
+       * HOW-78: prompts pinned AFTER start. A built-in graph can gain an agent step while a run
+       * of it is still going (implementation.report arrived under runs that were waiting on
+       * their PR), and a resume or a jump into that step found no pinned file — ENOENT, parked.
+       * `resume()` pins exactly the prompts the run never pinned, never re-pins one it has (OV-2
+       * still holds for every prompt the run already rendered), and records them here, so the
+       * versions are on the record and the pinned file reconstructs like any other.
+       */
+      type: "prompts-pinned";
+      pinned_prompts: Partial<Record<PromptId, number>>;
+      pinned_includes?: Record<string, Record<string, number>>;
+    }
+  | {
       type: "node-started"; node: string; visit: number; attempt_id: string;
       /**
        * HOW-73: set on a BRANCH's start — the parallel step and ITS visit this attempt belongs
