@@ -9,8 +9,11 @@
  *        │                       │                            └────────▶ cleanup_pending
  *        │                       ├─ CONFLICTS / CHANGES_REQUIRED / CI_FAILED ─▶ resolve_conflicts / address_reviews / fix_ci
  *        │                       └─ (fallback) wait 5m ─▶ probe_pr                     │
- *        │                                                                             ▼
- *        ├──────── pass ── review_repairs ─ reject ─▶ revise_repairs     [verifyAfterRepair: false]
+ *        │                                    ▲                                        ▼
+ *        │                                    └──── repair.changed == false ──── repair_check (repair:changed)
+ *        │                                                                             │ (fallback)
+ *        ├──────── pass ── review_repairs ◀────────────────────────────────────────────┘
+ *        │                   └─ reject ─▶ revise_repairs                    [verifyAfterRepair: false]
  *        └─────────────────────────────────────────────────┘
  *
  * CHANGES_REQUIRED is GitHub's `reviewDecision` OR review activity newer than the last
@@ -18,7 +21,17 @@
  * unresolved thread — since the operator who opens every Howdah PR cannot request changes on
  * it. probe_pr hands the items over as `pr.review_activity`. It cannot loop on itself: the
  * cutoff moves to each address_reviews start (read from the log), Howdah's replies carry
- * `REVIEW_REPLY_MARKER`, bots never count, and HOW-54's no-progress park is the backstop.
+ * `REVIEW_REPLY_MARKER`, bots never count, and a thread we answered last waits on the reviewer
+ * rather than counting (HOW-75).
+ *
+ * A REPAIR MAY RIGHTLY CHANGE NOTHING (HOW-75): every review thread already fixed, one answered
+ * and waiting on the reviewer. So resolve_conflicts / fix_ci / address_reviews declare
+ * `changesFiles: false` (no HOW-54 tree park) and each is followed by `delivery.repair_check`
+ * (`repair:changed`, engine/executors/repair-check.ts): an unchanged repair skips the review of
+ * repairs and the publish — nothing to judge, nothing to push — and waits for the PR to move. A
+ * probe that then demands the SAME repair with nothing new on the PR parks `repair-stalled`
+ * (core/repair-stall.ts), naming what is outstanding and the ways on. revise_repairs keeps
+ * HOW-54: it answers a reject of this very code, and changing nothing there IS the stall.
  *
  * A rejected repair is revised ONCE and published (f8c8d96): the next probe decides, and the
  * next repair reads the previous review's verdict and findings (address_reviews / fix_ci), so
@@ -27,8 +40,8 @@
  * verifyAfterRepair: true (implement-slice) — every code-changing repair is re-verified against
  * the APPROVED design before anything is reviewed or published (outside voice #7):
  *
- *   resolve_conflicts / fix_ci / address_reviews
- *        └─▶ delivery.reextract (map:reextract) → delivery.drift (map:drift --since delivery.publish)
+ *   resolve_conflicts / fix_ci / address_reviews ─▶ repair_check ─ repair.changed == false ─▶ wait
+ *        └─(fallback)─▶ delivery.reextract (map:reextract) → delivery.drift (map:drift --since delivery.publish)
  *                 ├─ new drift problems (PROBLEM_OUTCOMES, engine/slice-map.ts) ─▶ revise_repairs
  *                 └─ (fallback) ─▶ review_repairs ─┬─ pass ─▶ publish
  *                                                  └─ reject ─▶ revise_repairs
@@ -57,6 +70,9 @@ import type { BaseSnapshot } from "../engine/slice-decision";
 import type { MapAfter, SliceDrift } from "../engine/slice-map";
 import type { GhostSet } from "../map/ghosts";
 import type { ReviewItem } from "../core/review-activity";
+import { REPAIR_CHANGED_KEY, REPAIR_CHECK_BUILTIN, REPAIR_CHECK_NODE } from "../core/repair-stall";
+
+export { REPAIR_CHANGED_KEY, REPAIR_CHECK_NODE } from "../core/repair-stall";
 
 export type PrState = "OPEN" | "MERGED" | "CLOSED" | "CONFLICTS" | "CI_FAILED" | "CHANGES_REQUIRED";
 
@@ -72,6 +88,8 @@ export interface DeliveryCtx {
   "pr.state": PrState;
   /** HOW-70: new review activity on the PR(s), handed to address_reviews */
   "pr.review_activity": ReviewItem[];
+  /** HOW-75: did the repair that just ran change the worktree? (repair:changed) */
+  "repair.changed": boolean;
   "worktree.clean": boolean;
 }
 
@@ -123,6 +141,8 @@ function plainDelivery(): DeliveryParts<DeliveryCtx> {
         prompt: "delivery.address_reviews",
         reads: ["goal", "work", "publication_summary", "review_verdict", "review_findings", "pr.review_activity"],
         writes: { repair_summary: sticky },
+        // HOW-75: may rightly change nothing — repair_check routes on that instead of HOW-54
+        changesFiles: false,
         class: "delivery",
       },
       "delivery.fix_ci": {
@@ -130,6 +150,8 @@ function plainDelivery(): DeliveryParts<DeliveryCtx> {
         prompt: "delivery.fix_ci",
         reads: ["goal", "work", "publication_summary", "review_verdict", "review_findings"],
         writes: { repair_summary: sticky },
+        // HOW-75: may rightly change nothing — repair_check routes on that instead of HOW-54
+        changesFiles: false,
         class: "delivery",
       },
       "delivery.resolve_conflicts": {
@@ -137,8 +159,12 @@ function plainDelivery(): DeliveryParts<DeliveryCtx> {
         prompt: "delivery.resolve_conflicts",
         reads: ["goal", "work", "publication_summary"],
         writes: { repair_summary: sticky },
+        // HOW-75: may rightly change nothing — repair_check routes on that instead of HOW-54
+        changesFiles: false,
         class: "delivery",
       },
+      // HOW-75: did the repair change anything? Unchanged → wait for the PR, not review + publish
+      [REPAIR_CHECK_NODE]: { kind: "command", run: REPAIR_CHECK_BUILTIN, reads: ["repair_summary"], writes: { [REPAIR_CHANGED_KEY]: perVisit }, class: "delivery" },
       "delivery.review_repairs": {
         kind: "agent",
         prompt: "delivery.review_repairs",
@@ -207,9 +233,9 @@ function plainDelivery(): DeliveryParts<DeliveryCtx> {
       },
       { from: "delivery.probe_pr", to: "delivery.wait" },
 
-      { from: "delivery.address_reviews", to: "delivery.review_repairs" },
-      { from: "delivery.fix_ci", to: "delivery.review_repairs" },
-      { from: "delivery.resolve_conflicts", to: "delivery.review_repairs" },
+      ...NO_CHANGE_REPAIRS.map((from) => ({ from, to: REPAIR_CHECK_NODE })),
+      UNCHANGED_TO_WAIT,
+      { from: REPAIR_CHECK_NODE, to: "delivery.review_repairs" },
       {
         from: "delivery.review_repairs",
         to: "delivery.revise_repairs",
@@ -244,6 +270,20 @@ function plainDelivery(): DeliveryParts<DeliveryCtx> {
   };
 }
 
+/**
+ * HOW-75: the repairs a probe sends the run to, which may rightly change nothing — each is
+ * followed by repair_check. revise_repairs is not one: it answers a reject of this very code.
+ */
+export const NO_CHANGE_REPAIRS = ["delivery.address_reviews", "delivery.fix_ci", "delivery.resolve_conflicts"] as const;
+
+/** HOW-75: an unchanged repair has nothing to review or push — wait for the PR to move */
+const UNCHANGED_TO_WAIT: EdgeDef<DeliveryCtx> = {
+  from: REPAIR_CHECK_NODE,
+  to: "delivery.wait",
+  condition: { reads: [REPAIR_CHANGED_KEY], test: (v) => v[REPAIR_CHANGED_KEY] === false, label: `${REPAIR_CHANGED_KEY} == false` },
+  weight: 1,
+};
+
 /** The nodes whose agent changes code during delivery — each is re-verified when asked. */
 export const CODE_CHANGING_REPAIRS = ["delivery.resolve_conflicts", "delivery.fix_ci", "delivery.address_reviews", "delivery.revise_repairs"] as const;
 
@@ -262,9 +302,10 @@ function verifiedDelivery(): DeliveryParts<VerifiedDeliveryCtx> {
   const reviewAwareRepairReads = ["goal", "work", "publication_summary", "review_verdict", "review_findings", ...design] as const;
   const nodes: Record<string, NodeDef<VerifiedDeliveryCtx>> = {
     ...plain.nodes,
-    "delivery.address_reviews": { kind: "agent", prompt: "slice.address_reviews", reads: [...reviewAwareRepairReads, "pr.review_activity"], writes: { repair_summary: sticky }, class: "delivery" },
-    "delivery.fix_ci": { kind: "agent", prompt: "slice.fix_ci", reads: [...reviewAwareRepairReads], writes: { repair_summary: sticky }, class: "delivery" },
-    "delivery.resolve_conflicts": { kind: "agent", prompt: "slice.resolve_conflicts", reads: [...repairReads], writes: { repair_summary: sticky }, class: "delivery" },
+    // HOW-75: changesFiles: false — repair_check routes an unchanged repair, as in the plain half
+    "delivery.address_reviews": { kind: "agent", prompt: "slice.address_reviews", reads: [...reviewAwareRepairReads, "pr.review_activity"], writes: { repair_summary: sticky }, changesFiles: false, class: "delivery" },
+    "delivery.fix_ci": { kind: "agent", prompt: "slice.fix_ci", reads: [...reviewAwareRepairReads], writes: { repair_summary: sticky }, changesFiles: false, class: "delivery" },
+    "delivery.resolve_conflicts": { kind: "agent", prompt: "slice.resolve_conflicts", reads: [...repairReads], writes: { repair_summary: sticky }, changesFiles: false, class: "delivery" },
     "delivery.review_repairs": {
       kind: "agent",
       prompt: "slice.review_repairs",
@@ -304,11 +345,11 @@ function verifiedDelivery(): DeliveryParts<VerifiedDeliveryCtx> {
     test: (v: Pick<VerifiedDeliveryCtx, "slice.drift">) => newDriftProblems(v["slice.drift"]).length > 0,
     label: "slice.drift has new problems (missing / changed-unexpectedly / still-present / unchanged)",
   } as const;
-  const rerouted = new Set<string>(CODE_CHANGING_REPAIRS);
   const edges: EdgeDef<VerifiedDeliveryCtx>[] = [
-    // every code-changing repair goes through the map before anyone reviews it
-    ...plain.edges.filter((e) => !rerouted.has(e.from)),
-    ...CODE_CHANGING_REPAIRS.filter((from) => from !== "delivery.revise_repairs").map((from) => ({ from, to: REEXTRACT })),
+    // every code-changing repair goes through the map before anyone reviews it — the three
+    // probe-driven ones once repair_check has seen they changed something (HOW-75)
+    ...plain.edges.filter((e) => e.from !== "delivery.revise_repairs" && !(e.from === REPAIR_CHECK_NODE && e.condition === undefined)),
+    { from: REPAIR_CHECK_NODE, to: REEXTRACT },
     { from: REEXTRACT, to: DRIFT },
     { from: DRIFT, to: "delivery.revise_repairs", condition: { ...newProblems, reads: [...newProblems.reads] }, weight: 1 },
     { from: DRIFT, to: "delivery.review_repairs" },

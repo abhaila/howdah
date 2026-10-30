@@ -15,6 +15,10 @@
  * ("Let the agent choose", or any graph the builder can open — the drafter's catalog) and the
  * optional workspace. The body is core/draft-launch.ts draftLaunchRequest, the same builder a
  * redraft goes through, so what a draft run is told cannot depend on where it was started.
+ *
+ * HOW-71: the Graphs page's "Draft a graph" lands here as `?graph=draft-graph[&base=<name>]`.
+ * A `?base=` that is not one of `bases` reads as "Let the agent choose" AND is never sent: a
+ * native select shown an invalid value must not hide what gets POSTed.
  */
 import { useEffect, useState } from "react";
 import { Play } from "lucide-react";
@@ -43,7 +47,7 @@ export function StartRun() {
   const [workspace, setWorkspace] = useState<string>("");
   // draft-graph only (D-1B): the request, and the graph to start from ("" = the agent chooses)
   const [intent, setIntent] = useState<string>("");
-  const [base, setBase] = useState<string>("");
+  const [base, setBase] = useState<string>(() => new URLSearchParams(location.search).get("base") ?? "");
   const [overrides, setOverrides] = useState<AgentConfigDto>({});
   const [showOverrides, setShowOverrides] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -60,6 +64,7 @@ export function StartRun() {
   const graphs = catalog.filter((g) => !g.launched_by);
   // a base is anything the drafter's catalog offers: every graph the builder can open
   const bases = catalog.filter((g) => g.builder);
+  const chosenBase = bases.some((g) => g.name === base) ? base : "";
   const selected = graphs.find((g) => g.name === graph);
   const drafting = graph === DRAFT_GRAPH;
   const options = selected?.kind === "repo" ? workspaces.repos : [...workspaces.repos, ...workspaces.folders];
@@ -72,7 +77,7 @@ export function StartRun() {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(drafting
-          ? draftLaunchRequest({ intent, base: base || undefined, workspace: workspace || undefined, name: name.trim() || undefined, overrides })
+          ? draftLaunchRequest({ intent, base: chosenBase || undefined, workspace: workspace || undefined, name: name.trim() || undefined, overrides })
           : { graph, name: name.trim() || undefined, inputs, workspace: workspace || undefined, overrides }),
       });
       if (!r.ok) throw new Error((await r.json() as any).error ?? "launch failed");
@@ -114,7 +119,7 @@ export function StartRun() {
               </Label>
               <Label>
                 Base (optional)
-                <Select value={base} onChange={(e) => setBase(e.target.value)}>
+                <Select value={chosenBase} onChange={(e) => setBase(e.target.value)}>
                   <option value="">Let the agent choose</option>
                   {bases.map((g) => <option key={g.name} value={g.name}>{g.name}</option>)}
                 </Select>

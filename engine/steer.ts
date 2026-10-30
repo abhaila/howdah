@@ -34,24 +34,25 @@ export { steerStates, undeliveredSteers, steerTarget, softStopState, stopResumeF
  * whose runner is dead would sit in the log with nothing to deliver it — and resume starts the
  * step over anyway, where the operator should reply or jump instead.
  */
-export function steerRefusal(runDir: string, text: unknown): string | null {
+export function steerRefusal(runDir: string, text: unknown, node?: string): string | null {
   const path = join(runDir, "run.jsonl");
   if (!existsSync(path)) return `unknown run: ${basename(runDir)}`;
   const problem = steerTextProblem(text);
   if (problem) return problem;
-  const target = steerTarget(readLog(path));
+  const target = steerTarget(readLog(path), { node });
   if (!target.ok) return target.message;
   if (!runnerAlive(runDir)) return "the runner is not alive — nothing would deliver it; resume the run, then reply or jump instead";
   return null;
 }
 
 /** Refuse, or append the steer under the log lock — re-checking the target inside it. */
-export function steer(runDir: string, text: string): { ok: true; seq: number; node: string; visit: number } | { ok: false; message: string } {
-  const refused = steerRefusal(runDir, text);
+/** HOW-73: `node` names the branch when several steps are running at once */
+export function steer(runDir: string, text: string, node?: string): { ok: true; seq: number; node: string; visit: number } | { ok: false; message: string } {
+  const refused = steerRefusal(runDir, text, node);
   if (refused) return { ok: false, message: refused };
   let lateRefusal: string | null = null;
   const appended = new EventLog(join(runDir, "run.jsonl")).appendIf((events) => {
-    const target = steerTarget(events);
+    const target = steerTarget(events, { node });
     if (!target.ok) { lateRefusal = target.message; return null; }
     return { type: "operator-steered", node: target.node, visit: target.visit, text: text.trim(), by: "operator" };
   });
@@ -64,22 +65,22 @@ export function steer(runDir: string, text: string): { ok: true; seq: number; no
  * precheck, one difference: a mid-turn ask may be pending (the stop then applies after the
  * answer — awaitOperator is never interrupted). Asking twice for the same turn is idempotent.
  */
-export function softStopRefusal(runDir: string): string | null {
+export function softStopRefusal(runDir: string, node?: string): string | null {
   const path = join(runDir, "run.jsonl");
   if (!existsSync(path)) return `unknown run: ${basename(runDir)}`;
-  const target = steerTarget(readLog(path), { allowMidTurnAsk: true });
+  const target = steerTarget(readLog(path), { allowMidTurnAsk: true, node });
   if (!target.ok) return target.message.replace("steer:", "stop at the next tool call:").replace("nothing to steer", "nothing to stop softly — use Stop now");
   if (!runnerAlive(runDir)) return "the runner is not alive — there is no turn to stop";
   return null;
 }
 
-export function softStop(runDir: string): { ok: true; seq: number; node: string; visit: number; already: boolean } | { ok: false; message: string } {
-  const refused = softStopRefusal(runDir);
+export function softStop(runDir: string, node?: string): { ok: true; seq: number; node: string; visit: number; already: boolean } | { ok: false; message: string } {
+  const refused = softStopRefusal(runDir, node);
   if (refused) return { ok: false, message: refused };
   let late: string | null = null;
   let existing: { seq: number; node: string; visit: number } | null = null;
   const appended = new EventLog(join(runDir, "run.jsonl")).appendIf((events) => {
-    const target = steerTarget(events, { allowMidTurnAsk: true });
+    const target = steerTarget(events, { allowMidTurnAsk: true, node });
     if (!target.ok) { late = target.message; return null; }
     if (softStopState(events, target.node, target.visit)) {
       const prior = events.find((e) => e.type === "soft-stop-requested" && e.node === target.node && e.visit === target.visit)!;

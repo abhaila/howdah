@@ -14,6 +14,7 @@
  *   worktree   create/remove an isolated checkout; emits facts (e.g. worktree.clean)
  *   wait       parks the run for a duration; writes nothing
  *   approval   a human decision on a proposal (system-map 1a) — see ApprovalNodeDef
+ *   parallel   HOW-73: runs 2–8 read-only branch steps at once, then continues at `join`
  *   terminal   ends the run with an outcome
  *
  * Routing: edges carry an optional typed condition + weight. Highest-weight passing
@@ -245,6 +246,32 @@ export interface ApprovalNodeDef<C extends object> {
   class?: string;
 }
 
+/**
+ * HOW-73: a fork/join. The engine runs every branch — each ONE existing agent or command step —
+ * in the same process, up to `concurrency` at once (default: all of them), and continues at
+ * `join` once EVERY branch has succeeded. A branch that parks parks the run naming it; the
+ * finished siblings are kept and a resume re-runs only what has not succeeded.
+ *
+ * v1 is deliberately narrow, and `Graph.validate()` refuses everything outside it with a reason:
+ * branches share the run's one worktree, so none may write files (a `readOnly` agent, or a
+ * command declaring `changesFiles: false`); branches write DISJOINT keys and may not read a
+ * sibling's; a branch is reached only through its parallel step and has no edges of its own;
+ * and a parallel step has no edges either — its one successor is `join`, and routing after the
+ * join is the join step's own edges, over the merged context.
+ */
+export interface ParallelNodeDef {
+  kind: "parallel";
+  branches: readonly string[];
+  join: string;
+  /** how many branches run at once; 1..branches.length, default all */
+  concurrency?: number;
+  class?: string;
+}
+
+/** HOW-73: the fewest and most branches a parallel step may name */
+export const PARALLEL_MIN_BRANCHES = 2;
+export const PARALLEL_MAX_BRANCHES = 8;
+
 export type NodeDef<C extends object> =
   | ({
       kind: "agent";
@@ -278,6 +305,11 @@ export type NodeDef<C extends object> =
        * it publishes — so a visit of it that changes nothing is not a stalled loop. Absent: an
        * agent that is not readOnly is expected to change files, and on a cycle a visit that
        * changes none parks `no-progress` (engine/run.ts).
+       *
+       * HOW-75: also declared by a step that MAY rightly change nothing and whose "no change" is
+       * routed on instead of parked — the delivery repairs, each followed by `repair:changed`
+       * (delivery.repair_check), which sends an unchanged repair to the wait rather than the
+       * review, and whose repeat the probe parks as `repair-stalled` (core/repair-stall.ts).
        */
       changesFiles?: false;
       /**
@@ -299,6 +331,12 @@ export type NodeDef<C extends object> =
       timeoutMs?: number;
       maxVisits?: number;
       class?: string;
+      /**
+       * HOW-73: `false` declares the command never changes the worktree, which is what lets it
+       * be a branch of a parallel step (branches share the run's one worktree). Not enforced at
+       * run time — a declaration, like an agent's `changesFiles`.
+       */
+      changesFiles?: false;
     }
   | {
       kind: "worktree";
@@ -323,6 +361,7 @@ export type NodeDef<C extends object> =
       class?: string;
     }
   | ApprovalNodeDef<C>
+  | ParallelNodeDef
   | { kind: "terminal"; outcome: "success" | "failed" | "aborted"; label?: string };
 
 /** The context keys a node reads — the one answer the validator, engine and jump precheck share. */
@@ -445,14 +484,64 @@ export class Graph<C extends object> {
   toShape(): GraphShape {
     const nodes: GraphShape["nodes"] = {};
     for (const [id, n] of Object.entries(this.def.nodes)) {
-      nodes[id] = { reads: nodeReads(n), writes: Object.keys(this.writesOf(id)) };
+      nodes[id] = n.kind === "parallel"
+        ? { reads: [], writes: [], branches: [...n.branches] }
+        : { reads: nodeReads(n), writes: Object.keys(this.writesOf(id)) };
     }
     return {
       entry: this.def.entry,
       inputs: [...this.def.inputs],
       nodes,
-      edges: this.def.edges.map((e) => ({ from: e.from, to: e.to, reads: e.condition ? [...e.condition.reads] : undefined })),
+      edges: [
+        ...this.def.edges.map((e) => ({ from: e.from, to: e.to, reads: e.condition ? [...e.condition.reads] : undefined })),
+        // HOW-73: a parallel step reaches each branch and its join; core/validate.ts makes the
+        // join wait for every branch's writes (see GraphShape.nodes[].branches)
+        ...this.parallelEdges().map((e) => ({ from: e.from, to: e.to })),
+      ],
     };
+  }
+
+  /** HOW-73: the parallel steps of this graph, by id */
+  parallelNodes(): Array<[string, ParallelNodeDef]> {
+    return Object.entries(this.def.nodes).filter((e): e is [string, ParallelNodeDef] => e[1].kind === "parallel");
+  }
+
+  /** HOW-73: the parallel step a branch belongs to, or undefined when `nodeId` is not a branch */
+  parallelOf(nodeId: string): string | undefined {
+    return this.parallelNodes().find(([, p]) => p.branches.includes(nodeId))?.[0];
+  }
+
+  /**
+   * HOW-73: the edges a parallel step implies but `def.edges` does not hold — parallel → each
+   * branch, and parallel → join (the validator's view: the join is reached from the parallel
+   * step once every branch has written). Only edges whose endpoints exist, so a half-typed
+   * spec never hands validateGraph a dangling edge.
+   */
+  private parallelEdges(): Array<{ from: string; to: string }> {
+    const out: Array<{ from: string; to: string }> = [];
+    for (const [id, p] of this.parallelNodes()) {
+      for (const b of p.branches) if (this.def.nodes[b] && b !== id) out.push({ from: id, to: b });
+      if (this.def.nodes[p.join]) out.push({ from: id, to: p.join });
+    }
+    return out;
+  }
+
+  /**
+   * HOW-73: every edge a PICTURE draws — `def.edges`, plus a `fork` edge from a parallel step to
+   * each branch and a `join` edge from each branch to the join. The engine never routes on
+   * these; the run view's DAG and the builder do, so the layered placement puts the branches in
+   * one layer and the join after them.
+   */
+  flowEdges(): Array<{ from: string; to: string; edge: EdgeDef<C> | null; kind?: "fork" | "join" }> {
+    const out: Array<{ from: string; to: string; edge: EdgeDef<C> | null; kind?: "fork" | "join" }> =
+      this.def.edges.map((e) => ({ from: e.from, to: e.to, edge: e }));
+    for (const [id, p] of this.parallelNodes())
+      for (const b of p.branches) {
+        if (!this.def.nodes[b]) continue;
+        out.push({ from: id, to: b, edge: null, kind: "fork" });
+        if (this.def.nodes[p.join]) out.push({ from: b, to: p.join, edge: null, kind: "join" });
+      }
+    return out;
   }
 
   /**
@@ -468,6 +557,7 @@ export class Graph<C extends object> {
    *      approval per proposal key, and every `requires.approvalOf` names an approval node
    *   8. the acceptance contract (HOW-51): only read-only agents write `acceptance`, and a
    *      `requiresAcceptance` node reads it
+   *   9. parallel steps (HOW-73): see parallelProblems()
    */
   validate(): { structural: string[]; paths: Violation[] } {
     const structural: string[] = [];
@@ -481,9 +571,13 @@ export class Graph<C extends object> {
 
     const outgoing = new Map<string, EdgeDef<C>[]>(Object.keys(d.nodes).map((id) => [id, []]));
     for (const e of d.edges) outgoing.get(e.from)?.push(e);
+    // HOW-73: a branch's successor is its join and a parallel step's is its join — neither has
+    // (or may have) edges of its own; parallelProblems() says so when one does
+    const branchOf = new Set(this.parallelNodes().flatMap(([, p]) => p.branches));
 
     for (const [id, node] of Object.entries(d.nodes)) {
       const outs = outgoing.get(id) ?? [];
+      if (node.kind === "parallel" || branchOf.has(id)) continue;
       if (node.kind === "terminal") {
         if (outs.length > 0) structural.push(`terminal node "${id}" has outgoing edges`);
         continue;
@@ -503,11 +597,85 @@ export class Graph<C extends object> {
 
     structural.push(...this.approvalProblems());
     structural.push(...this.acceptanceProblems());
+    const parallel = this.parallelProblems();
+    structural.push(...parallel);
 
     this.declarations(); // throws GraphError on scope conflicts
 
-    const paths = validateGraph(this.toShape());
+    // a parallel step whose branches or join do not exist cannot be projected meaningfully —
+    // the structural problem already says what is wrong, and the path check would only repeat it
+    const paths = parallel.length ? [] : validateGraph(this.toShape());
     return { structural, paths };
+  }
+
+  /**
+   * HOW-73: the parallel step's v1 rules, each with its own sentence (graph-spec.ts rewrites
+   * them in the operator's words, so keep the quoted ids first and the wording stable):
+   *   - 2..8 distinct branches, each an existing agent or command step (a nested parallel and
+   *     every other kind are refused by name);
+   *   - a branch does not write files: a `readOnly` agent, or a command with `changesFiles: false`;
+   *   - a branch is not the entry, has no edges in or out, belongs to one parallel step, is not
+   *     the join, and carries no `requires` / `requiresAcceptance` gate;
+   *   - the join exists, is not a branch and is not the parallel step itself;
+   *   - the parallel step has no edges of its own (its successor is the join);
+   *   - branches write disjoint keys, and no branch reads a key a sibling writes;
+   *   - `concurrency`, when set, is an integer in 1..branches.
+   */
+  private parallelProblems(): string[] {
+    const problems: string[] = [];
+    const d = this.def;
+    const owner = new Map<string, string>();
+    for (const [id, p] of this.parallelNodes()) {
+      const n = p.branches.length;
+      if (n < PARALLEL_MIN_BRANCHES || n > PARALLEL_MAX_BRANCHES)
+        problems.push(`parallel node "${id}" names ${n} branch${n === 1 ? "" : "es"} — it needs ${PARALLEL_MIN_BRANCHES} to ${PARALLEL_MAX_BRANCHES}`);
+      if (new Set(p.branches).size !== n) problems.push(`parallel node "${id}" names the same branch twice`);
+      if (p.concurrency !== undefined && (!Number.isInteger(p.concurrency) || p.concurrency < 1 || p.concurrency > Math.max(1, n)))
+        problems.push(`parallel node "${id}" has concurrency ${p.concurrency} — it must be a whole number from 1 to ${n}`);
+      if (d.edges.some((e) => e.from === id))
+        problems.push(`parallel node "${id}" has outgoing edges — its only successor is its join "${p.join}"`);
+      if (p.join === id) problems.push(`parallel node "${id}" joins to itself`);
+      else if (!d.nodes[p.join]) problems.push(`parallel node "${id}" joins to unknown node "${p.join}"`);
+      else if (p.branches.includes(p.join)) problems.push(`parallel node "${id}" joins to "${p.join}", which is one of its own branches`);
+
+      const writers = new Map<string, string>();
+      for (const b of p.branches) {
+        const node = d.nodes[b];
+        if (!node) { problems.push(`parallel node "${id}" has unknown branch "${b}"`); continue; }
+        if (b === id) { problems.push(`parallel node "${id}" names itself as a branch`); continue; }
+        const prior = owner.get(b);
+        if (prior && prior !== id) problems.push(`branch "${b}" belongs to both parallel nodes "${prior}" and "${id}"`);
+        owner.set(b, id);
+        if (node.kind === "parallel") { problems.push(`branch "${b}" of parallel node "${id}" is itself a parallel step — nested parallel steps are not supported`); continue; }
+        if (node.kind !== "agent" && node.kind !== "command") {
+          problems.push(`branch "${b}" of parallel node "${id}" is a ${node.kind} step — a branch must be one agent or command step`);
+          continue;
+        }
+        if (node.kind === "agent" && !node.readOnly)
+          problems.push(`branch "${b}" of parallel node "${id}" may write files — an agent branch must be readOnly, because branches share one worktree`);
+        if (node.kind === "command" && node.changesFiles !== false)
+          problems.push(`branch "${b}" of parallel node "${id}" may write files — a command branch must declare changesFiles: false, because branches share one worktree`);
+        if (node.kind === "agent" && (node.requires || node.requiresAcceptance))
+          problems.push(`branch "${b}" of parallel node "${id}" has a start gate (requires) — gates are not supported on branches`);
+        if (b === d.entry) problems.push(`branch "${b}" of parallel node "${id}" is the entry — a branch is reached only through its parallel step`);
+        if (d.edges.some((e) => e.from === b)) problems.push(`branch "${b}" of parallel node "${id}" has outgoing edges — a branch continues at the join "${p.join}"`);
+        if (d.edges.some((e) => e.to === b)) problems.push(`branch "${b}" of parallel node "${id}" has incoming edges — a branch is reached only through its parallel step`);
+        for (const key of Object.keys(this.writesOf(b))) {
+          const other = writers.get(key);
+          if (other) problems.push(`branches "${other}" and "${b}" of parallel node "${id}" both write "${key}" — branches must write different keys`);
+          else writers.set(key, b);
+        }
+      }
+      for (const b of p.branches) {
+        const node = d.nodes[b];
+        if (!node) continue;
+        for (const key of nodeReads(node)) {
+          const w = writers.get(key);
+          if (w && w !== b) problems.push(`branch "${b}" of parallel node "${id}" reads "${key}", which its sibling "${w}" writes — branches run at once, so one cannot see another's output`);
+        }
+      }
+    }
+    return problems;
   }
 
   private approvalProblems(): string[] {

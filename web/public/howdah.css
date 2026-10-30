@@ -271,6 +271,7 @@ main { flex: 1; min-width: 0; min-height: 0; overflow: hidden; display: flex; fl
 .dag-node rect.dag-visits { fill: var(--status-running); stroke: none; }
 .dag-visits-text { fill: var(--on-alarm); font-size: var(--type-2xs); font-weight: 700; font-family: var(--font-mono); }
 .graphs-layout { display: grid; grid-template-columns: 300px 1fr; gap: 28px; align-items: start; }
+.graphs-layout .actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; }
 .graph-description { margin-bottom: 8px; }
 /* the moved static inline styles (HOW-16 P3.13) */
 .topbar-back { text-decoration: none; color: var(--fg-muted); }
@@ -587,6 +588,9 @@ main { flex: 1; min-width: 0; min-height: 0; overflow: hidden; display: flex; fl
    Inngest's shape: one row per node visit on a shared axis. Status is carried by the
    glyph; colour only ever seconds it, and `done` carries no hue at all. */
 .steps { padding-top: 4px; }
+/* HOW-73: the branches of one parallel step's visit — concurrent rows, grouped and indented */
+.step-group { margin-left: 8px; border-left: 2px solid var(--border-strong); }
+.step-row.branch .step-node { padding-left: 4px; }
 .step-row {
   display: flex; align-items: center; gap: 10px;
   height: 26px; padding: 0 4px; border-bottom: 1px solid var(--border);
@@ -1220,4 +1224,23 @@ main { flex: 1; min-width: 0; min-height: 0; overflow: hidden; display: flex; fl
 .dag-node.removed rect:first-of-type { stroke-dasharray: 5 4; fill: transparent; }
 .dag-node.removed .dag-title { text-decoration: line-through; fill: var(--fg-faint); }
 .dag-node.highlight rect:first-of-type { stroke: var(--attention); stroke-width: 2.2; }
-.gb-from-run { margin: 0; font-size: var(--type-sm); color: var(--fg-muted); }
+.gb-from-run, .gb-draft-hint { margin: 0; font-size: var(--type-sm); color: var(--fg-muted); }
+.gb-from-run a, .gb-draft-hint a { text-decoration: underline; text-underline-offset: 2px; }
+
+/* HOW-78: the run's three homes — Plan (the plan, its criteria, and the operator's answer to it)
+   and Report (a frame around the self-contained page /api/runs/:id/report renders) */
+.plan-pane { flex-grow: 1; min-height: 0; overflow: auto; padding: 16px 20px 24px; display: flex; flex-direction: column; gap: 12px; }
+.plan-head { display: flex; align-items: center; gap: 8px; color: var(--fg-muted); }
+.plan-head h2 { margin: 0; font-size: var(--type-md); color: var(--fg); }
+.plan-meta { margin-left: auto; font-family: var(--font-mono); font-size: var(--type-xs); color: var(--fg-faint); }
+.plan-doc { padding: 14px 16px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-raised); }
+.plan-empty { margin: 0; font-size: var(--type-sm); color: var(--fg-muted); }
+.plan-compose { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-raised); }
+.plan-modes { display: flex; gap: 4px; }
+.plan-send { display: flex; align-items: center; gap: 10px; }
+.plan-route { flex-grow: 1; font-size: var(--type-xs); color: var(--fg-muted); }
+.report-pane { flex-grow: 1; min-height: 0; display: flex; flex-direction: column; }
+.report-bar { display: flex; align-items: center; gap: 10px; padding: 6px 12px; border-bottom: 1px solid var(--border); }
+.report-note { flex-grow: 1; font-size: var(--type-xs); color: var(--fg-faint); }
+.report-link { display: inline-flex; align-items: center; gap: 4px; font-size: var(--type-sm); }
+.report-frame { flex-grow: 1; width: 100%; min-height: 480px; border: 0; background: var(--bg); }

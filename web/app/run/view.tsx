@@ -16,7 +16,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Rows3, Workflow, Play, Pause, OctagonX, RotateCcw, ExternalLink, GitBranch, GitPullRequest,
   Clock, Coins, Pin, Fingerprint, MessagesSquare, CornerDownRight, X, ScrollText, Loader2,
-  FolderOpen, Copy, GitFork, Activity, Hand, ChevronDown,
+  FolderOpen, Copy, GitFork, Activity, Hand, ChevronDown, FileText, Newspaper,
 } from "lucide-react";
 import type { RunDetail } from "../../derive";
 import { applyLiveEvent, type CoalescedTurn } from "../../../log/coalesce";
@@ -47,10 +47,13 @@ import { RunChat } from "./chat";
 import { UsageRows } from "./usage";
 import { ProgressPanel, liveStep, steerableTurn } from "./progress";
 import { AcceptanceCard } from "./acceptance";
+import { RunPlan } from "./plan";
+import { RunReport } from "./report";
 import { SOFT_STOP_ESCALATE_MS } from "../../../core/steer";
 import type { LiveGit } from "../../live-git";
 
-type RunTab = "steps" | "context" | "logs" | "chat" | "graph";
+/** HOW-78: Plan → Build ("chat", the transcript) → Report lead; the rest are the instruments */
+type RunTab = "plan" | "chat" | "report" | "steps" | "context" | "logs" | "graph";
 type DetailDto = RunDetail & { cwd_exists?: boolean; editor_configured?: boolean; soft_stop_escalate_ms?: number };
 
 /**
@@ -63,12 +66,14 @@ type DetailDto = RunDetail & { cwd_exists?: boolean; editor_configured?: boolean
  * becomes "Stop now" in a menu, with a line saying how the two differ. A soft stop that has not
  * taken effect after `escalateMs` (the agent may be inside one long tool call) offers Stop now.
  */
-export function RunControls({ runId, summary, onAction, softStoppable = false, softStop = null, escalateMs = SOFT_STOP_ESCALATE_MS, now = Date.now() }: {
+export function RunControls({ runId, summary, onAction, softStoppable = false, softStopNode, softStop = null, escalateMs = SOFT_STOP_ESCALATE_MS, now = Date.now() }: {
   runId: string;
   summary: RunDetail["summary"];
   onAction: () => void;
   /** a live turn on a harness with a steer channel (progress.tsx steerableTurn) */
   softStoppable?: boolean;
+  /** HOW-73: the step whose turn a soft stop names — several branches can be live at once */
+  softStopNode?: string;
   softStop?: RunDetail["soft_stop"];
   escalateMs?: number;
   now?: number;
@@ -83,7 +88,9 @@ export function RunControls({ runId, summary, onAction, softStoppable = false, s
     setError(null);
     setMenuOpen(false);
     try {
-      const r = await fetch(`/api/runs/${runId}/${verb}`, { method: "POST" });
+      const r = await fetch(`/api/runs/${runId}/${verb}`, verb === "soft-stop" && softStopNode
+        ? { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ node: softStopNode }) }
+        : { method: "POST" });
       if (!r.ok) throw new Error(((await r.json().catch(() => null)) as any)?.error ?? `${verb} failed`);
       toast(verb === "soft-stop" ? "stop sent — the agent stops at its next tool call" : `${verb} accepted — the runner is acting on it`);
       setTimeout(onAction, 300);
@@ -642,7 +649,9 @@ export function RunView({ id, graceMs = OPEN_GRACE_MS }: { id: string; graceMs?:
             value={tab}
             onValueChange={(v) => setTab(v as RunTab)}
             items={[
-              { value: "chat", label: "Chat", icon: <MessagesSquare /> },
+              { value: "plan", label: "Plan", icon: <FileText /> },
+              { value: "chat", label: "Build", icon: <MessagesSquare /> },
+              { value: "report", label: "Report", icon: <Newspaper /> },
               { value: "steps", label: "Steps", icon: <Rows3 /> },
               { value: "context", label: "Context", icon: <Fingerprint /> },
               { value: "logs", label: "Logs", icon: <ScrollText /> },
@@ -651,7 +660,7 @@ export function RunView({ id, graceMs = OPEN_GRACE_MS }: { id: string; graceMs?:
           />
           <RunControls
             runId={id} summary={summary} onAction={reload} now={now}
-            softStoppable={steerableTurn(detail) !== null} softStop={detail.soft_stop}
+            softStoppable={steerableTurn(detail) !== null} softStopNode={steerableTurn(detail)?.node} softStop={detail.soft_stop}
             escalateMs={detail.soft_stop_escalate_ms ?? SOFT_STOP_ESCALATE_MS}
           />
           <OpenIdeButton runId={id} detail={detail} />
@@ -705,7 +714,11 @@ export function RunView({ id, graceMs = OPEN_GRACE_MS }: { id: string; graceMs?:
             )}
           </div>
         )}
-        {tab === "context" ? (
+        {tab === "plan" ? (
+          <RunPlan runId={id} detail={detail} onChanged={reload} />
+        ) : tab === "report" ? (
+          <RunReport runId={id} detail={detail} />
+        ) : tab === "context" ? (
           <RunContext entries={detail.context} />
         ) : tab === "chat" ? (
           <RunChat runId={id} detail={chatDetail} ask={ask} liveGit={liveGit} onResolved={reload} onPickStep={(k) => { setPicked(k); setTab("steps"); }} earlier={transcriptStart > 0} onEarlier={loadEarlier} />
@@ -734,8 +747,9 @@ export function RunView({ id, graceMs = OPEN_GRACE_MS }: { id: string; graceMs?:
             <ProgressPanel detail={detail} liveGit={liveGit} variant="rail" runId={id} />
           </section>
         )}
-        {/* HOW-51: the contract while the run is still being judged; once finished it leads Chat */}
-        {detail.acceptance && detail.summary.outcome === null && detail.ask?.code !== "acceptance-unmet" && (
+        {/* HOW-51: the contract while the run is still being judged; once finished it leads Chat.
+            HOW-78: the Plan tab draws it under the plan, so the rail does not repeat it there */}
+        {detail.acceptance && detail.summary.outcome === null && detail.ask?.code !== "acceptance-unmet" && tab !== "plan" && (
           <section>
             <AcceptanceCard runId={id} detail={detail} onChanged={reload} />
           </section>

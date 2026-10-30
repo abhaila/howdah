@@ -75,9 +75,7 @@ export function RunSteps({ timeline, ask, selected, now, onSelect, mapping }: {
   const askKey = askRowKey(timeline, ask);
   const firstStartedAt = new Date(timeline[0]!.started_at).getTime();
   const liveSpan = Math.max(1, now - firstStartedAt);
-  return (
-    <div className="steps">
-      {timeline.map((t, i) => {
+  const row = (t: RunDetail["timeline"][number], i: number) => {
         const span = t.finished_at ? t.run_span_ms || 1 : Math.max(t.run_span_ms || 1, liveSpan);
         const waiting = askKey === `${t.node}@${t.visit}`;
         const status = waiting ? "needs-input" : t.status;
@@ -89,7 +87,7 @@ export function RunSteps({ timeline, ask, selected, now, onSelect, mapping }: {
         return (
           <Row
             key={`${key}#${i}`}
-            className={`step-row ${status}`}
+            className={`step-row ${status}${t.parallel ? " branch" : ""}`}
             selected={selected === key}
             needsInput={status === "needs-input"}
             onClick={() => onSelect(key)}
@@ -117,9 +115,39 @@ export function RunSteps({ timeline, ask, selected, now, onSelect, mapping }: {
             </span>
           </Row>
         );
-      })}
+  };
+  return (
+    <div className="steps">
+      {parallelBlocks(timeline).map((block) =>
+        block.group ? (
+          // HOW-73: the branches of one parallel visit, side by side in time — one block, so
+          // their bars read as concurrent rather than as steps that happened to overlap
+          <div key={`group-${block.first}`} className="step-group" role="group" aria-label={`${block.group} — ${block.rows.length} steps at once`}>
+            {block.rows.map(([t, i]) => row(t, i))}
+          </div>
+        ) : (
+          block.rows.map(([t, i]) => row(t, i))
+        ),
+      )}
     </div>
   );
+}
+
+/**
+ * HOW-73: the timeline cut into runs of rows — consecutive branch rows of the same parallel
+ * visit form one block (`group` = `node@visit` of the parallel step), every other row is a block
+ * of its own. Order is the timeline's, so nothing moves; a branch re-run after a resume (its
+ * parallel step's row comes first) starts a block of its own.
+ */
+export function parallelBlocks(timeline: RunDetail["timeline"]): Array<{ group: string | null; first: number; rows: Array<[RunDetail["timeline"][number], number]> }> {
+  const out: Array<{ group: string | null; first: number; rows: Array<[RunDetail["timeline"][number], number]> }> = [];
+  timeline.forEach((t, i) => {
+    const group = t.parallel ? `${t.parallel.node}@${t.parallel.visit}` : null;
+    const last = out.at(-1);
+    if (group && last?.group === group) last.rows.push([t, i]);
+    else out.push({ group, first: i, rows: [[t, i]] });
+  });
+  return out;
 }
 
 /**

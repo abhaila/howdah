@@ -112,7 +112,11 @@ export function suggestionsFor(detail: RunDetail, ask: RunDetail["ask"]): Sugges
 
 /** one message in the transcript — the parts model, in the order the run produced them */
 export type ChatMessage =
-  | { kind: "step"; key: string; node: string; visit: number; index: number; prompt: { id: string; version: number; read: string[] } | null }
+  | {
+      kind: "step"; key: string; node: string; visit: number; index: number; prompt: { id: string; version: number; read: string[] } | null;
+      /** HOW-73: this turn is a branch, running at once with its siblings in this parallel step */
+      parallel?: string;
+    }
   | { kind: "beats"; key: string; beats: ReturnType<typeof beatsOf>; state: TurnState | undefined }
   | { kind: "steer"; key: string; steer: RunDetail["steers"][number] }
   | { kind: "evidence"; key: string; entry: RunDetail["evidence"][number] }
@@ -148,6 +152,7 @@ export function conversation(detail: RunDetail): ChatMessage[] {
       visit: row.visit,
       index: i + 1,
       prompt: render ? { id: render.prompt, version: render.prompt_version, read: Object.keys(render.context_read) } : null,
+      ...(row.parallel ? { parallel: row.parallel.node } : {}),
     });
 
     const mine = detail.turns.filter((t) => t.node === row.node && t.visit === row.visit);
@@ -205,6 +210,7 @@ function Row({ m, onPickStep, lastActivityAt, runId }: { m: ChatMessage; onPickS
         <div className="cv-step">
           <div className="chat-eyebrow">
             Step {m.index} · visit {m.visit}
+            {m.parallel && <> · at once, in {m.parallel}</>}
             {m.prompt && <> · {m.prompt.id} v{m.prompt.version} · read {m.prompt.read.join(", ") || "nothing"}</>}
           </div>
           <Button
@@ -334,7 +340,8 @@ export function RunChat({ runId, detail, ask, onPickStep, onResolved, liveGit = 
     setBusy(true);
     setSteerError(null);
     const res = await fetch(`/api/runs/${runId}/steer`, {
-      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text }),
+      // HOW-73: name the turn — with several branches live at once the route needs to know which
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text, ...(steerable ? { node: steerable.node } : {}) }),
     }).catch(() => null);
     const body = (await res?.json().catch(() => null)) as { error?: string } | null;
     if (res?.ok) {

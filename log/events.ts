@@ -87,7 +87,14 @@ export type ParkCode =
    * visit left it — the loop would go round again on the same code for the same verdict. A reply
    * is carried into the step's next attempt; jump or steer are the other ways on.
    */
-  | "no-progress";
+  | "no-progress"
+  /**
+   * HOW-75: probe:pr asked again for the delivery repair that just changed nothing, and nothing
+   * new has arrived on the PR since (core/repair-stall.ts). Raised by a command step, so a reply
+   * has no prompt to reach: the reason names what is outstanding and the remedies — act on the
+   * PR, then retry the probe (a plain resume), jump to the repair with an instruction, or abort.
+   */
+  | "repair-stalled";
 
 export type ResolutionSource = "operator" | "resume";
 
@@ -141,7 +148,15 @@ export type RunEvent =
        */
       pinned_includes?: Record<string, Record<string, number>>;
     }
-  | { type: "node-started"; node: string; visit: number; attempt_id: string }
+  | {
+      type: "node-started"; node: string; visit: number; attempt_id: string;
+      /**
+       * HOW-73: set on a BRANCH's start — the parallel step and ITS visit this attempt belongs
+       * to. Replay keeps the run's position on the parallel step and derives each branch's
+       * progress from these (engine/replay.ts parallelProgress), so no sidecar is needed.
+       */
+      parallel?: { node: string; visit: number };
+    }
   | {
       type: "prompt-rendered";
       node: string;

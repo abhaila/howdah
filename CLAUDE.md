@@ -79,8 +79,9 @@ bun cli/main.ts reply <run-id> <text>        # answers the current ask, resumes 
 bun cli/main.ts resolve-effect <run-id> <effect> happened|not-happened [--node <n>]
                                              # HOW-3: attest to an ambiguous side effect, then resume
 bun cli/main.ts resume|pause|abort <run-id>  # pause/abort also interrupt a PROVEN live runner mid-turn
-bun cli/main.ts steer <run-id> <text>        # HOW-47: say something to a live agent; lands at its next tool call
-bun cli/main.ts stop <run-id>                # HOW-48: soft pause — the agent stops at its next tool call
+bun cli/main.ts steer <run-id> <text> [--node <step>]   # HOW-47: say something to a live agent; lands at its next tool call
+                                             # --node: which branch, when parallel steps are live (HOW-73)
+bun cli/main.ts stop <run-id> [--node <step>]           # HOW-48: soft pause — the agent stops at its next tool call
 bun cli/main.ts waive <run-id> <criterion> <reason>   # HOW-51: accept an unmet acceptance criterion, on the record
 bun cli/main.ts waive <run-id> --unprovable <reason> # HOW-59: waive every criterion this run cannot prove, at once
 bun cli/main.ts jump <run-id> <node> [msg]   # move a dead run to a node, injecting an instruction
@@ -96,6 +97,7 @@ bun cli/main.ts comment <run-id> [--proposal <id>] <entity-id> <text> # pin a co
 bun cli/main.ts redesign <run-id> <msg>      # re-extract and re-propose; msg also seeds the map
 bun cli/main.ts map <dir> [--json]           # extract a system map standalone (map/cli.ts)
 bun cli/main.ts metrics [--json]             # implement-slice vs implement-ticket value metrics
+bun cli/main.ts report <run-id> [--out f.html]   # HOW-78: the run report, one self-contained HTML page
 bun reviser/revise.ts <prompt-id>            # GEPA-style revision proposal → reviser/proposals/
 bun reviser/revise.ts <_partial> --evidence-from <includer>      # partials need an includer's evidence
 bun prompts/proposals.ts accept|reject <path> [reason]   # same guards the UI uses
@@ -526,7 +528,13 @@ Break one of these and the design stops working, so check them before changing t
   sat unpushed behind the loop for a day.
 - **A loop that changes nothing parks (HOW-54).** Progress-checked steps (on a cycle, not
   readOnly, not `changesFiles: false`) record `node-finished.tree`, the worktree's content tree
-  id; a visit whose tree equals its previous visit's parks `no-progress`.
+  id; a visit whose tree equals its previous visit's parks `no-progress`. HOW-75: the three
+  probe-driven delivery repairs (resolve_conflicts, fix_ci, address_reviews) may RIGHTLY change
+  nothing, so they declare `changesFiles: false` and `delivery.repair_check` (`repair:changed`)
+  routes an unchanged one to the wait instead of review + publish; a probe that then demands the
+  same repair with nothing new on the PR parks `repair-stalled` (core/repair-stall.ts) naming
+  what is outstanding. And a review thread we answered last waits on the reviewer — it is not
+  CHANGES_REQUIRED (core/review-activity.ts).
 - **The child waits; the parent still never supervises (HOW-57).** A slice's `depends_on` is
   `[{ slice, until: published | merged | package }]` (a bare id means `merged`; at most one
   `published`, same workspace — it is the stack base). A slice with dependencies is launched as
@@ -553,6 +561,36 @@ Break one of these and the design stops working, so check them before changing t
   `<tip>..HEAD`. A stacked publish must name its own PRs as an object, and probe:pr ignores
   `deps.prs`, or the run would finish when its BASE merged.
 
+- **Parallel steps run inside ONE visit, and the log says which (HOW-73).** A `parallel` node
+  (core/graph.ts `ParallelNodeDef`) names 2–8 `branches` and a `join`; the ONE runner runs the
+  branches in-process, up to `concurrency` at once (default all), each through the same
+  `Engine.runStep` a sequential step uses — so visits, maxVisits, gates, effects, the allowance
+  hop, context continuation, stuck detection and turn timeouts are all per branch, and every
+  branch's prompt reconstructs VERIFIED unchanged. `maxSteps` counts each branch attempt. v1
+  branches SHARE the worktree, so `validate()` refuses a branch that may write files (an agent
+  must be `readOnly`, a command must declare `changesFiles: false`), overlapping writes, a
+  branch reading a sibling's key, nested parallels, edges on a branch or on the parallel step,
+  and start gates on a branch; `core/validate.ts` makes the join's in-set out(P) ∪ every branch's
+  writes, so a step after the join may read any branch's output. A branch's `node-started`
+  carries `parallel: {node, visit}` and does NOT move replay's position: the run stays mid-flight
+  on the parallel step until its own `node-finished`, logged only once EVERY branch succeeded
+  (then `edge-taken` to the join). `parallelProgress()` (engine/replay.ts) derives succeeded /
+  failed / in-flight branches from the log alone, so a resume re-enters the SAME parallel visit,
+  never re-runs a finished branch, and re-attempts an in-flight one on its own visit (kill -9
+  mid-parallel). A branch park stops queued branches from starting, lets running siblings
+  finish their attempt and keep what they published, then parks the run ONCE on the first
+  parked branch (`runStep` returns parks, the caller appends them). The ContextStore holds one
+  attempt PER STEP (`setFor`/`endAttemptOf`); `set`/`endAttempt` still refuse anything but
+  exactly one open attempt. Asks are kept per step: an engine park (with a code) replaces
+  everything, a mid-turn ask stands beside a sibling's, and an executor's `awaitOperator` waits
+  for the resolution of ITS node@visit. Steer and soft stop take a node (`--node`, the routes'
+  `node`) and refuse, naming the live branches, when several turns are live and none is named;
+  a steer to a live sibling is never carried into another branch's prompt. Jumping to a branch
+  is refused (jump to its parallel step), and so is a jump instruction to a parallel step,
+  which has no prompt to carry it. A drafted graph may not contain one (`draftRuleProblems`),
+  the builder opens and draws one (`specFlowEdges`) but does not edit it yet, and the run view's
+  DAG draws the fork/join edges the server's graph API adds (`Graph.flowEdges`, dashed).
+
 - **A draft is a proposal; Save is the approval (HOW-56, HOW-65).** A `draft-graph` run
   (`graphs/draft-graph.ts`) publishes `graph.draft = { spec, prompts, based_on, notes }` and
   writes nothing else. What a draft may contain is narrower than what the builder allows: only
@@ -574,6 +612,17 @@ Break one of these and the design stops working, so check them before changing t
   rule `draftRuleProblems` uses, so `grantsNewWrite` (which turns the card's Save into "Review
   and save") covers every `permission` advice by construction.
 
+- **The run report is derived, and the agent contributes data, not HTML (HOW-78).** A run's
+  central home is three tabs — Plan (the plan + its acceptance contract; a comment is a steer
+  to a live steerable turn, else a jump back to `implementation.plan` carrying it), Build (the
+  transcript) and Report. The report is ONE self-contained HTML page rendered by
+  `core/run-report.ts` from the log (`web/report.ts` gathers the model; `GET
+  /api/runs/:id/report` and `howdah report` serve the same page). The only thing an agent adds
+  is `change_map` — what the change is, as JSON — from implement-ticket's read-only
+  `implementation.report` step between a passing local review and publish. So it works on every
+  harness, needs no hosted artifact, and nothing is stored: screenshots are embedded as data:
+  URIs, the page loads nothing, and `asChangeMap` drops malformed rows rather than throwing.
+
 ### Module map
 
 | Path | Role |
@@ -594,7 +643,8 @@ Break one of these and the design stops working, so check them before changing t
 
 ### Node kinds and executors
 
-`agent` (prompt through a harness), `command` (`bash -c`, facts from the final JSON line of
+`parallel` (HOW-73: runs its read-only branches at once in the one runner, then its join —
+see the invariant above), `agent` (prompt through a harness), `command` (`bash -c`, facts from the final JSON line of
 stdout, or the built-in `probe:pr`), `worktree` (`create`/`remove` under
 `$HOWDAH_HOME/repos/<repo>/worktrees/` on a `howdah/<run-id>` branch, grouped by the
 registered workspace name; a dirty worktree refuses to die),

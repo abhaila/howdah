@@ -26,6 +26,12 @@
  *              attempt runs, but a failed attempt restores it (the old answer still stands).
  *   per-visit: the act of re-entering the writer invalidates the old value forever —
  *              freshness is part of the value's meaning (e.g. a probe result).
+ *
+ * Concurrent attempts (HOW-73): the branches of a parallel step run at once, so attempts are
+ * kept PER STEP. Opening a second attempt on the SAME step is still refused. `set` and
+ * `endAttempt` keep their one-attempt meaning and throw unless exactly one attempt is open, so
+ * every sequential caller behaves as before; a branch uses `setFor` / `endAttemptOf`. Branch
+ * writes are disjoint (Graph.validate), so their buffers never collide.
  */
 
 export type Scope = "sticky" | "cleared" | "per-visit";
@@ -68,8 +74,8 @@ export class ContextError extends Error {}
 export class ContextStore<C extends object> {
   private cells = new Map<keyof C & string, Cell>();
   private declarations: Map<keyof C & string, { scope: Scope; writers: string[] }>;
-  private buffer = new Map<keyof C & string, unknown>();
-  private attempt: { node: string; visit: number } | null = null;
+  /** open attempts by step, each with its own write buffer (HOW-73) */
+  private attempts = new Map<string, { visit: number; buffer: Map<keyof C & string, unknown> }>();
   private readLog: ReadRecord[] = [];
 
   /**
@@ -92,9 +98,9 @@ export class ContextStore<C extends object> {
    * `per-visit` outputs.
    */
   beginAttempt(node: string, visit: number): void {
-    if (this.attempt) throw new ContextError(`attempt already open: ${this.attempt.node}@${this.attempt.visit}`);
-    this.attempt = { node, visit };
-    this.buffer.clear();
+    const open = this.attempts.get(node);
+    if (open) throw new ContextError(`attempt already open: ${node}@${open.visit}`);
+    this.attempts.set(node, { visit, buffer: new Map() });
     for (const [key, decl] of this.declarations) {
       if (!decl.writers.includes(node)) continue;
       const cell = this.cells.get(key);
@@ -104,16 +110,30 @@ export class ContextStore<C extends object> {
     }
   }
 
+  /** the one open attempt — what `set` / `endAttempt` act on; refused when none or several are open */
+  private sole(what: string): string {
+    if (this.attempts.size === 0) throw new ContextError(`${what} outside an attempt`);
+    if (this.attempts.size > 1)
+      throw new ContextError(`${what} is ambiguous: ${this.attempts.size} attempts are open (${[...this.attempts.keys()].join(", ")}) — name the step`);
+    return [...this.attempts.keys()][0]!;
+  }
+
   /** Write during the open attempt. Only declared keys, only by their declared writer. */
   set<K extends keyof C & string>(key: K, value: C[K]): void {
-    if (!this.attempt) throw new ContextError(`set(${key}) outside an attempt`);
+    this.setFor(this.sole(`set(${key})`), key, value);
+  }
+
+  /** HOW-73: write during `node`'s open attempt — the form a concurrent branch uses */
+  setFor<K extends keyof C & string>(node: string, key: K, value: C[K]): void {
+    const attempt = this.attempts.get(node);
+    if (!attempt) throw new ContextError(`set(${key}) outside an attempt of ${node}`);
     const decl = this.declarations.get(key);
-    if (!decl) throw new ContextError(`undeclared context key written: ${key} (by ${this.attempt.node})`);
-    if (!decl.writers.includes(this.attempt.node))
+    if (!decl) throw new ContextError(`undeclared context key written: ${key} (by ${node})`);
+    if (!decl.writers.includes(node))
       throw new ContextError(
-        `${this.attempt.node} is not a declared writer of ${key} (writers: ${decl.writers.join(", ")})`,
+        `${node} is not a declared writer of ${key} (writers: ${decl.writers.join(", ")})`,
       );
-    this.buffer.set(key, value);
+    attempt.buffer.set(key, value);
   }
 
   /**
@@ -121,11 +141,18 @@ export class ContextStore<C extends object> {
    * "failed" publishes nothing and un-veils `cleared` cells (the old answer stands).
    */
   endAttempt(outcome: "succeeded" | "failed"): void {
-    if (!this.attempt) throw new ContextError("endAttempt without beginAttempt");
-    const { node, visit } = this.attempt;
+    if (this.attempts.size === 0) throw new ContextError("endAttempt without beginAttempt");
+    this.endAttemptOf(this.sole("endAttempt"), outcome);
+  }
+
+  /** HOW-73: close `node`'s open attempt — the form a concurrent branch uses */
+  endAttemptOf(node: string, outcome: "succeeded" | "failed"): void {
+    const attempt = this.attempts.get(node);
+    if (!attempt) throw new ContextError(`endAttempt without beginAttempt (${node})`);
+    const { visit, buffer } = attempt;
     if (outcome === "succeeded") {
       const at = new Date().toISOString();
-      for (const [key, value] of this.buffer) {
+      for (const [key, value] of buffer) {
         const decl = this.declarations.get(key)!;
         this.cells.set(key, {
           value,
@@ -144,8 +171,7 @@ export class ContextStore<C extends object> {
         // per-visit cells stay invalidated: a new visit permanently outdates them
       }
     }
-    this.buffer.clear();
-    this.attempt = null;
+    this.attempts.delete(node);
   }
 
   /** Is the key currently readable? (scope-aware) */

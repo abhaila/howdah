@@ -135,6 +135,7 @@
             "scope": "sticky"
           }
         },
+        "changesFiles": false,
         "class": "delivery"
       },
       "delivery.drift": {
@@ -184,6 +185,7 @@
             "scope": "sticky"
           }
         },
+        "changesFiles": false,
         "class": "delivery"
       },
       "delivery.probe_pr": {
@@ -193,10 +195,10 @@
           "publication_summary"
         ],
         "writes": {
-          "pr.state": {
+          "pr.review_activity": {
             "scope": "per-visit"
           },
-          "pr.review_activity": {
+          "pr.state": {
             "scope": "per-visit"
           }
         },
@@ -244,6 +246,19 @@
         },
         "class": "delivery"
       },
+      "delivery.repair_check": {
+        "kind": "command",
+        "run": "repair:changed",
+        "reads": [
+          "repair_summary"
+        ],
+        "writes": {
+          "repair.changed": {
+            "scope": "per-visit"
+          }
+        },
+        "class": "delivery"
+      },
       "delivery.resolve_conflicts": {
         "kind": "agent",
         "prompt": "slice.resolve_conflicts",
@@ -259,6 +274,7 @@
             "scope": "sticky"
           }
         },
+        "changesFiles": false,
         "class": "delivery"
       },
       "delivery.review_repairs": {
@@ -280,14 +296,14 @@
             "scope": "cleared"
           }
         },
-        "class": "delivery",
+        "readOnly": true,
         "reviewsWorkOf": [
           "delivery.resolve_conflicts",
           "delivery.fix_ci",
           "delivery.address_reviews",
           "delivery.revise_repairs"
         ],
-        "readOnly": true
+        "class": "delivery"
       },
       "delivery.revise_repairs": {
         "kind": "agent",
@@ -358,8 +374,8 @@
             "scope": "cleared"
           }
         },
-        "class": "implementation",
-        "readOnly": true
+        "readOnly": true,
+        "class": "implementation"
       },
       "map.drift": {
         "kind": "command",
@@ -590,6 +606,28 @@
         "to": "delivery.wait"
       },
       {
+        "from": "delivery.address_reviews",
+        "to": "delivery.repair_check"
+      },
+      {
+        "from": "delivery.fix_ci",
+        "to": "delivery.repair_check"
+      },
+      {
+        "from": "delivery.resolve_conflicts",
+        "to": "delivery.repair_check"
+      },
+      {
+        "from": "delivery.repair_check",
+        "to": "delivery.wait",
+        "label": "repair.changed == false",
+        "reads": [
+          "repair.changed"
+        ],
+        "rank": 0,
+        "beatsFallback": true
+      },
+      {
         "from": "delivery.review_repairs",
         "to": "delivery.revise_repairs",
         "label": "review_verdict == 'reject'",
@@ -646,15 +684,7 @@
         "to": "cleanup_pending"
       },
       {
-        "from": "delivery.resolve_conflicts",
-        "to": "delivery.reextract"
-      },
-      {
-        "from": "delivery.fix_ci",
-        "to": "delivery.reextract"
-      },
-      {
-        "from": "delivery.address_reviews",
+        "from": "delivery.repair_check",
         "to": "delivery.reextract"
       },
       {
@@ -792,6 +822,7 @@
             "scope": "sticky"
           }
         },
+        "changesFiles": false,
         "class": "delivery"
       },
       "delivery.fix_ci": {
@@ -809,6 +840,7 @@
             "scope": "sticky"
           }
         },
+        "changesFiles": false,
         "class": "delivery"
       },
       "delivery.probe_pr": {
@@ -822,10 +854,10 @@
           "pr.approved": {
             "scope": "per-visit"
           },
-          "pr.state": {
+          "pr.review_activity": {
             "scope": "per-visit"
           },
-          "pr.review_activity": {
+          "pr.state": {
             "scope": "per-visit"
           }
         },
@@ -851,6 +883,19 @@
         "changesFiles": false,
         "class": "delivery"
       },
+      "delivery.repair_check": {
+        "kind": "command",
+        "run": "repair:changed",
+        "reads": [
+          "repair_summary"
+        ],
+        "writes": {
+          "repair.changed": {
+            "scope": "per-visit"
+          }
+        },
+        "class": "delivery"
+      },
       "delivery.resolve_conflicts": {
         "kind": "agent",
         "prompt": "delivery.resolve_conflicts",
@@ -864,6 +909,7 @@
             "scope": "sticky"
           }
         },
+        "changesFiles": false,
         "class": "delivery"
       },
       "delivery.resolve_restack": {
@@ -925,13 +971,13 @@
             "scope": "cleared"
           }
         },
+        "readOnly": true,
         "reviewsWorkOf": [
           "delivery.resolve_conflicts",
           "delivery.fix_ci",
           "delivery.address_reviews",
           "delivery.revise_repairs"
         ],
-        "readOnly": true,
         "class": "delivery"
       },
       "delivery.revise_repairs": {
@@ -1143,6 +1189,23 @@
         "changesFiles": false,
         "class": "implementation"
       },
+      "implementation.report": {
+        "kind": "agent",
+        "prompt": "implementation.report",
+        "reads": [
+          "goal",
+          "work",
+          "implementation_plan",
+          "implementation_summary"
+        ],
+        "writes": {
+          "change_map": {
+            "scope": "sticky"
+          }
+        },
+        "readOnly": true,
+        "class": "implementation"
+      },
       "verify.run": {
         "kind": "command",
         "run": "verify:run",
@@ -1210,13 +1273,17 @@
       },
       {
         "from": "implementation.local_review",
-        "to": "delivery.publish",
+        "to": "implementation.report",
         "label": "review_verdict == 'pass'",
         "reads": [
           "review_verdict"
         ],
         "rank": 1,
         "beatsFallback": true
+      },
+      {
+        "from": "implementation.report",
+        "to": "delivery.publish"
       },
       {
         "from": "implementation.plan_review",
@@ -1292,14 +1359,28 @@
       },
       {
         "from": "delivery.address_reviews",
-        "to": "delivery.review_repairs"
+        "to": "delivery.repair_check"
       },
       {
         "from": "delivery.fix_ci",
-        "to": "delivery.review_repairs"
+        "to": "delivery.repair_check"
       },
       {
         "from": "delivery.resolve_conflicts",
+        "to": "delivery.repair_check"
+      },
+      {
+        "from": "delivery.repair_check",
+        "to": "delivery.wait",
+        "label": "repair.changed == false",
+        "reads": [
+          "repair.changed"
+        ],
+        "rank": 0,
+        "beatsFallback": true
+      },
+      {
+        "from": "delivery.repair_check",
         "to": "delivery.review_repairs"
       },
       {
@@ -1478,6 +1559,7 @@
             "scope": "sticky"
           }
         },
+        "changesFiles": false,
         "class": "delivery"
       },
       "delivery.fix_ci": {
@@ -1495,6 +1577,7 @@
             "scope": "sticky"
           }
         },
+        "changesFiles": false,
         "class": "delivery"
       },
       "delivery.probe_pr": {
@@ -1504,10 +1587,10 @@
           "publication_summary"
         ],
         "writes": {
-          "pr.state": {
+          "pr.review_activity": {
             "scope": "per-visit"
           },
-          "pr.review_activity": {
+          "pr.state": {
             "scope": "per-visit"
           }
         },
@@ -1531,6 +1614,19 @@
         "changesFiles": false,
         "class": "delivery"
       },
+      "delivery.repair_check": {
+        "kind": "command",
+        "run": "repair:changed",
+        "reads": [
+          "repair_summary"
+        ],
+        "writes": {
+          "repair.changed": {
+            "scope": "per-visit"
+          }
+        },
+        "class": "delivery"
+      },
       "delivery.resolve_conflicts": {
         "kind": "agent",
         "prompt": "delivery.resolve_conflicts",
@@ -1544,6 +1640,7 @@
             "scope": "sticky"
           }
         },
+        "changesFiles": false,
         "class": "delivery"
       },
       "delivery.review_repairs": {
@@ -1563,13 +1660,13 @@
             "scope": "cleared"
           }
         },
+        "readOnly": true,
         "reviewsWorkOf": [
           "delivery.resolve_conflicts",
           "delivery.fix_ci",
           "delivery.address_reviews",
           "delivery.revise_repairs"
         ],
-        "readOnly": true,
         "class": "delivery"
       },
       "delivery.revise_repairs": {
@@ -1720,6 +1817,23 @@
         "changesFiles": false,
         "class": "implementation"
       },
+      "implementation.report": {
+        "kind": "agent",
+        "prompt": "implementation.report",
+        "reads": [
+          "goal",
+          "work",
+          "implementation_plan",
+          "implementation_summary"
+        ],
+        "writes": {
+          "change_map": {
+            "scope": "sticky"
+          }
+        },
+        "readOnly": true,
+        "class": "implementation"
+      },
       "verify.run": {
         "kind": "command",
         "run": "verify:run",
@@ -1769,13 +1883,17 @@
       },
       {
         "from": "implementation.local_review",
-        "to": "delivery.publish",
+        "to": "implementation.report",
         "label": "review_verdict == 'pass'",
         "reads": [
           "review_verdict"
         ],
         "rank": 1,
         "beatsFallback": true
+      },
+      {
+        "from": "implementation.report",
+        "to": "delivery.publish"
       },
       {
         "from": "implementation.plan_review",
@@ -1845,14 +1963,28 @@
       },
       {
         "from": "delivery.address_reviews",
-        "to": "delivery.review_repairs"
+        "to": "delivery.repair_check"
       },
       {
         "from": "delivery.fix_ci",
-        "to": "delivery.review_repairs"
+        "to": "delivery.repair_check"
       },
       {
         "from": "delivery.resolve_conflicts",
+        "to": "delivery.repair_check"
+      },
+      {
+        "from": "delivery.repair_check",
+        "to": "delivery.wait",
+        "label": "repair.changed == false",
+        "reads": [
+          "repair.changed"
+        ],
+        "rank": 0,
+        "beatsFallback": true
+      },
+      {
+        "from": "delivery.repair_check",
         "to": "delivery.review_repairs"
       },
       {
@@ -1966,6 +2098,7 @@
             "scope": "sticky"
           }
         },
+        "changesFiles": false,
         "class": "delivery"
       },
       "delivery.fix_ci": {
@@ -1983,6 +2116,7 @@
             "scope": "sticky"
           }
         },
+        "changesFiles": false,
         "class": "delivery"
       },
       "delivery.probe_pr": {
@@ -1992,10 +2126,10 @@
           "publication_summary"
         ],
         "writes": {
-          "pr.state": {
+          "pr.review_activity": {
             "scope": "per-visit"
           },
-          "pr.review_activity": {
+          "pr.state": {
             "scope": "per-visit"
           }
         },
@@ -2013,8 +2147,21 @@
             "scope": "sticky"
           }
         },
-        "class": "delivery",
-        "changesFiles": false
+        "changesFiles": false,
+        "class": "delivery"
+      },
+      "delivery.repair_check": {
+        "kind": "command",
+        "run": "repair:changed",
+        "reads": [
+          "repair_summary"
+        ],
+        "writes": {
+          "repair.changed": {
+            "scope": "per-visit"
+          }
+        },
+        "class": "delivery"
       },
       "delivery.resolve_conflicts": {
         "kind": "agent",
@@ -2029,6 +2176,7 @@
             "scope": "sticky"
           }
         },
+        "changesFiles": false,
         "class": "delivery"
       },
       "delivery.review_repairs": {
@@ -2048,14 +2196,14 @@
             "scope": "cleared"
           }
         },
-        "class": "delivery",
+        "readOnly": true,
         "reviewsWorkOf": [
           "delivery.resolve_conflicts",
           "delivery.fix_ci",
           "delivery.address_reviews",
           "delivery.revise_repairs"
         ],
-        "readOnly": true
+        "class": "delivery"
       },
       "delivery.revise_repairs": {
         "kind": "agent",
@@ -2151,8 +2299,8 @@
             "scope": "cleared"
           }
         },
-        "class": "implementation",
-        "readOnly": true
+        "readOnly": true,
+        "class": "implementation"
       },
       "implementation.plan": {
         "kind": "agent",
@@ -2184,8 +2332,8 @@
             "scope": "sticky"
           }
         },
-        "class": "implementation",
-        "changesFiles": false
+        "changesFiles": false,
+        "class": "implementation"
       }
     },
     "edges": [
@@ -2313,14 +2461,28 @@
       },
       {
         "from": "delivery.address_reviews",
-        "to": "delivery.review_repairs"
+        "to": "delivery.repair_check"
       },
       {
         "from": "delivery.fix_ci",
-        "to": "delivery.review_repairs"
+        "to": "delivery.repair_check"
       },
       {
         "from": "delivery.resolve_conflicts",
+        "to": "delivery.repair_check"
+      },
+      {
+        "from": "delivery.repair_check",
+        "to": "delivery.wait",
+        "label": "repair.changed == false",
+        "reads": [
+          "repair.changed"
+        ],
+        "rank": 0,
+        "beatsFallback": true
+      },
+      {
+        "from": "delivery.repair_check",
         "to": "delivery.review_repairs"
       },
       {

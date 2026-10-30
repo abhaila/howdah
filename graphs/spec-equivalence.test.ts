@@ -45,6 +45,14 @@
  *   HOW-70  implement-ticket, implement-slice, implement-stacked (through stackedFrom),
  *           improve-codebase: delivery.probe_pr also publishes `pr.review_activity` (per-visit),
  *           and delivery.address_reviews reads it — the review comments the probe found new.
+ *   HOW-75  implement-ticket, implement-slice, implement-stacked (through stackedFrom),
+ *           improve-codebase: resolve_conflicts / fix_ci / address_reviews declare
+ *           `changesFiles: false` and route to a new `delivery.repair_check` (repair:changed,
+ *           writes `repair.changed` per-visit), which sends an unchanged repair to delivery.wait
+ *           and everything else on to review_repairs (implement-slice: delivery.reextract).
+ *   HOW-78  implement-ticket and implement-stacked (through stackedFrom): a read-only
+ *           `implementation.report` step runs between a passing local_review and
+ *           delivery.publish, writing `change_map` (sticky) — the run report's change map.
  *
  * ONE ENTRY WAS ADDED BY HAND, 2026-10-13 (HOW-57, decision G9): `implement-stacked` is a NEW
  * graph, not a conversion, so it has no pre-conversion shape to be faithful to. Its entry was
@@ -82,10 +90,12 @@ describe("B1: converting a built-in to a GraphSpec changes nothing (HOW-31)", ()
   });
 
   test("every registered graph validates", () => {
-    const broken = Object.entries(GRAPHS).filter(([, g]) => {
-      try { g.validate(); return false; } catch { return true; }
+    // the reason travels with the name: a graph that validates alone and not after another
+    // file ran (one shared GRAPHS registry per bun process) is undebuggable from a bare name
+    const broken = Object.entries(GRAPHS).flatMap(([name, g]) => {
+      try { g.validate(); return []; } catch (e) { return [`${name}: ${e instanceof Error ? e.message : String(e)}`]; }
     });
-    expect(broken.map(([name]) => name)).toEqual([]);
+    expect(broken).toEqual([]);
   });
 
   test("a converted graph carries its spec back for an exact round trip", () => {

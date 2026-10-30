@@ -381,7 +381,7 @@ describe("every native node kind can be built from the forms' own defaults (AC1)
         edges: [],
       },
     };
-    const add = (kind: NodeSpec["kind"], title: string, over: (n: NodeSpec) => NodeSpec = (n) => n) => {
+    const add = (kind: Exclude<NodeSpec["kind"], "parallel">, title: string, over: (n: NodeSpec) => NodeSpec = (n) => n) => {
       const made = newStep(draft.spec, kind, title);
       draft = apply(draft, { type: "add-step", ...made, node: over(made.node) });
       return over(made.node).id;
@@ -2504,5 +2504,35 @@ describe("removing a field says what it destroys first (HOW-31 item 7)", () => {
     const input = draft.spec.inputs[0];
     expect(input).toBeDefined();
     expect(fieldRemoval(draft, input!).wasInput).toBe(true);
+  });
+});
+
+// ---- HOW-71: a blank builder offers drafting instead ------------------------------------------
+
+describe("a blank /graphs/new offers drafting (HOW-71)", () => {
+  test("one quiet line, linking to New run with draft-graph picked", async () => {
+    const el = await mount();
+    const hint = el.querySelector(".gb-draft-hint");
+    expect(hint?.textContent).toBe("Rather describe it? Draft a graph");
+    expect(hint?.querySelector("a")?.getAttribute("href")).toBe("/new?graph=draft-graph");
+  });
+
+  test("not on /graphs/:name/build, which is a deliberate hand edit", async () => {
+    const spec = doc().spec;
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      const url = String(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+      const path = url.replace(/^https?:\/\/[^/]+/, "");
+      const body = path === `/api/graphs/${spec.name}` ? { spec, builder: true }
+        : path.startsWith("/api/local-prompts/") ? { body: "" }
+        : { graphs: [{ name: spec.name }], problems: [] };
+      return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+    host = document.createElement("div");
+    document.body.appendChild(host);
+    root = createRoot(host);
+    await act(async () => { root!.render(<ToastProvider><GraphBuilder name={spec.name} /></ToastProvider>); });
+    await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
+    expect(host.querySelector("h1")?.textContent).toBe(`Editing ${spec.name}`);
+    expect(host.querySelector(".gb-draft-hint")).toBeNull();
   });
 });

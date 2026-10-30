@@ -245,6 +245,8 @@ export function jumpRefusal(
   runDir: string,
   node: string,
   graphs: Record<string, Graph<any>>,
+  /** the instruction the jump carries, if any — refused on a parallel step, which has no prompt (HOW-73) */
+  message?: string,
 ): { ok: false; message: string } | { ok: true; replayed: ReplayedState; graph: Graph<any> } {
   const path = join(runDir, "run.jsonl");
   if (!existsSync(path)) return { ok: false, message: `unknown run: ${basename(runDir)}` };
@@ -257,6 +259,11 @@ export function jumpRefusal(
   const def = graph.def.nodes[node];
   if (!def) return { ok: false, message: `unknown node "${node}" — have: ${Object.keys(graph.def.nodes).join(", ")}` };
   if (def.kind === "terminal") return { ok: false, message: "cannot jump to a terminal node" };
+  // HOW-73: a branch runs only inside its parallel step's visit, beside its siblings
+  const owner = graph.parallelOf(node);
+  if (owner) return { ok: false, message: `"${node}" is one of the steps "${owner}" runs at once — jump to "${owner}" instead` };
+  if (def.kind === "parallel" && message?.trim())
+    return { ok: false, message: `"${node}" runs steps at once and has no prompt of its own to carry an instruction — jump without one` };
   // the target's declared reads must be satisfiable from the replayed context, otherwise the
   // jump is refused with the missing keys named — never a runtime surprise
   const missing = jumpMissingReads(graph, replayed, node);
@@ -396,6 +403,15 @@ export const REPLY_RULES: Readonly<Record<ParkCode, Rule>> = {
   "paused-by-operator": retryWithReply,
   // HOW-54: the repair changed nothing; a reply tells its next attempt what to do differently
   "no-progress": retryWithReply,
+  // HOW-75: the PR is waiting on somebody else; act there, then retry the probe — or jump/abort
+  "repair-stalled": ({ run }) => ({
+    accept: false,
+    retry: true,
+    message:
+      `the PR still asks for the repair that just changed nothing, and nothing new has arrived on it; ` +
+      `reply on the PR, re-request review or dismiss the stale review (or re-run the check), then Retry this step ` +
+      `(\`resume ${run}\`); or \`jump ${run} <repair-step> "<what to change>"\` to make a change; or \`abort ${run}\``,
+  }),
   // HOW-51: a reply cannot meet a criterion; a waiver (a decision) or a re-review can
   "acceptance-unmet": ({ run }) => ({
     accept: false,

@@ -37,9 +37,17 @@ import { harnessSpec, isHarness } from "../../../core/harnesses";
 
 /** the newest step, when its turn is live — the only time the panel has anything to say */
 export function liveStep(detail: Pick<RunDetail, "timeline" | "turn_states">): { node: string; visit: number } | null {
-  const row = detail.timeline.at(-1);
-  if (!row) return null;
-  return detail.turn_states[`${row.node}@${row.visit}`] === "live" ? { node: row.node, visit: row.visit } : null;
+  const last = detail.timeline.at(-1);
+  if (!last) return null;
+  // HOW-73: the branches of one parallel visit are all "the latest step" — take the newest of
+  // them whose turn is live (the run's controls then name it, so the route knows which turn)
+  const group = last.parallel;
+  for (let i = detail.timeline.length - 1; i >= 0; i--) {
+    const row = detail.timeline[i]!;
+    if (row !== last && !(group && row.parallel?.node === group.node && row.parallel.visit === group.visit)) break;
+    if (detail.turn_states[`${row.node}@${row.visit}`] === "live") return { node: row.node, visit: row.visit };
+  }
+  return null;
 }
 
 /**

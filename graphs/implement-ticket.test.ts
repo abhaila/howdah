@@ -37,9 +37,13 @@ function engineFor(dir: string, script: Script, prompts: Map<string, string>, ex
     ...extra,
     executors: {
       worktree: async ({ nodeId }) => ok(nodeId.startsWith("cleanup") ? { "worktree.clean": true } : { "worktree.verify_command": "", "worktree.preview_paths": "" }),
-      // verify, the evidence capture and the probe are the only command steps; each publishes its own fact
+      // verify, the evidence capture, the repair check and the probe are the command steps; each
+      // publishes its own fact. HOW-75: every stubbed repair "changed" something, so the loops
+      // below go round through review_repairs and publish as they always did
       command: async ({ nodeId }) =>
-        nodeId === "verify.run"
+        nodeId === "delivery.repair_check"
+          ? ok({ "repair.changed": true })
+          : nodeId === "verify.run"
           ? ok({ "verify.result": script.verify?.() ?? VERIFY_PASS })
           : nodeId === "implementation.evidence"
           ? ok({ "evidence.items": { outcome: "not-checked", items: [], reason: "stub" } })
@@ -64,6 +68,8 @@ function engineFor(dir: string, script: Script, prompts: Map<string, string>, ex
                 ? { id: "ac-1", text: "the bug is fixed", source: "plan", passes: false, evidence: null }
                 : { id: "ac-1", text: "the bug is fixed", source: "plan", passes: true, evidence: { kind: "verify.result" } }],
             });
+          case "implementation.report":
+            return ok({ change_map: { title: "login fix", summary: "fixes login", components: [] } });
           case "delivery.publish":
             return ok({ publication_summary: "pr opened" });
           case "delivery.review_repairs":

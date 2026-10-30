@@ -19,6 +19,7 @@ export type PromptId =
   | "implementation.local_review"
   | "implementation.plan"
   | "implementation.plan_review"
+  | "implementation.report"
   | "plan.propose"
   | "plan.tickets"
   | "quick-task.work"
@@ -63,6 +64,7 @@ export const PROMPT_IDS = [
   "implementation.local_review",
   "implementation.plan",
   "implementation.plan_review",
+  "implementation.report",
   "plan.propose",
   "plan.tickets",
   "quick-task.work",
