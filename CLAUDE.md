@@ -97,6 +97,7 @@ bun cli/main.ts comment <run-id> [--proposal <id>] <entity-id> <text> # pin a co
 bun cli/main.ts redesign <run-id> <msg>      # re-extract and re-propose; msg also seeds the map
 bun cli/main.ts map <dir> [--json]           # extract a system map standalone (map/cli.ts)
 bun cli/main.ts metrics [--json]             # implement-slice vs implement-ticket value metrics
+bun cli/main.ts report <run-id> [--out f.html]   # HOW-78: the run report, one self-contained HTML page
 bun reviser/revise.ts <prompt-id>            # GEPA-style revision proposal → reviser/proposals/
 bun reviser/revise.ts <_partial> --evidence-from <includer>      # partials need an includer's evidence
 bun prompts/proposals.ts accept|reject <path> [reason]   # same guards the UI uses
@@ -610,6 +611,17 @@ Break one of these and the design stops working, so check them before changing t
   `core/draft-diff.ts`, computed on the server; it matches steps to the base by exact id, the
   rule `draftRuleProblems` uses, so `grantsNewWrite` (which turns the card's Save into "Review
   and save") covers every `permission` advice by construction.
+
+- **The run report is derived, and the agent contributes data, not HTML (HOW-78).** A run's
+  central home is three tabs — Plan (the plan + its acceptance contract; a comment is a steer
+  to a live steerable turn, else a jump back to `implementation.plan` carrying it), Build (the
+  transcript) and Report. The report is ONE self-contained HTML page rendered by
+  `core/run-report.ts` from the log (`web/report.ts` gathers the model; `GET
+  /api/runs/:id/report` and `howdah report` serve the same page). The only thing an agent adds
+  is `change_map` — what the change is, as JSON — from implement-ticket's read-only
+  `implementation.report` step between a passing local review and publish. So it works on every
+  harness, needs no hosted artifact, and nothing is stored: screenshots are embedded as data:
+  URIs, the page loads nothing, and `asChangeMap` drops malformed rows rather than throwing.
 
 ### Module map
 

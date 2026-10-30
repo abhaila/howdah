@@ -68,6 +68,8 @@ function engineFor(dir: string, script: Script, prompts: Map<string, string>, ex
                 ? { id: "ac-1", text: "the bug is fixed", source: "plan", passes: false, evidence: null }
                 : { id: "ac-1", text: "the bug is fixed", source: "plan", passes: true, evidence: { kind: "verify.result" } }],
             });
+          case "implementation.report":
+            return ok({ change_map: { title: "login fix", summary: "fixes login", components: [] } });
           case "delivery.publish":
             return ok({ publication_summary: "pr opened" });
           case "delivery.review_repairs":

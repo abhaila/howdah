@@ -61,6 +61,7 @@ function deliveryRun(o: { probes: Probe[]; repairCommits?: (node: string, visit:
         return ok({ implementation_summary: "built" });
       case "implementation.local_review":
         return ok({ review_verdict: "pass", review_findings: [], acceptance: [{ id: "ac-1", text: "works", source: "plan", passes: true, evidence: { kind: "verify.result" } }] });
+      case "implementation.report": return ok({ change_map: { title: "feature", summary: "adds f", components: [] } });
       case "delivery.publish": return ok({ publication_summary: `PR ${PR}` });
       case "delivery.review_repairs": return ok({ review_verdict: "pass", review_findings: [] });
       case "complete_ticket": return ok({ completion_summary: "done" });
