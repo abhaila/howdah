@@ -74,13 +74,15 @@ function writesDetail(writes: Record<string, unknown>): { title?: string; detail
 
 /**
  * The run's own account of itself, oldest first. The PR poll (probe → wait → probe, while the PR
- * is OPEN) is folded into one row, or a run waiting a day on a reviewer would be 500 rows long.
+ * is OPEN) is folded into one row, or a run waiting a day on a reviewer would be 500 rows long,
+ * and so is any step that succeeds back to back (a stacked run's dependency wait: "Await ×18").
  */
 export function reportSteps(events: readonly LoggedEvent[]): ReportStep[] {
   const out: ReportStep[] = [];
   const started = new Map<string, string>();
   let polling: ReportStep | null = null;
   let polls = 0;
+  let repeating: { node: string; row: ReportStep; count: number } | null = null;
   for (const e of events) {
     if (e.type === "node-started") { started.set(`${e.node}@${e.visit}`, e.ts); continue; }
     if (e.type === "node-finished") {
@@ -96,13 +98,24 @@ export function reportSteps(events: readonly LoggedEvent[]): ReportStep[] {
         continue;
       }
       polling = null;
+      // a step that repeats back to back — a dependency wait, a retried probe — is one row with
+      // a count and its latest detail, not one row per visit
+      const prev = out.at(-1);
+      if (e.status === "succeeded" && repeating && repeating.node === e.node && prev === repeating.row) {
+        repeating.count += 1;
+        repeating.row.title = [`${stepName(e.node)} ×${repeating.count}`, w.title].filter(Boolean).join(" · ");
+        if (w.detail) repeating.row.detail = w.detail;
+        continue;
+      }
       const name = `${stepName(e.node)}${e.visit > 1 ? ` #${e.visit}` : ""}`;
-      out.push({
+      const row: ReportStep = {
         at,
         title: [name, e.status === "failed" ? "failed" : w.title, dur].filter(Boolean).join(" · "),
         ...(w.detail || e.refused ? { detail: e.refused ?? w.detail } : {}),
         kind: e.status === "failed" ? "failed" : "step",
-      });
+      };
+      repeating = e.status === "succeeded" ? { node: e.node, row, count: 1 } : null;
+      out.push(row);
       continue;
     }
     if (e.type === "operator-jump") {

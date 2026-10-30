@@ -9,7 +9,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { deriveDetail, type RunDetail } from "../derive";
 import { FakeLog } from "../slice.fixtures";
 import { RunPlan, planInstruction, planRoute } from "./run/plan";
-import { RunReport } from "./run/report";
+import { RunReport, canMapChange } from "./run/report";
 import { ToastProvider } from "@/components/ui/toast";
 
 let root: Root | null = null;
@@ -94,4 +94,38 @@ test("the Report tab frames the derived page, sandboxed, with Open and Download"
   expect(frame.getAttribute("src")).toBe("/api/runs/r1/report");
   expect(frame.getAttribute("sandbox")).toBe("allow-scripts");
   expect([...el.querySelectorAll("a")].map((a) => a.getAttribute("href"))).toEqual(["/api/runs/r1/report", "/api/runs/r1/report?download=1"]);
+});
+
+describe("Map this change (HOW-78)", () => {
+  const mapless = (written: boolean, finished = false) => {
+    const log = new FakeLog();
+    log.add({ type: "run-started", graph: "implement-ticket", inputs: {}, pinned_prompts: {} });
+    if (written) {
+      log.add({ type: "node-started", node: "implementation.report", visit: 1, attempt_id: "r#1" });
+      log.add({ type: "node-finished", node: "implementation.report", visit: 1, status: "succeeded", writes: { change_map: { title: "t" } } });
+    }
+    if (finished) log.add({ type: "run-finished", outcome: "success" });
+    return deriveDetail("r1", log.events, { change_map: { scope: "sticky", writer: ["implementation.report"] } } as never);
+  };
+
+  test("offered only when the graph has the step, no visit wrote the map, and the run is not over", () => {
+    expect(canMapChange(mapless(false))).toBe(true);
+    expect(canMapChange(mapless(true))).toBe(false);
+    expect(canMapChange(mapless(false, true))).toBe(false);
+    expect(canMapChange(deriveDetail("r2", [], {}))).toBe(false);
+  });
+
+  test("it is a jump to implementation.report, and a refusal is shown verbatim", async () => {
+    const settings = (window as unknown as { happyDOM?: { settings: { disableIframePageLoading: boolean } } }).happyDOM?.settings;
+    if (settings) settings.disableIframePageLoading = true;
+    const sent: unknown[] = [];
+    globalThis.fetch = (async (_url: string, init?: RequestInit) => {
+      sent.push(JSON.parse(String(init?.body)));
+      return new Response(JSON.stringify({ error: "runner is live — pause or abort first, then jump" }), { status: 400 });
+    }) as typeof fetch;
+    const el = render(<RunReport runId="r1" detail={mapless(false)} />);
+    await act(async () => { button(el, "Map this change").click(); });
+    expect(sent).toEqual([{ node: "implementation.report" }]);
+    expect(el.querySelector(".field-error")!.textContent).toBe("runner is live — pause or abort first, then jump");
+  });
 });

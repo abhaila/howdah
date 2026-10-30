@@ -615,11 +615,16 @@ Break one of these and the design stops working, so check them before changing t
 - **The run report is derived, and the agent contributes data, not HTML (HOW-78).** A run's
   central home is three tabs — Plan (the plan + its acceptance contract; a comment is a steer
   to a live steerable turn, else a jump back to `implementation.plan` carrying it), Build (the
-  transcript) and Report. The report is ONE self-contained HTML page rendered by
+  transcript) and Report. The report is ONE self-contained HTML page, laid out as a system map
+  OF THE CHANGE — request path on the left, lanes of new/changed/reused/external components in
+  the centre with a token that plays the flow, "What it does" / "How it's built" per component on
+  the right, then a worked example and the folded run history; evidence and plan collapse below
+  (the first version led with run bookkeeping and was rejected for it). It is rendered by
   `core/run-report.ts` from the log (`web/report.ts` gathers the model; `GET
   /api/runs/:id/report` and `howdah report` serve the same page). The only thing an agent adds
   is `change_map` — what the change is, as JSON — from implement-ticket's read-only
-  `implementation.report` step between a passing local review and publish. So it works on every
+  `implementation.report` step between a passing local review and publish; a run without one is
+  offered "Map this change" (a jump to that step). So it works on every
   harness, needs no hosted artifact, and nothing is stored: screenshots are embedded as data:
   URIs, the page loads nothing, and `asChangeMap` drops malformed rows rather than throwing.
 

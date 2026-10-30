@@ -32,6 +32,22 @@ function run() {
   return { home, runsDir: join(home, "runs") };
 }
 
+test("a step that repeats back to back is one row with a count and its latest detail", () => {
+  const home = mkdtempSync(join(tmpdir(), "howdah-report-fold-"));
+  const path = join(home, "run.jsonl");
+  const log = new EventLog(path);
+  log.append({ type: "run-started", graph: "implement-stacked", inputs: {}, pinned_prompts: {} });
+  for (let v = 1; v <= 18; v++) {
+    log.append({ type: "node-started", node: "stacked.await", visit: v, attempt_id: `a#${v}` });
+    log.append({ type: "node-finished", node: "stacked.await", visit: v, status: "succeeded", writes: { "deps.waiting": `waiting on be-1 · package (check ${v})` } });
+  }
+  log.append({ type: "node-started", node: "create_worktree", visit: 1, attempt_id: "w#1" });
+  log.append({ type: "node-finished", node: "create_worktree", visit: 1, status: "succeeded", writes: {} });
+  const steps = reportSteps(readLog(path));
+  expect(steps.map((s) => s.title)).toEqual(["Await ×18", "Create worktree"]);
+  expect(steps[0]!.detail).toBe("waiting on be-1 · package (check 18)");
+});
+
 describe("the run report", () => {
   test("is derived from the log: change map, plan, criteria, tests and an embedded screenshot", () => {
     const { runsDir } = run();
