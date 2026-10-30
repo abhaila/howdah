@@ -27,7 +27,8 @@
 import { userHookReport } from "../engine/executors/agent-env";
 import { softStop, steer } from "../engine/steer";
 import { waiveCriterion, waiveUnprovable } from "../engine/acceptance-decision";
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, writeFileSync } from "node:fs";
+import { loadRunReport } from "../web/report";
 import { join } from "node:path";
 import { Engine, pinnedHarness } from "../engine/run";
 import { liveExecutors, stubExecutors } from "../engine/executors";
@@ -678,6 +679,15 @@ if (import.meta.main) {
       if (verb === "approve") await approveCommand(args[0] ?? "", proposalId);
       else if (verb === "send-feedback") await sendFeedbackCommand(args[0] ?? "", proposalId);
       else commentCommand(args[0] ?? "", args[1] ?? "", args.slice(2).join(" "), proposalId);
+    }
+    // HOW-78: the run report — the same page the viewer's Report tab shows, as a file to share
+    else if (verb === "report") {
+      const { value: out, rest: args } = takeFlag(rest, "--out");
+      const id = args[0] ?? "";
+      const html = loadRunReport(runsDir, id, (await loadRegistry(base, ROOT)).graphs);
+      if (html === null) throw new Error(`unknown run: ${id} (checked ${runsDir}; set HOWDAH_HOME to the home used by the web server)`);
+      if (out) { writeFileSync(out, html); console.log(`wrote ${out}`); }
+      else process.stdout.write(html);
     }
     else if (verb === "redesign") await redesignCommand(rest[0] ?? "", rest.slice(1).join(" "));
     else if (verb === "up") await upCommand({ once: rest.includes("--once") });

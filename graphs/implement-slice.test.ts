@@ -122,8 +122,10 @@ describe("deliveryGraph extraction keeps implement-ticket identical", () => {
     //   HOW-75  resolve_conflicts / fix_ci / address_reviews declare `changesFiles: false` and go
     //           to `delivery.repair_check` (repair:changed): unchanged → delivery.wait, else
     //           review_repairs
+    //   HOW-78  `implementation.report` (read-only) runs between a passing local_review and
+    //           delivery.publish and writes `change_map` (sticky), which the run report draws
     const s = JSON.stringify(sortDeep(shapeOf(implementTicket)));
-    expect(createHash("sha256").update(s).digest("hex")).toBe("65444914aa3f76446cb72f7a1d9a6175e3602343ba7a91b4e7a597c85e786dad");
+    expect(createHash("sha256").update(s).digest("hex")).toBe("e8117ec7fbe841303bf73a3b6cdbe13b419771694b604cd5fdf1fe9115bbaeff");
   });
 ;
 

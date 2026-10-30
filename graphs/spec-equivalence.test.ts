@@ -50,6 +50,9 @@
  *           `changesFiles: false` and route to a new `delivery.repair_check` (repair:changed,
  *           writes `repair.changed` per-visit), which sends an unchanged repair to delivery.wait
  *           and everything else on to review_repairs (implement-slice: delivery.reextract).
+ *   HOW-78  implement-ticket and implement-stacked (through stackedFrom): a read-only
+ *           `implementation.report` step runs between a passing local_review and
+ *           delivery.publish, writing `change_map` (sticky) — the run report's change map.
  *
  * ONE ENTRY WAS ADDED BY HAND, 2026-10-13 (HOW-57, decision G9): `implement-stacked` is a NEW
  * graph, not a conversion, so it has no pre-conversion shape to be faithful to. Its entry was

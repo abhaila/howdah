@@ -1189,6 +1189,23 @@
         "changesFiles": false,
         "class": "implementation"
       },
+      "implementation.report": {
+        "kind": "agent",
+        "prompt": "implementation.report",
+        "reads": [
+          "goal",
+          "work",
+          "implementation_plan",
+          "implementation_summary"
+        ],
+        "writes": {
+          "change_map": {
+            "scope": "sticky"
+          }
+        },
+        "readOnly": true,
+        "class": "implementation"
+      },
       "verify.run": {
         "kind": "command",
         "run": "verify:run",
@@ -1256,13 +1273,17 @@
       },
       {
         "from": "implementation.local_review",
-        "to": "delivery.publish",
+        "to": "implementation.report",
         "label": "review_verdict == 'pass'",
         "reads": [
           "review_verdict"
         ],
         "rank": 1,
         "beatsFallback": true
+      },
+      {
+        "from": "implementation.report",
+        "to": "delivery.publish"
       },
       {
         "from": "implementation.plan_review",
@@ -1796,6 +1817,23 @@
         "changesFiles": false,
         "class": "implementation"
       },
+      "implementation.report": {
+        "kind": "agent",
+        "prompt": "implementation.report",
+        "reads": [
+          "goal",
+          "work",
+          "implementation_plan",
+          "implementation_summary"
+        ],
+        "writes": {
+          "change_map": {
+            "scope": "sticky"
+          }
+        },
+        "readOnly": true,
+        "class": "implementation"
+      },
       "verify.run": {
         "kind": "command",
         "run": "verify:run",
@@ -1845,13 +1883,17 @@
       },
       {
         "from": "implementation.local_review",
-        "to": "delivery.publish",
+        "to": "implementation.report",
         "label": "review_verdict == 'pass'",
         "reads": [
           "review_verdict"
         ],
         "rank": 1,
         "beatsFallback": true
+      },
+      {
+        "from": "implementation.report",
+        "to": "delivery.publish"
       },
       {
         "from": "implementation.plan_review",

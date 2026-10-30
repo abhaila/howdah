@@ -24,6 +24,7 @@
  *   POST /api/runs/:id/draft/save  {name} → HOW-65: save the draft as a local graph with provenance (201 / 409 name taken, already saved or discarded / 422 the gate refused)
  *   POST /api/runs/:id/draft/redraft {change} → HOW-66: launch a draft-graph run with --parent this one and this draft as its base (202 {id} / 400 no change / 409 not ready or discarded / 422 too large)
  *   POST /api/runs/:id/draft/discard → HOW-66: append `draft-discarded` (200 {ok, appended}; idempotent / 409 not ready or saved)
+ *   GET  /api/runs/:id/report      HOW-78: the run report, one self-contained HTML page derived from the log (?download=1 → attachment)
  *   GET  /api/local-prompts/:id    HOW-22: the body of a prompt a builder graph owns
  *   GET  /api/attention            HOW-20: the needs-you inbox — every pending ask with its run, reason and wait
  *   GET  /api/ready                HOW-67: the quiet "Ready for you" tier — finished drafts neither saved nor discarded
@@ -51,6 +52,7 @@ import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from "n
 import { dirname, join, resolve, sep } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { LogTail, readLog } from "../log/write";
+import { loadRunReport } from "./report";
 import { deriveDetail, deriveSummary, deriveTimeline, runDigest, snapshotIndex, sortRuns, type RunSummary, type SnapshotIndex } from "./derive";
 import { LiveGitHub, liveTargetOf, type LiveTarget } from "./live-git";
 import { softStop, steer } from "../engine/steer";
@@ -836,6 +838,26 @@ export function createHowdahServer(opts: ServerOpts) {
         if (!real.startsWith(realpathSync(root) + sep)) return json({ error: "not an evidence file" }, 400);
         const type = rel.endsWith(".png") ? "image/png" : "text/plain; charset=utf-8";
         return new Response(Bun.file(real), { headers: { "content-type": type, "cache-control": "no-cache" } });
+      }
+
+      /**
+       * HOW-78: the run report — one self-contained HTML page derived from the log
+       * (web/report.ts). `?download=1` serves it as an attachment, which is how it is shared.
+       * Its own CSP: the page carries one inline script and inline styles and loads nothing.
+       */
+      const rpm = url.pathname.match(/^\/api\/runs\/([^/]+)\/report$/);
+      if (rpm && req.method === "GET") {
+        const id = rpm[1]!;
+        if (!/^[A-Za-z0-9._-]+$/.test(id) || id.startsWith(".")) return json({ error: "bad run id" }, 400);
+        const html = loadRunReport(opts.runsDir, id, (await registry()).graphs);
+        if (html === null) return json({ error: `no run ${id}` }, 404);
+        const headers: Record<string, string> = {
+          "content-type": "text/html; charset=utf-8",
+          "cache-control": "no-cache",
+          "content-security-policy": "default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'",
+        };
+        if (url.searchParams.get("download") === "1") headers["content-disposition"] = `attachment; filename="${id}-report.html"`;
+        return new Response(html, { headers });
       }
 
       // the rendered prompt for one turn, rebuilt from the pinned template and proven by
