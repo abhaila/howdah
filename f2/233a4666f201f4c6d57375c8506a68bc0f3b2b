@@ -1,0 +1,21 @@
+engine/executors/restack.test.ts
+  s_e2aaaef2530ddb::t_4c80b059a682fc 4-6,58-59,80,182-214,245-262
+engine/executors/restack.ts
+  s_e2aaaef2530ddb::t_0211e64d57307e 18-19,36,121-126,138-144,146,149-150,155,173,179,191,194,202-218
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f2233a4666f201f4c6d57375c8506a68bc0f3b2b",
+  "prompts": {},
+  "sessions": {
+    "s_e2aaaef2530ddb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "781019d2-5eff-456d-af92-22a227fa90b6",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "areeb.bhaila <areeb.bhaila@gmail.com>"
+    }
+  }
+}
