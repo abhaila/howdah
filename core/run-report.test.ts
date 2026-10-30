@@ -4,7 +4,7 @@
  * and no string reaches the page unescaped.
  */
 import { describe, expect, test } from "bun:test";
-import { asChangeMap, esc, placeComponents, renderRunReport, wrap, type RunReportModel } from "./run-report";
+import { asChangeMap, esc, placeComponents, prLabel, renderRunReport, wrap, type RunReportModel } from "./run-report";
 
 const MAP = {
   title: "Xero overpayment applications",
@@ -15,7 +15,10 @@ const MAP = {
     { id: "ledger", label: "Payment ledger", group: "invoices-api", status: "reused" },
   ],
   links: [{ from: "xero", to: "recon" }, { from: "recon", to: "ledger", dashed: true }, { from: "recon", to: "ghost" }],
-  flow: [{ component: "xero", text: "Xero sends INVOICE UPDATE" }, "Reconcile the gap"],
+  flow: [{ component: "xero", text: "Xero sends INVOICE UPDATE" }, { component: "recon", text: "Compare reported with held" }, "Reconcile the gap"],
+  flow_name: "One invoice update",
+  diff: { files: 29, additions: 1985, deletions: 35 },
+  example: { title: "One 809.50 overpayment", steps: ["Xero: 300.00 applied to invoice A"], outcome: { label: "IN_SYNC", body: "Nothing is written." } },
   risks: ["Concurrent updates rely on the per-overpayment lock."],
 };
 
@@ -29,7 +32,9 @@ describe("asChangeMap", () => {
     const m = asChangeMap(MAP)!;
     expect(m.components.map((c) => c.id)).toEqual(["xero", "recon", "ledger"]);
     expect(m.links).toEqual([{ from: "xero", to: "recon" }, { from: "recon", to: "ledger", dashed: true }]);
-    expect(m.flow).toEqual([{ component: "xero", text: "Xero sends INVOICE UPDATE" }, { text: "Reconcile the gap" }]);
+    expect(m.flow).toEqual([{ component: "xero", text: "Xero sends INVOICE UPDATE" }, { component: "recon", text: "Compare reported with held" }, { text: "Reconcile the gap" }]);
+    expect(m.example).toEqual({ title: "One 809.50 overpayment", steps: ["Xero: 300.00 applied to invoice A"], outcome: { label: "IN_SYNC", body: "Nothing is written." } });
+    expect(m.diff).toEqual({ files: 29, additions: 1985, deletions: 35 });
   });
 
   test("parses a JSON string, defaults an unknown status to changed, drops duplicates and junk", () => {
@@ -40,6 +45,16 @@ describe("asChangeMap", () => {
   test("null for anything that is not a map at all", () => {
     for (const v of [undefined, null, "not json", 3, [], {}]) expect(asChangeMap(v)).toBeNull();
   });
+});
+
+test("a component the flow never visits sinks below the path in its lane", () => {
+  const { boxes } = placeComponents(asChangeMap(MAP)!.components, new Set(["xero", "ledger"]));
+  const at = Object.fromEntries(boxes.map((b) => [b.c.id, b]));
+  expect(at.ledger!.y).toBeLessThan(at.recon!.y);
+});
+
+test("a PR url reads as repository / number", () => {
+  expect(prLabel("https://github.com/SequenceHQ/sequence-web/pull/92")).toBe("sequence-web / #92");
 });
 
 test("placement puts one lane per group, in first-appearance order", () => {
@@ -78,6 +93,32 @@ describe("renderRunReport", () => {
     expect(html).not.toMatch(/<(script|link|img)[^>]+(src|href)="https?:/);
   });
 
+  test("the stage: the request path, a What it does / How it's built panel per component, and the trace", () => {
+    const html = renderRunReport(model());
+    expect(html).toContain("Live topology / One invoice update");
+    expect(html).toContain('data-act="play"');
+    expect(html).toContain('data-act="step"');
+    expect(html).toContain("What it does");
+    expect(html).toContain("How it's built");
+    expect(html.match(/data-panel="/g)).toHaveLength(3);
+    // the first stop on the path is the panel shown without script; the rest wait hidden
+    expect(html).toContain('data-panel="xero">');
+    expect(html).toContain('data-panel="recon" hidden');
+    expect(html).toContain("<code>Reconciler.kt</code>: writes only the gap");
+    expect(html).toContain("Supporting systems"); // ledger is off the path
+    expect(html).toContain("Worked example");
+    expect(html).toContain("IN_SYNC");
+    expect(html).toContain("29 files · +1985 −35");
+    expect(html).toContain('<script type="application/json" id="report-data">{"flow":["xero","recon",null]}</script>');
+  });
+
+  test("the flow data cannot close its script element", () => {
+    const html = renderRunReport(model({ change: asChangeMap({ title: "t", components: [{ id: "</script><b>", label: "x" }], flow: [{ component: "</script><b>", text: "go" }] }) }));
+    const data = html.slice(html.indexOf('id="report-data">') + 17, html.indexOf("</script>", html.indexOf('id="report-data">')));
+    expect(JSON.parse(data)).toEqual({ flow: ["</script><b>"] });
+    expect(data).not.toContain("<");
+  });
+
   test("every model string is escaped", () => {
     const evil = `</script><img src=x onerror=alert(1)>`;
     const html = renderRunReport(model({
@@ -90,7 +131,8 @@ describe("renderRunReport", () => {
 
   test("without a change map it says so, and falls back to the implementer's summary", () => {
     const html = renderRunReport(model({ change: null, implementation_summary: "Added the reconciler." }));
-    expect(html).toContain("No change map was written for this run");
+    expect(html).toContain("No change map yet");
+    expect(html).toContain("Map this change");
     expect(html).toContain("Added the reconciler.");
   });
 });

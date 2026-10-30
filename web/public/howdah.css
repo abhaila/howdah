@@ -1244,3 +1244,4 @@ main { flex: 1; min-width: 0; min-height: 0; overflow: hidden; display: flex; fl
 .report-note { flex-grow: 1; font-size: var(--type-xs); color: var(--fg-faint); }
 .report-link { display: inline-flex; align-items: center; gap: 4px; font-size: var(--type-sm); }
 .report-frame { flex-grow: 1; width: 100%; min-height: 480px; border: 0; background: var(--bg); }
+.report-error { padding: 4px 12px; }
