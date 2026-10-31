@@ -75,7 +75,7 @@ import { DEFAULT_CONTEXT_CAP, RENDER_VERSION, SUFFIX_VERSION, assemblePrompt, re
 import { defaultHarness, fallbackChain, harnessNames, harnessSpec, isHarness } from "../core/harnesses";
 import { EventLog } from "../log/write";
 import type { LoggedEvent, ParkCode } from "../log/events";
-import { ACCEPTANCE_KEY, asAcceptance, evidenceSources, unmetCriteria, unprovable, type AcceptanceRow } from "../core/acceptance";
+import { ACCEPTANCE_KEY, asAcceptance, disclosesAcceptance, evidenceSources, notProven, unmetCriteria, unprovable, type AcceptanceRow } from "../core/acceptance";
 import { waivedCriteria } from "./acceptance-decision";
 import { repairScope } from "./repair-scope";
 import { softStopState, stopResumeFor, undeliveredSteers } from "./steer-state";
@@ -1069,7 +1069,8 @@ export class Engine {
   }
 
   /**
-   * HOW-51: the acceptance gate. Every live criterion must pass, or have been WAIVED by an
+   * HOW-51: the acceptance gate — OPT-IN since HOW-72 (`requiresAcceptance`; no built-in sets
+   * it, they disclose unmet rows in the PR instead). Every live criterion must pass, or have been WAIVED by an
    * operator decision event — never a flag, and never `attention-resolved`: resume() resolves
    * every standing park, so a gate that trusted it would let any resume through. A plain resume
    * therefore re-checks here and parks again until the contract is met or waived.
@@ -1436,12 +1437,15 @@ export class Engine {
     const def = this.graph.def.nodes[nodeId];
     const reviewed = def?.kind === "agent" ? def.reviewsWorkOf : undefined;
     const scope = reviewed && reviewed.length > 0 ? repairScope(logged, nodeId, reviewed) : undefined;
+    // HOW-72: a publish step is told which criteria this run did not prove, to disclose them
+    const unproven = this.notProvenFor(nodeId, visit, logged);
     // system-map 0.1: every suffix goes in BEFORE hashing, so the hash covers what is sent
     const skills = skillsForHarness(config?.harness, config?.skills);
     const finalRendered = assemblePrompt({
       body: rendered,
       ...(stackedOn ? { stackedOn } : {}),
       ...(scope ? { repairScope: scope } : {}),
+      ...(unproven.length ? { notProven: unproven } : {}),
       jumpMessage,
       replyMessage,
       refusalMessage,
@@ -1481,8 +1485,28 @@ export class Engine {
       ...(stopResume ? { resumed_after_stop: stopResume.seq } : {}),
       ...(stackedOn ? { stacked_on: stackedOn } : {}),
       ...(scope ? { repair_scope: scope } : {}),
+      ...(unproven.length ? { not_proven: unproven } : {}),
     });
     return finalRendered;
+  }
+
+  /**
+   * HOW-72: the live criteria this run did not prove, for a step that discloses them
+   * (core/acceptance.ts disclosesAcceptance) — [] for any other step, and when every row passed
+   * or was waived. Derived here once and logged as `not_proven`, so reconstruction and the
+   * viewer read the very list the step was given. Unreadable criteria disclose nothing rather
+   * than failing the render: there is then no contract to disclose.
+   */
+  private notProvenFor(nodeId: string, visit: number, events: readonly LoggedEvent[]): Array<{ id: string; text: string; reason: string }> {
+    const def = this.graph.def.nodes[nodeId];
+    if (!def || !disclosesAcceptance(def.kind, nodeReads(def), Object.keys(this.graph.writesOf(nodeId)))) return [];
+    let rows: AcceptanceRow[] | null = null;
+    try {
+      if (this.ctx.has(ACCEPTANCE_KEY)) rows = asAcceptance(this.ctx.get(ACCEPTANCE_KEY, { node: `${nodeId}(not-proven)`, visit }));
+    } catch {
+      return [];
+    }
+    return rows ? notProven(rows, waivedCriteria(events), evidenceSources(events)) : [];
   }
 
   /**

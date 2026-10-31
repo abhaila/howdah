@@ -298,6 +298,8 @@ export type NodeDef<C extends object> =
        * HOW-51: a pre-start gate like `requires` — the node starts only while every live
        * criterion in `acceptance` passes or was waived by a human decision event. The node
        * must read `acceptance` (validate() checks), which is also what proves a writer exists.
+       * HOW-72: OPT-IN, off by default, and no built-in graph sets it — they publish anyway and
+       * disclose the unmet rows in the PR (suffix v11). A hand-built graph may still gate on it.
        */
       requiresAcceptance?: true;
       /**
@@ -555,8 +557,8 @@ export class Graph<C extends object> {
    *   7. approval wiring (system-map 1a): distinct decision/feedback keys, a real
    *      redesignTo that does not itself declare the (engine-owned) feedback key, one
    *      approval per proposal key, and every `requires.approvalOf` names an approval node
-   *   8. the acceptance contract (HOW-51): only read-only agents write `acceptance`, and a
-   *      `requiresAcceptance` node reads it
+   *   8. the acceptance contract (HOW-51): only read-only agents write `acceptance`, and an
+   *      (opt-in, HOW-72) `requiresAcceptance` node reads it
    *   9. parallel steps (HOW-73): see parallelProblems()
    */
   validate(): { structural: string[]; paths: Violation[] } {

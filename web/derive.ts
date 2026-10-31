@@ -206,6 +206,18 @@ export interface RunDetail {
     unmet: number;
     /** HOW-59: unmet rows this run cannot prove — what "Waive all unprovable" would settle */
     unprovable: number;
+    /**
+     * HOW-72: the "Not proven by this run" list exactly as the publish step was given it (the
+     * latest render's logged `not_proven`, core/acceptance.ts notProven) — what the PR discloses.
+     * Empty before publish, and when every live row passed or was waived. Informational: it
+     * raises no attention and changes no status.
+     */
+    not_proven: Array<{ id: string; text: string; reason: string }>;
+    /**
+     * HOW-72: whether a waiver would DO anything — only while the run is parked at an opted-in
+     * acceptance gate (`acceptance-unmet`). The card offers no waive control otherwise.
+     */
+    waivable: boolean;
   } | null;
   /**
    * HOW-46/HOW-49: when the agent last produced anything (a chunk or a turn boundary) — the
@@ -567,6 +579,7 @@ export function deriveDetail(
   }
 
   const { ask } = deriveStatus(events);
+  const askReply = ask && opts.graphs ? replyVerdict(events, id, opts.graphs) : null;
   const { id: _id, ...summaryRest } = summary;
   const turns = opts.turns ?? coalesce(events);
   const timeline = deriveTimeline(events);
@@ -594,6 +607,10 @@ export function deriveDetail(
         written_by: { node: latest.node, visit: latest.visit, at: latest.at },
         unmet: left.length,
         unprovable: left.filter((r) => unprovable(r, sources) !== null).length,
+        not_proven: latestNotProven(renders),
+        // a park the reply verdict says a plain resume clears (HOW-72: the gate is gone from
+        // the current graph) is not one a waiver is needed for
+        waivable: ask?.code === "acceptance-unmet" && !(askReply?.accept === false && askReply.retry === true),
       };
     })(),
     evidence: events.flatMap((e) => {
@@ -609,7 +626,7 @@ export function deriveDetail(
     allowance: [...allowanceByHarness.values()],
     ask,
     ask_questions: askQuestions(ask),
-    ask_reply: ask && opts.graphs ? replyVerdict(events, id, opts.graphs) : null,
+    ask_reply: askReply,
     pinned_prompts: pinned,
     git,
     pull_requests: [...prs.values()],
@@ -1443,4 +1460,16 @@ export function sortRuns<T extends RunSummary>(runs: T[]): T[] {
       return (a.waiting_since ?? "").localeCompare(b.waiting_since ?? ""); // longest wait first
     return (b.last_event_at ?? "").localeCompare(a.last_event_at ?? "");
   });
+}
+
+/**
+ * HOW-72: the "Not proven by this run" list the latest disclosing render was given — unless a
+ * later render of that same step carried none (everything settled by then), in which case the
+ * PR was last told there is nothing to disclose.
+ */
+function latestNotProven(renders: ReadonlyArray<Extract<LoggedEvent, { type: "prompt-rendered" }>>): Array<{ id: string; text: string; reason: string }> {
+  const last = renders.findLast((r) => r.not_proven !== undefined);
+  if (!last) return [];
+  if (renders.some((r) => r.seq > last.seq && r.node === last.node && r.not_proven === undefined)) return [];
+  return last.not_proven ?? [];
 }

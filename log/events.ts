@@ -78,7 +78,9 @@ export type ParkCode =
   | "paused-by-operator"
   /**
    * HOW-51: a node gated on the acceptance contract (`requiresAcceptance`) found a live
-   * criterion that neither passes nor was waived. A reply cannot fix it: waive the criterion
+   * criterion that neither passes nor was waived. Opt-in since HOW-72 — no built-in graph sets
+   * it; they disclose unmet rows in the PR instead (suffix v11), so only a hand-built graph and
+   * a run parked before HOW-72 ever carry this code. A reply cannot fix it: waive the criterion
    * (`howdah waive`, the Acceptance card) or jump back to the review once it is met.
    */
   | "acceptance-unmet"
@@ -241,6 +243,13 @@ export type RunEvent =
        * reconstruction words the same range.
        */
       repair_scope?: { node: string; visit: number; sha: string; branch?: string };
+      /**
+       * HOW-72 (suffix v11): the acceptance criteria this publish step was told to disclose as
+       * "Not proven by this run" — derived once by the engine (core/acceptance.ts notProven) and
+       * logged so reconstruction words the same list and the viewer shows what the PR was given.
+       * Absent when every live criterion passed or was waived, or the step does not disclose.
+       */
+      not_proven?: Array<{ id: string; text: string; reason: string }>;
     }
   | {
       type: "chunk";

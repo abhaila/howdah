@@ -24,12 +24,19 @@
  *           - a row that passes names its evidence, and the evidence must be REAL in this run:
  *             `verify.result` only when the tests passed, a screenshot only when it is one of
  *             the files the evidence step captured, a command only with the output it gave.
- *   GATE  delivery requires every live criterion to pass or to have been WAIVED by a human —
- *         a decision event (`acceptance-waived`), never a flag, so a plain resume never lets a
- *         failing contract through (engine/run.ts requiresGate).
+ *   TELL  HOW-72: the contract is the AGENTS', not a gate on the operator. A row still failing
+ *         at publish is DISCLOSED — `notProven()` hands it to the publish step (suffix v11),
+ *         which lists it in the PR description under "Not proven by this run", and the run's
+ *         Acceptance card shows the same list. It raises no attention. The pressure to meet a
+ *         row belongs to the review → repair loop: an unmet, provable row is a legitimate reason
+ *         for the reviewer to reject.
+ *   GATE  opt-in only (`requiresAcceptance`; no built-in sets it since HOW-72): a gated node
+ *         requires every live criterion to pass or to have been WAIVED by a human — a decision
+ *         event (`acceptance-waived`), never a flag, so a plain resume never lets a failing
+ *         contract through (engine/run.ts requiresGate).
  *
  * A criterion that cannot be checked mechanically ("feels right") has no evidence kind on
- * purpose: it can only pass by waiver, never silently.
+ * purpose: it never passes silently — it is disclosed, or (on a gated graph) waived.
  *
  * HOW-59: every row says HOW it will be checked (`check`), decided by the criteria step from
  * what this run can actually produce. It exists because the contract turned into a blocker: a
@@ -47,6 +54,7 @@
  */
 
 import type { LoggedEvent } from "../log/events";
+import type { NotProven } from "./template";
 
 export const ACCEPTANCE_KEY = "acceptance";
 
@@ -243,4 +251,38 @@ export function latestAcceptance(events: readonly LoggedEvent[]): { rows: Accept
   if (!e || e.type !== "node-finished") return null;
   const rows = asAcceptance(e.writes[ACCEPTANCE_KEY]);
   return rows ? { rows, node: e.node, visit: e.visit, at: e.ts } : null;
+}
+
+/**
+ * HOW-72: the live rows this run did not prove — not superseded, not passing, not waived —
+ * each with a short plain-words reason. Unlike `unmetCriteria` it INCLUDES `after-publish`
+ * rows: they are not met at publish either, and the PR should say they are checked later.
+ * Whether a row could never be proved is `unprovable()`'s decision, so "cannot prove" keeps
+ * one definition; only the wording here is shorter, because it is read in a PR description.
+ * The engine (the publish suffix), and through its log the viewer, both read it from here.
+ */
+export function notProven(rows: readonly AcceptanceRow[], waived: { has(id: string): boolean }, sources: EvidenceSources): NotProven[] {
+  return rows
+    .filter((r) => !r.superseded && !r.passes && !waived.has(r.id))
+    .map((r) => ({ id: r.id, text: r.text, reason: notProvenReason(r, sources) }));
+}
+
+function notProvenReason(row: AcceptanceRow, sources: EvidenceSources): string {
+  if (row.check === "after-publish") return "checked after publish";
+  if (unprovable(row, sources) !== null) {
+    if (row.check === "human") return "only a human can judge it";
+    if (row.check === "tests") return "no tests ran in this run";
+    if (row.check === "screenshot") return "no screenshot was captured";
+  }
+  return "the reviewer found no evidence for it";
+}
+
+/**
+ * HOW-72: does this step disclose the unmet criteria? An agent step that READS `acceptance`
+ * without writing it — in the built-ins exactly the publish steps (delivery.publish,
+ * stacked.publish), because the criteria step and the evaluator both write it. Reading the
+ * contract is already the declaration that a step acts on it, so no flag is needed.
+ */
+export function disclosesAcceptance(kind: string, reads: readonly string[], writes: readonly string[]): boolean {
+  return kind === "agent" && reads.includes(ACCEPTANCE_KEY) && !writes.includes(ACCEPTANCE_KEY);
 }

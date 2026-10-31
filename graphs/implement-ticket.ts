@@ -49,11 +49,13 @@
  * from the ticket's checkboxes — or proposes criteria from the plan when there are none — with
  * every row failing; `implementation.local_review` (read-only, HOW-53) is the only node that
  * flips a row, and only on evidence real in this run (engine/executors/outputs.ts checkWrites);
- * `delivery.publish` will not start while a live criterion is unmet and unwaived. HOW-40's
+ * HOW-72: the contract is the agents', not a gate on the operator — `delivery.publish` no longer
+ * `requiresAcceptance`; it is handed the rows still failing and lists them in the PR description
+ * as "Not proven by this run". The pressure to meet a row is the review → repair loop's. HOW-40's
  * `implementation.verify` (verify:run) runs before every review so the contract has the test
  * verdict to cite. The repair-side reviewer (delivery.review_repairs) does not write the contract:
  * its prompt is shared with improve-codebase, and the list it would re-judge was already settled
- * before the first publish, which is where the gate stands.
+ * before the first publish, which is where it is disclosed.
  *
  * HOW-54: on the two cycles, a step expected to change files (implement_review and
  * revise_repairs) that finishes with the worktree exactly as its previous visit left it parks
@@ -166,8 +168,10 @@ export const spec: GraphSpec = {
     { id: "implementation.implement_review", kind: "agent", prompt: "implementation.implement_review", reads: ["goal", "work", "implementation_plan", "implementation_summary", "review_verdict", "review_findings"], writes: ["implementation_summary"], class: impl },
 
     // ---- the delivery half, inlined from deliveryGraph({ verifyAfterRepair: false }) ----
-    // HOW-51: nothing is published while a live criterion is unmet and unwaived
-    { id: "delivery.publish", kind: "agent", prompt: "delivery.publish", reads: ["goal", "work", "acceptance"], writes: ["publication_summary"], maxVisits: 5, requiresAcceptance: true, changesFiles: false, class: deliv },
+    // HOW-72: the criteria do not gate publication — a row still failing is DISCLOSED: reading
+    // `acceptance` makes this the step the engine hands the "Not proven by this run" list to
+    // (suffix v11), and the PR description carries it
+    { id: "delivery.publish", kind: "agent", prompt: "delivery.publish", reads: ["goal", "work", "acceptance"], writes: ["publication_summary"], maxVisits: 5, changesFiles: false, class: deliv },
     // HOW-70: also publishes the review activity newer than the last address_reviews (core/review-activity.ts)
     { id: "delivery.probe_pr", kind: "command", run: "probe:pr", reads: ["publication_summary"], writes: ["pr.state", "pr.review_activity"], class: deliv },
     { id: "delivery.address_reviews", kind: "agent", prompt: "delivery.address_reviews", reads: ["goal", "work", "publication_summary", "review_verdict", "review_findings", "pr.review_activity"], writes: ["repair_summary"], changesFiles: false, class: deliv },

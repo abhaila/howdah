@@ -122,8 +122,10 @@ describe("deliveryGraph extraction keeps implement-ticket identical", () => {
     //   HOW-75  resolve_conflicts / fix_ci / address_reviews declare `changesFiles: false` and go
     //           to `delivery.repair_check` (repair:changed): unchanged → delivery.wait, else
     //           review_repairs
+    //   HOW-72  delivery.publish no longer `requiresAcceptance`: the criteria stop gating
+    //           publish and the rows still failing are disclosed in the PR (suffix v11)
     const s = JSON.stringify(sortDeep(shapeOf(implementTicket)));
-    expect(createHash("sha256").update(s).digest("hex")).toBe("65444914aa3f76446cb72f7a1d9a6175e3602343ba7a91b4e7a597c85e786dad");
+    expect(createHash("sha256").update(s).digest("hex")).toBe("4b33a5bccac7ce7eaac35f297da50a5ac9fa70c1bfc3671deb0321a5778f2f7b");
   });
 ;
 
@@ -391,7 +393,7 @@ describe("validateProposal (GhostSet against the base the proposal was drawn on)
     expect(retry).toContain("com.example.api.<top>.nope(Request)");
     const retryRender = run.events().filter((e) => e.type === "prompt-rendered" && e.node === "slice.propose")[1]!;
     if (retryRender.type !== "prompt-rendered") throw new Error("no render");
-    expect(retryRender.suffix_version).toBe(10);
+    expect(retryRender.suffix_version).toBe(11);
     expect(reconstructRender(run.runDir, retryRender.rendered_hash)).toMatchObject({ verified: true, text: retry });
 
     // ...once: the redraw after operator feedback does not repeat it

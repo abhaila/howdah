@@ -50,6 +50,9 @@
  *           `changesFiles: false` and route to a new `delivery.repair_check` (repair:changed,
  *           writes `repair.changed` per-visit), which sends an unchanged repair to delivery.wait
  *           and everything else on to review_repairs (implement-slice: delivery.reextract).
+ *   HOW-72  implement-ticket and implement-stacked (through stackedFrom): delivery.publish no
+ *           longer `requiresAcceptance` — a deliberate behaviour change: the criteria stop
+ *           gating publish, and the rows still failing are disclosed in the PR instead.
  *
  * ONE ENTRY WAS ADDED BY HAND, 2026-10-13 (HOW-57, decision G9): `implement-stacked` is a NEW
  * graph, not a conversion, so it has no pre-conversion shape to be faithful to. Its entry was

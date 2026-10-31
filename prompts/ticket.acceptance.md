@@ -1,8 +1,8 @@
 ---
 id: ticket.acceptance
-version: 2
+version: 3
 tags: [implement-ticket]
-provenance: HOW-51 — opens the default-FAIL acceptance contract, after the plan and before any code is written. v2 (HOW-59) says what this run can prove, and every row names how it will be checked
+provenance: HOW-51 — opens the default-FAIL acceptance contract, after the plan and before any code is written. v2 (HOW-59) says what this run can prove, and every row names how it will be checked. v3 (HOW-72) — the operator reads these in the PR, so at most five, each one sentence about behaviour the ticket asks for, no test-suite-green and no process rows
 ---
 You are opening the acceptance contract for this ticket. You do not build or judge anything: you write down what "done" must mean, so a later reviewer can only call it done with evidence.
 
@@ -33,11 +33,15 @@ If no test command is named above, nothing will run the tests in this run, so no
 
 ## The criteria
 
-Write the criteria as a JSON array. Each criterion is one checkable statement about the finished change:
+Write the criteria as a JSON array. A person reads them: any criterion this run does not prove is listed in the pull request description as "Not proven by this run". So write few, and write them plainly.
 
-- If the work scope has acceptance checkboxes (`- [ ] …`), make one criterion per checkbox, with its wording kept as close to the ticket's as a single sentence allows, and `"source": "ticket"`. Do not add criteria the ticket does not ask for, and do not drop or merge any.
-- If it has none, propose three to seven criteria from the plan that a reviewer could check with evidence — a test that passes, a command and its output, or a screenshot of a changed screen — and give each `"source": "plan"`, so nobody mistakes them for the ticket's.
-- A criterion that only a human can judge ("feels right", "reads well") stays in the list as written. It will need an operator's waiver; never reword it into something it is not.
+- Write at most five criteria.
+- Each criterion is one sentence about behaviour the ticket asks for, in the ticket's own terms: what a user or caller of the change can now do or observe. Do not name files, functions or other code, and do not describe how the change is built.
+- Never write a criterion that the test suite, typecheck, build or lint is green. The harness runs the tests and reports that itself.
+- Never write a process step: committing, pushing, opening or updating a pull request, running a command, or updating a ticket. Those are how the work gets done, not what it must achieve.
+- If the work scope has acceptance checkboxes (`- [ ] …`), take the criteria from them, keeping the ticket's wording as close as one sentence allows, with `"source": "ticket"`. Leave out a checkbox that is only a test-suite or process step. When more than five remain, combine closely related ones into one sentence; never drop one the ticket asks for.
+- If it has none, propose up to five criteria from the ticket and the plan that a reviewer could check with evidence, and give each `"source": "plan"`, so nobody mistakes them for the ticket's.
+- A criterion that only a human can judge ("feels right", "reads well") stays in the list as written, with the check `"human"`. It is disclosed as not proven; never reword it into something it is not.
 
 Give every criterion a `"check"` saying how it will be checked, and choose honestly from what this run can prove:
 
@@ -47,7 +51,7 @@ Give every criterion a `"check"` saying how it will be checked, and choose hones
 - `"human"`: only a person can judge it.
 - `"after-publish"`: it is about pull requests, CI, reviewers, merges or deploys. It cannot be true before publication, so it does not hold publication; the delivery steps check it.
 
-Prefer criteria a read-only reviewer can settle in this run. When a ticket checkbox needs evidence this run cannot produce, keep it, and give it the check it really needs; the operator settles it.
+Prefer criteria a read-only reviewer can settle in this run. When a ticket checkbox needs evidence this run cannot produce, keep it, and give it the check it really needs; it is disclosed as not proven.
 
 Every criterion starts FAILING: `"passes": false` and `"evidence": null`, always. Only the reviewer flips one, and only on evidence. A list where anything already passes is refused.
 

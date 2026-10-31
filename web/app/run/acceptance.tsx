@@ -14,6 +14,12 @@
  * HOW-59: each row says how it is checked; a row this run can never prove says WHY in place of
  * "no evidence yet", and one control waives all of those with one reason. An `after-publish`
  * row is drawn as pending, not red: it does not hold publication, which it cannot precede.
+ *
+ * HOW-72: the contract is the agents', not a gate on the operator. The card is a progress view,
+ * and the rows the publish step was told to disclose are listed as "Not proven by this run" —
+ * the same list the PR carries, in neutral colours, never as attention. Waiving is offered ONLY
+ * while the run is parked at an opted-in gate (`acc.waivable`): anywhere else a waiver would
+ * change nothing, and inviting one taught operators to waive without reading.
  */
 import { useState } from "react";
 import { CheckCircle2, CircleX, Clock, ShieldCheck, Ban } from "lucide-react";
@@ -77,15 +83,26 @@ export function AcceptanceCard({ runId, detail, onChanged }: { runId: string; de
   };
 
   return (
-    <section className="ac-card" data-met={acc.unmet === 0 ? "true" : "false"} aria-label="Acceptance criteria">
+    <section className="ac-card" data-met={acc.unmet === 0 ? "true" : "false"} data-held={acc.waivable && acc.unmet > 0 ? "true" : "false"} aria-label="Acceptance criteria">
       <div className="ac-head">
         <ShieldCheck size={13} aria-hidden />
         <span className="ac-title">Acceptance</span>
         <span className="ac-score">{met} of {live.length} met</span>
-        {acc.unmet > 0 && <Badge variant="destructive">{acc.unmet} unmet</Badge>}
+        {acc.unmet > 0 && <Badge variant={acc.waivable ? "destructive" : "outline"}>{acc.unmet} unmet</Badge>}
         <span className="ac-by">judged by {acc.written_by.node}@{acc.written_by.visit}</span>
       </div>
-      {acc.unprovable > 0 && detail.summary.outcome === null && (
+      {acc.not_proven.length > 0 && (
+        <div className="ac-not-proven">
+          <span className="ac-not-proven-title">Not proven by this run</span>
+          <ul className="ac-not-proven-list">
+            {acc.not_proven.map((r) => (
+              <li key={r.id}><span className="ac-text">{r.text}</span> <span className="ac-not-proven-why">— {r.reason}</span></li>
+            ))}
+          </ul>
+          <span className="ac-not-proven-note">Listed in the pull request description. Nothing to do here.</span>
+        </div>
+      )}
+      {acc.unprovable > 0 && acc.waivable && (
         <div className="ac-unprovable">
           <span>{acc.unprovable} of the unmet criteria can never be proved in this run — say why once to settle them all.</span>
           {waiving === ALL ? (
@@ -117,8 +134,8 @@ export function AcceptanceCard({ runId, detail, onChanged }: { runId: string; de
                   {state === "fail" && <span>{r.unprovable ? `can't be proved in this run: ${r.unprovable}` : "no evidence yet"}</span>}
                   {state === "later" && <span>not held at publish — the delivery steps check it</span>}
                 </span>
-                {/* a finished run has no gate left to open: waiving there would change nothing */}
-                {state === "fail" && detail.summary.outcome === null && (waiving === r.id ? (
+                {/* HOW-72: only a run parked at a gate has one to open — anywhere else a waiver changes nothing */}
+                {state === "fail" && acc.waivable && (waiving === r.id ? (
                   <span className="ac-waive">
                     <Input aria-label={`why ${r.id} is accepted without evidence`} placeholder="why this is accepted without evidence" value={reason} onChange={(e) => setReason(e.target.value)} />
                     <Button size="sm" variant="destructive-outline" disabled={busy || !reason.trim()} onClick={() => waive(r.id)}>Waive</Button>

@@ -82,7 +82,7 @@ bun cli/main.ts resume|pause|abort <run-id>  # pause/abort also interrupt a PROV
 bun cli/main.ts steer <run-id> <text> [--node <step>]   # HOW-47: say something to a live agent; lands at its next tool call
                                              # --node: which branch, when parallel steps are live (HOW-73)
 bun cli/main.ts stop <run-id> [--node <step>]           # HOW-48: soft pause — the agent stops at its next tool call
-bun cli/main.ts waive <run-id> <criterion> <reason>   # HOW-51: accept an unmet acceptance criterion, on the record
+bun cli/main.ts waive <run-id> <criterion> <reason>   # HOW-51: accept an unmet acceptance criterion, on the record (only needed on a gated graph or a pre-HOW-72 park)
 bun cli/main.ts waive <run-id> --unprovable <reason> # HOW-59: waive every criterion this run cannot prove, at once
 bun cli/main.ts jump <run-id> <node> [msg]   # move a dead run to a node, injecting an instruction
 bun cli/main.ts up                           # supervisor: heartbeat + resume dead runs
@@ -502,14 +502,25 @@ Break one of these and the design stops working, so check them before changing t
   `--replay-user-messages` echo, and carries an undelivered steer into the next render (suffix
   v6). A turn that ends after a delivered stop is `paused-by-operator`, never a contract
   violation; its last words brief the next visit (suffix v7). docs/designs/steer.md has the spike.
-- **"Done" is a contract, not prose (HOW-51).** `acceptance` rows start failing; only a READ-ONLY
-  node may write them (validate), a flip must cite evidence real in this run (outputs check,
-  core/acceptance.ts), and `requiresAcceptance` holds delivery until every live row passes or an
-  operator waives it with a decision event (`acceptance-waived`). HOW-59: every row also says how it is checked
-  (`check`: tests | screenshot | command | human | after-publish), chosen from what the run CAN
-  produce (`worktree.verify_command`, `worktree.preview_paths`); `after-publish` rows never hold
-  publication, a row this run cannot prove (`unprovable()`) is never a reason for the evaluator
-  to reject, and the gate names those rows so one `waive --unprovable` settles them.
+- **"Done" is a contract for the agents, disclosed to the operator — not a gate on them (HOW-51,
+  HOW-72).** `acceptance` rows start failing; only a READ-ONLY node may write them (validate), and
+  a flip must cite evidence real in this run (outputs check, core/acceptance.ts). The pressure to
+  meet a row is the review → repair loop's: an unmet, provable row is a legitimate reason for the
+  reviewer to reject. HOW-59: every row also says how it is checked (`check`: tests | screenshot |
+  command | human | after-publish), chosen from what the run CAN produce (`worktree.verify_command`,
+  `worktree.preview_paths`), and a row this run cannot prove (`unprovable()`) is never a reason for
+  the evaluator to reject. HOW-72: publication is NOT held on the rows — 11 of 40 runs parked there
+  and were waived unread, a false record. Instead `notProven()` hands every live row still failing
+  and unwaived (after-publish included) to the step that reads `acceptance` without writing it
+  (`disclosesAcceptance`: the publish steps), as suffix v11's "Not proven by this run" list with a
+  plain-words reason each, logged as `prompt-rendered.not_proven`; the PR description carries it,
+  and the Acceptance card shows the same list — informational, never attention. A suffix, not a
+  publish-prompt edit, so a run parked at the old gate resumes on the current graph and publishes
+  with the disclosure (its reply verdict says "Retry this step", not "waive"). `requiresAcceptance`
+  remains an engine OPT-IN that no built-in uses: a gated node still parks `acceptance-unmet` until
+  every row passes or an operator waives it with a decision event (`acceptance-waived`, `waive
+  --unprovable` for the unprovable ones), and the card offers Waive only while such a gate holds the
+  run (`acceptance.waivable`).
 - **Reviewers are read-only, and the harness enforces it (HOW-53).** Plan mode does NOT refuse an
   Edit — it asks the permission-prompt tool. On a plan-mode node the claude executor refuses every
   permission request itself and never asks the operator (adapter/fixtures/claude-plan-mode-*.jsonl).
