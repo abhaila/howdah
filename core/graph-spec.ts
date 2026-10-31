@@ -53,8 +53,8 @@ import { AWAIT_BUILTIN, AWAIT_PRODUCES, AWAIT_PROBE_PRODUCES, AWAIT_READS, RESTA
 import { EVIDENCE_BUILTIN, EVIDENCE_PRODUCES } from "./evidence";
 import { GRAPH_DRAFT_KEY, GRAPHS_CATALOG_BUILTIN, GRAPHS_CATALOG_PRODUCES, type GraphsCatalog } from "./catalog";
 import { includeRefs, templateReads } from "./template-refs";
-import { ACCEPTANCE_KEY } from "./acceptance";
 import { REPAIR_CHECK_BUILTIN, REPAIR_CHECK_PRODUCES, REPAIR_CHECK_READS } from "./repair-stall";
+import { ACCEPTANCE_KEY } from "./acceptance";
 
 export const SPEC_VERSION = 1;
 
@@ -724,22 +724,6 @@ function rewriteStructural(spec: GraphSpec, raw: string): SpecProblem {
 }
 
 /**
- * HOW-74: the reads the ENGINE consumes for an agent step, as opposed to the ones its prompt
- * text names. `requiresAcceptance` is the one today: the publish gate and its suffix read
- * `acceptance` from context, and core/graph.ts validate() refuses a gated node that does not
- * declare it — so a body that never says `{{context.acceptance}}` still needs the read. This is
- * the ONE place such a read is declared; `reviewsWorkOf` and the stacked briefing read the log,
- * not context, and so do not belong here. Everything that derives `reads` goes through
- * `derivedReads`, so the builder, the save route and validate() cannot disagree.
- */
-export function structuralReads(n: Extract<NodeSpec, { kind: "agent" }>): string[] {
-  return n.requiresAcceptance ? [ACCEPTANCE_KEY] : [];
-}
-
-/** An agent step's reads: what its body names, then what the engine consumes for it. */
-export function derivedReads(n: Extract<NodeSpec, { kind: "agent" }>, body: string): string[] {
-  const fromBody = templateReads(body);
-  return [...fromBody, ...structuralReads(n).filter((k) => !fromBody.includes(k))];
  * HOW-73: core/graph.ts parallelProblems(), in the operator's words. Every one of its sentences
  * opens with the quoted ids it is about, which is what these patterns read.
  */
@@ -781,6 +765,25 @@ function parallelProblem(spec: GraphSpec, raw: string): SpecProblem | null {
   if (/which its sibling "/.test(raw))
     return step(a, `${t(a)} is given \`${c}\`, but ${t(q[3])} produces it at the same time, in ${t(b)} — one cannot see the other's answer. Read it in the step after them instead.`);
   return null;
+}
+
+/**
+ * HOW-74: the reads the ENGINE consumes for an agent step, as opposed to the ones its prompt
+ * text names. `requiresAcceptance` is the one today: the publish gate and its suffix read
+ * `acceptance` from context, and core/graph.ts validate() refuses a gated node that does not
+ * declare it — so a body that never says `{{context.acceptance}}` still needs the read. This is
+ * the ONE place such a read is declared; `reviewsWorkOf` and the stacked briefing read the log,
+ * not context, and so do not belong here. Everything that derives `reads` goes through
+ * `derivedReads`, so the builder, the save route and validate() cannot disagree.
+ */
+export function structuralReads(n: Extract<NodeSpec, { kind: "agent" }>): string[] {
+  return n.requiresAcceptance ? [ACCEPTANCE_KEY] : [];
+}
+
+/** An agent step's reads: what its body names, then what the engine consumes for it. */
+export function derivedReads(n: Extract<NodeSpec, { kind: "agent" }>, body: string): string[] {
+  const fromBody = templateReads(body);
+  return [...fromBody, ...structuralReads(n).filter((k) => !fromBody.includes(k))];
 }
 
 /**
