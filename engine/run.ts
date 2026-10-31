@@ -504,7 +504,19 @@ export class Engine {
     if (replayed.finished) return { state: "finished", outcome: replayed.finished.outcome };
 
     this.inputs = replayed.started.inputs;
-    this.pinnedIncludes = replayed.started.pinned_includes ?? {};
+    this.pinnedIncludes = { ...(replayed.started.pinned_includes ?? {}) };
+    for (const e of this.log.read()) if (e.type === "prompts-pinned") Object.assign(this.pinnedIncludes, e.pinned_includes ?? {});
+    // HOW-78: a step the graph gained after this run started has no pinned prompt yet — pin
+    // only those, and say so in the log (a prompt already pinned is never re-read)
+    const late = this.pinPrompts({ onlyUnpinned: true });
+    if (Object.keys(late.pinned).length) {
+      Object.assign(this.pinnedIncludes, late.includes);
+      this.log.append({
+        type: "prompts-pinned",
+        pinned_prompts: late.pinned,
+        ...(Object.keys(late.includes).length ? { pinned_includes: late.includes } : {}),
+      });
+    }
     this.visits = { ...replayed.visits };
     this.floors = { ...replayed.floors };
     this.completedEffects = new Set(replayed.completedEffects);
@@ -1199,8 +1211,12 @@ export class Engine {
    * EVERY prompt is read and expanded before anything is written — a broken include refuses the
    * start without leaving a half-pinned run dir behind. Returns the pinned versions and, per
    * includer, the version of every prompt it included (the include closure).
+   *
+   * `onlyUnpinned` serves a resume (HOW-78): a prompt whose pinned file already exists is
+   * skipped before it is read, so only what the graph gained since the run started is pinned,
+   * and a prompt since deleted or renamed in the repo cannot break a run that already pinned it.
    */
-  private pinPrompts(): { pinned: Partial<Record<PromptId, number>>; includes: Record<string, Record<string, number>> } {
+  private pinPrompts(opts: { onlyUnpinned?: boolean } = {}): { pinned: Partial<Record<PromptId, number>>; includes: Record<string, Record<string, number>> } {
     const dirs = this.opts.promptsDir === undefined
       ? [join(import.meta.dir, "..", "prompts")]
       : Array.isArray(this.opts.promptsDir) ? this.opts.promptsDir : [this.opts.promptsDir];
@@ -1208,6 +1224,7 @@ export class Engine {
     const plans: Array<{ id: PromptId; pinned: string; version: number; includes: Record<string, number> }> = [];
     for (const node of Object.values(this.graph.def.nodes)) {
       if (node.kind !== "agent" || plans.some((p) => p.id === node.prompt)) continue;
+      if (opts.onlyUnpinned && existsSync(join(this.pinDir(), `${node.prompt}.md`))) continue;
       const { raw, pinned, included } = pinnableText(node.prompt, rawOf);
       plans.push({
         id: node.prompt,

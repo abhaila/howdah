@@ -1,8 +1,9 @@
 /**
  * `git:restack` (HOW-57 S5) against a real local bare origin (decision 8A): merged (squash),
  * moved while unapproved, moved while approved (no push), a conflict (aborted, with the exact
- * --onto command), a conflict an agent then resolved by hand, an idempotent re-run, and a
- * teammate's push that a restack must never overwrite.
+ * --onto command), a conflict an agent then resolved by hand (and the base squash-merging after
+ * it), a PR head named after the ticket, an idempotent re-run, and a teammate's push that a
+ * restack must never overwrite.
  */
 import { describe, expect, test } from "bun:test";
 import { mkdtempSync, writeFileSync, existsSync } from "node:fs";
@@ -54,8 +55,8 @@ async function stack() {
   const b = commit(wt, "fe2.txt", "fe-2 work\n", "fe-2: its own change");
   git(wt, "push", "-q", "origin", "howdah/plan--fe-2");
 
-  const prs: { retargeted: Array<[string, string]>; base: string } = { retargeted: [], base: "fe-1" };
-  const prView: PrView = (_cwd, ref): PrHead => ({ state: "OPEN", url: "https://github.com/acme/web/pull/2", headRefName: ref, headRefOid: "", baseRefName: prs.base });
+  const prs: { retargeted: Array<[string, string]>; base: string; head: string } = { retargeted: [], base: "fe-1", head: "howdah/plan--fe-2" };
+  const prView: PrView = (): PrHead => ({ state: "OPEN", url: "https://github.com/acme/web/pull/2", headRefName: prs.head, headRefOid: "", baseRefName: prs.base });
   const retarget: PrRetarget = (_cwd, ref, base) => {
     prs.retargeted.push([ref, base]);
     prs.base = base;
@@ -76,7 +77,7 @@ async function stack() {
   // the worktree-create effect shares the handle; only the restack's own effects are counted
   const events = (type: string) => log.read().filter((e) => e.type === type && (!("effect" in e) || e.effect.startsWith("restack:")));
   const notes = () => log.read().flatMap((e) => (e.type === "chunk" && e.node === "restack" ? [e.content] : [])).join("");
-  const remote = () => sha(fx.other, "HEAD") && git(fx.clone, "ls-remote", "origin", "refs/heads/howdah/plan--fe-2").split(/\s+/)[0]!;
+  const remote = (branch = "howdah/plan--fe-2") => sha(fx.other, "HEAD") && git(fx.clone, "ls-remote", "origin", `refs/heads/${branch}`).split(/\s+/)[0]!;
   return { ...fx, wt, a, b, log, restack, events, notes, remote, prs };
 }
 
@@ -178,6 +179,39 @@ describe("git:restack (real git, local bare origin)", () => {
     expect(s.events("base-restacked")[0]).toMatchObject({ from: { sha: s.a }, to: { sha: a2 }, head: resolved });
   });
 
+  test("a conflict resolved by hand, then the base squash-merges: only this run's commits are replayed", async () => {
+    const s = await stack();
+    commit(s.wt, "shared.txt", "fe-2's version\n", "fe-2: touch shared");
+    git(s.wt, "push", "-q", "origin", "howdah/plan--fe-2");
+    const a2 = commit(s.other, "shared.txt", "fe-1's newer version\n", "fe-1: rewrite shared");
+    git(s.other, "push", "-q", "origin", "fe-1");
+    const r1 = await s.restack({});
+    const conflict = r1.writes["restack.conflict"] as string;
+    // the engine logs what the conflicted restack published; the repair agent resolves by hand
+    s.log.append({ type: "node-finished", node: "restack", visit: 1, status: "succeeded", writes: r1.writes });
+    git(s.wt, "fetch", "-q", "origin");
+    try { git(s.wt, ...conflict.split(" ").slice(1)); } catch { /* the conflict */ }
+    writeFileSync(join(s.wt, "shared.txt"), "both versions\n");
+    git(s.wt, "add", "shared.txt");
+    git(s.wt, "-c", "core.editor=true", "rebase", "--continue");
+    git(s.wt, "push", "-q", "--force-with-lease", "origin", "howdah/plan--fe-2");
+
+    // before the next restack, fe-1 is squash-merged and its branch deleted
+    git(s.other, "checkout", "-q", "main");
+    git(s.other, "pull", "-q", "origin", "main");
+    git(s.other, "merge", "--squash", "fe-1");
+    git(s.other, "commit", "-q", "-m", "fe-1 (#1)");
+    const squashed = sha(s.other, "HEAD");
+    git(s.other, "push", "-q", "origin", "main", ":fe-1");
+
+    const r = await s.restack({ merged: true });
+    expect(r.writes).toEqual({ "restack.conflict": "", "deps.base": "", "deps.base_tip": "" });
+    expect(git(s.wt, "rev-parse", "HEAD~2")).toBe(squashed);
+    expect(git(s.wt, "log", "--format=%s", `${squashed}..HEAD`)).toBe("fe-2: touch shared\nfe-2: its own change");
+    expect(s.notes()).toContain(`resolved onto ${a2.slice(0, 12)} by hand`);
+    expect(s.events("base-restacked")[0]).toMatchObject({ from: { sha: a2 }, to: { branch: "main", sha: squashed } });
+  });
+
   test("idempotent: a second restack onto the same tip does nothing — no second event, no second push", async () => {
     const s = await stack();
     commit(s.other, "fe1-more.txt", "x\n");
@@ -206,6 +240,24 @@ describe("git:restack (real git, local bare origin)", () => {
     await expect(s.restack({})).rejects.toThrow("origin/howdah/plan--fe-2 has commits this worktree lacks");
     expect(s.remote()).toBe(theirs);
     expect(s.events("side-effect-intent")).toEqual([]);
+  });
+
+  test("a PR whose head is named after the ticket: the stale howdah/<run> copy is ignored, and the PR's branch is pushed", async () => {
+    const s = await stack();
+    // the publish step pushed this run's work under the ticket's name; howdah/<run> keeps an older copy
+    commit(s.wt, "fe2-more.txt", "a review fix\n", "fe-2: review fix");
+    git(s.wt, "push", "-q", "origin", "HEAD:refs/heads/areeb/fe-2-ticket");
+    git(s.wt, "push", "-q", "--force", "origin", `${s.a}:refs/heads/howdah/plan--fe-2`);
+    commit(s.other, "fe1-more.txt", "x\n");
+    git(s.other, "push", "-q", "origin", "fe-1");
+    s.prs.head = "areeb/fe-2-ticket";
+    const stale = s.remote();
+
+    const r = await s.restack({});
+    expect(r.writes["restack.conflict"]).toBe("");
+    expect(s.remote("areeb/fe-2-ticket")).toBe(sha(s.wt, "HEAD"));
+    expect(s.remote()).toBe(stale);
+    expect(s.notes()).toContain("restacked areeb/fe-2-ticket");
   });
 
   test("a push that races this one is refused by the lease: put back, recorded as not pushed, retried next probe", async () => {

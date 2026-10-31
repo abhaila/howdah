@@ -15,7 +15,8 @@
  * `base-restacked`'s `to`, else the worktree's recorded base (engine/executors/await.ts
  * recordedBaseTip) — so after a SQUASH merge only this run's own commits survive, which a plain
  * rebase onto main would not manage. Then `git push --force-with-lease` of THIS run's branch
- * only (leased against the remote head the rebase started from), a retarget of this run's PR
+ * only — the PR's head branch, which need not be the worktree's `howdah/<run>` — (leased against
+ * the remote head the rebase started from), a retarget of this run's PR
  * when GitHub did not already move it, and a `base-restacked` event.
  *
  * Exactly-once, by observed state as much as by record:
@@ -32,6 +33,7 @@
  */
 import { dirname } from "node:path";
 import type { AttemptResult, Executor, ExecArgs } from "../run";
+import type { LoggedEvent } from "../../log/events";
 import { declaredWrites } from "./map";
 import { readWorktreeRecord } from "./worktree-record";
 import { remoteDefaultBranch, revParse, sh } from "./git";
@@ -116,7 +118,12 @@ export function restackBuiltinExecutor(opts: RestackBuiltinOpts = {}): Executor 
       return result("", stackedOn, merged ? "" : toSha);
     }
 
-    const branch = record.branch;
+    // the PR's head, not the worktree's: a publish step may name the branch after the ticket, and
+    // then `howdah/<run>` on origin is a stale copy — guarding or pushing it parks every
+    // hand-resolved conflict and never moves the PR
+    const own = publishedPrs(reads.publication_summary).primary;
+    const ownPr = own ? (opts.prView ?? ghPrView)(record.repo, own) : null;
+    const branch = ownPr?.headRefName ?? record.branch;
     const status = sh(["git", "status", "--porcelain"], wt);
     if (status.stdout.trim()) throw new Error(`the worktree has uncommitted changes, so it cannot be replayed onto ${targetBranch} — commit or discard them, then resume`);
     const head = revParse(wt, "HEAD");
@@ -128,17 +135,24 @@ export function restackBuiltinExecutor(opts: RestackBuiltinOpts = {}): Executor 
           `Bring them into the worktree, then resume; a restack never force-pushes over them`,
       );
 
+    // a conflict an agent resolved by hand put HEAD on that restack's target, but only a
+    // base-restacked moves the recorded tip — replaying from the stale tip would replay the base's
+    // own commits again, and after a squash merge they conflict with themselves
+    const resolvedOnto = handResolvedTarget(log.read(), wt, head);
+    const from = resolvedOnto ?? fromSha;
+    if (resolvedOnto && resolvedOnto !== fromSha) note(`a conflict was resolved onto ${resolvedOnto.slice(0, 12)} by hand — replaying from there, not ${fromSha.slice(0, 12)}`);
+
     // the rebase — unless the branch already holds the target (a conflict resolved by hand)
-    const command = `git rebase --onto ${toSha} ${fromSha}`;
+    const command = `git rebase --onto ${toSha} ${from}`;
     if (isAncestor(wt, toSha, head)) note(`${branch} already contains ${targetBranch} @ ${toSha.slice(0, 12)} — recording it, not rebasing again`);
     else {
-      note(`$ ${command}    # replay ${fromSha.slice(0, 12)}..HEAD onto ${merged ? `origin/${targetBranch} (the base merged)` : `${targetBranch}'s new tip`}`);
-      const r = sh(["git", "rebase", "--onto", toSha, fromSha], wt);
+      note(`$ ${command}    # replay ${from.slice(0, 12)}..HEAD onto ${merged ? `origin/${targetBranch} (the base merged)` : `${targetBranch}'s new tip`}`);
+      const r = sh(["git", "rebase", "--onto", toSha, from], wt);
       if (r.code !== 0) {
         const files = sh(["git", "diff", "--name-only", "--diff-filter=U"], wt).stdout.trim().split("\n").filter(Boolean);
         sh(["git", "rebase", "--abort"], wt);
         note(`the replay conflicts${files.length ? ` in ${files.join(", ")}` : ""} — aborted; the worktree is back at ${head.slice(0, 12)}`);
-        return result(command, base, fromSha);
+        return result(command, base, from);
       }
     }
     const newHead = revParse(wt, "HEAD")!;
@@ -156,14 +170,13 @@ export function restackBuiltinExecutor(opts: RestackBuiltinOpts = {}): Executor 
       const why = push.stderr.trim().slice(0, 200) || `git push exited ${push.code}`;
       effects.done(effect, { pushed: false, reason: why });
       note(`push refused (${why}) — the worktree is back at ${head.slice(0, 12)}; the restack is retried at the next probe`);
-      return result("", base, fromSha);
+      return result("", base, from);
     }
 
     // retarget this run's PR when GitHub did not (it does when a merged base branch is deleted)
-    const own = publishedPrs(reads.publication_summary).primary ?? branch;
     let retargeted: string | undefined;
     try {
-      const pr = (opts.prView ?? ghPrView)(record.repo, own);
+      const pr = ownPr ?? (opts.prView ?? ghPrView)(record.repo, branch);
       if (pr && pr.baseRefName !== targetBranch) {
         const error = (opts.retarget ?? ghPrRetarget)(record.repo, pr.url, targetBranch);
         if (error) note(`could not retarget ${pr.url} onto ${targetBranch}: ${error}`);
@@ -175,15 +188,32 @@ export function restackBuiltinExecutor(opts: RestackBuiltinOpts = {}): Executor 
 
     // proof first, then the bookkeeping: a death between the two re-attempts, finds the branch
     // already containing the target, and records it under a new lease (the remote moved)
-    effects.done(effect, { pushed: true, from: fromSha, to: toSha, head: newHead });
+    effects.done(effect, { pushed: true, from, to: toSha, head: newHead });
     log.append({
       type: "base-restacked", node: nodeId, visit,
-      from: { branch: base, sha: fromSha }, to: { branch: targetBranch, sha: toSha }, head: newHead,
+      from: { branch: base, sha: from }, to: { branch: targetBranch, sha: toSha }, head: newHead,
       ...(retargeted ? { pr: retargeted } : {}),
     });
     note(`restacked ${branch} onto ${targetBranch} @ ${toSha.slice(0, 12)} and pushed ${newHead.slice(0, 12)}`);
     return result("", stackedOn, merged ? "" : toSha);
   };
+}
+
+/**
+ * The target of the latest conflicted restack, when HEAD already contains it: an agent ran the
+ * handed-over `--onto` command by hand. Null once a later base-restacked recorded the tip.
+ */
+function handResolvedTarget(events: readonly LoggedEvent[], wt: string, head: string): string | null {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const e = events[i]!;
+    if (e.type === "base-restacked") return null;
+    if (e.type !== "node-finished" || e.status !== "succeeded") continue;
+    const conflict = e.writes["restack.conflict"];
+    if (typeof conflict !== "string" || !conflict) continue;
+    const onto = /--onto (\S+)/.exec(conflict)?.[1];
+    return onto !== undefined && isAncestor(wt, onto, head) ? onto : null;
+  }
+  return null;
 }
 
 /** The node's declaration, checked before git is touched. */

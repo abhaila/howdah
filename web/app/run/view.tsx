@@ -636,7 +636,8 @@ export function RunView({ id, graceMs = OPEN_GRACE_MS }: { id: string; graceMs?:
     <div
       className="runview"
       ref={rail.boxRef}
-      data-pane={rail.collapsed ? "closed" : "open"}
+      // HOW-78: the report is a three-column map and needs the width; the rail returns on any other tab
+      data-pane={rail.collapsed || tab === "report" ? "closed" : "open"}
       style={{ ["--rail-w" as string]: `${rail.width}px` }}
     >
       <div className="thread-col">
@@ -717,7 +718,7 @@ export function RunView({ id, graceMs = OPEN_GRACE_MS }: { id: string; graceMs?:
         {tab === "plan" ? (
           <RunPlan runId={id} detail={detail} onChanged={reload} />
         ) : tab === "report" ? (
-          <RunReport runId={id} detail={detail} />
+          <RunReport runId={id} detail={detail} onChanged={reload} />
         ) : tab === "context" ? (
           <RunContext entries={detail.context} />
         ) : tab === "chat" ? (
