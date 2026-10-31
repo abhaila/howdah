@@ -15,7 +15,7 @@ import { Engine, type AttemptResult } from "./run";
 import { defineGraph } from "../core/graph";
 import { readLog } from "../log/write";
 import { waiveCriterion, waiveUnprovable } from "./acceptance-decision";
-import { REPLY_RULES } from "./control";
+import { REPLY_RULES, replyVerdict } from "./control";
 
 type C = { goal: string; acceptance: unknown; summary: string; "verify.result": unknown };
 const ok = (writes: Record<string, unknown> = {}): AttemptResult => ({ status: "succeeded", writes });
@@ -49,7 +49,7 @@ function setup(reviewPasses: Record<string, boolean>, checks: Record<string, str
       },
     },
   });
-  return { dir, engine, ran, path: join(dir, "run.jsonl") };
+  return { dir, engine, ran, graph, path: join(dir, "run.jsonl") };
 }
 
 describe("the acceptance gate", () => {
@@ -80,6 +80,15 @@ describe("the acceptance gate", () => {
     expect((rule as { message: string }).message).toContain("`waive r1 <criterion-id> <reason>`");
     expect((rule as { message: string }).message).toContain("`waive r1 --unprovable <reason>`");
     expect((rule as { message: string }).message).toContain("`jump r1 implementation.local_review`");
+  });
+
+  test("HOW-72: on a graph that still gates, the reply verdict offers the waiver, not a plain retry", async () => {
+    const { engine, graph, path } = setup({ "ac-1": false });
+    await engine().start({ goal: "g" });
+    const verdict = replyVerdict(readLog(path), "r1", { gated: graph });
+    expect(verdict).toMatchObject({ accept: false, code: "acceptance-unmet", retry: false });
+    expect((verdict as { message: string }).message).toContain("`waive r1 <criterion-id> <reason>`");
+    expect((verdict as { message: string }).message).not.toContain("No waiver is needed");
   });
 
   test("after a waiver decision event, delivery runs", async () => {
