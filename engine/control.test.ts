@@ -465,7 +465,9 @@ describe("resolveReply refuses what a reply cannot fix (system-map 0.2)", () => 
     ["tools-unsupported", "one", "tools-unsupported", true],
     ["no-edge", "one", "no-edge", false],
     ["awaiting-approval", "one", "awaiting-approval", false],
-    ["acceptance-unmet", "one", "acceptance-unmet", false],
+    // HOW-72: "one" is not gated, so an old acceptance-unmet park there is cleared by a plain
+    // resume — the gated case (retry: false, the waive verbs) is engine/acceptance.test.ts
+    ["acceptance-unmet on a step no longer gated", "one", "acceptance-unmet", true],
     ["ambiguous-effect", "cmd", "ambiguous-effect", false],
   ];
   for (const [label, node, code, retry] of verdictCases) {
