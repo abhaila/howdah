@@ -2,6 +2,10 @@
  * HOW-51 — the delivery gate in the engine. A node that `requiresAcceptance` does not START while
  * a live criterion is unmet and unwaived; a plain resume re-checks and parks again (the gate reads
  * decision events, never `attention-resolved`); a waiver — and only a waiver — lets it through.
+ *
+ * HOW-72: the gate is OPT-IN — no built-in graph sets `requiresAcceptance` any more (they disclose
+ * unmet rows in the PR, graphs/implement-ticket.test.ts). This graph opts in, so every case here
+ * pins that a hand-built gated graph still parks exactly as before.
  */
 import { describe, expect, test } from "bun:test";
 import { mkdtempSync, writeFileSync } from "node:fs";
@@ -56,6 +60,10 @@ describe("the acceptance gate", () => {
     expect((res as { reason: string }).reason).toContain('1 not met yet — "ac-2" (criterion ac-2)');
     expect(ran).toEqual(["criteria", "review"]);
     expect(readLog(path).some((e) => e.type === "node-started" && e.node === "publish")).toBe(false);
+    // HOW-72: an opted-in gate still raises attention, as before — it is the one place it should
+    expect(readLog(path).filter((e) => e.type === "attention-raised")).toEqual([
+      expect.objectContaining({ node: "publish", code: "acceptance-unmet" }),
+    ]);
   });
 
   test("a plain resume does NOT let it through — the park is re-checked, not trusted", async () => {

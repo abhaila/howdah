@@ -879,7 +879,6 @@
           }
         },
         "maxVisits": 5,
-        "requiresAcceptance": true,
         "changesFiles": false,
         "class": "delivery"
       },
@@ -1610,7 +1609,6 @@
           }
         },
         "maxVisits": 5,
-        "requiresAcceptance": true,
         "changesFiles": false,
         "class": "delivery"
       },

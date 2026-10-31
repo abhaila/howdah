@@ -583,7 +583,9 @@ export function reconstructRender(runDir: string, renderedHashWanted: string): R
     // a stacked briefing this version cannot word is not reconstructable
     (render.stacked_on === undefined || builders.stackedInstruction) &&
     // nor is a repair-scope briefing (v9)
-    (render.repair_scope === undefined || builders.repairScopeInstruction)
+    (render.repair_scope === undefined || builders.repairScopeInstruction) &&
+    // nor a not-proven disclosure (v11)
+    (render.not_proven === undefined || builders.notProvenInstruction)
   ) {
     const suffixVersion = render.suffix_version;
     const assemble = (jumpMessage?: string, replyMessage?: string, refusalMessage?: string) =>
@@ -601,6 +603,8 @@ export function reconstructRender(runDir: string, renderedHashWanted: string): R
         ...(render.stacked_on ? { stackedOn: render.stacked_on } : {}),
         // v9: likewise the repair scope — derived once by the engine, logged, reused here
         ...(render.repair_scope ? { repairScope: render.repair_scope } : {}),
+        // HOW-72: and the not-proven list the publish step was given
+        ...(render.not_proven ? { notProven: render.not_proven } : {}),
         skills: render.skills ?? [], outputKeys: render.output_keys ?? [], suffixVersion,
       });
     // [plain, ...jumps, ...replies] — never both: a jump clears any pending reply (replay.ts),

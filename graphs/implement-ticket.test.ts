@@ -5,7 +5,7 @@
  * Each park is asserted by its code (system-map 0.2), not only its reason text.
  */
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { implementTicket, spec, type PrState } from "./implement-ticket";
@@ -13,6 +13,8 @@ import { buildGraph, type GraphSpec } from "../core/graph-spec";
 import { Engine, type AttemptResult, type EngineOpts } from "../engine/run";
 import type { LoggedEvent } from "../log/events";
 import type { VerifyResult } from "../core/verify";
+import type { Graph } from "../core/graph";
+import { reconstructRender } from "../prompts/library";
 
 const VERIFY_PASS: VerifyResult = { outcome: "pass", command: "bun test", exit_code: 0, commit: "abc123", dirty: false, output_tail: "12 pass" };
 
@@ -30,8 +32,8 @@ interface Script {
 }
 
 /** stub every executor kind; agent prompts are recorded per `node@visit` */
-function engineFor(dir: string, script: Script, prompts: Map<string, string>, extra: Partial<EngineOpts> = {}): Engine {
-  return new Engine(implementTicket, {
+function engineFor(dir: string, script: Script, prompts: Map<string, string>, extra: Partial<EngineOpts> = {}, graph: Graph<any> = implementTicket): Engine {
+  return new Engine(graph, {
     dir,
     promptsDir: PROMPTS,
     ...extra,
@@ -247,12 +249,76 @@ describe("implement-ticket runs verify:run before its review (HOW-40)", () => {
   });
 });
 
-describe("implement-ticket's acceptance gate (HOW-51)", () => {
-  test("a review that PASSES but leaves a criterion unmet is still held before delivery.publish", async () => {
-    const engine = engineFor(tmp(), { localReview: () => "pass", flips: false }, new Map());
-    const result = await engine.start(INPUTS);
-    expect(result).toMatchObject({ state: "parked", node: "delivery.publish", code: "acceptance-unmet" });
-    expect(started(engine.log.read(), "delivery.publish")).toEqual([]);
+describe("implement-ticket's acceptance contract is disclosed, not a gate (HOW-72)", () => {
+  const publishRender = (events: LoggedEvent[]) =>
+    events.find((e): e is Extract<LoggedEvent, { type: "prompt-rendered" }> => e.type === "prompt-rendered" && e.node === "delivery.publish");
+
+  test("a review that PASSES but leaves a criterion unmet reaches delivery.publish, which is told to disclose it", async () => {
+    const dir = tmp();
+    const prompts = new Map<string, string>();
+    const engine = engineFor(dir, { localReview: () => "pass", flips: false, pr: () => "MERGED" }, prompts);
+    expect(await engine.start(INPUTS)).toEqual({ state: "finished", outcome: "success" });
+    const events = engine.log.read();
+    expect(started(events, "delivery.publish")).toEqual([1]);
+    // informational, never attention
+    expect(events.some((e) => e.type === "attention-raised" && e.code === "acceptance-unmet")).toBe(false);
+    const render = publishRender(events)!;
+    expect(render.not_proven).toEqual([{ id: "ac-1", text: "the bug is fixed", reason: "the reviewer found no evidence for it" }]);
+    const sent = prompts.get("delivery.publish@1")!;
+    expect(sent).toContain("## Not proven by this run");
+    expect(sent).toContain("- the bug is fixed — the reviewer found no evidence for it");
+    expect(sent).toContain("## Notes for testing / reviewing");
+    const rebuilt = reconstructRender(dir, render.rendered_hash);
+    expect(rebuilt).toMatchObject({ verified: true, text: sent });
+    // the list is an INPUT to reconstruction, not a guess: strip it and the render is UNVERIFIED
+    const path = join(dir, "run.jsonl");
+    const lines = readFileSync(path, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+    delete lines.find((e) => e.type === "prompt-rendered" && e.node === "delivery.publish").not_proven;
+    writeFileSync(path, lines.map((e) => JSON.stringify(e)).join("\n") + "\n");
+    expect(reconstructRender(dir, render.rendered_hash)).toMatchObject({ verified: false });
+  });
+
+  test("when every criterion passes, publish is told nothing and logs no not_proven", async () => {
+    const prompts = new Map<string, string>();
+    const engine = engineFor(tmp(), { localReview: () => "pass", pr: () => "MERGED" }, prompts);
+    expect(await engine.start(INPUTS)).toEqual({ state: "finished", outcome: "success" });
+    expect(publishRender(engine.log.read())).not.toHaveProperty("not_proven");
+    expect(prompts.get("delivery.publish@1")).not.toContain("Not proven by this run");
+  });
+
+  test("only the steps that read the contract without writing it disclose — across every built-in", async () => {
+    const { disclosesAcceptance } = await import("../core/acceptance");
+    const { nodeReads } = await import("../core/graph");
+    const { GRAPHS } = await import("./index");
+    const disclosing = Object.entries(GRAPHS).flatMap(([name, g]) =>
+      Object.entries(g.def.nodes).flatMap(([id, n]) =>
+        disclosesAcceptance(n.kind, nodeReads(n), Object.keys(g.writesOf(id))) ? [`${name}:${id}`] : []));
+    expect(disclosing.sort()).toEqual(["implement-stacked:delivery.publish", "implement-ticket:delivery.publish"]);
+  });
+
+  test("a run parked at the OLD gate resumes on the current graph and publishes, disclosing the row", async () => {
+    // the graph before HOW-72: delivery.publish `requiresAcceptance` — named here, exactly what changed
+    const gated = buildGraph({
+      ...spec,
+      nodes: spec.nodes.map((n) => (n.id === "delivery.publish" ? { ...n, requiresAcceptance: true as const } : n)),
+    } as GraphSpec);
+    const dir = tmp();
+    const prompts = new Map<string, string>();
+    const script: Script = { localReview: () => "pass", flips: false, pr: () => "MERGED" };
+    // the fixture: a real run log parked on acceptance-unmet under the old graph
+    const parked = await engineFor(dir, script, prompts, {}, gated).start(INPUTS);
+    expect(parked).toMatchObject({ state: "parked", node: "delivery.publish", code: "acceptance-unmet" });
+    expect(started(engineFor(dir, script, prompts).log.read(), "delivery.publish")).toEqual([]);
+
+    // a fresh process on the CURRENT graph: resume() resolves the park and there is no gate
+    const resumed = engineFor(dir, script, prompts);
+    expect(await resumed.resume()).toEqual({ state: "finished", outcome: "success" });
+    const events = resumed.log.read();
+    expect(started(events, "delivery.publish")).toEqual([1]);
+    expect(events.filter((e) => e.type === "attention-raised" && e.code === "acceptance-unmet")).toHaveLength(1); // the old park only
+    const render = publishRender(events)!;
+    expect(render.not_proven?.map((r) => r.id)).toEqual(["ac-1"]);
+    expect(reconstructRender(dir, render.rendered_hash)).toMatchObject({ verified: true });
   });
 
   test("the criteria step runs once, after the plan and before any code", async () => {

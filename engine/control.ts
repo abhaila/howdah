@@ -333,6 +333,12 @@ interface AskContext {
   retryOverBudget: number | undefined;
   /** system-map 1a: the approval node this node `requires`, when it has one */
   requires: string | undefined;
+  /**
+   * HOW-72: whether the CURRENT graph still gates this node on its acceptance criteria;
+   * undefined = graph or node not registered. A run parked at the gate before HOW-72 resumes
+   * on the current graph, where no built-in sets it, so a plain resume publishes.
+   */
+  gatedOnAcceptance?: boolean;
 }
 
 /**
@@ -413,7 +419,14 @@ export const REPLY_RULES: Readonly<Record<ParkCode, Rule>> = {
       `(\`resume ${run}\`); or \`jump ${run} <repair-step> "<what to change>"\` to make a change; or \`abort ${run}\``,
   }),
   // HOW-51: a reply cannot meet a criterion; a waiver (a decision) or a re-review can
-  "acceptance-unmet": ({ run }) => ({
+  "acceptance-unmet": ({ run, gatedOnAcceptance }) => (gatedOnAcceptance === false ? {
+    // HOW-72: parked at a gate the graph no longer has — resuming publishes and discloses
+    accept: false,
+    retry: true,
+    message:
+      `this step is no longer held on its acceptance criteria — the unmet ones are disclosed in the PR instead; ` +
+      `Retry this step (\`resume ${run}\`) to publish. No waiver is needed`,
+  } : {
     accept: false,
     message:
       `delivery is held until every acceptance criterion passes or is waived; waive one with ` +
@@ -502,7 +515,8 @@ function verdictOf(replayed: ReplayedState, run: string, graphs: Record<string, 
   const retryVisit = (replayed.visits[ask.node] ?? 0) + 1;
   const overBudget = maxVisits !== undefined && retryVisit - (replayed.floors[ask.node] ?? 0) > maxVisits;
   const requires = def?.kind === "agent" ? def.requires?.approvalOf : undefined;
-  const verdict = REPLY_RULES[ask.code]({ node: ask.node, run, kind: def?.kind, retryOverBudget: overBudget ? maxVisits : undefined, requires });
+  const gatedOnAcceptance = def ? def.kind === "agent" && def.requiresAcceptance === true : undefined;
+  const verdict = REPLY_RULES[ask.code]({ node: ask.node, run, kind: def?.kind, retryOverBudget: overBudget ? maxVisits : undefined, requires, gatedOnAcceptance });
   if (verdict.accept) return verdict;
   return { accept: false, message: `reply refused (${ask.code}): ${verdict.message}`, code: ask.code, retry: verdict.retry === true };
 }

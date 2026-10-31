@@ -199,7 +199,7 @@ export function operatorInstructionSuffix(message: string): string {
 // ---- suffixes (system-map 0.1) ---------------------------------------------------
 
 /** The suffix wording new renders use. Bump it — and add a builder set — to reword. */
-export const SUFFIX_VERSION = 10;
+export const SUFFIX_VERSION = 11;
 
 /**
  * HOW-36: what a context-exhausted visit had done, as data — derived by engine/handoff.ts from
@@ -265,6 +265,18 @@ export interface SuffixBuilders {
    * changed since this step last judged (engine/repair-scope.ts). Absent from v1–v8.
    */
   repairScopeInstruction?(scope: RepairScope): string;
+  /**
+   * HOW-72: the acceptance criteria this run did not prove, for the publish step to disclose in
+   * the PR description. Absent from v1–v10.
+   */
+  notProvenInstruction?(rows: readonly NotProven[]): string;
+}
+
+/** HOW-72: a criterion still failing at publish and the plain-words reason (core/acceptance.ts notProven) */
+export interface NotProven {
+  id: string;
+  text: string;
+  reason: string;
 }
 
 /** where the repairs a review judges began: the step, its visit, and the commit it started from */
@@ -461,9 +473,26 @@ const V10: SuffixBuilders = {
     `so any merge request completes at once and folds this change into that PR. Merging a stacked PR is a human decision.`,
 };
 
-const SUFFIX_BUILDERS: Readonly<Record<number, SuffixBuilders>> = { 1: V1, 2: V2, 3: V3, 4: V4, 5: V5, 6: V6, 7: V7, 8: V8, 9: V9, 10: V10 };
+/**
+ * v11 = v10 + NOT PROVEN BY THIS RUN (HOW-72): the acceptance criteria are the agents' contract,
+ * no longer a gate on publish, so the rows still failing are handed to the publish step to
+ * disclose in the PR description. A suffix, not a publish-prompt edit, so that it also reaches
+ * runs already parked at the old gate, whose pinned publish prompt never rendered `acceptance`.
+ * NEVER edit a published version.
+ */
+const V11: SuffixBuilders = {
+  ...V10,
+  notProvenInstruction: (rows) =>
+    `\n\n## Not proven by this run\n` +
+    `These acceptance criteria were not proven by this run. Disclose them in the PR description: under ` +
+    `\`## Notes for testing / reviewing\`, add a "Not proven by this run" list with one bullet per criterion, ` +
+    `its words and its reason exactly as given here. Do not claim they are met, and do not leave the list out.\n` +
+    rows.map((r) => `- ${r.text} — ${r.reason}`).join("\n"),
+};
+
+const SUFFIX_BUILDERS: Readonly<Record<number, SuffixBuilders>> = { 1: V1, 2: V2, 3: V3, 4: V4, 5: V5, 6: V6, 7: V7, 8: V8, 9: V9, 10: V10, 11: V11 };
 /** the builders new renders use; bump together with SUFFIX_VERSION */
-const CURRENT: SuffixBuilders = V10;
+const CURRENT: SuffixBuilders = V11;
 
 /** The builders a logged `suffix_version` pins, or undefined for a version this code never had. */
 export function suffixBuilders(version: number): SuffixBuilders | undefined {
@@ -517,6 +546,8 @@ export interface PromptParts {
   stackedOn?: StackedOn;
   /** v9: where the repairs this step reviews began — renders the REPAIR SCOPE briefing */
   repairScope?: RepairScope;
+  /** HOW-72 (v11): the criteria this publish step must disclose — renders NOT PROVEN BY THIS RUN */
+  notProven?: readonly NotProven[];
   /** skills named in the hint — already filtered by skillsForHarness */
   skills: readonly string[];
   /** the node's declared write keys, in declaration order */
@@ -526,7 +557,7 @@ export interface PromptParts {
 
 /**
  * The ONE assembly of a prompt as sent. Fixed order:
- *   template body → stacked briefing (HOW-57) → repair scope (v9) → operator jump → operator reply (0.2) → proposal refusal (1c)
+ *   template body → stacked briefing (HOW-57) → repair scope (v9) → not proven (HOW-72) → operator jump → operator reply (0.2) → proposal refusal (1c)
  *   → context re-entry (HOW-14) → resume after operator stop (HOW-48) → carried operator steers
  *   (HOW-47) → skill hint → outputs contract.
  * Throws on a suffix version with no builders — the engine only ever passes SUFFIX_VERSION,
@@ -545,6 +576,11 @@ export function assemblePrompt(parts: PromptParts): string {
   if (parts.repairScope !== undefined) {
     if (!builders.repairScopeInstruction) throw new Error(`suffix version ${parts.suffixVersion} has no repair-scope builder`);
     scope = builders.repairScopeInstruction(parts.repairScope);
+  }
+  let notProven = "";
+  if (parts.notProven !== undefined && parts.notProven.length > 0) {
+    if (!builders.notProvenInstruction) throw new Error(`suffix version ${parts.suffixVersion} has no not-proven builder`);
+    notProven = builders.notProvenInstruction(parts.notProven);
   }
   let reply = "";
   if (parts.replyMessage !== undefined) {
@@ -575,6 +611,7 @@ export function assemblePrompt(parts: PromptParts): string {
     parts.body +
     stacked +
     scope +
+    notProven +
     (parts.jumpMessage !== undefined ? operatorInstructionSuffix(parts.jumpMessage) : "") +
     reply +
     refusal +
