@@ -54,6 +54,7 @@ import { EVIDENCE_BUILTIN, EVIDENCE_PRODUCES } from "./evidence";
 import { GRAPH_DRAFT_KEY, GRAPHS_CATALOG_BUILTIN, GRAPHS_CATALOG_PRODUCES, type GraphsCatalog } from "./catalog";
 import { includeRefs, templateReads } from "./template-refs";
 import { REPAIR_CHECK_BUILTIN, REPAIR_CHECK_PRODUCES, REPAIR_CHECK_READS } from "./repair-stall";
+import { ACCEPTANCE_KEY } from "./acceptance";
 
 export const SPEC_VERSION = 1;
 
@@ -767,6 +768,25 @@ function parallelProblem(spec: GraphSpec, raw: string): SpecProblem | null {
 }
 
 /**
+ * HOW-74: the reads the ENGINE consumes for an agent step, as opposed to the ones its prompt
+ * text names. `requiresAcceptance` is the one today: the publish gate and its suffix read
+ * `acceptance` from context, and core/graph.ts validate() refuses a gated node that does not
+ * declare it — so a body that never says `{{context.acceptance}}` still needs the read. This is
+ * the ONE place such a read is declared; `reviewsWorkOf` and the stacked briefing read the log,
+ * not context, and so do not belong here. Everything that derives `reads` goes through
+ * `derivedReads`, so the builder, the save route and validate() cannot disagree.
+ */
+export function structuralReads(n: Extract<NodeSpec, { kind: "agent" }>): string[] {
+  return n.requiresAcceptance ? [ACCEPTANCE_KEY] : [];
+}
+
+/** An agent step's reads: what its body names, then what the engine consumes for it. */
+export function derivedReads(n: Extract<NodeSpec, { kind: "agent" }>, body: string): string[] {
+  const fromBody = templateReads(body);
+  return [...fromBody, ...structuralReads(n).filter((k) => !fromBody.includes(k))];
+}
+
+/**
  * HOW-60 (H2): what is wrong between an agent step and the body it names. Both are BLOCKING:
  *
  *   An include. `{{> id }}` is expanded when a run PINS its prompts (Engine.pinPrompts), which
@@ -775,11 +795,20 @@ function parallelProblem(spec: GraphSpec, raw: string): SpecProblem | null {
  *   would be given less than its instructions ask for. A builder graph's step says everything
  *   itself.
  *
- *   Reads that are not the body's. `reads` is DERIVED from the body (templateReads), on both
- *   sides, so a mismatch means a spec that arrived some other way (a PUT, a hand edit) is about
- *   to declare one thing and ask for another. Both directions are named.
+ *   Reads that are not the body's. `reads` is DERIVED from the body (derivedReads: the body's
+ *   template refs plus the step's structural reads), on both sides, so a mismatch means a spec
+ *   that arrived some other way (a PUT, a hand edit) is about to declare one thing and ask for
+ *   another. Both directions are named. `inherited` (HOW-74) is what a `{ copyOf }` body's
+ *   base steps declared: a copy keeps its original's reads, so those are never "unused" — the
+ *   base declared them on purpose (implement-ticket's `worktree.verify_command` is headroom for
+ *   the HOW-44 verify-aware variants). The unlisted direction is unchanged.
  */
-function bodyProblems(n: Extract<NodeSpec, { kind: "agent" }>, body: string, who: string): SpecProblem[] {
+function bodyProblems(
+  n: Extract<NodeSpec, { kind: "agent" }>,
+  body: string,
+  who: string,
+  inherited: readonly string[] = [],
+): SpecProblem[] {
   const out: SpecProblem[] = [];
   if (body.includes("{{>")) {
     const ids = includeRefs(body);
@@ -789,10 +818,10 @@ function bodyProblems(n: Extract<NodeSpec, { kind: "agent" }>, body: string, who
       message: `${who}'s instructions include ${named} with \`{{> … }}\`. A graph built here cannot include another prompt — paste the text it needs into the instructions instead.`,
     });
   }
-  const wanted = templateReads(body);
+  const wanted = derivedReads(n, body);
   const declared = new Set(n.reads);
   const unlisted = wanted.filter((k) => !declared.has(k));
-  const unused = [...declared].filter((k) => !wanted.includes(k)).sort();
+  const unused = [...declared].filter((k) => !wanted.includes(k) && !inherited.includes(k)).sort();
   if (unlisted.length || unused.length) {
     const list = (keys: string[]) => keys.map((k) => `\`${k}\``).join(", ");
     const parts = [
@@ -824,9 +853,14 @@ export function specProblems(
      * HOW-60 (H2): the prompt bodies, by id, when the caller has them — the browser's draft and
      * the save route's about-to-be-written set. Given, they are ALSO the known prompts (a step
      * with no body is the existing "has no file yet"), and each is checked against its step: no
-     * `{{> include }}`, `reads` equal to templateReads(body), and no body that no step uses.
+     * `{{> include }}`, `reads` equal to derivedReads(step, body), and no body that no step uses.
      */
     bodies?: Readonly<Record<string, string>>;
+    /**
+     * HOW-74: by prompt id, the reads a COPIED body inherits from its base steps — the drafter's
+     * check fills it from `{ copyOf }` (checkGraphDraft). Those reads are never reported unused.
+     */
+    copiedReads?: Readonly<Record<string, readonly string[]>>;
   } = {},
 ): SpecProblem[] {
   const problems: SpecProblem[] = [];
@@ -914,7 +948,7 @@ export function specProblems(
       } else if (knownPrompts && !knownPrompts.has(n.prompt))
         problems.push({ node: n.id, where: "steps", message: `${who} names the prompt "${n.prompt}", which has no file yet. Write its instructions.` });
       const body = bodies?.[n.prompt];
-      if (body !== undefined) problems.push(...bodyProblems(n, body, who));
+      if (body !== undefined) problems.push(...bodyProblems(n, body, who, opts.copiedReads?.[n.prompt]));
       if (n.requires && !spec.nodes.some((x) => x.id === n.requires && x.kind === "approval"))
         problems.push({ node: n.id, where: "steps", message: `${who} waits on an approval step that does not exist. Pick one, or clear it.` });
       for (const r of n.reviewsWorkOf ?? [])
@@ -1745,8 +1779,25 @@ export function checkGraphDraft(value: unknown, catalog: GraphsCatalog, material
   }
   const taken = nameTakenProblem(spec.name, catalog.takenNames);
   if (taken) out.push(taken.message);
-  const structural = texts ? specProblems(spec, { bodies: texts }) : specProblems(spec, { knownPrompts: Object.keys(prompts) });
+  const structural = texts
+    ? specProblems(spec, { bodies: texts, copiedReads: resolved.ok ? copiedReadsOf(resolved.bodies, base) : {} })
+    : specProblems(spec, { knownPrompts: Object.keys(prompts) });
   out.push(...structural.filter(isBlocking).map((p) => p.message));
   out.push(...draftRuleProblems(spec, base, resolved.ok ? { bodies: resolved.bodies } : {}).filter(isBlocking).map((p) => p.message));
+  return out;
+}
+
+/**
+ * HOW-74: for each `{ copyOf: P }` body, the union of the reads of every BASE agent step whose
+ * prompt is P — the same matching draftRuleProblems' read-only copy rule uses. A copy of a
+ * prompt the base does not use inherits nothing: its reads come from its text alone.
+ */
+function copiedReadsOf(bodies: Readonly<Record<string, DraftBody>>, base: GraphSpec | undefined): Record<string, string[]> {
+  const out: Record<string, string[]> = {};
+  for (const [id, body] of Object.entries(bodies)) {
+    if (typeof body !== "object") continue;
+    const reads = (base?.nodes ?? []).flatMap((b) => (b.kind === "agent" && b.prompt === body.copyOf ? b.reads : []));
+    if (reads.length) out[id] = [...new Set(reads)];
+  }
   return out;
 }
