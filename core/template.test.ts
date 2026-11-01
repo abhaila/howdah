@@ -46,8 +46,8 @@ describe("versioned suffix builders (system-map 0.1)", () => {
     expect(v1.outputContract([])).toBe(V1_SUMMARY_ONLY);
   });
 
-  test("the current version is 10 and buildOutputInstruction is its contract builder", () => {
-    expect(SUFFIX_VERSION).toBe(10);
+  test("the current version is 11 and buildOutputInstruction is its contract builder", () => {
+    expect(SUFFIX_VERSION).toBe(11);
     expect(buildOutputInstruction(["a", "b"])).toBe(V1_CONTRACT);
   });
 
@@ -129,6 +129,37 @@ describe("versioned suffix builders (system-map 0.1)", () => {
     // a run that is not stacked renders v10 exactly as v9
     const plain = { body: "BODY", skills: [], outputKeys: ["a"], jumpMessage: "JUMP" };
     expect(assemblePrompt({ ...plain, suffixVersion: 10 })).toBe(assemblePrompt({ ...plain, suffixVersion: 9 }));
+  });
+
+  test("v11 (HOW-72) is v10 plus NOT PROVEN BY THIS RUN: the disclosure pinned literally, everything else byte-identical", () => {
+    const v10 = suffixBuilders(10)!;
+    const v11 = suffixBuilders(11)!;
+    expect(v10.notProvenInstruction).toBeUndefined();
+    const rows = [
+      { id: "ac-1", text: "The card lists unmet rows", reason: "only a human can judge it" },
+      { id: "ac-2", text: "CI is green on the PR", reason: "checked after publish" },
+    ];
+    expect(v11.notProvenInstruction!(rows)).toBe(
+      "\n\n## Not proven by this run\n" +
+        "These acceptance criteria were not proven by this run. Disclose them in the PR description: under " +
+        "`## Notes for testing / reviewing`, add a \"Not proven by this run\" list with one bullet per criterion, " +
+        "its words and its reason exactly as given here. Do not claim they are met, and do not leave the list out.\n" +
+        "- The card lists unmet rows — only a human can judge it\n" +
+        "- CI is green on the PR — checked after publish",
+    );
+    const sha = "0123456789abcdef0123456789abcdef01234567";
+    expect(v11.stackedInstruction!({ branch: "b", sha })).toBe(v10.stackedInstruction!({ branch: "b", sha }));
+    expect(v11.outputContract(["a"])).toBe(v10.outputContract(["a"]));
+    // nothing to disclose (absent or empty): v11 renders exactly as v10
+    const plain = { body: "BODY", skills: [], outputKeys: ["a"], jumpMessage: "JUMP", repairScope: { node: "fix", visit: 1, sha } };
+    expect(assemblePrompt({ ...plain, suffixVersion: 11 })).toBe(assemblePrompt({ ...plain, suffixVersion: 10 }));
+    expect(assemblePrompt({ ...plain, notProven: [], suffixVersion: 11 })).toBe(assemblePrompt({ ...plain, suffixVersion: 10 }));
+    // it sits after the repair scope and before the operator jump
+    const full = assemblePrompt({ ...plain, notProven: rows, suffixVersion: 11 });
+    expect(full.indexOf("## Repair scope")).toBeLessThan(full.indexOf("## Not proven by this run"));
+    expect(full.indexOf("## Not proven by this run")).toBeLessThan(full.indexOf("## Operator instruction"));
+    // a version with no builder refuses rather than dropping the disclosure
+    expect(() => assemblePrompt({ ...plain, notProven: rows, suffixVersion: 10 })).toThrow("no not-proven builder");
   });
 
   test("v3 is v2 plus the refusal builder (system-map 1c): everything else byte-identical, refusal pinned literally", () => {

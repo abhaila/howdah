@@ -43,6 +43,12 @@ function contractLog(finished = true): FakeLog {
   return log;
 }
 
+/** HOW-72: waiving is offered only while the run is parked at an (opted-in) acceptance gate */
+function heldAtGate(log: FakeLog): FakeLog {
+  log.add({ type: "attention-raised", node: "delivery.publish", visit: 1, reason: "1 unmet", code: "acceptance-unmet" });
+  return log;
+}
+
 function render(node: React.ReactNode): HTMLElement {
   host = document.createElement("div");
   document.body.appendChild(host);
@@ -84,7 +90,7 @@ describe("the Acceptance card", () => {
       posted.push({ url: String(input), body: JSON.parse(String(init?.body)) });
       return new Response(JSON.stringify({ error: "criterion \"ac-5\" was superseded — waive the row that replaced it" }), { status: 409 });
     }) as typeof fetch;
-    const el = render(<AcceptanceCard runId="r1" detail={deriveDetail("r1", contractLog(false).events)} onChanged={() => {}} />);
+    const el = render(<AcceptanceCard runId="r1" detail={deriveDetail("r1", heldAtGate(contractLog(false)).events)} onChanged={() => {}} />);
     act(() => (el.querySelector(".ac-waive-open") as HTMLButtonElement).click());
     const waive = [...el.querySelectorAll("button")].find((b) => b.textContent === "Waive")!;
     expect(waive.disabled).toBe(true); // no reason, no waiver
@@ -101,7 +107,7 @@ describe("the Acceptance card", () => {
   // HOW-58: the rail's layout (judged-by on its own line, waive aligned under the text) rests
   // on this structure — the CSS addresses these elements as children of these parents
   test("structure the rail layout depends on: 'judged by' in the head, Waive… in its row's body", () => {
-    const el = render(<AcceptanceCard runId="r1" detail={deriveDetail("r1", contractLog(false).events)} onChanged={() => {}} />);
+    const el = render(<AcceptanceCard runId="r1" detail={deriveDetail("r1", heldAtGate(contractLog(false)).events)} onChanged={() => {}} />);
     const by = el.querySelector(".ac-by")!;
     expect(by.parentElement!.classList.contains("ac-head")).toBe(true);
     expect(by.textContent).toBe("judged by implementation.local_review@1");
@@ -130,8 +136,7 @@ describe("the Acceptance card", () => {
   });
 
   test("a run held at the delivery gate shows the card WITH the ask, inside the transcript", () => {
-    const events = contractLog(false);
-    events.add({ type: "attention-raised", node: "delivery.publish", visit: 1, reason: "1 unmet", code: "acceptance-unmet" });
+    const events = heldAtGate(contractLog(false));
     const detail = deriveDetail("r1", events.events);
     const el = render(<RunChat runId="r1" detail={detail} ask={detail.ask} onPickStep={() => {}} onResolved={() => {}} />);
     expect(el.querySelector(".chat-head .ac-card")).toBeNull();
@@ -152,8 +157,8 @@ describe("the Acceptance card", () => {
         ],
       },
     });
-    const detail = deriveDetail("r1", log.events);
-    expect(detail.acceptance).toMatchObject({ unmet: 3, unprovable: 2 });
+    const detail = deriveDetail("r1", heldAtGate(log).events);
+    expect(detail.acceptance).toMatchObject({ unmet: 3, unprovable: 2, waivable: true });
     const posted: unknown[] = [];
     globalThis.fetch = (async (_: unknown, init?: RequestInit) => {
       posted.push(JSON.parse(String(init?.body)));
@@ -176,6 +181,68 @@ describe("the Acceptance card", () => {
     const go = [...el.querySelectorAll("button")].find((b) => b.textContent === "Waive 2")!;
     await act(async () => { go.click(); await new Promise((r) => setTimeout(r, 20)); });
     expect(posted).toEqual([{ unprovable: true, reason: "no test command yet" }]);
+  });
+
+  // HOW-72: the contract is disclosed, not a gate — the card is a progress view, not a park
+  describe("Not proven by this run (HOW-72)", () => {
+    function disclosedLog(): FakeLog {
+      const log = contractLog(false);
+      log.add({
+        type: "prompt-rendered", node: "delivery.publish", visit: 1, prompt: "delivery.publish", prompt_version: 4,
+        rendered_hash: "h1", context_read: {}, suffix_version: 11,
+        not_proven: [{ id: "ac-5", text: "the full suite runs", reason: "no tests ran in this run" }],
+      } as never);
+      return log;
+    }
+
+    test("the read model carries the list the publish step was given, with no ask and no needs-input", () => {
+      const detail = deriveDetail("r1", disclosedLog().events);
+      expect(detail.acceptance).toMatchObject({
+        not_proven: [{ id: "ac-5", text: "the full suite runs", reason: "no tests ran in this run" }],
+        waivable: false,
+      });
+      expect(detail.ask).toBeNull();
+      expect(detail.summary.status).not.toBe("needs-input");
+    });
+
+    test("a later render of the same step with nothing to disclose clears the list", () => {
+      const log = disclosedLog();
+      log.add({ type: "prompt-rendered", node: "delivery.publish", visit: 2, prompt: "delivery.publish", prompt_version: 4, rendered_hash: "h2", context_read: {}, suffix_version: 11 } as never);
+      expect(deriveDetail("r1", log.events).acceptance?.not_proven).toEqual([]);
+    });
+
+    test("the card lists each row with its reason, neutrally, and offers no waiver", () => {
+      const el = render(<AcceptanceCard runId="r1" detail={deriveDetail("r1", disclosedLog().events)} onChanged={() => {}} />);
+      const box = el.querySelector(".ac-not-proven")!;
+      expect(box.querySelector(".ac-not-proven-title")!.textContent).toBe("Not proven by this run");
+      expect([...box.querySelectorAll("li")].map((li) => li.textContent)).toEqual(["the full suite runs — no tests ran in this run"]);
+      expect(el.querySelector(".ac-waive-open")).toBeNull();
+      expect([...el.querySelectorAll("button")].some((b) => b.textContent?.startsWith("Waive"))).toBe(false);
+      expect(el.querySelector(".ac-card")!.getAttribute("data-held")).toBe("false"); // no alarm border
+    });
+
+    test("a finished run's Chat leads with the same list", () => {
+      const log = disclosedLog();
+      log.add({ type: "run-finished", outcome: "success" });
+      const detail = deriveDetail("r1", log.events);
+      const el = render(<RunChat runId="r1" detail={detail} ask={null} onPickStep={() => {}} onResolved={() => {}} />);
+      expect(el.querySelector(".chat-log")!.firstElementChild!.querySelector(".ac-not-proven")!.textContent).toContain("no tests ran in this run");
+    });
+
+    test("an unfinished, unparked run with an unmet row offers no waiver — there is no gate to open", () => {
+      const el = render(<AcceptanceCard runId="r1" detail={deriveDetail("r1", contractLog(false).events)} onChanged={() => {}} />);
+      expect(el.querySelector(".ac-waive-open")).toBeNull();
+    });
+
+    test("a run parked at the OLD gate, on a graph that no longer has it, is retried — not waived", async () => {
+      const { GRAPHS } = await import("../../graphs/index");
+      const detail = deriveDetail("r1", heldAtGate(contractLog(false)).events, undefined, { graphs: GRAPHS });
+      expect(detail.acceptance?.waivable).toBe(false);
+      expect(detail.ask_reply).toMatchObject({ accept: false, retry: true });
+      expect((detail.ask_reply as { message: string }).message).toContain("No waiver is needed");
+      const el = render(<AcceptanceCard runId="r1" detail={detail} onChanged={() => {}} />);
+      expect(el.querySelector(".ac-waive-open")).toBeNull();
+    });
   });
 
   test("migration: a run with no acceptance renders no card — not an empty red one", () => {

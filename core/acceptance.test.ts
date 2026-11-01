@@ -3,7 +3,7 @@
  * say (the outputs check), and what holds delivery (the gate's verdict).
  */
 import { describe, expect, test } from "bun:test";
-import { acceptanceProblem, asAcceptance, evidenceSources, latestAcceptance, unmetCriteria, unprovable, waivedCriteria, type AcceptanceRow } from "./acceptance";
+import { acceptanceProblem, asAcceptance, evidenceSources, latestAcceptance, notProven, unmetCriteria, unprovable, waivedCriteria, type AcceptanceRow } from "./acceptance";
 import { defineGraph } from "./graph";
 import { FakeLog } from "../web/slice.fixtures";
 
@@ -154,5 +154,43 @@ describe("HOW-59: how each criterion is checked", () => {
     log.add({ type: "node-finished", node: "verify.run", visit: 2, status: "succeeded", writes: { "verify.result": { outcome: "not-checked", reason: "why" } } } as never);
     log.add({ type: "node-finished", node: "implementation.evidence", visit: 1, status: "succeeded", writes: { "evidence.items": { outcome: "captured", items: [] } } } as never);
     expect(evidenceSources(log.events)).toEqual({ verify: { outcome: "not-checked", reason: "why" }, screenshots: { outcome: "captured" } });
+  });
+  describe("notProven (HOW-72): what the PR and the card disclose", () => {
+    const row = (id: string, check?: string, extra: Record<string, unknown> = {}) =>
+      ({ id, text: `text of ${id}`, source: "plan", passes: false, evidence: null, ...(check ? { check } : {}), ...extra });
+    const none = { verify: { outcome: "not-checked", reason: "no verify command" }, screenshots: { outcome: "not-checked", reason: "no preview" } };
+
+    test("excludes superseded, passing and waived rows; keeps after-publish rows", () => {
+      const rows = asAcceptance([
+        row("gone", "tests", { superseded: true }),
+        row("ok", "command", { passes: true, evidence: { kind: "command", command: "x", output: "y" } }),
+        row("waived", "human"),
+        row("later", "after-publish"),
+        row("open", "command"),
+      ])!;
+      expect(notProven(rows, new Set(["waived"]), {}).map((r) => r.id)).toEqual(["later", "open"]);
+    });
+
+    test("each row carries a plain-words reason", () => {
+      const rows = asAcceptance([row("h", "human"), row("t", "tests"), row("s", "screenshot"), row("p", "after-publish"), row("c", "command"), row("old")])!;
+      expect(notProven(rows, new Set(), none)).toEqual([
+        { id: "h", text: "text of h", reason: "only a human can judge it" },
+        { id: "t", text: "text of t", reason: "no tests ran in this run" },
+        { id: "s", text: "text of s", reason: "no screenshot was captured" },
+        { id: "p", text: "text of p", reason: "checked after publish" },
+        { id: "c", text: "text of c", reason: "the reviewer found no evidence for it" },
+        { id: "old", text: "text of old", reason: "the reviewer found no evidence for it" },
+      ]);
+    });
+
+    test("a tests row whose suite ran red is not 'no tests ran' — unprovable() decides", () => {
+      const rows = asAcceptance([row("t", "tests")])!;
+      expect(notProven(rows, new Set(), { verify: { outcome: "fail" } })[0]?.reason).toBe("the reviewer found no evidence for it");
+    });
+
+    test("nothing to disclose when every live row passes or was waived", () => {
+      const rows = asAcceptance([row("w", "human"), row("gone", "tests", { superseded: true })])!;
+      expect(notProven(rows, new Set(["w"]), none)).toEqual([]);
+    });
   });
 });

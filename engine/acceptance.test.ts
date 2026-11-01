@@ -2,6 +2,10 @@
  * HOW-51 — the delivery gate in the engine. A node that `requiresAcceptance` does not START while
  * a live criterion is unmet and unwaived; a plain resume re-checks and parks again (the gate reads
  * decision events, never `attention-resolved`); a waiver — and only a waiver — lets it through.
+ *
+ * HOW-72: the gate is OPT-IN — no built-in graph sets `requiresAcceptance` any more (they disclose
+ * unmet rows in the PR, graphs/implement-ticket.test.ts). This graph opts in, so every case here
+ * pins that a hand-built gated graph still parks exactly as before.
  */
 import { describe, expect, test } from "bun:test";
 import { mkdtempSync, writeFileSync } from "node:fs";
@@ -11,7 +15,7 @@ import { Engine, type AttemptResult } from "./run";
 import { defineGraph } from "../core/graph";
 import { readLog } from "../log/write";
 import { waiveCriterion, waiveUnprovable } from "./acceptance-decision";
-import { REPLY_RULES } from "./control";
+import { REPLY_RULES, replyVerdict } from "./control";
 
 type C = { goal: string; acceptance: unknown; summary: string; "verify.result": unknown };
 const ok = (writes: Record<string, unknown> = {}): AttemptResult => ({ status: "succeeded", writes });
@@ -45,7 +49,7 @@ function setup(reviewPasses: Record<string, boolean>, checks: Record<string, str
       },
     },
   });
-  return { dir, engine, ran, path: join(dir, "run.jsonl") };
+  return { dir, engine, ran, graph, path: join(dir, "run.jsonl") };
 }
 
 describe("the acceptance gate", () => {
@@ -56,6 +60,10 @@ describe("the acceptance gate", () => {
     expect((res as { reason: string }).reason).toContain('1 not met yet — "ac-2" (criterion ac-2)');
     expect(ran).toEqual(["criteria", "review"]);
     expect(readLog(path).some((e) => e.type === "node-started" && e.node === "publish")).toBe(false);
+    // HOW-72: an opted-in gate still raises attention, as before — it is the one place it should
+    expect(readLog(path).filter((e) => e.type === "attention-raised")).toEqual([
+      expect.objectContaining({ node: "publish", code: "acceptance-unmet" }),
+    ]);
   });
 
   test("a plain resume does NOT let it through — the park is re-checked, not trusted", async () => {
@@ -72,6 +80,15 @@ describe("the acceptance gate", () => {
     expect((rule as { message: string }).message).toContain("`waive r1 <criterion-id> <reason>`");
     expect((rule as { message: string }).message).toContain("`waive r1 --unprovable <reason>`");
     expect((rule as { message: string }).message).toContain("`jump r1 implementation.local_review`");
+  });
+
+  test("HOW-72: on a graph that still gates, the reply verdict offers the waiver, not a plain retry", async () => {
+    const { engine, graph, path } = setup({ "ac-1": false });
+    await engine().start({ goal: "g" });
+    const verdict = replyVerdict(readLog(path), "r1", { gated: graph });
+    expect(verdict).toMatchObject({ accept: false, code: "acceptance-unmet", retry: false });
+    expect((verdict as { message: string }).message).toContain("`waive r1 <criterion-id> <reason>`");
+    expect((verdict as { message: string }).message).not.toContain("No waiver is needed");
   });
 
   test("after a waiver decision event, delivery runs", async () => {

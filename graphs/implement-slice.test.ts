@@ -124,8 +124,10 @@ describe("deliveryGraph extraction keeps implement-ticket identical", () => {
     //           review_repairs
     //   HOW-78  `implementation.report` (read-only) runs between a passing local_review and
     //           delivery.publish and writes `change_map` (sticky), which the run report draws
+    //   HOW-72  delivery.publish no longer `requiresAcceptance`: the criteria stop gating
+    //           publish and the rows still failing are disclosed in the PR (suffix v11)
     const s = JSON.stringify(sortDeep(shapeOf(implementTicket)));
-    expect(createHash("sha256").update(s).digest("hex")).toBe("e8117ec7fbe841303bf73a3b6cdbe13b419771694b604cd5fdf1fe9115bbaeff");
+    expect(createHash("sha256").update(s).digest("hex")).toBe("9c68629049eb25fbe149f42129e64f535e047067431d8377afc86a0d8ea4c96f");
   });
 ;
 
@@ -393,7 +395,7 @@ describe("validateProposal (GhostSet against the base the proposal was drawn on)
     expect(retry).toContain("com.example.api.<top>.nope(Request)");
     const retryRender = run.events().filter((e) => e.type === "prompt-rendered" && e.node === "slice.propose")[1]!;
     if (retryRender.type !== "prompt-rendered") throw new Error("no render");
-    expect(retryRender.suffix_version).toBe(10);
+    expect(retryRender.suffix_version).toBe(11);
     expect(reconstructRender(run.runDir, retryRender.rendered_hash)).toMatchObject({ verified: true, text: retry });
 
     // ...once: the redraw after operator feedback does not repeat it

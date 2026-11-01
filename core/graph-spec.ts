@@ -769,7 +769,7 @@ function parallelProblem(spec: GraphSpec, raw: string): SpecProblem | null {
 
 /**
  * HOW-74: the reads the ENGINE consumes for an agent step, as opposed to the ones its prompt
- * text names. `requiresAcceptance` is the one today: the publish gate and its suffix read
+ * text names. `requiresAcceptance` is the one today: the (opt-in, HOW-72) gate and its suffix read
  * `acceptance` from context, and core/graph.ts validate() refuses a gated node that does not
  * declare it — so a body that never says `{{context.acceptance}}` still needs the read. This is
  * the ONE place such a read is declared; `reviewsWorkOf` and the stacked briefing read the log,

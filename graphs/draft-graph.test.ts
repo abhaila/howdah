@@ -93,10 +93,25 @@ describe("a draft that copies a built-in unchanged is one that would save (HOW-7
     const noVerify = withReads(draft, "implementation.implement", (r) => r.filter((k) => k !== "worktree.verify_command"));
     expect(checkGraphDraft(noVerify, catalog, materialise)).toEqual([]);
 
-    // ...and dropping acceptance is refused ONCE, telling the drafter to add it back — not by
-    // validate()'s rule as well, and not with an instruction a second rule would refuse.
+    // HOW-72: implement-ticket's publish is no longer gated, so its `acceptance` read is not
+    // structural — it is the declaration that the step DISCLOSES the unmet rows
+    // (disclosesAcceptance). Dropping it is a graph that saves; the copy simply stops disclosing.
     const noAcceptance = withReads(draft, "delivery.publish", (r) => r.filter((k) => k !== ACCEPTANCE_KEY));
-    const problems = checkGraphDraft(noAcceptance, catalog, materialise);
+    expect(checkGraphDraft(noAcceptance, catalog, materialise)).toEqual([]);
+
+    // ...but on a step that OPTS IN to the gate the read is structural again, and dropping it is
+    // refused ONCE, telling the drafter to add it back — not by validate()'s rule as well, and
+    // not with an instruction a second rule would refuse. (Moved deliberately with HOW-72: this
+    // was pinned on the built-in's own gate, which HOW-72 removed.)
+    const gatedNoAcceptance = {
+      ...noAcceptance,
+      spec: {
+        ...noAcceptance.spec,
+        nodes: noAcceptance.spec.nodes.map((n) =>
+          n.kind === "agent" && n.id === "delivery.publish" ? { ...n, requiresAcceptance: true as const } : n),
+      },
+    };
+    const problems = checkGraphDraft(gatedNoAcceptance, catalog, materialise);
     expect(problems).toHaveLength(1);
     expect(problems[0]).toContain("its instructions use `acceptance`, which the step does not list");
     expect(problems[0]).not.toContain("never use");

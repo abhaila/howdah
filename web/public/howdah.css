@@ -1146,7 +1146,7 @@ main { flex: 1; min-width: 0; min-height: 0; overflow: hidden; display: flex; fl
 /* HOW-51: the Acceptance card — red until evidence, green with it, waived on the record,
    superseded struck through but kept */
 .ac-card { margin: 0 0 12px; padding: 14px 16px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-raised); }
-.ac-card[data-met="false"] { border-color: var(--status-failed-recoverable); }
+.ac-card[data-held="true"] { border-color: var(--status-failed-recoverable); }
 /* HOW-58: "judged by" takes its own line, so a long node id wraps inside the 344px rail
    rather than being pushed past the card's edge by an auto margin */
 .ac-head { display: flex; align-items: center; gap: 4px 8px; flex-wrap: wrap; font-size: var(--type-sm); }
@@ -1164,6 +1164,12 @@ main { flex: 1; min-width: 0; min-height: 0; overflow: hidden; display: flex; fl
 /* HOW-59: the one decision for every row this run cannot prove */
 .ac-unprovable { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; padding: 10px 12px; border-radius: var(--radius-sm); background: var(--bg-inset); font-size: var(--type-sm); color: var(--fg-muted); }
 .ac-unprovable > button { align-self: flex-start; }
+/* HOW-72: what the PR discloses — informational, so neutral: no warn, attention or failure colour */
+.ac-not-proven { display: flex; flex-direction: column; gap: 6px; margin-top: 12px; padding: 10px 12px; border-radius: var(--radius-sm); background: var(--bg-inset); font-size: var(--type-sm); }
+.ac-not-proven-title { font-weight: 600; color: var(--fg); }
+.ac-not-proven-list { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; }
+.ac-not-proven-why { color: var(--fg-muted); }
+.ac-not-proven-note { font-size: var(--type-xs); color: var(--fg-faint); }
 .ac-row[data-state="waived"] svg { color: var(--attention); }
 .ac-row[data-state="superseded"] { color: var(--fg-faint); }
 .ac-row[data-state="superseded"] .ac-text { text-decoration: line-through; }

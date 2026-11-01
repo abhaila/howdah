@@ -70,7 +70,9 @@ describe("implement-stacked is implement-ticket, stacked — never a silent fork
 
   test("publish is stacked.publish, and probe_pr ignores dependency PRs and reports approval", () => {
     const d = implementStacked.def;
-    expect(d.nodes["delivery.publish"]).toMatchObject({ prompt: "stacked.publish", requiresAcceptance: true, maxVisits: 5 });
+    expect(d.nodes["delivery.publish"]).toMatchObject({ prompt: "stacked.publish", maxVisits: 5 });
+    // HOW-72: publish is not gated on the criteria — it discloses them instead
+    expect(d.nodes["delivery.publish"]).not.toHaveProperty("requiresAcceptance");
     expect((d.nodes["delivery.publish"] as { reads: string[] }).reads).toEqual(expect.arrayContaining(["deps.base", "deps.prs"]));
     expect((d.nodes["delivery.probe_pr"] as { reads: string[] }).reads).toContain("deps.prs");
     expect(Object.keys((d.nodes["delivery.probe_pr"] as { writes: object }).writes)).toEqual(["pr.state", "pr.review_activity", "pr.approved"]);
@@ -165,7 +167,7 @@ describe("G8: the STACKED briefing (suffix v8)", () => {
     const { dir, render, sent } = await run("howdah/p--fe-1", TIP);
     expect(sent).toContain("This change is stacked on howdah/p--fe-1@0123456789ab");
     expect(sent).toContain("Your change is `0123456789ab..HEAD`");
-    expect(render).toMatchObject({ suffix_version: 10, stacked_on: { branch: "howdah/p--fe-1", sha: TIP } });
+    expect(render).toMatchObject({ suffix_version: 11, stacked_on: { branch: "howdah/p--fe-1", sha: TIP } });
     const r = reconstructRender(dir, render.rendered_hash)!;
     expect(r.verified).toBe(true);
     expect(r.text).toBe(sent);
