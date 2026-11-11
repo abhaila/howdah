@@ -297,7 +297,7 @@ export async function jumpCommand(runId: string, node: string, message?: string)
   const path = join(runDir, "run.jsonl");
   // the precheck (live runner, finished, unknown node, missing reads) is shared with the
   // viewer's jump route — engine/control.ts jumpRefusal
-  const check = jumpRefusal(runDir, node, GRAPHS, message);
+  const check = jumpRefusal(runDir, node, (await loadRegistry(base, ROOT)).graphs, message);
   if (!check.ok) throw new Error(check.message);
   const { replayed } = check;
 
