@@ -1,0 +1,19 @@
+cli/main.ts
+  s_bbbeed836018ba::t_316c649ce3fdea 300
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2d158568f279f8364d6844d3b1b3ea1be6d0b59a",
+  "prompts": {},
+  "sessions": {
+    "s_bbbeed836018ba": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6af0df0e-dbf2-4bb9-b06a-e8be567249c5",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "areeb.bhaila <areeb.bhaila@gmail.com>"
+    }
+  }
+}
