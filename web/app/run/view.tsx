@@ -599,7 +599,8 @@ export function RunView({ id, graceMs = OPEN_GRACE_MS }: { id: string; graceMs?:
       .catch(() => { triedSteps.current.delete(stepKey); });
     return () => { stop = true; };
   }, [stepKey, id]);
-  useAttentionSurfaces(detail?.summary.status === "needs-input");
+  const parked = detail?.summary.status === "needs-input";
+  useAttentionSurfaces(parked, detail ? { waiting: parked ? [id] : [], cleared: parked ? [] : [id] } : null);
 
 
   if (!detail && missing)

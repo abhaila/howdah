@@ -46,7 +46,7 @@ export function AttentionInbox() {
     return () => clearInterval(t);
   }, []);
   // the AMBER list only — a ready draft must never raise the favicon or chime (HOW-67)
-  useAttentionSurfaces(!!items?.length);
+  useAttentionSurfaces(!!items?.length, items ? { waiting: items.map((i) => i.run), cleared: "others" } : null);
 
   if (!items) return <LoadingBlock label="Loading what needs you" rows={4} />;
   return (

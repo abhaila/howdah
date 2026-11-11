@@ -3,6 +3,7 @@
  * surfaces that consume them are `components/scroll-shell.tsx` and the run screens.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
+import { observeAsks, type Observation } from "./attention-sound";
 
 /** a ticking clock, so live durations count up without the read model refetching */
 export function useNow(tickMs = 1000): number {
@@ -40,9 +41,15 @@ export function useBottomPinnedScroll(followKey: unknown) {
   return { ref, atTop, atBottom, measure, scrollToTop, scrollToBottom };
 }
 
-/** needs-attention surfaces: trunk-raise favicon + one two-note chime on transition */
-export function useAttentionSurfaces(needsInput: boolean) {
-  const prev = useRef(needsInput);
+/**
+ * needs-attention surfaces: the trunk-raise favicon, and the sound.
+ *
+ * The favicon follows `needsInput` directly. The sound does not: it is decided by
+ * lib/attention-sound.ts from WHICH runs are waiting, so it plays for news and never for
+ * navigation (HOW-68). Pass `null` while the screen has no data yet — "nothing loaded" is not
+ * "nothing waiting", and treating it as such is what forgot every standing ask on each mount.
+ */
+export function useAttentionSurfaces(needsInput: boolean, observation: Observation | null = null) {
   useEffect(() => {
     const fav = document.getElementById("favicon") as HTMLLinkElement | null;
     let timer: ReturnType<typeof setInterval> | undefined;
@@ -50,11 +57,13 @@ export function useAttentionSurfaces(needsInput: boolean) {
       let frame = 0;
       const frames = ["/favicon-raise-1.svg", "/favicon-raise-2.svg"];
       timer = setInterval(() => { if (fav) fav.href = frames[(frame = (frame + 1) % 2)]!; }, 900);
-      if (!prev.current) new Audio("/chime.wav").play().catch(() => {});
     } else if (fav) fav.href = "/favicon.svg";
-    prev.current = needsInput;
     return () => { if (timer) clearInterval(timer); if (fav) fav.href = "/favicon.svg"; };
   }, [needsInput]);
+  const seen = observation === null ? null : JSON.stringify(observation);
+  useEffect(() => {
+    if (seen !== null) void observeAsks(JSON.parse(seen) as Observation);
+  }, [seen]);
 }
 
 /**

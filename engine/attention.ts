@@ -23,6 +23,7 @@
  */
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { loadConfig } from "../config/config";
 
 export interface AttentionRecord {
   id: string; // `${run}:${node}:${visit}`
@@ -55,19 +56,26 @@ export type Notifier = (n: Notification) => Promise<void>;
  * the reader can get there by hand. Either way the escaping guard stays — a reason with a
  * quote in it must not break the AppleScript (or the argv).
  */
-export function notifierArgv(n: Notification, deliverer: string | null): string[] {
+export function notifierArgv(n: Notification, deliverer: string | null, sound = false): string[] {
   const esc = (s: string) => s.replace(/["\\]/g, "");
   if (deliverer)
-    return [deliverer, "-title", esc(n.title), "-message", esc(n.body), "-open", n.link, "-sound", "Glass"];
+    return [deliverer, "-title", esc(n.title), "-message", esc(n.body), "-open", n.link, ...(sound ? ["-sound", "Glass"] : [])];
   return [
     "osascript",
     "-e",
-    `display notification "${esc(`${n.body} — ${n.link}`)}" with title "${esc(n.title)}" sound name "Glass"`,
+    `display notification "${esc(`${n.body} — ${n.link}`)}" with title "${esc(n.title)}"${sound ? ' sound name "Glass"' : ""}`,
   ];
 }
 
+/**
+ * Silent unless the operator asked for sound (HOW-68): the banner is the notification, and
+ * the same `chime` setting that governs the viewer's sound governs this one, so "off" means
+ * off everywhere. An unreadable config is silence, never a reason not to deliver the banner.
+ */
 export const osNotifier: Notifier = async (n) => {
-  Bun.spawnSync(notifierArgv(n, Bun.which("terminal-notifier")));
+  let sound = false;
+  try { sound = loadConfig().chime === true; } catch { /* deliver silently */ }
+  Bun.spawnSync(notifierArgv(n, Bun.which("terminal-notifier"), sound));
 };
 
 export const slackNotifier = (webhookUrl: string): Notifier => async (n) => {

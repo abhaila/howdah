@@ -143,8 +143,11 @@ describe("AttentionCenter", () => {
       "-title", "a quoted run",
       "-message", "why",
       "-open", "http://localhost:4711/run/r#needs-input",
-      "-sound", "Glass",
     ]);
+    // HOW-68: silent unless the operator turned the sound on — and then on both deliverers
+    expect(notifierArgv(n, "/opt/homebrew/bin/terminal-notifier", true).slice(-2)).toEqual(["-sound", "Glass"]);
+    expect(notifierArgv(n, null)[2]).not.toContain("sound name");
+    expect(notifierArgv(n, null, true)[2]).toContain('sound name "Glass"');
     const fallback = notifierArgv(n, null);
     expect(fallback[0]).toBe("osascript");
     expect(fallback[2]).toContain("http://localhost:4711/run/r#needs-input");

@@ -13,6 +13,7 @@
 import { useEffect, useState } from "react";
 import { GitBranch, FolderGit2, Plus, X } from "lucide-react";
 import type { GhRepoDto, Workspaces } from "@/lib/types";
+import { SETTINGS_CHANGED } from "@/lib/attention-sound";
 import { getJSON } from "@/lib/net";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -181,6 +182,7 @@ export function Settings() {
     // The key is write-only, so the screen cannot know the new state on its own: re-read it,
     // and drop whatever was typed so the box does not keep holding a credential.
     if (r?.ok) await getJSON<SettingsDto>("/api/settings").then(setS).catch(() => {});
+    if (r?.ok) window.dispatchEvent(new Event(SETTINGS_CHANGED)); // the sound setting applies at once
     setSaved(true);
     toast(r?.ok ? "settings saved" : "could not save settings", r?.ok ? "default" : "error");
     setTimeout(() => setSaved(false), 1500);
@@ -220,7 +222,7 @@ export function Settings() {
               {s.typesafeApiKey === null && " — press Save to confirm."}
             </div>
           )}
-          <Checkbox label="Attention chime" checked={s.chime !== false} onChange={(e) => setS({ ...s, chime: e.target.checked })} />
+          <Checkbox label="Play a sound when a run starts waiting on you" checked={s.chime === true} onChange={(e) => setS({ ...s, chime: e.target.checked })} />
           <Button onClick={save} className="self-start">{saved ? "Saved" : "Save"}</Button>
         </CardContent>
       </Card>

@@ -48,9 +48,11 @@ const HARNESS_ITEM: InboxItem = {
   href: null,
 };
 
-function serve(body: unknown, status = 200, ready: unknown = []) {
+function serve(body: unknown, status = 200, ready: unknown = [], settings: unknown = { chime: true }) {
   globalThis.fetch = (async (input: string | URL | Request, _init?: RequestInit) => {
-    const isReady = String(input instanceof Request ? input.url : input).includes("/api/ready");
+    const url = String(input instanceof Request ? input.url : input);
+    if (url.includes("/api/settings")) return new Response(JSON.stringify(settings), { status: 200, headers: { "content-type": "application/json" } });
+    const isReady = url.includes("/api/ready");
     return new Response(JSON.stringify(isReady ? ready : body), { status: isReady ? 200 : status, headers: { "content-type": "application/json" } });
   }) as typeof fetch;
 }
@@ -158,6 +160,10 @@ describe("AttentionInbox", () => {
 
   test("a twice-refused draft is an ordinary amber ask: it chimes, raises the favicon, and is not 'ready'", async () => {
     const surfaces = watchSurfaces();
+    // HOW-68: the sound is for NEWS. This session has already looked and seen nothing waiting,
+    // so the ask below is new; the settings fixture has the sound turned on.
+    window.dispatchEvent(new Event("howdah:settings-changed"));
+    sessionStorage.setItem("howdah-asks-seen", "[]");
     serve([REFUSED_DRAFT], 200, []);
     const el = await render();
     const row = el.querySelector("a.run-row") as HTMLAnchorElement;

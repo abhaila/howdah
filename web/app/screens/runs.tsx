@@ -112,7 +112,8 @@ export function RunsList() {
     if (es) es.onmessage = () => void load();
     return () => { clearInterval(t); es?.close(); };
   }, [load]);
-  useAttentionSurfaces(!!runs?.some((r) => r.status === "needs-input"));
+  const waitingIds = runs?.filter((r) => r.status === "needs-input").map((r) => r.id);
+  useAttentionSurfaces(!!waitingIds?.length, waitingIds ? { waiting: waitingIds, cleared: "others" } : null);
 
   if (!runs) return <LoadingBlock label="Loading runs" rows={6} />;
   if (runs.length === 0)
