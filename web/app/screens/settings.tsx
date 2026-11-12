@@ -28,7 +28,7 @@
  * Everything else on the page is saved to config.json by the ONE primary action, Save, which
  * lives in the header so it is reachable however far the page has scrolled (⌘S / Ctrl S).
  */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Bell, BellOff, Check, Copy, FolderGit2, GitBranch, Plus, RotateCw, Send, X } from "lucide-react";
 import type { GhRepoDto, Workspaces } from "@/lib/types";
 import { SETTINGS_CHANGED } from "@/lib/attention-sound";
@@ -254,6 +254,9 @@ export function Settings() {
   // declared with the other state, above the loading return: hooks may not follow an early return
   const [confirmed, setConfirmed] = useState<boolean>(() => notifyConfirmed());
   const [asking, setAsking] = useState<"idle" | "sent" | "not-seen">("idle");
+  // the two answer buttons leave the page with the answer, so focus goes back to the control
+  // the question came from — "Send a test notification" — not to <body>
+  const testButton = useRef<HTMLButtonElement | null>(null);
   const [singleKeys, setSingleKeys] = useSingleKeys();
   const { toast } = useToast();
   const loadWs = () => getJSON<Workspaces>("/api/workspaces").then(setWs).catch(() => {});
@@ -297,6 +300,7 @@ export function Settings() {
     setNotifyConfirmed(seen);
     setConfirmed(seen);
     setAsking(seen ? "idle" : "not-seen");
+    testButton.current?.focus();
     window.dispatchEvent(new Event(PRESENCE_CHANGED)); // the engine learns at once who delivers
     if (seen) toast("Desktop notifications are confirmed for this browser");
   };
@@ -325,7 +329,7 @@ export function Settings() {
           </div>
           <div className="flex flex-wrap gap-2">
             {permission === "default" && <Button variant="outline" size="sm" onClick={enableNotifications}><Bell />Enable desktop notifications</Button>}
-            <Button variant="outline" size="sm" disabled={permission !== "granted"} onClick={testNotification}><Send />Send a test notification</Button>
+            <Button ref={testButton} variant="outline" size="sm" disabled={permission !== "granted"} onClick={testNotification}><Send />Send a test notification</Button>
           </div>
           {asking === "sent" && (
             <div data-slot="notify-confirm" role="group" aria-label="Did the test notification appear?" className="flex flex-wrap items-center gap-2 text-sm">

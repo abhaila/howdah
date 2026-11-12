@@ -224,6 +224,17 @@ describe("the canvas pans and zooms, and says how", () => {
     expect(openingView({ width: 1200, height: 600 }, pane, undefined).zoom).toBe(1);
   });
 
+  test("a finished run's last step is where the picture opens, and is NOT drawn as the step the run is on", () => {
+    // it was passed as `current`, so a run that had ended showed a ringed card with the running half-disc
+    const done = render({ openOn: "review", info: { review: { state: "done" } }, visits: { review: 1 } });
+    expect(done.querySelector(".dag-card.current")).toBeNull();
+    expect([...done.querySelectorAll(".dag-card")].some((c) => /current/.test(c.getAttribute("aria-label") ?? ""))).toBe(false);
+    act(() => root!.unmount());
+    host!.remove();
+    const live = render({ current: "review" });
+    expect(live.querySelector(".dag-card.current")).not.toBeNull();
+  });
+
   test("a step walked to is panned into view by the least that shows it, at the zoom in use", () => {
     const pane = { width: 800, height: 600 };
     const box = { x: 100, y: 100, width: 248, height: 52 };

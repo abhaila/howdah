@@ -384,7 +384,11 @@ export function RunGraph({ runId, graph, timeline, status, onJumped }: { runId: 
   }, [timeline]);
   if (!shape) return <LoadingBlock label={`Loading the ${graph} graph`} rows={3} className="p-6" />;
   const running = timeline.findLast((t) => t.status === "running");
-  const current = running?.node ?? timeline.at(-1)?.node;
+  // a FINISHED run is on no step: its last one is where the picture opens, and that is all — it
+  // was drawn ringed with the running half-disc on a run that had ended
+  const finished = status === "done" || status === "failed-terminal";
+  const last = running?.node ?? timeline.at(-1)?.node;
+  const current = finished ? undefined : last;
   const jumpable = status !== "done" && status !== "failed-terminal" && status !== "running";
 
   const jump = async () => {
@@ -438,7 +442,8 @@ export function RunGraph({ runId, graph, timeline, status, onJumped }: { runId: 
         current={current}
         waiting={status === "needs-input"}
         // a finished run is read as a whole: open on all of it when that is still readable
-        whole={status === "done" || status === "failed-terminal"}
+        whole={finished}
+        openOn={last}
         visits={visits}
         info={info}
         taken={taken}
@@ -803,7 +808,13 @@ function RunFrame({ id, detail, tab, setTab, picked, setPicked, liveGit, now, re
   // preference about this machine. The shell is not this component's, so it is told through one
   // attribute on <html> that howdah.css reads; it is taken back when the run is left.
   const [focus, setFocusState] = useState(() => { try { return sessionStorage.getItem(FOCUS_KEY) === "1"; } catch { return false; } });
+  const focusButton = useRef<HTMLButtonElement | null>(null);
+  const leaveButton = useRef<HTMLButtonElement | null>(null);
+  const handoff = useRef(false);
   const setFocus = useCallback((on: boolean) => {
+    // was the toggle pressed ON its control? Then the control is about to unmount under the focus
+    const a = document.activeElement;
+    handoff.current = a !== null && (a === focusButton.current || a === leaveButton.current);
     setFocusState(on);
     try { sessionStorage.setItem(FOCUS_KEY, on ? "1" : "0"); } catch { /* unremembered is fine */ }
   }, []);
@@ -814,6 +825,17 @@ function RunFrame({ id, detail, tab, setTab, picked, setPicked, liveGit, now, re
   }, [focus]);
   const leaveFocus = useCallback(() => setFocus(false), [setFocus]);
   useEscapeLayer(leaveFocus, { active: focus, kind: "drawer" });
+  // The control that toggles focus is unmounted BY the toggle (the header goes, or the strip's
+  // bar does), so a press on it left keyboard focus on <body>. Its counterpart takes it — and
+  // only then (`handoff`, set in setFocus): F pressed with focus anywhere else, or nowhere,
+  // moves nothing — a button that took focus on every F also raised its tooltip over the tabs.
+  const focusWas = useRef(focus);
+  useEffect(() => {
+    if (focusWas.current === focus) return;
+    focusWas.current = focus;
+    if (handoff.current) (focus ? leaveButton : focusButton).current?.focus();
+    handoff.current = false;
+  }, [focus]);
   // ⌘I while focused means "I want the details": leave focus and show them
   const toggleDetails = useCallback(() => {
     if (focus) { setFocus(false); drawer.setOpen(true); } else drawer.toggle();
@@ -866,9 +888,12 @@ function RunFrame({ id, detail, tab, setTab, picked, setPicked, liveGit, now, re
 
   /** the Build pane is where the ask and both composers live; a tab switch needs a frame to land */
   const inBuild = useCallback((then: () => void) => {
+    // already there: act NOW. Deferring it even one task let the next key race the focus —
+    // "A, 2" typed fast sent the 2 to the tab strip instead of the question (seen in a browser)
+    if (tab === "chat") { then(); return; }
     setTab("chat");
     setTimeout(then, 0);
-  }, [setTab]);
+  }, [setTab, tab]);
   // A QUESTION is answered with its number keys, and those are handled by the questionnaire's
   // own form — so `A` has to land INSIDE it. Focus on the card around the form left `1`…`7`
   // to the tab shortcuts: "A, then 2" switched to another tab instead of picking option 2.
@@ -1005,7 +1030,7 @@ function RunFrame({ id, detail, tab, setTab, picked, setPicked, liveGit, now, re
               </Button>
             )}
             <Tooltip content={<span className="inline-flex items-center gap-2">Focus the pane: hide the sidebar and details <Kbd keys="f" /></span>} side="bottom" align="end">
-              <Button variant="ghost" size="sm" aria-pressed={false} aria-label="Focus the pane" onClick={() => setFocus(true)}>
+              <Button ref={focusButton} variant="ghost" size="sm" aria-pressed={false} aria-label="Focus the pane" onClick={() => setFocus(true)}>
                 <Maximize2 /><span className="run-wide">Focus</span><Kbd keys="f" decorative className="run-wide" />
               </Button>
             </Tooltip>
@@ -1031,7 +1056,7 @@ function RunFrame({ id, detail, tab, setTab, picked, setPicked, liveGit, now, re
               <Truncate className="text-sm text-muted-foreground">{runLabel({ ...summary, id })}</Truncate>
               {statusLine}
               {prLink}
-              <Button variant="outline" size="sm" aria-pressed aria-label="Leave focus" onClick={leaveFocus}>
+              <Button ref={leaveButton} variant="outline" size="sm" aria-pressed aria-label="Leave focus" onClick={leaveFocus}>
                 <Minimize2 />Leave focus<Kbd keys="f" decorative />
               </Button>
             </div>

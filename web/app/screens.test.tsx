@@ -244,11 +244,14 @@ describe("Settings", () => {
     const help = el.querySelector("[data-slot='notify-help']")!;
     expect(help.textContent).toContain("System Settings → Notifications");
     expect(help.textContent).toContain("Focus");
+    // the answer buttons are gone with the answer: focus returns to the control it came from
+    expect(document.activeElement).toBe(button(el, "Send a test notification")!);
     await act(async () => { button(el, "Send a test notification")!.click(); });
     await act(async () => { button(el, "Yes, I saw it")!.click(); });
     expect(localStorage.getItem("howdah.notify.confirmed")).toBe("yes");
     expect(el.querySelector("[data-slot='notify-help']")).toBeNull();
     expect(el.textContent).toContain("Confirmed in this browser");
+    expect(document.activeElement).toBe(button(el, "Send a test notification")!);
     localStorage.removeItem("howdah.notify.confirmed");
   });
 

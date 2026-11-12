@@ -336,6 +336,32 @@ describe("focus: the open pane has the window", () => {
     expect(el.querySelector('[data-slot="run-focus-bar"]')).toBeNull();
   });
 
+  // The final pass, in a browser: the control that toggles focus is unmounted by the toggle, so
+  // pressing it left keyboard focus on <body>.
+  test("pressing the control hands keyboard focus to its counterpart, both ways", async () => {
+    const el = await open(polling(2));
+    const enter = el.querySelector<HTMLElement>('button[aria-label="Focus the pane"]')!;
+    enter.focus();
+    act(() => enter.click());
+    await settle(10);
+    expect((document.activeElement as HTMLElement).getAttribute("aria-label")).toBe("Leave focus");
+    act(() => (document.activeElement as HTMLElement).click());
+    await settle(10);
+    expect((document.activeElement as HTMLElement).getAttribute("aria-label")).toBe("Focus the pane");
+    // F with focus somewhere in the pane leaves it there
+    const tabEl = el.querySelector<HTMLElement>('.run-tabs [role="tab"]')!;
+    tabEl.focus();
+    press("f", {}, tabEl);
+    await settle(10);
+    expect(document.activeElement).toBe(tabEl);
+    // ...and F with focus on nothing moves it nowhere: a button that took focus on every F
+    // raised its tooltip over the tab strip (seen in a browser)
+    tabEl.blur();
+    press("f");
+    await settle(10);
+    expect(document.activeElement === document.body || document.activeElement === null).toBe(true);
+  });
+
   test("the control does the same, and every tab can be read focused", async () => {
     const el = await open(polling(2));
     act(() => el.querySelector<HTMLElement>('button[aria-label="Focus the pane"]')!.click());

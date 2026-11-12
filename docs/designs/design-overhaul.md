@@ -1,6 +1,7 @@
 # Design overhaul (HOW-68): the plan and the loop
 
-Status: **agreed 2026-11-12; three iterations of the loop have run (see "Loop log").** `DESIGN.md` is now the authority and wins
+Status: **agreed 2026-11-12; three iterations of the loop, a sign-off pass, a fix pass, a
+confirming review, the operator-feedback work and a final pass have run (see "Loop log").** `DESIGN.md` is now the authority and wins
 over this file; this file is the plan, the checklist and the log of the loop.
 
 - Vision and mockups: https://claude.ai/artifact/NktPftzTLnWvLQ7i5nxZ1m
@@ -83,7 +84,8 @@ Each has a check that fails the build or the loop, so it cannot regress quietly.
 |---|---|
 | Anywhere | ⌘K palette · `?` shortcuts · `G` then `R` `N` `G` `P` `O` `S` go to a screen · `C` new run · `[` sidebar |
 | Lists | `J` `K` or arrows · Enter open · `/` filter |
-| A run | `1`–`7` tabs · ⌘I details · `R` reply · `A` jump to the ask · `/` ask about the run, or search on Logs · `E` expand tool calls · `O` open in IDE · `.` more |
+| A run | `1`–`7` tabs · ⌘I details · `F` focus the pane · `R` reply · `A` jump to the ask · `/` ask about the run, or search on Logs · `E` expand tool calls · `O` open in IDE · `.` more |
+| A graph | on a step: arrows, `Home`, `End` · `Enter` selects · on the canvas: arrows pan · `+` `−` zoom · `0` all of it · `Home` the start |
 | Forms | ⌘S save · ⌘↵ launch |
 | Layers | Esc closes the topmost |
 
@@ -163,7 +165,7 @@ Status: ☐ not started · ◐ in progress · ☑ passes (the gate, and looked a
 | ☑ | Existing primitives: targets ≥24px, focus ring everywhere, states complete. `questionnaire` lost its `dark:` utilities (they followed the OS, not the toggle); `message-scroller`'s pin no longer animates; Button's disabled state is a readable token and loading keeps its colours |
 | ☑ | Shell: rail, palette, shortcuts (`lib/shortcuts.ts`), `?` sheet, 404, skip link |
 | ☑ | Scroll contract — 0 clipped, unreachable or document-scrolling screens in the final capture, 1024×640 included |
-| ◐ | Native notifications — ONE notification per ask: an open viewer whose browser permission is granted beats `POST /api/viewer/presence` every 20s, the server writes `$HOWDAH_HOME/viewer.json`, and the engine's OS notifier stands down while that is under 45s old; the shell (not only Runs / Needs you / a run) observes asks, so a viewer left on any screen announces them. **Verified:** the ring/skip decision, the presence file, the watchdog ringing through the OS when the viewer never beat again, the deep link's port, the route and its guards, and the beat itself — by unit and route tests (`engine/attention.test.ts`, `web/web.test.ts`, `web/app/focus.test.tsx`, `web/app/notify.test.ts`); that a notification's deep link (`/run/:id#needs-input`) lands focus on the control — in Chromium, for all five card kinds. **Not verified:** a real browser notification on screen (headless Chromium blocks the permission; the posting half runs against a fake `Notification`); the OS banner itself, through either `terminal-notifier` or `osascript` — this sandbox is Linux and has neither, so only the argv and the decision to spawn are tested; the new sound was measured from its bytes and never heard |
+| ◐ | Native notifications — ONE notification per ask, once the operator has confirmed one: an open viewer beats `POST /api/viewer/presence` every 20s with `notify: true` only when the browser's permission is granted AND a test notification was answered "Yes, I saw it" in Settings (`lib/notify.ts` `notifyDelivers`; a browser can report `granted` while the OS shows nothing). The server writes `$HOWDAH_HOME/viewer.json`, and the engine's OS notifier stands down while a `notify: true` beat is under 45s old — until the confirmation both paths ring; the shell (not only Runs / Needs you / a run) observes asks, so a viewer left on any screen announces them. **Verified:** the ring/skip decision, the presence file, the watchdog ringing through the OS when the viewer never beat again, the deep link's port, the route and its guards, and the beat itself — by unit and route tests (`engine/attention.test.ts`, `web/web.test.ts`, `web/app/focus.test.tsx`, `web/app/notify.test.ts`); that a notification's deep link (`/run/:id#needs-input`) lands focus on the control — in Chromium, for all five card kinds. **Not verified:** a real browser notification on screen (headless Chromium blocks the permission; the posting half runs against a fake `Notification`); the OS banner itself, through either `terminal-notifier` or `osascript` — this sandbox is Linux and has neither, so only the argv and the decision to spawn are tested; the new sound was measured from its bytes and never heard |
 | ☑ | Component gallery route (`/dev/components`; harness step `components-gallery`) |
 
 ### Surfaces
@@ -176,18 +178,18 @@ run view also at 1024×640).
 | ☑ | Run: header, tabs, actions | one row at every width, 24px back control, tab strip with key hints (3.1.3, 3.1.12, 3.5); a 100-character run id and name at 1024 |
 | ☑ | Run: Build (transcript, ask cards, composer) | the ask is said once — no banner, and no `[failed: …]` line above the card that says it; the transcript is the body; answerable at 1024×640 with the drawer open or shut (3.1.2, 3.1.5, 3.1.6); steers (delivered and pending) and the steer composer on a live turn; a stacked run waiting on its dependency |
 | ☑ | Run: ask cards | prose, question, ambiguous effect, no-reply (Retry, and routing parks with the way to the Graph tab), approval in the conversation (3.8), permission (the command, Allow / Deny), MCP elicitation, soft stop, gated acceptance with Waive; turn-timeout, no-progress, repair-stalled, stale-base, context-exhausted, stuck, harness-unauthenticated |
-| ☑ | Run: Details drawer (inspector) | sans labels, values wrap and paths break at `/`, timeline rows open their step (3.2, 3.5) |
-| ☑ | Run: Plan | one scroller around a 720px column (3.1.13) |
-| ☑ | Run: Report | follows the theme; a frame around the self-contained page (3.4). The page inside the frame is `core/run-report.ts`'s and is not measured by the in-page audit (it is an iframe) |
-| ☑ | Run: Steps + step detail | grid rows, fixed numeric columns, the detail replaces the list under 1100px and a step picked elsewhere lands on it (3.1.4, 3.1.7); a `parallel` group; two attempts of one visit as two rows; the Drift pane; an UNVERIFIED prompt |
+| ☑ | Run: Details drawer (inspector) | sans labels, values wrap and paths break at `/`, timeline rows open their step (3.2, 3.5). Since the feedback work: the pull request leads it, a poll is one row, its edge is a separator you drag or arrow (280px to half the room, remembered); a step parked on a question reads "waiting on you", not "running" |
+| ☑ | Run: Plan | one scroller around an 880px column (it was 720; a plan is scanned, not read as prose), with the acceptance contract and the answer box beside it once the pane is 1160px wide (3.1.13) |
+| ☑ | Run: Report | follows the theme; a frame around the self-contained page (3.4). The page inside the frame is `core/run-report.ts`'s and is not measured by the in-page audit (it is an iframe). Its links open a new tab; `Esc`, `F`, `?` and `1`–`7` typed inside it reach the app, and the pane says what does not |
+| ☑ | Run: Steps + step detail | grid rows, fixed numeric columns, the detail replaces the list under 1100px and a step picked elsewhere lands on it (3.1.4, 3.1.7); a `parallel` group; two attempts of one visit as two rows; the Drift pane; an UNVERIFIED prompt; a poll folded to one row that J/K walk over |
 | ☑ | Run: Context | a real list at 1024; what was given at launch reads "you, at launch" |
-| ☑ | Run: Logs | summary column never 0px (3.1.1); the fetch-error state |
-| ☑ | Run: Graph | 12px edge labels; the fork/join wires of a parallel step |
-| ☑ | Runs list | rows, one sentence per row from `parkSummary`, every status including queued and failed-recoverable; the empty state |
-| ☑ | Needs you | name, sentence, step, wait — one row each (3.1.8); the wait is a number, not "waiting …" 21 times; the empty state |
+| ☑ | Run: Logs | summary column never 0px (3.1.1); the fetch-error state; the list is windowed (fixed 28px rows) |
+| ☑ | Run: Graph | the builder's canvas and card, read-only (React Flow), laid out by dagre with every sideways run in its own lane; pan, zoom, minimap, a tooltip per card; the fork/join wires of a parallel step; a finished run opens on the whole graph when that fits at 70%+ |
+| ☑ | Runs list | rows, one sentence per row from `parkSummary`, every status including queued and failed-recoverable; the empty state; a real list per group and ONE tab stop |
+| ☑ | Needs you | name, sentence, step, wait — one row each (3.1.8); the wait is a number, not "waiting …" 21 times; the empty state; a real list and ONE tab stop |
 | ☑ | New run | with and without workspaces |
 | ☑ | Graphs list and source editor | built-in and local graphs, a broken local graph, the tuning table |
-| ☑ | Graph builder | canvas at 100% by default, 12–13px cards, ringed nodes (3.1.10, 3.1.11, 3.6); wires side to side on a left-to-right graph with captions off the cards; a parallel step is drawn and opened (it is not editable yet, by design) |
+| ☑ | Graph builder | canvas at 100% by default, 12–13px cards, ringed nodes (3.1.10, 3.1.11, 3.6); wires side to side on a left-to-right graph with captions off the cards; a wire goes ROUND a card that is not its own (a lane beside it), captions are placed together so none is on a card or on another, and a palette-added step never lands under a Finish step; a parallel step is drawn and opened (it is not editable yet, by design) |
 | ☑ | Prompts and prompt detail | |
 | ☑ | Proposals | pending, stale and orphaned, each saying what may be done; the empty state is one pane. The "unexplained 502" is `/api/github/repos` on SETTINGS when `gh` is unavailable, and Settings explains it in place |
 | ☑ | Draft review | the card and the page share one list; marks are SVG, headings `SectionLabel` |
@@ -207,6 +209,13 @@ comparison), `repair-stalled` and `stale-base` (by the real gate), a queued and 
 failed-recoverable run, an empty home, a stale and an orphaned proposal, an UNVERIFIED prompt
 reconstruction, failed evidence, and a Logs fetch error (forced by cutting the route for one
 capture step).
+
+Added in the final pass (`seed.ts` section Q): a run that polled its PR fourteen times before it
+merged (the fold), a parked run whose PR is known only from `publication_summary` (the probe never
+reached the forge), a stacked run with two pull requests of its own in different states, a tool
+call the harness failed, one it passed whose output says "0 failed", and one with no verdict at
+all (an old log's shape) whose output starts like a failure; and on the `triage-bug` local graph a
+step title long enough to wrap past three lines.
 
 Still not produced, so not judged: a real desktop notification (headless Chromium blocks the
 permission); a codex `request_user_input` question and any cursor or opencode transcript; the

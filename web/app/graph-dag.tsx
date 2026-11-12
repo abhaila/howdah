@@ -437,6 +437,9 @@ export interface GraphDagProps {
   wheel?: "zoom" | "page";
   /** open on the WHOLE graph when it fits at 70% or more (a finished run) — see `openingView` */
   whole?: boolean;
+  /** the step to open ON when there is no `current` one: a finished run's last step. It is where
+   *  the view starts and nothing more — not ringed, not "running" */
+  openOn?: string;
 }
 
 export const takenKey = edgeKey;
@@ -452,7 +455,7 @@ export function GraphDag(props: GraphDagProps) {
 /** the default: only an agent step has settings to select it for (the Graphs screen's tuner) */
 const AGENTS_ONLY = (node: ShapeNode) => node.kind === "agent";
 
-function DagCanvas({ shape, current, visits, onSelect, selected, canSelect = AGENTS_ONLY, removed, highlight, waiting = false, info, taken, wheel = "zoom", whole = false }: GraphDagProps) {
+function DagCanvas({ shape, current, visits, onSelect, selected, canSelect = AGENTS_ONLY, removed, highlight, waiting = false, info, taken, wheel = "zoom", whole = false, openOn }: GraphDagProps) {
   const { setViewport, getViewport, zoomIn, zoomOut, fitView } = useReactFlow();
   const store = useStoreApi();
   const paneWidth = useStore((s) => s.width);
@@ -549,8 +552,8 @@ function DagCanvas({ shape, current, visits, onSelect, selected, canSelect = AGE
   // `frame(true)` is the opening view (which may be the whole graph); the "100%" control is
   // `frame()` — always 100%, as it says
   const frame = useCallback((opening = false) => {
-    void setViewport(openingView(flow.layout, { width: paneWidth, height: paneHeight }, boxes.get(current ?? shape.entry), { whole: opening && whole }));
-  }, [setViewport, flow.layout, paneWidth, paneHeight, boxes, current, shape.entry, whole]);
+    void setViewport(openingView(flow.layout, { width: paneWidth, height: paneHeight }, boxes.get(current ?? openOn ?? shape.entry), { whole: opening && whole }));
+  }, [setViewport, flow.layout, paneWidth, paneHeight, boxes, current, openOn, shape.entry, whole]);
   useEffect(() => {
     if (!(paneWidth > 0 && paneHeight > 0) || framed.current === shape.name) return;
     framed.current = shape.name;
