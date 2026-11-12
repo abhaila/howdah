@@ -1,0 +1,42 @@
+CLAUDE.md
+  s_205ba363533c4e::t_ee674fa1dd9dff 84-86
+core/stack.ts
+  s_205ba363533c4e::t_c479e93d7e5ad9 22-33
+engine/executors/index.ts
+  s_205ba363533c4e::t_ea192e0919d373 136-137
+engine/executors/launch.ts
+  s_205ba363533c4e::t_4f1c6c1c1c0917 64
+  s_205ba363533c4e::t_aaa5b1dfaad633 173-174
+  s_205ba363533c4e::t_fa7b0a42a074e2 75-81,85-117
+  s_205ba363533c4e::t_4598ca8428f569 227,231
+  s_205ba363533c4e::t_d1524e3c7696d6 192-194
+  s_205ba363533c4e::t_8f277a8a76005e 61,63
+  s_205ba363533c4e::t_67d80a75233bfa 5-7
+  s_205ba363533c4e::t_8811099bd90c29 376,379
+  s_205ba363533c4e::t_22820ebfdd5057 118-119
+graphs/registry.ts
+  s_205ba363533c4e::t_5e68b4a8b847c4 65-88
+  s_205ba363533c4e::t_dcc896fb306a5f 99-100,103-104
+  s_205ba363533c4e::t_a6dbf89ef01886 48-49
+  s_205ba363533c4e::t_3dc74a342b551b 14-15,17
+engine/executors/launch.test.ts
+  s_205ba363533c4e::t_5ec8dd87133518 22,69,75,83,524-596
+graphs/local.test.ts
+  s_205ba363533c4e::t_0fd1e18db30bde 250-287
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f4d8daeb8beac4ba148690695210e3b51bf90c57",
+  "prompts": {},
+  "sessions": {
+    "s_205ba363533c4e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f655be41-237e-4491-84b0-061d37c59257",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "areeb.bhaila <areeb.bhaila@gmail.com>"
+    }
+  }
+}
