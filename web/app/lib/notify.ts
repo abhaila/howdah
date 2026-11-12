@@ -113,7 +113,36 @@ export function notifyRuns(fresh: readonly string[], info: Readonly<Record<strin
 }
 
 /** Settings' "Send a test notification": shown even while the page is focused — that is the point of a test. */
+/**
+ * HOW-68 — "granted" is the BROWSER's answer, not the operator's experience. Chrome on macOS
+ * reports `granted` and accepts `new Notification()` while macOS itself shows nothing (Chrome
+ * switched off under System Settings → Notifications, or a Focus mode), and no event tells
+ * the page so. The first build trusted `granted`, told the server "this viewer delivers", and
+ * the engine then skipped its own banner — so an operator in that state got NO notification
+ * at all. The only reliable witness is the person: Settings sends a test and asks whether it
+ * appeared, and only a yes makes this viewer claim delivery (lib/presence.ts). Until then
+ * both paths ring, which is the safe failure.
+ */
+const CONFIRMED_KEY = "howdah.notify.confirmed";
+
+export function notifyConfirmed(): boolean {
+  try { return localStorage.getItem(CONFIRMED_KEY) === "yes"; } catch { return false; }
+}
+
+export function setNotifyConfirmed(seen: boolean): void {
+  try { if (seen) localStorage.setItem(CONFIRMED_KEY, "yes"); else localStorage.removeItem(CONFIRMED_KEY); } catch { /* private window: stays unconfirmed, so the OS path keeps ringing */ }
+}
+
+/** This viewer may be relied on to deliver: the browser allows it AND the operator has seen one. */
+export function notifyDelivers(): boolean {
+  return notifyPermission() === "granted" && notifyConfirmed();
+}
+
+let testSeq = 0;
+
 export function sendTestNotification(): boolean {
   if (notifyPermission() !== "granted") return false;
-  return post({ id: "howdah-test", title: "Howdah", body: "This is what a run waiting on you will look like." }, () => {});
+  // a fresh tag each time: a repeated tag REPLACES the standing notification silently, so a
+  // second press of the test button would show nothing even where notifications work
+  return post({ id: `howdah-test-${Date.now()}-${++testSeq}`, title: "Howdah", body: "This is what a run waiting on you will look like." }, () => {});
 }

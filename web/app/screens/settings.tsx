@@ -33,7 +33,7 @@ import { Bell, BellOff, Check, Copy, FolderGit2, GitBranch, Plus, RotateCw, Send
 import type { GhRepoDto, Workspaces } from "@/lib/types";
 import { SETTINGS_CHANGED } from "@/lib/attention-sound";
 import { PRESENCE_CHANGED } from "@/lib/presence";
-import { notifyPermission, requestNotifyPermission, sendTestNotification, type NotifyPermission } from "@/lib/notify";
+import { notifyConfirmed, notifyPermission, requestNotifyPermission, sendTestNotification, setNotifyConfirmed, type NotifyPermission } from "@/lib/notify";
 import { getJSON } from "@/lib/net";
 import { useShortcuts, useSingleKeys } from "@/lib/shortcuts";
 import { Button } from "@/components/ui/button";
@@ -250,6 +250,9 @@ export function Settings() {
   const [ws, setWs] = useState<Workspaces | null>(null);
   const [removing, setRemoving] = useState<string | null>(null);
   const [permission, setPermission] = useState<NotifyPermission>(() => notifyPermission());
+  // declared with the other state, above the loading return: hooks may not follow an early return
+  const [confirmed, setConfirmed] = useState<boolean>(() => notifyConfirmed());
+  const [asking, setAsking] = useState<"idle" | "sent" | "not-seen">("idle");
   const [singleKeys, setSingleKeys] = useSingleKeys();
   const { toast } = useToast();
   const loadWs = () => getJSON<Workspaces>("/api/workspaces").then(setWs).catch(() => {});
@@ -283,8 +286,18 @@ export function Settings() {
     if (next === "granted") toast("Desktop notifications are on");
     else if (next === "denied") toast("The browser blocked notifications for this site", "error");
   };
+  // HOW-68: the browser saying "granted" does not mean a notification reached the screen
+  // (macOS can drop Chrome's silently), so a test is followed by the only reliable check: ask.
   const testNotification = () => {
-    if (!sendTestNotification()) toast("The browser would not show a notification", "error");
+    if (!sendTestNotification()) { toast("The browser would not show a notification", "error"); return; }
+    setAsking("sent");
+  };
+  const answerTest = (seen: boolean) => {
+    setNotifyConfirmed(seen);
+    setConfirmed(seen);
+    setAsking(seen ? "idle" : "not-seen");
+    window.dispatchEvent(new Event(PRESENCE_CHANGED)); // the engine learns at once who delivers
+    if (seen) toast("Desktop notifications are confirmed for this browser");
   };
   const workspaces = ws ? [...ws.repos.map((w) => ({ ...w, kind: "repo" as const })), ...ws.folders.map((w) => ({ ...w, kind: "plain" as const }))] : null;
 
@@ -313,7 +326,31 @@ export function Settings() {
             {permission === "default" && <Button variant="outline" size="sm" onClick={enableNotifications}><Bell />Enable desktop notifications</Button>}
             <Button variant="outline" size="sm" disabled={permission !== "granted"} onClick={testNotification}><Send />Send a test notification</Button>
           </div>
-          <Hint>Applies at once, in this browser. Nothing is posted while you are looking at this tab: the count beside “Needs you” says it.</Hint>
+          {asking === "sent" && (
+            <div data-slot="notify-confirm" role="group" aria-label="Did the test notification appear?" className="flex flex-wrap items-center gap-2 text-sm">
+              <span>Did a notification appear on your screen?</span>
+              <Button variant="outline" size="sm" onClick={() => answerTest(true)}>Yes, I saw it</Button>
+              <Button variant="outline" size="sm" onClick={() => answerTest(false)}>No, nothing appeared</Button>
+            </div>
+          )}
+          {asking === "not-seen" && (
+            <div data-slot="notify-help" role="status" className="flex flex-col gap-1 text-sm leading-5">
+              <p className="m-0 font-medium">The browser accepted it, so the system is not showing it. Check, in this order:</p>
+              <ol className="m-0 flex list-decimal flex-col gap-1 pl-5 text-muted-foreground">
+                <li>macOS System Settings → Notifications → your browser: “Allow notifications” on, and the style set to Banners or Alerts.</li>
+                <li>macOS Focus or Do Not Disturb is off (Control Centre → Focus).</li>
+                <li>In the browser's own settings, notifications for this site are allowed and not “quieter”.</li>
+              </ol>
+              <p className="m-0 text-muted-foreground">Then send another test. Until you confirm one, Howdah keeps sending the system notification as well, so an ask is never missed.</p>
+            </div>
+          )}
+          <Hint>
+            {permission === "granted" && confirmed
+              ? "Confirmed in this browser: while this viewer is open it delivers the notification, and the system one stays quiet. Nothing is posted while you are looking at this tab; the count beside “Needs you” says it."
+              : permission === "granted"
+                ? "Not confirmed yet. Send a test and say whether you saw it; until then the system notification is sent as well."
+                : "Applies at once, in this browser. Nothing is posted while you are looking at this tab: the count beside “Needs you” says it."}
+          </Hint>
         </div>
         {s.notifier && (
           <div data-slot="os-notifier" data-clickable={s.notifier.clickable ? "yes" : "no"} className="flex flex-col gap-2">

@@ -200,12 +200,16 @@ describe("the draft card in the run's Chat — D-4A", () => {
     expect(linkNamed(el, "Open")?.getAttribute("href")).toBe("/graphs/my-look/build");
     expect(linkNamed(el, "Run it")?.getAttribute("href")).toBe("/new?graph=my-look");
     expect(buttonNamed(el, "Save")).toBeUndefined(); // a reload or a second tab never offers it twice
+    // HOW-68 confirming review: the button that was pressed is gone, so the receipt takes focus
+    // (it fell to <body>); a receipt found already saved, below, takes nothing
+    expect(document.activeElement).toBe(receipt);
 
     if (root) act(() => root!.unmount());
     host?.remove();
     serve([{ ...readOnlyDraft(), saved: { name: "my-look", edited: true } }]);
     const again = await mount(<DraftCard runId="r1" />);
     expect(again.querySelector(".draft-receipt")?.textContent).toContain("Saved as my-look · edited on canvas");
+    expect(document.activeElement).not.toBe(again.querySelector(".draft-receipt")); // found saved: no focus taken
   });
 
   test("a 409 is shown word for word and the cursor goes back to the name (D-9A)", async () => {

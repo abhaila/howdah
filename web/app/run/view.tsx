@@ -31,7 +31,7 @@
  *   KEYS: 1–7 tabs, ⌘I details, R reply, A the ask, O open in IDE, `.` More — all rows in
  *   `lib/shortcuts.ts`, so `?` lists them (E and / are registered by the Build pane).
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Play, Pause, OctagonX, RotateCcw, ExternalLink, CornerDownRight, X, FolderOpen, Copy, Hand,
   ArrowLeft, Ellipsis, PanelRight,
@@ -93,6 +93,23 @@ const TABS: ReadonlyArray<{ value: RunTab; label: string }> = [
 /** links that read as buttons: going back to Runs is navigation, so each is an `<a>` */
 const BACK_LINK = `${buttonVariants({ variant: "ghost", size: "icon-sm" })} shrink-0`;
 const PRIMARY_LINK = buttonVariants({ variant: "default" });
+
+/**
+ * HOW-68 confirming review: the panes that do NOT read the clock. `RunFrame` re-renders once a
+ * second (`now` drives the header's wait and the step durations), and it used to take the whole
+ * open pane with it: on a 600-item transcript that was a 250–390ms main-thread task EVERY second
+ * with nothing on screen changing — measured on a finished run, sitting idle — so scrolling and
+ * typing hitched once a second for as long as the tab was open. Memoised, a pane renders when its
+ * own props change: a new `detail` (a reload or a stream event), not a tick. Everything passed to
+ * them from the frame is therefore kept referentially stable (`chatDetail` below, `reload`,
+ * `showStep`, `loadEarlier`). The pieces that DO count time keep their own clock (`LiveNote`,
+ * the ask card).
+ */
+export const TranscriptPane = memo(RunChat);
+const PlanPane = memo(RunPlan);
+const ReportPane = memo(RunReport);
+const ContextPane = memo(RunContext);
+const LogsPane = memo(RunLogs);
 type DetailDto = RunDetail & { cwd_exists?: boolean; editor_configured?: boolean; soft_stop_escalate_ms?: number };
 
 /** a soft stop that has not taken effect within the escalation window (HOW-48), and for how long */
@@ -803,11 +820,13 @@ function RunFrame({ id, detail, tab, setTab, picked, setPicked, liveGit, now, re
   const selectedKey = selectedStepKey(detail, picked);
   // the chat shows the loaded window. Steps above it stay on the Steps list; "Load earlier"
   // brings the next window in, and the newest step stays even before it has spoken.
-  const chatDetail = transcriptStart <= 0 ? detail : (() => {
+  // memoised: a fresh object per render would defeat `TranscriptPane`'s memo on every tick
+  const chatDetail = useMemo(() => {
+    if (transcriptStart <= 0) return detail;
     const loaded = new Set(detail.turns.map((t) => `${t.node}@${t.visit}`));
     const first = detail.timeline.findIndex((r) => loaded.has(`${r.node}@${r.visit}`));
     return first <= 0 ? detail : { ...detail, timeline: detail.timeline.slice(first) };
-  })();
+  }, [detail, transcriptStart]);
   const selectedRow = detail.timeline.find((t) => stepKey(t) === selectedKey) ?? null;
   // D26: steps the timeline still calls running that nothing is running; their clock stops at
   // the run's last event rather than counting up for as long as the page is open
@@ -906,15 +925,15 @@ function RunFrame({ id, detail, tab, setTab, picked, setPicked, liveGit, now, re
             so the pane's own scroller is the only thing that scrolls */}
         <div className="run-body" data-tab={tab}>
           {tab === "plan" ? (
-            <RunPlan runId={id} detail={detail} onChanged={reload} />
+            <PlanPane runId={id} detail={detail} onChanged={reload} />
           ) : tab === "report" ? (
-            <RunReport runId={id} detail={detail} onChanged={reload} />
+            <ReportPane runId={id} detail={detail} onChanged={reload} />
           ) : tab === "context" ? (
-            <RunContext entries={detail.context} />
+            <ContextPane entries={detail.context} />
           ) : tab === "chat" ? (
-            <RunChat runId={id} detail={chatDetail} ask={ask} liveGit={liveGit} onResolved={reload} onPickStep={showStep} earlier={transcriptStart > 0} onEarlier={loadEarlier} />
+            <TranscriptPane runId={id} detail={chatDetail} ask={ask} liveGit={liveGit} onResolved={reload} onPickStep={showStep} earlier={transcriptStart > 0} onEarlier={loadEarlier} />
           ) : tab === "logs" ? (
-            <RunLogs runId={id} />
+            <LogsPane runId={id} />
           ) : tab === "graph" ? (
             <RunGraph runId={id} graph={summary.graph} timeline={detail.timeline} status={summary.status} onJumped={reload} />
           ) : (

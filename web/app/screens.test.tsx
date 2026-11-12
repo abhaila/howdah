@@ -223,6 +223,35 @@ describe("Settings", () => {
     expect(shown).toEqual(["Howdah"]);
   });
 
+  // HOW-68, from the operator's report: Chrome said "granted", the test was posted, and macOS
+  // showed nothing. The browser cannot tell the page that, so Settings asks — and only a yes
+  // lets this viewer stand in for the system notification.
+  test("a test notification is followed by 'did it appear?': yes confirms delivery, no shows what to check", async () => {
+    localStorage.removeItem("howdah.notify.confirmed");
+    (globalThis as { Notification?: unknown }).Notification = class {
+      static get permission() { return "granted"; }
+      onclick: (() => void) | null = null;
+      close() {}
+    };
+    serve(reads);
+    const el = await mount(<Settings />);
+    expect(el.querySelector("[data-slot='notify-confirm']")).toBeNull();
+    expect(el.textContent).toContain("Not confirmed yet");
+    await act(async () => { button(el, "Send a test notification")!.click(); });
+    expect(el.querySelector("[data-slot='notify-confirm']")!.textContent).toContain("Did a notification appear");
+    await act(async () => { button(el, "No, nothing appeared")!.click(); });
+    expect(localStorage.getItem("howdah.notify.confirmed")).toBeNull();
+    const help = el.querySelector("[data-slot='notify-help']")!;
+    expect(help.textContent).toContain("System Settings → Notifications");
+    expect(help.textContent).toContain("Focus");
+    await act(async () => { button(el, "Send a test notification")!.click(); });
+    await act(async () => { button(el, "Yes, I saw it")!.click(); });
+    expect(localStorage.getItem("howdah.notify.confirmed")).toBe("yes");
+    expect(el.querySelector("[data-slot='notify-help']")).toBeNull();
+    expect(el.textContent).toContain("Confirmed in this browser");
+    localStorage.removeItem("howdah.notify.confirmed");
+  });
+
   test("a browser with no Notification API says so and offers nothing to press", async () => {
     serve(reads);
     const el = await mount(<Settings />);

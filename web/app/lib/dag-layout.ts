@@ -1,0 +1,234 @@
+/**
+ * The read-only graph's layout: a real layered (Sugiyama) placement, from `@dagrejs/dagre`
+ * (HOW-68, the operator's first hands-on feedback: "the graphs are not so neat").
+ *
+ * WHAT IT REPLACED. `lib/layout.ts` `layout()` is a layered BFS: a step's layer is its distance
+ * from the entry and its place in the layer is the order the graph file declares it in. Nothing
+ * in it looks at an edge after the layers are made, so wires crossed wherever declaration order
+ * disagreed with the shape, a loop back was a fixed curve round the left that ran THROUGH any
+ * card standing there, and a route's condition was printed at a guessed point beside its wire.
+ * implement-ticket (25 steps, five review → repair loops) was unreadable. That function stays
+ * exactly as it is for the BUILDER, which only uses it to seed positions the operator then owns.
+ *
+ * WHY A DEPENDENCY, and why this one (the test CLAUDE.md applies to `@xyflow/react` and
+ * `@shadcn/react`): it buys a part that is expensive to own and cheap to borrow — crossing
+ * minimisation, coordinate assignment and edge routing through the gaps, three algorithms each a
+ * paper long. Its whole dependency tree is ONE package, `@dagrejs/graphlib`, the graph structure
+ * it lays out; both are pure JavaScript with no DOM. And it is confined to THIS FILE: the picture
+ * (`graph-dag.tsx`) is handed plain boxes and points and never sees the library.
+ *
+ * `elkjs` was measured against it with the project's own build and refused: it lays out a little
+ * better, and it is 1.5 MB minified (456 KB gzipped) against dagre's 49 KB (17 KB), runs in a
+ * worker or blocks, and is asynchronous — so the picture would paint empty and then jump. dagre
+ * is synchronous and lays out the largest built-in (30 steps, 40 edges) in a few milliseconds.
+ *
+ * Three things this file decides rather than the library:
+ *
+ *   THE ENTRY IS AT THE TOP, AND A LOOP IS THE EDGE THAT GOES BACK. dagre breaks cycles with a
+ *   depth-first search over nodes in INSERTION order, so the entry is inserted first and every
+ *   other step in the order a walk from it reaches them. The edge it reverses is then the one
+ *   that returns to a step the run has already been through — review → repair goes down, the way
+ *   back to the review curves up — rather than whichever edge a greedy pass happened to pick.
+ *
+ *   A CONDITION HAS ROOM. Each labelled edge is given its caption's box, which dagre places in a
+ *   rank of its own between the two cards. So a caption never sits on a card or on another
+ *   caption by construction, instead of being nudged off them afterwards.
+ *
+ *   THE PICTURE NEVER ASSERTS (CLAUDE.md, HOW-22). A draft is laid out too, and a draft is being
+ *   typed: an edge naming a step that does not exist is SKIPPED (its slot in `edges` is `null`),
+ *   never dereferenced, and an empty shape is an empty layout.
+ *
+ * Pure, synchronous, node-free and DOM-free.
+ */
+import dagre from "@dagrejs/dagre";
+
+export interface Point { x: number; y: number }
+export interface Box { x: number; y: number; width: number; height: number }
+
+export interface LayoutNode { id: string; width: number; height: number }
+export interface LayoutEdge {
+  from: string;
+  to: string;
+  /** the caption's box, when the edge carries one */
+  label?: { width: number; height: number };
+}
+
+export interface LaidEdge {
+  /** the wire, from the source card's border to the target's, through the gaps between cards */
+  points: Point[];
+  /** the caption's CENTRE */
+  label?: Point;
+  /** it returns to a step at or above the one it leaves: a loop */
+  back: boolean;
+  /** a step routed to itself */
+  self: boolean;
+}
+
+export interface DagLayout {
+  /** top-left corners, as React Flow positions a node */
+  nodes: Map<string, Box>;
+  /** index-aligned with the edges passed in; `null` where an endpoint does not exist */
+  edges: Array<LaidEdge | null>;
+  width: number;
+  height: number;
+}
+
+/** the air between two cards in a rank, between two wires, and between two ranks */
+const SPACING = { nodesep: 36, edgesep: 20, ranksep: 64, margin: 24 } as const;
+
+/** how far a wire runs straight off a card before it may bend, so no bend touches a card's edge */
+const STUB = 10;
+/** half a caption's height: the band a wire crosses straight where a rank holds only captions */
+const LABEL_HALF = 14;
+
+/** the order a walk from the entry reaches the steps in; anything unreached keeps its place after */
+function reachOrder(entry: string, ids: readonly string[], edges: ReadonlyArray<{ from: string; to: string }>): string[] {
+  const known = new Set(ids);
+  const seen = new Set<string>();
+  const order: string[] = [];
+  const visit = (start: string) => {
+    if (!known.has(start) || seen.has(start)) return;
+    const queue = [start];
+    seen.add(start);
+    while (queue.length) {
+      const at = queue.shift()!;
+      order.push(at);
+      for (const e of edges) {
+        if (e.from !== at || !known.has(e.to) || seen.has(e.to)) continue;
+        seen.add(e.to);
+        queue.push(e.to);
+      }
+    }
+  };
+  visit(entry);
+  for (const id of ids) visit(id);
+  return order;
+}
+
+export function dagLayout(entry: string, nodes: readonly LayoutNode[], edges: readonly LayoutEdge[]): DagLayout {
+  const out: DagLayout = { nodes: new Map(), edges: edges.map(() => null), width: 0, height: 0 };
+  if (nodes.length === 0) return out;
+  const size = new Map(nodes.map((n) => [n.id, n]));
+  const g = new dagre.graphlib.Graph({ multigraph: true });
+  g.setGraph({ rankdir: "TB", nodesep: SPACING.nodesep, edgesep: SPACING.edgesep, ranksep: SPACING.ranksep, marginx: SPACING.margin, marginy: SPACING.margin });
+  g.setDefaultEdgeLabel(() => ({}));
+  for (const id of reachOrder(entry, nodes.map((n) => n.id), edges)) {
+    const n = size.get(id);
+    if (n) g.setNode(id, { width: n.width, height: n.height });
+  }
+  edges.forEach((e, i) => {
+    // an edge to or from a step that is not there has nothing to be drawn between (see header)
+    if (!size.has(e.from) || !size.has(e.to)) return;
+    g.setEdge(e.from, e.to, e.label ? { width: e.label.width, height: e.label.height, labelpos: "c" } : {}, `e${i}`);
+  });
+  dagre.layout(g);
+
+  for (const n of nodes) {
+    const at = g.node(n.id) as { x?: number; y?: number } | undefined;
+    if (!at || !Number.isFinite(at.x) || !Number.isFinite(at.y)) continue;
+    // dagre answers centres; a card is positioned by its corner
+    out.nodes.set(n.id, { x: Math.round(at.x! - n.width / 2), y: Math.round(at.y! - n.height / 2), width: n.width, height: n.height });
+  }
+  // a rank's band: from the top of its tallest card to the bottom of it (cards in a rank share a centre)
+  const bands = new Map<number, { top: number; bottom: number }>();
+  for (const box of out.nodes.values()) {
+    const mid = Math.round(box.y + box.height / 2);
+    const band = bands.get(mid);
+    bands.set(mid, { top: Math.min(band?.top ?? Infinity, box.y - STUB), bottom: Math.max(band?.bottom ?? -Infinity, box.y + box.height + STUB) });
+  }
+  const bandAt = (y: number, half: number) => {
+    for (const [mid, band] of bands) if (Math.abs(mid - y) <= 2) return band;
+    return { top: y - half, bottom: y + half };
+  };
+  const raw = edges.map((e, i) => {
+    const a = out.nodes.get(e.from), b = out.nodes.get(e.to);
+    if (!a || !b || !g.hasEdge(e.from, e.to, `e${i}`)) return null;
+    const laid = g.edge(e.from, e.to, `e${i}`) as { points?: Point[]; x?: number; y?: number } | undefined;
+    const points = (laid?.points ?? []).filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y));
+    if (points.length < 2) return null;
+    const label = e.label && Number.isFinite(laid?.x) && Number.isFinite(laid?.y) ? { x: laid!.x!, y: laid!.y! } : undefined;
+    return { a, b, points, label, self: e.from === e.to, back: e.from !== e.to && b.y <= a.y };
+  });
+  // PORTS. dagre aims every wire at a card's CENTRE and cuts it at the border, so a wire to a
+  // step far to one side left through the card's flank and ran across its neighbour. Here a wire
+  // leaves by the bottom edge and arrives at the top (a loop back: the other way round), and the
+  // wires sharing an edge of a card are spread along it in the order of where they are going.
+  const ports = new Map<string, Array<{ edge: number; toward: number }>>();
+  const want = (key: string, edge: number, toward: number) => { const list = ports.get(key); if (list) list.push({ edge, toward }); else ports.set(key, [{ edge, toward }]); };
+  raw.forEach((r, i) => {
+    if (!r || r.self) return;
+    const e = edges[i]!;
+    const inner = r.points.slice(1, -1);
+    want(`${e.from}\u0000${r.back ? "top" : "bottom"}`, i, (inner[0] ?? r.points.at(-1)!).x);
+    want(`${e.to}\u0000${r.back ? "bottom" : "top"}`, i, (inner.at(-1) ?? r.points[0]!).x);
+  });
+  const portX = new Map<string, number>();
+  for (const [key, list] of ports) {
+    const box = out.nodes.get(key.split("\u0000")[0]!)!;
+    list.sort((p, q) => p.toward - q.toward);
+    // within the middle of the edge, so a wire never meets a rounded corner
+    const span = Math.min(box.width - 48, (list.length - 1) * 28);
+    list.forEach((p, n) => portX.set(`${key}\u0000${p.edge}`, box.x + box.width / 2 + (list.length === 1 ? 0 : -span / 2 + (span * n) / (list.length - 1))));
+  }
+  raw.forEach((r, i) => {
+    if (!r) return;
+    if (r.self) { out.edges[i] = { points: r.points, ...(r.label ? { label: r.label } : {}), back: false, self: true }; return; }
+    const e = edges[i]!;
+    const [leave, arrive] = r.back ? (["top", "bottom"] as const) : (["bottom", "top"] as const);
+    const sx = portX.get(`${e.from}\u0000${leave}\u0000${i}`) ?? r.a.x + r.a.width / 2;
+    const tx = portX.get(`${e.to}\u0000${arrive}\u0000${i}`) ?? r.b.x + r.b.width / 2;
+    const from = bandAt(r.a.y + r.a.height / 2, 0), to = bandAt(r.b.y + r.b.height / 2, 0);
+    const points: Point[] = r.back
+      ? [{ x: sx, y: r.a.y }, { x: sx, y: from.top }]
+      : [{ x: sx, y: r.a.y + r.a.height }, { x: sx, y: from.bottom }];
+    // every rank a wire passes is crossed STRAIGHT, top to bottom of that rank's tallest card,
+    // in the lane dagre kept clear for it; all sideways travel happens in the gaps between ranks
+    for (const p of r.points.slice(1, -1)) {
+      const band = bandAt(p.y, LABEL_HALF);
+      points.push({ x: p.x, y: r.back ? band.bottom : band.top }, { x: p.x, y: r.back ? band.top : band.bottom });
+    }
+    points.push(r.back ? { x: tx, y: to.bottom } : { x: tx, y: to.top }, r.back ? { x: tx, y: r.b.y + r.b.height } : { x: tx, y: r.b.y });
+    out.edges[i] = { points, ...(r.label ? { label: r.label } : {}), back: r.back, self: false };
+  });
+  const graph = g.graph() as { width?: number; height?: number };
+  out.width = Number.isFinite(graph.width) ? graph.width! : 0;
+  out.height = Number.isFinite(graph.height) ? graph.height! : 0;
+  return out;
+}
+
+/**
+ * The wire, as an SVG path. Where two consecutive points share an x it is a straight run (a rank
+ * being crossed, or the stub off a card); where they do not it is one S-bend with VERTICAL ends,
+ * so a wire always meets a card, a caption and the lane beside a card head-on.
+ *
+ * A step routed to itself is the exception: dagre draws that as a small loop beside the card,
+ * and it is passed through as the smooth curve (a uniform B-spline) dagre's own renderers use.
+ */
+export function wirePath(edge: Pick<LaidEdge, "points" | "self">): string {
+  const r = (n: number) => Math.round(n * 10) / 10;
+  const pts = edge.points;
+  const first = pts[0];
+  if (!first) return "";
+  let d = `M${r(first.x)},${r(first.y)}`;
+  if (edge.self && pts.length > 2) {
+    let x0 = first.x, y0 = first.y, x1 = first.x, y1 = first.y;
+    const seg = (x: number, y: number) => {
+      d += `C${r((2 * x0 + x1) / 3)},${r((2 * y0 + y1) / 3)} ${r((x0 + 2 * x1) / 3)},${r((y0 + 2 * y1) / 3)} ${r((x0 + 4 * x1 + x) / 6)},${r((y0 + 4 * y1 + y) / 6)}`;
+    };
+    pts.forEach((p, i) => {
+      if (i === 0) return;
+      if (i === 1) { x1 = p.x; y1 = p.y; d += `L${r((5 * x0 + x1) / 6)},${r((5 * y0 + y1) / 6)}`; return; }
+      seg(p.x, p.y);
+      x0 = x1; y0 = y1; x1 = p.x; y1 = p.y;
+    });
+    seg(x1, y1);
+    return `${d}L${r(x1)},${r(y1)}`;
+  }
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1]!, b = pts[i]!;
+    if (Math.abs(a.x - b.x) < 0.5) { d += `L${r(b.x)},${r(b.y)}`; continue; }
+    const mid = (a.y + b.y) / 2;
+    d += `C${r(a.x)},${r(mid)} ${r(b.x)},${r(mid)} ${r(b.x)},${r(b.y)}`;
+  }
+  return d;
+}

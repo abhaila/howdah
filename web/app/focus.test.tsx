@@ -370,8 +370,13 @@ describe("D18: the viewer's presence beat", () => {
     return beats;
   }
 
-  test("notify is true exactly when the browser permission is granted", async () => {
+  // HOW-68, after the operator's report that the test notification never appeared in Chrome on
+  // macOS: `granted` is the browser's answer, and macOS can still drop every notification. The
+  // beat used to say `notify: true` on `granted` alone, which made the engine skip its banner
+  // for a viewer that delivered nothing. It now also needs the operator's own "I saw it".
+  test("notify is true only when the permission is granted AND the operator confirmed a test", async () => {
     const beats = captureBeats();
+    localStorage.removeItem("howdah.notify.confirmed");
     (globalThis as { Notification?: unknown }).Notification = undefined;
     await beatPresence();
     (globalThis as { Notification?: unknown }).Notification = { permission: "default" };
@@ -379,13 +384,13 @@ describe("D18: the viewer's presence beat", () => {
     (globalThis as { Notification?: unknown }).Notification = { permission: "denied" };
     await beatPresence();
     (globalThis as { Notification?: unknown }).Notification = { permission: "granted" };
+    await beatPresence(); // granted, never confirmed: the system notification must keep ringing
+    localStorage.setItem("howdah.notify.confirmed", "yes");
     await beatPresence();
-    expect(beats).toEqual([
-      { url: "/api/viewer/presence", body: { notify: false } },
-      { url: "/api/viewer/presence", body: { notify: false } },
-      { url: "/api/viewer/presence", body: { notify: false } },
-      { url: "/api/viewer/presence", body: { notify: true } },
-    ]);
+    (globalThis as { Notification?: unknown }).Notification = { permission: "denied" };
+    await beatPresence(); // a confirmation does not outlive the permission
+    localStorage.removeItem("howdah.notify.confirmed");
+    expect(beats.map((b) => (b.body as { notify: boolean }).notify)).toEqual([false, false, false, false, true, false]);
   });
 
   test("the shell beats on mount and when the tab is shown or hidden — from any screen", async () => {

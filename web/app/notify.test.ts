@@ -7,7 +7,7 @@
  * permission, that the tag is the run id, and where the click goes.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { decideNotify, notifyPermission, notifyRuns, requestNotifyPermission, runAskHref, sendTestNotification } from "@/lib/notify";
+import { decideNotify, notifyDelivers, notifyPermission, notifyRuns, requestNotifyPermission, runAskHref, sendTestNotification, setNotifyConfirmed } from "@/lib/notify";
 import { observeAsks } from "@/lib/attention-sound";
 
 const HIDDEN = { permission: "granted" as const, visible: false, focused: false };
@@ -128,6 +128,25 @@ describe("posting", () => {
   test("the test notification is shown even while the page is focused", () => {
     document.hasFocus = () => true;
     expect(sendTestNotification()).toBe(true);
-    expect(posted[0]!.options.tag).toBe("howdah-test");
+    expect(posted[0]!.options.tag).toMatch(/^howdah-test-/);
+  });
+
+  // HOW-68: a repeated tag REPLACES the standing notification without alerting again, so a
+  // second press of the test button showed nothing even where notifications worked
+  test("each test notification has its own tag", () => {
+    sendTestNotification();
+    sendTestNotification();
+    expect(posted).toHaveLength(2);
+    expect(posted[0]!.options.tag).not.toBe(posted[1]!.options.tag);
+  });
+
+  test("a viewer delivers only once the operator has confirmed seeing a notification", () => {
+    setNotifyConfirmed(false);
+    expect(notifyDelivers()).toBe(false); // granted alone is the browser's word, not the screen's
+    setNotifyConfirmed(true);
+    expect(notifyDelivers()).toBe(true);
+    permission = "denied";
+    expect(notifyDelivers()).toBe(false);
+    setNotifyConfirmed(false);
   });
 });

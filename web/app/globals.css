@@ -112,3 +112,19 @@
 .map-progress { display: inline-flex; align-items: center; gap: 6px; min-width: 0; font-size: var(--type-xs); color: var(--fg-muted); white-space: nowrap; }
 .mp-track { width: 48px; height: 4px; flex-shrink: 0; background: var(--bg-inset); border-radius: 2px; }
 .mp-fill { display: block; height: 4px; border-radius: 2px; background: var(--status-running); }
+
+/* HOW-68 confirming review — Windows High Contrast and other forced-colour modes. The browser
+   replaces every fill and text colour with the user's palette, which took three things with it:
+   a filled button had no edge left at all ("Next" on a question read as loose text), every tab
+   showed the same rule because a transparent border is drawn in that mode, and the rail's "where
+   you are" was a change of ground. System colour keywords are the one thing still honoured, so
+   each is restated in them. Focus rings and status glyphs need nothing: an outline and an SVG
+   shape both survive. */
+@media (forced-colors: active) {
+  [data-slot="button"] { border: 1px solid ButtonText; }
+  [data-slot="button"]:disabled { border-color: GrayText; }
+  [role="tab"] { border-bottom-color: Canvas; }
+  [role="tab"][aria-selected="true"] { border-bottom-color: Highlight; }
+  .sidebar a.nav.active[aria-current="page"] { forced-color-adjust: none; background: Highlight; color: HighlightText; border-color: Highlight; }
+  .sidebar a.nav.active[aria-current="page"] * { color: HighlightText; background: transparent; border-color: HighlightText; }
+}

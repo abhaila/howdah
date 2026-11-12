@@ -339,9 +339,18 @@ export const DraftName = forwardRef<HTMLInputElement, { value: string; onChange:
 });
 
 /** `Saved as X · not edited | edited on canvas · Open · Run it`, behind a check mark */
-export function DraftReceipt({ saved }: { saved: { name: string; edited: boolean } }) {
+export function DraftReceipt({ saved, takeFocus = false }: {
+  saved: { name: string; edited: boolean };
+  /** HOW-68: true on the render that follows THIS page's own Save. The Save button is gone by
+   *  then, and focus fell to `<body>` — a keyboard user was sent back to the top of the page at
+   *  the moment "Run it" appeared. The receipt is what the screen now says, so it takes focus;
+   *  a receipt found on load (saved earlier, or in another tab) takes nothing. */
+  takeFocus?: boolean;
+}) {
+  const ref = useRef<HTMLParagraphElement>(null);
+  useEffect(() => { if (takeFocus) ref.current?.focus(); }, [takeFocus]);
   return (
-    <p className="draft-receipt" role="status">
+    <p ref={ref} tabIndex={-1} className="draft-receipt rounded-[var(--radius-sm)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--ring)]" role="status">
       <Glyph icon={Check} className="ok" />Saved as <strong>{saved.name}</strong>
       <span aria-hidden> · </span>{saved.edited ? "edited on canvas" : "not edited"}
       <span aria-hidden> · </span><a href={`/graphs/${saved.name}/build`}>Open</a>
@@ -416,16 +425,18 @@ export function useDraftSave(runId: string, draft: ReadyDraft, onSaved: () => vo
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const nameRef = useRef<HTMLInputElement>(null);
+  /** this page pressed Save and it worked: the receipt that now appears takes focus */
+  const [savedHere, setSavedHere] = useState(false);
   const save = useCallback(async () => {
     setBusy(true);
     setError(null);
     const r = await saveDraft(runId, name.trim());
     setBusy(false);
-    if (r.ok) { onSaved(); return; }
+    if (r.ok) { setSavedHere(true); onSaved(); return; }
     setError(r.error);
     if (r.conflict) nameRef.current?.focus();
   }, [runId, name, onSaved]);
-  return { name, setName, busy, error, save, nameRef };
+  return { name, setName, busy, error, save, nameRef, savedHere };
 }
 
 /** The card at the foot of a finished draft-graph run's Chat (D-2A, D-6A). Never the diagram. */
@@ -457,7 +468,7 @@ function ReadyCard({ runId, draft, onSaved }: { runId: string; draft: ReadyDraft
         <h2>The draft is ready</h2>
         <p className="draft-basis">{draftBasis(draft)}</p>
       </div>
-      {draft.saved && <DraftReceipt saved={draft.saved} />}
+      {draft.saved && <DraftReceipt saved={draft.saved} takeFocus={s.savedHere} />}
       {draft.discarded && <DiscardedReceipt />}
       <RedraftReceipts redrafts={draft.redrafts} />
       {open && <DraftName ref={s.nameRef} value={s.name} onChange={s.setName} />}

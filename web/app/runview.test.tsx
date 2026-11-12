@@ -13,11 +13,11 @@
  * when it lands, and a run that never lands says so instead of spinning forever.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { act } from "react";
+import { act, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { deriveDetail } from "../derive";
 import { FakeLog, started } from "../slice.fixtures";
-import { RunView, OPEN_GRACE_MS } from "./run/view";
+import { RunView, OPEN_GRACE_MS, TranscriptPane } from "./run/view";
 import { ToastProvider } from "./components/ui/toast";
 
 let root: Root | null = null;
@@ -312,5 +312,47 @@ describe("HOW-49: the live progress panel on the run page", () => {
     const el = render(OPEN_GRACE_MS);
     await settle(50);
     expect(el.querySelector(".progress-panel")).toBeNull();
+  });
+});
+
+/**
+ * HOW-68 confirming review. The frame re-renders once a second for its clock, and the transcript
+ * used to re-render with it: a 250–390ms task every second on a 600-item run, idle, measured in
+ * Chromium. The pane is memoised; what is pinned is the property that matters — the frame
+ * rendering again with the SAME detail costs the transcript nothing, and a new detail still draws.
+ */
+describe("the transcript does not re-render on the frame's clock", () => {
+  test("same props: no render; a new detail: a render", async () => {
+    serve([{ status: 200, body: {} }]);
+    // the probe: RunChat reads `detail.timeline` every time it renders, so a getter counts renders
+    let renders = 0;
+    const noop = () => {};
+    const base = runDetail();
+    const counted = (): typeof base => {
+      const d = { ...base };
+      Object.defineProperty(d, "timeline", { enumerable: true, get: () => { renders += 1; return base.timeline; } });
+      return d;
+    };
+    const first = counted();
+    // the frame owns its clock, as RunView does: the providers above it do not render on a tick
+    let setTick!: (n: number) => void;
+    let setDetail!: (d: typeof base) => void;
+    function Frame() {
+      const [tick, st] = useState(0);
+      const [detail, sd] = useState(first);
+      setTick = st; setDetail = sd;
+      return <div data-tick={tick}><TranscriptPane runId="r1" detail={detail} ask={detail.ask} onPickStep={noop} onResolved={noop} /></div>;
+    }
+    host = document.createElement("div");
+    document.body.appendChild(host);
+    root = createRoot(host);
+    await act(async () => { root!.render(<ToastProvider><Frame /></ToastProvider>); });
+    const settled = renders;
+    expect(settled).toBeGreaterThan(0);
+    for (const tick of [1, 2, 3]) await act(async () => { setTick(tick); });
+    expect(host.querySelector("[data-tick]")!.getAttribute("data-tick")).toBe("3"); // the frame DID render
+    expect(renders).toBe(settled);
+    await act(async () => { setDetail(counted()); });
+    expect(renders).toBeGreaterThan(settled);
   });
 });

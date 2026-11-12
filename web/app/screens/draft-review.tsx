@@ -123,7 +123,7 @@ function ReadyReview({ runId, draft, onSaved }: { runId: string; draft: ReadyDra
             <span>{draftBasis(draft)} · from run</span>
             <a className={`${LINK} min-w-0 max-w-full`} href={runHref}><Truncate mono middle={10}>{runId}</Truncate></a>
           </Hint>
-          {draft.saved ? <DraftReceipt saved={draft.saved} /> : draft.discarded ? <DiscardedReceipt /> : <DraftName ref={s.nameRef} value={s.name} onChange={s.setName} />}
+          {draft.saved ? <DraftReceipt saved={draft.saved} takeFocus={s.savedHere} /> : draft.discarded ? <DiscardedReceipt /> : <DraftName ref={s.nameRef} value={s.name} onChange={s.setName} />}
           {s.error && <FieldError pre>{s.error}</FieldError>}
           <DraftSummary draft={draft} />
           <BaseChangedBanner draft={draft} />

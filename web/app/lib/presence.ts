@@ -14,7 +14,7 @@
  * The beat stops when the tab closes, which is the whole signal: 45s later the OS path rings
  * again. A failed beat is not an error to show — the cost is one duplicate banner.
  */
-import { notifyPermission } from "./notify";
+import { notifyDelivers } from "./notify";
 
 export const PRESENCE_INTERVAL_MS = 20_000;
 
@@ -22,7 +22,10 @@ export function beatPresence(): Promise<void> {
   return fetch("/api/viewer/presence", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ notify: notifyPermission() === "granted" }),
+    // "delivers" needs the operator to have SEEN a notification, not just the browser's `granted`
+    // (lib/notify.ts notifyDelivers): otherwise the engine would skip its banner for a viewer
+    // whose notifications macOS is silently dropping
+    body: JSON.stringify({ notify: notifyDelivers() }),
     keepalive: true,
   }).then(() => {}, () => {});
 }
