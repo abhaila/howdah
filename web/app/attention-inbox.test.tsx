@@ -125,6 +125,11 @@ describe("AttentionInbox", () => {
     // an amber glyph and an amber nav count said it three times. Row keeps `data-needs-input`.
     expect(row.getAttribute("data-needs-input")).toBe("true");
     expect(row.className).not.toContain("var(--attention");
+    // a source comment inside JSX is TEXT: one once printed a paragraph above every inbox row.
+    // The list holds rows and nothing else.
+    const item = el.querySelector('[role="listitem"]')!;
+    expect(item.textContent).toBe(row.textContent);
+    expect(el.querySelector('[role="list"]')!.textContent).not.toContain("//");
   });
 
   test("a record with no run page is readable text, not a link to a run that does not exist", async () => {

@@ -166,10 +166,12 @@ export function AttentionInbox() {
               <div role="list" aria-label="Waiting on you">
               {rows.map(({ item, name, named, line, stepAfter: after }) => (
                 <div role="listitem" key={item.id}>
-                // href ?? undefined, never a guessed path: the harness record's "run" is the literal
-                // string "howdah", and /run/howdah is a page that says the run failed to start. The
-                // server decides what each row can link at (engine/attention-inbox.ts `href`); a row
-                // with nothing to link at reads as plain text, its reason already naming `howdah up`.
+                {/* href ?? undefined, never a guessed path: the harness record's "run" is the literal
+                    string "howdah", and /run/howdah is a page that says the run failed to start. The
+                    server decides what each row can link at (engine/attention-inbox.ts `href`); a row
+                    with nothing to link at reads as plain text, its reason already naming `howdah up`.
+                    (A `//` comment here is JSX TEXT: wrapping the Row in a listitem once printed this
+                    paragraph above every row of the inbox.) */}
                 <Row className={INBOX_ROW} needsInput href={item.href ?? undefined} selected={nav.selected === item.id} data-nav-row={item.href ? item.id : undefined}>
                   <StatusGlyph status="needs-input" label="waiting on you" />
                   <span data-col="name" className="flex min-w-0">
