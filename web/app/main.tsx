@@ -16,7 +16,7 @@ import "./globals.css";
 // themed by setting React Flow's custom properties from tokens.css, under .gb-canvas.
 import "@xyflow/react/dist/style.css";
 import { createRoot } from "react-dom/client";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Rows3, Plus, Workflow, Settings as SettingsIcon, Library, FileDiff, BellRing, Sun, Moon, Monitor, Search, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import type { ProposalView } from "../../prompts/proposals";
 import type { InboxItem } from "../../engine/attention-inbox";
@@ -24,6 +24,9 @@ import type { ReadyItem } from "../draft";
 import { PROPOSALS_CHANGED } from "@/lib/types";
 import { getJSON } from "@/lib/net";
 import { navigate } from "@/lib/nav";
+import { observeAsks } from "@/lib/attention-sound";
+import { startPresence } from "@/lib/presence";
+import { useRouteFocus } from "@/lib/page";
 import { useMediaQuery } from "@/lib/hooks";
 import { installShortcuts, useShortcuts } from "@/lib/shortcuts";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -146,6 +149,9 @@ export function App() {
     return () => { document.removeEventListener("click", onClick); window.removeEventListener("popstate", onPop); };
   }, []);
 
+  // D20: a change of screen moves focus to the new screen's heading (lib/page.ts)
+  useRouteFocus(path);
+
   const [theme, setTheme] = useState<string>(() => localStorage.getItem("howdah-theme") ?? "system");
   useEffect(() => {
     if (theme === "system") delete document.documentElement.dataset.theme;
@@ -195,9 +201,27 @@ export function App() {
   // how many runs are standing there waiting for a human (HOW-20). Polled, not counted from
   // the runs list: this is the same read model the notifications ring by, so the badge and
   // the banner can never say different numbers.
+  //
+  // D18: the same poll is what makes the viewer's notification reach EVERY screen. Only Runs,
+  // Needs you and a run's own page used to observe asks, so a viewer left on Settings or the
+  // builder announced nothing — and it now tells the engine to leave the banner to it
+  // (lib/presence.ts), so it has to. It clears only what IT listed and no longer lists: a
+  // screen with a different view of "waiting" must never be argued with, or the two would
+  // call the same run new on alternate polls.
   const [waiting, setWaiting] = useState(0);
+  const listed = useRef<string[]>([]);
+  useEffect(() => startPresence(), []);
   useEffect(() => {
-    const load = () => getJSON<InboxItem[]>("/api/attention").then((i) => setWaiting(i.length)).catch(() => setWaiting(0));
+    const load = () => getJSON<InboxItem[]>("/api/attention").then((i) => {
+      setWaiting(i.length);
+      const now = i.map((x) => x.run);
+      void observeAsks({
+        waiting: now,
+        cleared: listed.current.filter((id) => !now.includes(id)),
+        info: Object.fromEntries(i.map((x) => [x.run, { name: x.run, body: x.reason, ...(x.href === null ? { href: "/attention" } : {}) }])),
+      });
+      listed.current = now;
+    }).catch(() => setWaiting(0));
     load();
     const t = setInterval(load, 5000);
     return () => clearInterval(t);

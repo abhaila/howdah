@@ -13,15 +13,17 @@
 import { useId } from "react";
 import { SectionLabel } from "@/components/ui/section-label";
 
-export function Section({ title, hint, children }: {
+export function Section({ title, hint, children, slot }: {
   title: React.ReactNode;
+  /** `data-slot`, and a programmatic focus target: Save lands on the problem list (D25) */
+  slot?: string;
   /** one sentence saying what this section decides */
   hint?: React.ReactNode;
   children: React.ReactNode;
 }) {
   const id = useId();
   return (
-    <section aria-labelledby={id} className="flex flex-col gap-3 border-b border-border py-4 first:pt-0 last:border-b-0 last:pb-0">
+    <section aria-labelledby={id} data-slot={slot} tabIndex={slot ? -1 : undefined} className="flex flex-col gap-3 border-b border-border py-4 first:pt-0 last:border-b-0 last:pb-0">
       <div className="flex flex-col gap-0.5">
         <SectionLabel as="h3" id={id}>{title}</SectionLabel>
         {hint !== undefined && <p className="m-0 text-pretty text-sm text-muted-foreground">{hint}</p>}

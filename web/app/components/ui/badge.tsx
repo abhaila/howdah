@@ -69,8 +69,3 @@ export function Badge({
     state: { slot: "badge", variant },
   });
 }
-
-/** the scope a context key declares → its Badge variant (one mapping, not one per call site) */
-export function scopeVariant(scope: string): BadgeVariant {
-  return scope === "cleared" ? "scope-cleared" : scope === "per-visit" ? "scope-per-visit" : "scope-sticky";
-}

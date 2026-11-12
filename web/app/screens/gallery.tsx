@@ -24,6 +24,7 @@
  * composites (HOW-27, kept verbatim from the shadcn registry) and are only meaningful with a
  * transcript or a harness question behind them; they are judged on the run view.
  */
+import { useDocumentTitle } from "@/lib/page";
 import { useState } from "react";
 import { Copy, FolderOpen, MoreHorizontal, Pause, Play, Plus, Square, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -105,6 +106,7 @@ export function Gallery() {
   const [chips, setChips] = useState<Record<string, boolean>>({ model: true, tool: false });
   const [checked, setChecked] = useState(true);
   const [dialog, setDialog] = useState(false);
+  useDocumentTitle("Components");
   const [alert, setAlert] = useState(false);
   const [drawer, setDrawer] = useState(true);
   const [palette, setPalette] = useState(false);

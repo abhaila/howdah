@@ -56,6 +56,7 @@ import { submitOnEnter } from "@/lib/keys";
 import { fmtWait } from "@/lib/format";
 import { useNow } from "@/lib/hooks";
 import { useRegisteredShortcuts } from "@/lib/shortcuts";
+import { focusWhenVisible } from "@/lib/page";
 import { useToast } from "@/components/ui/toast";
 import { StatusGlyph } from "../status";
 import { ApprovalCard } from "../slice";
@@ -113,7 +114,7 @@ function FullMessage({ reason, closed = false, children }: { reason: string; clo
  * and the run header's "Waiting on you" target; `collapsing` is the exit half of the
  * sending → delivered → collapsing moment.
  */
-function AskShell({ runId, ask, title, hint, collapsing = false, messageClosed = false, shellRef, record, children }: {
+function AskShell({ runId, ask, title, hint, collapsing = false, messageClosed = false, shellRef, focusRef, record, children }: {
   runId: string;
   ask: Ask;
   title: string;
@@ -122,6 +123,8 @@ function AskShell({ runId, ask, title, hint, collapsing = false, messageClosed =
   /** the card already shows what the message says (a question card shows the question) */
   messageClosed?: boolean;
   shellRef?: React.RefObject<HTMLElement | null>;
+  /** what a deep link (`#needs-input`) focuses: the card's own control. Default: the card. */
+  focusRef?: React.RefObject<HTMLElement | null>;
   /** shown inside the "Full message" disclosure, after the engine's reason */
   record?: React.ReactNode;
   children: React.ReactNode;
@@ -129,9 +132,19 @@ function AskShell({ runId, ask, title, hint, collapsing = false, messageClosed =
   const headingId = useId();
   const now = useNow(30_000);
   const arriving = useArriving(runId, ask);
+  // THE DEEP LINK LANDS ON THE CONTROL — for every card, from here. Two cards used to do this
+  // themselves (and three did not do it at all), each with a bare `focus()` at mount, which a
+  // real browser ignores: the transcript is `visibility: hidden` until its first scroll
+  // position is set. `focusWhenVisible` waits for it.
+  const own = useRef<HTMLElement | null>(null);
+  const attach = useCallback((el: HTMLElement | null) => { own.current = el; if (shellRef) shellRef.current = el; }, [shellRef]);
+  useEffect(() => {
+    if (location.hash !== "#needs-input") return;
+    return focusWhenVisible(() => focusRef?.current ?? own.current);
+  }, [focusRef]);
   return (
     <section
-      ref={shellRef}
+      ref={attach}
       tabIndex={-1}
       id="needs-input"
       aria-labelledby={headingId}
@@ -266,6 +279,13 @@ function permissionAsk(ask: NonNullable<RunDetail["ask"]>): { tool: string; what
   return { tool: a.tool_name, what, why: typeof why === "string" && why.trim() !== "" && why.trim() !== what ? why.trim() : null };
 }
 
+/** what the toast says for a permission answer — the two verdicts are not "a reply" */
+function permissionVerdict(sent: string | undefined): string | null {
+  if (sent === "allow") return "Allowed. The agent is carrying on.";
+  if (sent !== undefined && /^deny\b/.test(sent)) return "Denied. The agent is carrying on without it.";
+  return null;
+}
+
 export function AskCard({ runId, ask, detail, onResolved }: { runId: string; ask: NonNullable<RunDetail["ask"]>; detail: RunDetail; onResolved: () => void }) {
   const [text, setText] = useState("");
   const [state, setState] = useState<"idle" | "sending" | "delivered" | "failed" | "refused">("idle");
@@ -274,7 +294,6 @@ export function AskCard({ runId, ask, detail, onResolved }: { runId: string; ask
   const [refusal, setRefusal] = useState<string | null>(null);
   const ref = useRef<HTMLTextAreaElement>(null);
   const { toast } = useToast();
-  useEffect(() => { if (location.hash === "#needs-input") ref.current?.focus(); }, []);
   const context = attentionContext(detail, ask);
   const elicitation = elicitationAsk(ask);
   const permission = permissionAsk(ask);
@@ -297,18 +316,18 @@ export function AskCard({ runId, ask, detail, onResolved }: { runId: string; ask
       }
       if (!r.ok) throw new Error(await r.text());
       setState("delivered");
-      toast(`Reply delivered to ${ask.node}@${ask.visit}`);
+      toast(permissionVerdict(override) ?? "Reply sent. The run is resuming.");
       setTimeout(onResolved, 420); // the collapse plays, then the thread takes over — the motion moment
     } catch {
       setState("failed");
       toast("The reply did not reach the runner", "error");
     }
-  }, [runId, text, onResolved, toast, ask.node, ask.visit]);
+  }, [runId, text, onResolved, toast]);
 
   const busy = state === "sending" || state === "delivered";
   const summary = parkSummary({ code: ask.code, node: ask.node, ask: ask.ask });
   return (
-    <AskShell runId={runId} ask={ask} title={summary.title} hint={summary.hint} collapsing={state === "delivered"}>
+    <AskShell runId={runId} ask={ask} title={summary.title} hint={summary.hint} collapsing={state === "delivered"} focusRef={ref}>
       <AskItems ask={ask} detail={detail} />
       {elicitation && (
         <div className="ask-elicitation">
@@ -423,8 +442,7 @@ export function AskQuestionCard({ runId, ask, questions, onResolved }: {
   const [refusal, setRefusal] = useState<string | null>(null);
   const card = useRef<HTMLElement>(null);
   const { toast } = useToast();
-  // the deep link lands on the card; the questionnaire moves focus to the active item itself
-  useEffect(() => { if (location.hash === "#needs-input") card.current?.focus(); }, []);
+  // the deep link lands on the card (AskShell does it); the questionnaire moves focus to the active item itself
 
   const toggle = (q: (typeof questions)[number], label: string) =>
     setPicked((p) => {
@@ -460,13 +478,13 @@ export function AskQuestionCard({ runId, ask, questions, onResolved }: {
       }
       if (!r.ok) throw new Error(await r.text());
       setState("delivered");
-      toast(`Answer delivered to ${ask.node}@${ask.visit}`);
+      toast("Answer sent. The agent is carrying on.");
       setTimeout(onResolved, 420); // the collapse plays, then the thread takes over
     } catch {
       setState("failed");
       toast("The answer did not reach the runner", "error");
     }
-  }, [runId, answers, onResolved, toast, ask.node, ask.visit]);
+  }, [runId, answers, onResolved, toast]);
 
   const busy = state === "sending" || state === "delivered";
 
@@ -523,7 +541,10 @@ export function AskQuestionCard({ runId, ask, questions, onResolved }: {
               onChange={(e) => setOther((o) => ({ ...o, [q.id]: e.target.value }))}
               placeholder={q.options.length ? "Something else…" : "Your answer…"}
             />
-            <QuestionnaireError />
+            {/* not while the answer is on its way: the choices are disabled then, a disabled
+                choice does not satisfy `required`, and the primitive printed "Choose an answer to
+                continue." under an answer that had just been accepted — for the whole collapse */}
+            {!busy && <QuestionnaireError />}
           </QuestionnaireItem>
         ))}
         <QuestionnaireActions>
@@ -597,7 +618,7 @@ export function EffectCard({
         }
         if (!r.ok) throw new Error(await r.text());
         setState("recorded");
-        toast(`${effect.effect} recorded as ${verdict === "happened" ? "already done" : "not done"}`);
+        toast(`${effect.effect} recorded as ${verdict === "happened" ? "already done" : "not done"}. The run is resuming.`);
         setTimeout(onResolved, 420);
       } catch {
         setState("failed");
@@ -686,7 +707,7 @@ export function NoReplyCard({ runId, ask, detail, refusal, retry, onResolved }: 
         return;
       }
       setState("delivered");
-      toast(`Retrying ${ask.node}@${ask.visit}`);
+      toast(`Retrying ${ask.node}@${ask.visit}. The run is resuming.`);
       setTimeout(onResolved, 420); // the collapse plays, then the thread takes over — the motion moment
     } catch {
       setError("the retry did not reach the runner");
@@ -764,6 +785,11 @@ export function NoReplyCard({ runId, ask, detail, refusal, retry, onResolved }: 
  * with its own needs-you edge, and a card inside a card is the thing DESIGN.md forbids.
  */
 function ApprovalAsk({ runId, ask, slice, onResolved }: { runId: string; ask: Ask; slice: NonNullable<RunDetail["slice"]>; onResolved: () => void }) {
+  // the deep link lands here too: the approval card is not an AskShell, so it is done by id
+  useEffect(() => {
+    if (location.hash !== "#needs-input") return;
+    return focusWhenVisible(() => { const el = document.getElementById("needs-input"); if (el && !el.hasAttribute("tabindex")) el.setAttribute("tabindex", "-1"); return el; });
+  }, []);
   return (
     // no id here: the approval card carries `id="needs-input"` itself while it awaits a decision
     <section className="ask-approval" aria-label="the proposal waiting for your decision">

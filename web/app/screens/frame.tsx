@@ -24,6 +24,7 @@
  */
 import { ArrowLeft, RotateCw } from "lucide-react";
 import { useMediaQuery } from "@/lib/hooks";
+import { useDocumentTitle } from "@/lib/page";
 import { useEscapeLayer } from "@/lib/shortcuts";
 import { Kbd } from "@/components/ui/kbd";
 import { ScrollPane } from "@/components/ui/scroll-pane";
@@ -70,6 +71,7 @@ export function Screen({ name, title, description, actions, footer, width = "lis
   width?: keyof typeof WIDTH;
   children: React.ReactNode;
 }) {
+  useDocumentTitle(title);
   return (
     <div data-screen={name} className="flex min-h-0 min-w-0 flex-1 flex-col">
       <ScreenHeader title={title} description={description} actions={actions} />
@@ -136,6 +138,7 @@ export function SplitScreen({ name, title, description, actions, footer, list, l
   onBack?: () => void;
   backLabel: string;
 }) {
+  useDocumentTitle(title);
   const narrow = useMediaQuery(SPLIT_NARROW);
   const detailOnly = narrow && hasDetail;
   // Esc steps back out of the detail, like every other panel — only while it has replaced the list

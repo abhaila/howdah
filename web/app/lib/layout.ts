@@ -100,13 +100,9 @@ const ROOM: Point = { x: CARD.x + 24, y: CARD.y + 64 };
  *  end on a free spot rather than merely end. */
 const ASIDE: Point = { x: ROOM.x + 4, y: ROOM.y + 4 };
 
-/** The small step of the last resort below: a whole card down, so one placed step can rule out
- *  at most one candidate. */
-const NUDGE: Point = { x: 48, y: 80 };
-
 /**
- * `at`, unless a step is already sitting there or close enough to share a wire's caption —
- * then the nearest clear spot around it.
+ * `at`, unless a step is already sitting there, close enough to share a wire's caption, or the
+ * spot is ON A WIRE — then the nearest clear spot around it.
  *
  * Two palette clicks in a row must not stack two cards on the same pixel, which is the failure
  * mode "always the centre" has; and "half a card away" was not enough either: three steps added
@@ -114,36 +110,66 @@ const NUDGE: Point = { x: 48, y: 80 };
  * NOT used by the DROP path: a drop is where the operator put it, and moving it is a lie about
  * a direct-manipulation gesture.
  *
- * `undefined` in, `undefined` out — there is no spot near nowhere. Each direction's row of
- * candidates is spaced just past the room a card needs, so one placed step can rule out at
- * most one of them and `placed.length + 1` steps out always holds a free one.
+ * D21: it no longer settles for "close but visible". It used to take `reach` — how far the
+ * view extended — and, in a small pane with nothing clear on screen, stepped aside by less than
+ * a card, which is how a third step ended up on a wire and its caption. The canvas now PANS to
+ * the new step (builder/canvas.tsx `revealShift`), so the only question here is "where is it
+ * clear", and a wire is an obstacle like a card is: pass `edges` and a spot whose card would
+ * sit on the line between two wired steps, or on the caption at its middle, is not clear.
+ *
+ * `undefined` in, `undefined` out — there is no spot near nowhere. Candidates are a grid around
+ * `at`, spaced just past the room a card needs, nearest first; if a crowded draft rules out
+ * every one, the spot below everything is clear by construction.
  */
-export function freeSpotNear(nodes: NodeSpec[], at: Point | undefined, reach?: Point): Point | undefined {
+export function freeSpotNear(nodes: NodeSpec[], at: Point | undefined, opts: { edges?: ReadonlyArray<{ from: string; to: string }> } = {}): Point | undefined {
   if (!at) return undefined;
   const placed = nodes.map((n) => n.position).filter((p): p is Point => !!p);
-  const clear = (p: Point) => !placed.some((q) => Math.abs(q.x - p.x) < ROOM.x && Math.abs(q.y - p.y) < ROOM.y);
+  const where = new Map(nodes.flatMap((n) => (n.position ? [[n.id, n.position] as const] : [])));
+  // a wire, as the straight line between the two cards' centres — the drawn curve leaves by the
+  // facing sides and stays inside the margin below — and its caption at the middle
+  const wires = (opts.edges ?? []).flatMap((e) => {
+    const a = where.get(e.from), b = where.get(e.to);
+    if (!a || !b || e.from === e.to) return [];
+    return [{ a: { x: a.x + CARD.x / 2, y: a.y + CARD.y / 2 }, b: { x: b.x + CARD.x / 2, y: b.y + CARD.y / 2 } }];
+  });
+  const onWire = (p: Point) => wires.some(({ a, b }) => {
+    const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+    return segmentHitsBox(a, b, { x: p.x - WIRE_MARGIN, y: p.y - WIRE_MARGIN, w: CARD.x + WIRE_MARGIN * 2, h: CARD.y + WIRE_MARGIN * 2 })
+      || (mid.x > p.x - CAPTION.x && mid.x < p.x + CARD.x + CAPTION.x && mid.y > p.y - CAPTION.y && mid.y < p.y + CARD.y + CAPTION.y);
+  });
+  const clear = (p: Point) => !placed.some((q) => Math.abs(q.x - p.x) < ROOM.x && Math.abs(q.y - p.y) < ROOM.y) && !onWire(p);
   if (clear(at)) return at;
-  // Every spot one, two, … steps out in the four directions, nearest first; a tie goes below,
-  // then above (a graph reads downwards), then to either side.
-  const around: Point[] = [];
-  for (let i = 1; i <= placed.length + 1; i++) {
-    around.push({ x: at.x, y: at.y + i * ASIDE.y }, { x: at.x, y: at.y - i * ASIDE.y }, { x: at.x + i * ASIDE.x, y: at.y }, { x: at.x - i * ASIDE.x, y: at.y });
+  // A grid of spots around `at`, nearest first; a tie goes below, then above (a graph reads
+  // downwards), then to either side.
+  const span = Math.min(8, placed.length + wires.length + 1);
+  const around: Array<{ p: Point; order: number }> = [];
+  for (let i = -span; i <= span; i++) for (let j = -span; j <= span; j++) {
+    if (i === 0 && j === 0) continue;
+    const order = i === 0 ? (j > 0 ? 0 : 1) : j === 0 ? (i > 0 ? 2 : 3) : 4;
+    around.push({ p: { x: at.x + i * ASIDE.x, y: at.y + j * ASIDE.y }, order });
   }
   const far = (p: Point) => Math.hypot(p.x - at.x, p.y - at.y);
-  const free = around.map((p, order) => ({ p, order })).sort((a, b) => far(a.p) - far(b.p) || a.order - b.order).map((c) => c.p).filter(clear);
-  // `reach` is how far from `at` a card can sit and still be on screen. A clear spot IN VIEW
-  // wins over a nearer one that is not: the canvas does not move when one step is added, so a
-  // step placed past the edge of the pane is a step the operator cannot see they made.
-  if (!reach) return free[0] ?? { x: at.x, y: at.y + (placed.length + 1) * ASIDE.y };
-  const seen = free.find((p) => Math.abs(p.x - at.x) <= reach.x && Math.abs(p.y - at.y) <= reach.y);
-  if (seen) return seen;
-  // Nothing clear is on screen (a small pane, or a crowded one). Seen-but-close beats
-  // tidy-but-invisible, so step aside by less than a card until at least the two cards'
-  // titles are apart — the rule this function had before it knew about captions.
-  let spot = at;
-  const apart = (p: Point) => !placed.some((q) => Math.abs(q.x - p.x) < CARD.x / 2 && Math.abs(q.y - p.y) < CARD.y / 2);
-  for (let i = 1; i <= placed.length && !apart(spot); i++) spot = { x: at.x + i * NUDGE.x, y: at.y + i * NUDGE.y };
-  return spot;
+  const free = around.sort((a, b) => far(a.p) - far(b.p) || a.order - b.order).map((c) => c.p).find(clear);
+  // below everything: no card and no wire reaches there
+  return free ?? { x: at.x, y: Math.max(at.y, ...placed.map((q) => q.y)) + ASIDE.y };
+}
+
+/** how close to a wire's line a card may come before it reads as sitting on it */
+const WIRE_MARGIN = 12;
+/** half a caption's box ("Otherwise", `goal is set`), which is drawn centred on the wire's middle */
+const CAPTION: Point = { x: 64, y: 14 };
+
+/** Does the segment a→b touch the box? Liang–Barsky clipping; pure. */
+export function segmentHitsBox(a: Point, b: Point, box: { x: number; y: number; w: number; h: number }): boolean {
+  let t0 = 0, t1 = 1;
+  const dx = b.x - a.x, dy = b.y - a.y;
+  for (const [p, q] of [[-dx, a.x - box.x], [dx, box.x + box.w - a.x], [-dy, a.y - box.y], [dy, box.y + box.h - a.y]] as const) {
+    if (p === 0) { if (q < 0) return false; continue; }
+    const t = q / p;
+    if (p < 0) { if (t > t1) return false; if (t > t0) t0 = t; }
+    else { if (t < t0) return false; if (t < t1) t1 = t; }
+  }
+  return true;
 }
 
 /** Where a step with no position of its own goes — below everything, so nothing is covered. */

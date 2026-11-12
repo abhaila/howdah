@@ -41,6 +41,8 @@ export interface Observation {
 export interface RunNote {
   name: string;
   body: string;
+  /** where the notification's click lands, when it is not the run's own ask */
+  href?: string;
 }
 
 /** Which of the waiting runs are NEWS, and what is known after this sighting. Pure. */

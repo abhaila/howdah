@@ -29,7 +29,7 @@
  * waiting on you, and a waiver is a decision already made, so it is neutral. How a row is
  * checked is one small chip. Nothing is uppercase.
  */
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { CheckCircle2, CircleX, Clock, ShieldCheck, Ban, MinusCircle } from "lucide-react";
 import type { RunDetail } from "../../derive";
 import { Button } from "@/components/ui/button";
@@ -70,6 +70,33 @@ export function AcceptanceCard({ runId, detail, onChanged }: { runId: string; de
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const { toast } = useToast();
+  // D20: closing the reason field — Esc, Cancel or a waiver that went through — removes the
+  // element that had focus. Focus goes back to the control that opened it; when that is gone
+  // too (the row is waived now) to the next row that can still be waived, else to the card.
+  const card = useRef<HTMLElement | null>(null);
+  const opened = useRef<string | null>(null);
+  useEffect(() => {
+    if (waiving !== null) { opened.current = waiving; return; }
+    const was = opened.current;
+    opened.current = null;
+    const root = card.current;
+    if (was === null || !root) return;
+    const active = document.activeElement;
+    if (active && active !== document.body && active.isConnected && !root.contains(active)) return; // the operator moved on
+    const opener = [...root.querySelectorAll<HTMLElement>("[data-waive-open]")].find((b) => b.dataset.waiveOpen === was);
+    (opener ?? root.querySelector<HTMLElement>("[data-waive-open]") ?? root).focus();
+    held.current = Date.now() + 3000;
+  }, [waiving]);
+  // ...and a waiver that went through reloads the run a moment later, which removes the row's
+  // opener — the very control focus was just returned to. For a few seconds after the field
+  // closes, focus that has fallen off the card is put back on it.
+  const held = useRef(0);
+  useEffect(() => {
+    const root = card.current;
+    if (!root || Date.now() > held.current) return;
+    const a = document.activeElement;
+    if (!a || a === document.body || !a.isConnected) (root.querySelector<HTMLElement>("[data-waive-open]") ?? root).focus();
+  });
   if (!acc) return null;
   const live = acc.rows.filter((r) => !r.superseded);
   const met = live.filter((r) => r.passes || r.waived).length;
@@ -102,7 +129,7 @@ export function AcceptanceCard({ runId, detail, onChanged }: { runId: string; de
   };
 
   return (
-    <section className="ac-card" data-met={acc.unmet === 0 ? "true" : "false"} data-held={acc.waivable && acc.unmet > 0 ? "true" : "false"} aria-label="Acceptance criteria">
+    <section ref={card} tabIndex={-1} data-slot="acceptance-card" className="ac-card" data-met={acc.unmet === 0 ? "true" : "false"} data-held={acc.waivable && acc.unmet > 0 ? "true" : "false"} aria-label="Acceptance criteria">
       <div className="ac-head">
         <ShieldCheck size={14} aria-hidden className="shrink-0 text-muted-foreground" />
         <h3 className="m-0 text-md font-semibold text-foreground">Acceptance</h3>
@@ -131,7 +158,7 @@ export function AcceptanceCard({ runId, detail, onChanged }: { runId: string; de
               <Button size="sm" variant="ghost" disabled={busy} onClick={() => { setWaiving(null); setError(null); }}>Cancel</Button>
             </span>
           ) : (
-            <Button size="sm" variant="outline" className="self-start" onClick={() => { setWaiving(ALL); setReason(""); setError(null); }}>Waive all unprovable…</Button>
+            <Button size="sm" variant="outline" className="self-start" data-waive-open={ALL} onClick={() => { setWaiving(ALL); setReason(""); setError(null); }}>Waive all unprovable…</Button>
           )}
         </div>
       )}
@@ -161,7 +188,7 @@ export function AcceptanceCard({ runId, detail, onChanged }: { runId: string; de
                     <Button size="sm" variant="ghost" disabled={busy} onClick={() => { setWaiving(null); setError(null); }}>Cancel</Button>
                   </span>
                 ) : (
-                  <Button size="sm" variant="outline" className="ac-waive-open" onClick={() => { setWaiving(r.id); setReason(""); setError(null); }}>Waive…</Button>
+                  <Button size="sm" variant="outline" className="ac-waive-open" data-waive-open={r.id} onClick={() => { setWaiving(r.id); setReason(""); setError(null); }}>Waive…</Button>
                 ))}
               </div>
             </li>

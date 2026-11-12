@@ -105,6 +105,44 @@ const KIND_ICON: Record<string, typeof Sparkles> = { agent: Sparkles, command: T
  */
 const fitId = (s: string, max: number): string => (s.length <= max ? s : `${s.slice(0, Math.ceil((max - 1) / 2) - 1)}…${s.slice(-(Math.floor((max - 1) / 2) + 1))}`);
 
+/**
+ * A step id as a box prints it (D23): the part that TELLS STEPS APART, in full.
+ *
+ * `fitId` cut the middle of every long id, which for `implementation.local_review` among
+ * `implementation.plan_review` and `implementation.implement_review` gave three boxes reading
+ * "implemen…al_review", "implemen…an_review", "implemen…nt_review" — the shared prefix kept, the
+ * word that differs lost. A dotted id is `<group>.<step>`, so:
+ *
+ *   - when EVERY step of the graph is in one group (`quick-task.work`, `quick-task.review`),
+ *     the group says nothing and is omitted;
+ *   - otherwise the group is printed dimmed, and when the whole id does not fit it is the GROUP
+ *     that is shortened (`impl….local_review`), never the step;
+ *   - only a step name that cannot fit on its own is cut, both ends kept, as before.
+ *
+ * The full id is never lost: it is the node's `aria-label` and its hover `<title>`. Pure.
+ */
+export function idParts(id: string, max: number, sharedGroup: string | null): { dim: string; main: string } {
+  const dot = id.lastIndexOf(".");
+  if (dot <= 0 || dot === id.length - 1) return { dim: "", main: fitId(id, max) };
+  const group = id.slice(0, dot);
+  const step = id.slice(dot + 1);
+  if (sharedGroup !== null && group === sharedGroup) return { dim: "", main: fitId(step, max) };
+  if (id.length <= max) return { dim: `${group}.`, main: step };
+  // room for the group once the step and its dot are in: at least two letters and the ellipsis
+  const room = max - step.length - 1;
+  if (room >= 3) return { dim: `${group.slice(0, room - 1)}….`, main: step };
+  return { dim: "", main: fitId(step, max) };
+}
+
+/** the one group every dotted id shares, when every node has a dotted id in it — else null */
+export function sharedGroupOf(ids: readonly string[]): string | null {
+  if (ids.length < 2) return null;
+  const groups = new Set(ids.map((id) => { const dot = id.lastIndexOf("."); return dot > 0 ? id.slice(0, dot) : null; }));
+  if (groups.size !== 1) return null;
+  const [only] = [...groups];
+  return only ?? null;
+}
+
 /** a point on the cubic the forward edges are drawn with */
 const cubic = (t: number, a: number, b: number, c: number, d: number) => {
   const u = 1 - t;
@@ -149,6 +187,7 @@ export function GraphDag({
   waiting?: boolean;
 }) {
   const pos = layout(shape);
+  const sharedGroup = sharedGroupOf(shape.nodes.map((n) => n.id));
   const width = Math.max(...[...pos.values()].map((p) => p.x)) + 230;
   const height = Math.max(...[...pos.values()].map((p) => p.y)) + 90;
   /**
@@ -371,7 +410,10 @@ export function GraphDag({
               {/* a kind is an icon; a removed step keeps its minus sign as text (it is the word) */}
               {!gone && (() => { const Icon = KIND_ICON[n.kind] ?? Circle; return <g transform="translate(10, 11)" className="dag-kind" aria-hidden><Icon size={13} /></g>; })()}
               <text x={gone ? 12 : 29} y="22" className="dag-title" aria-hidden>
-                {gone ? "− " : ""}{fitId(shown, isCurrent || gone ? 16 : 18)}
+                {gone ? "− " : ""}
+                {shown === n.id
+                  ? (() => { const parts = idParts(n.id, isCurrent || gone ? 16 : 18, sharedGroup); return <>{parts.dim && <tspan className="dag-title-group">{parts.dim}</tspan>}{parts.main}</>; })()
+                  : fitId(shown, isCurrent || gone ? 16 : 18)}
               </text>
               <text x="12" y="40" className="dag-sub" aria-hidden>{sub.length > 26 ? sub.slice(0, 25) + "…" : sub}</text>
               {isCurrent && <g transform="translate(158, 11)" aria-hidden><StatusGlyph status={waiting ? "needs-input" : "running"} size={13} /></g>}

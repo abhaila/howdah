@@ -134,7 +134,9 @@ describe("AttentionInbox", () => {
     const row = el.querySelector("[data-needs-input]")!;
     expect(row.textContent).toContain("howdah up"); // the fix is in the reason, where it reads
     expect(row.querySelector('[data-col="waited"]')!.textContent).toBe("20m");
-    expect(row.querySelector('[data-col="step"]')!.textContent).toBe(""); // `__harness__` is not a step anyone can open
+    // D22: there is no step column any more; `__harness__` is not a step anyone can open, so it is not printed at all
+    expect(row.querySelector('[data-col="step"]')).toBeNull();
+    expect(row.textContent).not.toContain("__harness__");
   });
 
   test("nothing waiting says so", async () => {
@@ -222,18 +224,30 @@ describe("AttentionInbox", () => {
     const row = el.querySelector("a[data-nav-row]")!;
     const cell = (name: string) => row.querySelector(`[data-col="${name}"]`)!.textContent!.replace(/\s+/g, " ").trim();
     expect(cell("name")).toBe("HOW-431 Rate-limit headers"); // the NAME, not the 100-character id
-    expect(cell("line")).toBe("Publish? Some acceptance criteria are not proven.");
-    expect(cell("step")).toBe("delivery.publish");
+    // D22: the step column is gone — it repeated what most sentences already say and cut the
+    // sentence at 1024. Where the sentence does not name the step, the id follows it.
+    expect(cell("line")).toBe("Publish? Some acceptance criteria are not proven. · delivery.publish");
+    expect(row.querySelector('[data-col="step"]')).toBeNull();
+    expect(row.querySelector('[data-col="line"] .font-mono')!.textContent).toBe("delivery.publish");
     expect(cell("waited")).toBe("2h 11m");
     expect(row.textContent).not.toContain(LONG);
     // every cell that can be long is a Truncate, so nothing wraps into the next row (audit 3.1.8)
-    for (const name of ["name", "line", "step"]) expect(row.querySelector(`[data-col="${name}"] [data-slot="truncate"]`), name).not.toBeNull();
+    for (const name of ["name", "line"]) expect(row.querySelector(`[data-col="${name}"] [data-slot="truncate"]`), name).not.toBeNull();
+  });
+
+  test("D22: a sentence that already names the step does not get the id a second time", () => {
+    const named = inboxLine({ ...ITEM, node: "implementation.plan", reason: "implementation.plan failed: exit 1" }, undefined, Date.now());
+    expect(named.line.parts.filter((p) => p.value.includes("implementation.plan"))).toHaveLength(1);
+    const unnamed = inboxLine({ ...ITEM, node: "plan.approve", reason: "A proposal is waiting for your decision." }, undefined, Date.now());
+    expect(unnamed.line.parts.at(-1)).toEqual({ kind: "mono", value: "plan.approve" });
+    expect(inboxLine({ ...ITEM, node: "__harness__", reason: "run `howdah up`" }, undefined, Date.now()).line.parts.some((p) => p.kind === "mono")).toBe(false);
   });
 
   test("inboxLine: a run the board does not know, or whose park is a different ask, falls back to the record's own first line", () => {
     const fallback = inboxLine({ ...ITEM, reason: "\nfirst line\nsecond" }, undefined, Date.now());
     expect(fallback).toMatchObject({ name: ITEM.run, named: false, body: "first line", step: "implementation.plan" });
-    expect(fallback.line.parts.map((p) => p.value)).toEqual(["Needs you.", "first line"]);
+    // D22: the step id follows a sentence that does not name it (it used to be its own column)
+    expect(fallback.line.parts.map((p) => p.value)).toEqual(["Needs you.", "first line", "·", "implementation.plan"]);
     expect(inboxLine(HARNESS_ITEM, undefined, Date.now()).step).toBeNull();
   });
 });

@@ -67,8 +67,22 @@ import { StatusGlyph } from "../status";
 import { KeyHints, LIST_HINTS, Screen, ScreenLoading } from "./frame";
 import { Line } from "./runs";
 
-/** glyph · name · what it asks · step · how long — one 36px line, nothing wraps */
-const INBOX_ROW = "grid min-h-9 grid-cols-[16px_minmax(0,5fr)_minmax(0,8fr)_minmax(0,3fr)_132px] items-center gap-x-3 border-b border-border px-2 py-1.5 text-sm leading-[1.4] no-underline";
+/**
+ * glyph · name · what it asks · how long — one 36px line, nothing wraps.
+ *
+ * D22: there is no step column. The sentence usually NAMES the step ("implementation.plan
+ * failed."), so a fourth column printing the same id beside it cost the sentence a quarter of
+ * the row and cut it at 1024. The step id is still on the row: where the sentence does not say
+ * it ("Approve? A proposal is waiting for your decision."), it follows the sentence, in mono —
+ * so it is read where there is room and is in the Truncate's tooltip where there is not.
+ */
+const INBOX_ROW = "grid min-h-9 grid-cols-[16px_minmax(0,4fr)_minmax(0,9fr)_132px] items-center gap-x-3 border-b border-border px-2 py-1.5 text-sm leading-[1.4] no-underline";
+
+/** the sentence, followed by the step id unless the sentence already names it */
+function withStep(line: RunLine, step: string | null): RunLine {
+  if (step === null || line.parts.some((p) => p.value.includes(step))) return line;
+  return { ...line, parts: [...line.parts, { kind: "text", value: "·" }, { kind: "mono", value: step }] };
+}
 
 const firstLine = (s: string) => (s.split("\n").find((l) => l.trim() !== "") ?? "").trim();
 
@@ -81,13 +95,13 @@ export function inboxLine(item: InboxItem, row: RunBoardRow | undefined, now: nu
   const step = item.node.startsWith("__") ? null : item.node;
   if (row !== undefined && same) {
     const line = runLine(row, now);
-    return { name: runLabel(row), named: !!(row.name || row.goal), line, body: parkSummary(row.park ?? { node: item.node }).title, step };
+    return { name: runLabel(row), named: !!(row.name || row.goal), line: withStep(line, step), body: parkSummary(row.park ?? { node: item.node }).title, step };
   }
   const said = firstLine(item.reason);
   return {
     name: row ? runLabel(row) : item.run,
     named: !!(row && (row.name || row.goal)),
-    line: { parts: [{ kind: "strong", value: "Needs you." }, { kind: "text", value: said }], quiet: false },
+    line: withStep({ parts: [{ kind: "strong", value: "Needs you." }, { kind: "text", value: said }], quiet: false }, step),
     body: said,
     step,
   };
@@ -140,7 +154,7 @@ export function AttentionInbox() {
           ) : (
             <section aria-label="Waiting on you" className="flex flex-col">
               <SectionLabel as="h2" count={items.length} className="border-b border-border px-2 pb-1.5">Waiting on you</SectionLabel>
-              {rows.map(({ item, name, named, line, step }) => (
+              {rows.map(({ item, name, named, line }) => (
                 // href ?? undefined, never a guessed path: the harness record's "run" is the literal
                 // string "howdah", and /run/howdah is a page that says the run failed to start. The
                 // server decides what each row can link at (engine/attention-inbox.ts `href`); a row
@@ -153,7 +167,6 @@ export function AttentionInbox() {
                       : <Truncate mono middle={12} className="text-code text-foreground">{name}</Truncate>}
                   </span>
                   <span data-col="line" className="flex min-w-0"><Line line={line} /></span>
-                  <span data-col="step" className="flex min-w-0">{step !== null && <Truncate mono middle={14} className="text-code text-muted-foreground">{step}</Truncate>}</span>
                   {/* the wait, written the way the Runs list writes it ("19h 06m"): under a heading that
                       already says "Waiting on you", the server's "waiting …" said the word 21 times */}
                   {/* the CELL is right-aligned and the tooltip sits inside it, as on the Runs list: with the
@@ -175,9 +188,9 @@ export function AttentionInbox() {
                   <span data-col="name" className="flex min-w-0"><Truncate className="text-body font-medium text-foreground">{item.name || item.intent || item.run}</Truncate></span>
                   <span data-col="line" className="flex min-w-0 items-center gap-2 text-muted-foreground">
                     <Badge variant="outline"><Inbox aria-hidden />ready</Badge>
-                    <Truncate>A drafted graph, ready to review and save</Truncate>
+                    {/* the run id follows the sentence (D22): the same shape as the rows above */}
+                    <Truncate text={`A drafted graph, ready to review and save · ${item.run}`}>A drafted graph, ready to review and save · <span className="font-mono text-code">{item.run}</span></Truncate>
                   </span>
-                  <span data-col="step" className="flex min-w-0"><Truncate mono middle={12} className="text-code text-muted-foreground">{item.run}</Truncate></span>
                   <span data-col="finished" className="whitespace-nowrap text-right tabular-nums text-muted-foreground">finished {fmtAgo(Date.now() - new Date(item.finished_at).getTime())} ago</span>
                 </Row>
               ))}

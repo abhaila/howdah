@@ -158,8 +158,11 @@ From the animations.dev course. Motion states a change; it never decorates.
 - The viewer posts a real browser notification for a run that newly starts waiting: its name,
   what it is asking, and a click that opens it. Permission is asked from Settings, never on
   load.
-- The OS path (`engine/attention.ts`) exists for when no viewer is open.
-- Sound is off by default, one setting governs every sound, and it plays only for news.
+- One ask, one notification. An open viewer that may notify tells the server so
+  (`viewer.json`), and the OS path (`engine/attention.ts`) stands down while it does; the OS
+  path exists for when no viewer is open. Nothing is posted over a viewer you are looking at.
+- Sound is off by default, one setting governs every sound, and it plays only for news. When
+  on it is one short soft tone (`tools/chime.ts`), never a jingle.
 
 ## Identity
 

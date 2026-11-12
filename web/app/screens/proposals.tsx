@@ -31,6 +31,7 @@ import { RotateCcw, ThumbsUp, X } from "lucide-react";
 import type { ProposalView } from "../../../prompts/proposals";
 import { PROPOSALS_CHANGED } from "@/lib/types";
 import { getJSON } from "@/lib/net";
+import { focusIfLost } from "@/lib/page";
 import { fmtWhen } from "@/lib/format";
 import { useListNav } from "@/lib/list-nav";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -102,8 +103,13 @@ export function ProposalsScreen({ selected }: { selected: string | null }) {
       setReason("");
       toast("Rejected — the reviser reads your reason as feedback");
     }
-    load();
+    await load();
     window.dispatchEvent(new Event(PROPOSALS_CHANGED));
+    // D20: the decision removes the buttons that made it, and focus fell to <body>. It goes to
+    // what the screen now says about the proposal — the notice — or to the detail pane.
+    requestAnimationFrame(() => focusIfLost(
+      document.querySelector<HTMLElement>("[data-slot='proposal-notice']") ?? document.querySelector<HTMLElement>("[data-screen='proposals'] [data-pane='detail']"),
+    ));
   };
 
   const nav = useListNav({ noun: "proposal", arrows: "list", enabled: !!list?.length });

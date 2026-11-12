@@ -256,7 +256,7 @@ function holdForKeyboardFocus(e: React.FocusEvent<HTMLDivElement>) {
 }
 
 /** one transcript row. Split out so the scroller's item wrapper stays one line per message. */
-function Row({ m, onPickStep, lastActivityAt, runId, parked, died, standing }: { m: ChatMessage; onPickStep: (key: string) => void; lastActivityAt: string | null; runId: string; parked: boolean; died: boolean; /** these are the words of the step whose park is still standing: its failure is the card's to say */ standing: boolean }) {
+function Row({ m, onPickStep, lastActivityAt, runId, parked, died, runDead, standing }: { m: ChatMessage; onPickStep: (key: string) => void; lastActivityAt: string | null; runId: string; parked: boolean; died: boolean; /** the run's runner is dead: the header and its notice say so, once (D26) */ runDead: boolean; /** these are the words of the step whose park is still standing: its failure is the card's to say */ standing: boolean }) {
   switch (m.kind) {
     case "step":
       return (
@@ -294,7 +294,8 @@ function Row({ m, onPickStep, lastActivityAt, runId, parked, died, standing }: {
                   ? <p key={i} className="act-thinking">{b.part.content.trim()}</p>
                   : <AgentProse key={i} text={b.part.content} hideFailure={standing} />,
           )}
-          <TurnNote state={m.state} lastActivityAt={lastActivityAt} className="cv-unfinished" />
+          {/* in a dead run the header's status and the one notice already say it died */}
+          <TurnNote state={runDead && m.state === "died" ? undefined : m.state} lastActivityAt={lastActivityAt} className="cv-unfinished" />
         </div>
       );
     case "steer":
@@ -538,6 +539,7 @@ export function RunChat({ runId, detail, ask, onPickStep, onResolved, liveGit = 
                   <Row m={m} onPickStep={onPickStep} lastActivityAt={detail.last_agent_event_at} runId={runId} parked={m.kind === "step" && ask !== null && ask !== undefined && ask.node === m.node && ask.visit === m.visit}
                     // a step still "running" in the timeline whose turn the read model derived as died is not running
                     died={m.kind === "step" && detail.turn_states[`${m.node}@${m.visit}`] === "died"}
+                    runDead={detail.summary.status === "harness-dead"}
                     standing={standingBeats !== null && (m.key === standingBeats || m.key.startsWith(`${standingBeats}:`))}
                   />
                 </MessageScrollerItem>

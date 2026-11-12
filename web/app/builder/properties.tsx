@@ -38,9 +38,9 @@
  *   reachable while a step is selected; this panel says what the name becomes.
  */
 
-import { ChevronLeft, CircleCheck, Play } from "lucide-react";
+import { ChevronLeft, CircleAlert, CircleCheck, Play } from "lucide-react";
 import { parseAgentConfig, promptIdFor, type SpecProblem } from "../../../core/graph-spec";
-import { PRESETS, bySeverity, type Draft, type DraftAction } from "@/lib/spec-draft";
+import { PRESETS, bySeverity, problemsByPane, type Draft, type DraftAction } from "@/lib/spec-draft";
 import { ConfigFields } from "../screens/graphs";
 import { FieldsPane } from "./fields";
 import { RemoveStep, StepFields } from "./step-form";
@@ -68,7 +68,10 @@ export function panelTitle(draft: Draft, selection: Selection): string {
   return "The graph";
 }
 
-export function Properties({ draft, dispatch, problems, selection, onSelect, onPreset }: {
+/** the problem list Save lands on (D25): the shell focuses and scrolls to this section */
+export const PROBLEMS_SLOT = "builder-problems";
+
+export function Properties({ draft, dispatch, problems, selection, onSelect, onPreset, refusal = null }: {
   draft: Draft;
   dispatch: (a: DraftAction) => void;
   /** ALL of them: the panel decides which ones belong to what is selected */
@@ -76,12 +79,14 @@ export function Properties({ draft, dispatch, problems, selection, onSelect, onP
   selection: Selection;
   onSelect: (sel: Selection) => void;
   onPreset: (presetId: string) => void;
+  /** what the SERVER said when it refused a save the browser thought was fine (D25) */
+  refusal?: string | null;
 }) {
   const { spec } = draft;
 
   if (selection?.kind === "step") {
     const node = spec.nodes.find((n) => n.id === selection.id);
-    if (!node) return <GraphPanel draft={draft} dispatch={dispatch} problems={problems} onSelect={onSelect} onPreset={onPreset} />;
+    if (!node) return <GraphPanel draft={draft} dispatch={dispatch} problems={problems} onSelect={onSelect} onPreset={onPreset} refusal={refusal} />;
     const mine = problemsOfStep(problems, node.id);
     const Icon = KIND_ICON[node.kind];
     const kindLine = (
@@ -112,6 +117,10 @@ export function Properties({ draft, dispatch, problems, selection, onSelect, onP
     // by SEVERITY (HOW-26): advice describes a step that RUNS and is merely not what was
     // probably meant, and printing it in the refusal colour would say the save is blocked
     // when it is not. The branching ones are printed with the routes they are about.
+    // D24: core's sentences say "in Branching" (its pane vocabulary, untouched), so the section
+    // those sentences send you to is TITLED Branching — it read "Goes to", and "Remove its rows
+    // in Branching" pointed at a heading that was not on screen.
+    const branching = problemsByPane(mine).branching;
     const own = mine.filter((p) => p.where !== "branching");
     return (
       <div className="flex flex-col">
@@ -138,8 +147,8 @@ export function Properties({ draft, dispatch, problems, selection, onSelect, onP
           )}
         </Section>
         {node.kind !== "terminal" && (
-          <Section title="Goes to" hint="The same routes as the wires on the canvas — set here when you would rather not draw one.">
-            <StepRoutes draft={draft} from={node.id} problems={mine.filter((p) => p.where === "branching")} dispatch={dispatch} />
+          <Section title="Branching" hint="Where the run goes after this step. The same routes as the wires on the canvas — set here when you would rather not draw one.">
+            <StepRoutes draft={draft} from={node.id} problems={branching} dispatch={dispatch} />
           </Section>
         )}
         <Section title="Remove" hint="Takes the step and every route into and out of it. There is no undo.">
@@ -165,7 +174,7 @@ export function Properties({ draft, dispatch, problems, selection, onSelect, onP
     );
   }
 
-  return <GraphPanel draft={draft} dispatch={dispatch} problems={problems} onSelect={onSelect} onPreset={onPreset} />;
+  return <GraphPanel draft={draft} dispatch={dispatch} problems={problems} onSelect={onSelect} onPreset={onPreset} refusal={refusal} />;
 }
 
 /** Clicking empty canvas deselects too, but "click nothing" is not an affordance — and the
@@ -194,12 +203,13 @@ function ProblemRow({ problem, onSelect }: { problem: SpecProblem; onSelect: (se
   );
 }
 
-function GraphPanel({ draft, dispatch, problems, onSelect, onPreset }: {
+function GraphPanel({ draft, dispatch, problems, onSelect, onPreset, refusal }: {
   draft: Draft;
   dispatch: (a: DraftAction) => void;
   problems: SpecProblem[];
   onSelect: (sel: Selection) => void;
   onPreset: (presetId: string) => void;
+  refusal: string | null;
 }) {
   const { spec, saved } = draft;
   const agents = spec.nodes.filter((n) => n.kind === "agent");
@@ -235,14 +245,32 @@ function GraphPanel({ draft, dispatch, problems, onSelect, onPreset }: {
           text, a loop with no limit. None of it is refused, here or at the server, because the
           operator is the authority on their own graph — but it is counted and printed, because
           the graph in the ticket said "Ready to save" and then spun forever on an
-          unconditional edge to itself. */}
+          unconditional edge to itself.
+          D25: ONE verdict, said ONCE, HERE. The bar counts it in the same words; pressing Save
+          with something blocking brings you to this list instead of sending a request the
+          server would refuse — the hint used to say "Saving is still allowed" beside a Save
+          that then came back 422, in a banner, in this list and in a toast. The only thing
+          that can still be added is what the browser could NOT predict: the server's own
+          refusal (a prompt id shadowing the repo's, a file that will not import), shown as
+          the first row. */}
       <Section
-        title={blocking.length === 0 ? "Ready to save" : `${blocking.length} thing${blocking.length === 1 ? "" : "s"} to sort out`}
-        hint={blocking.length === 0
+        slot={PROBLEMS_SLOT}
+        title={refusal && blocking.length === 0 ? "The save was refused"
+          : blocking.length === 0 ? "Ready to save"
+          : `${blocking.length} ${blocking.length === 1 ? "problem" : "problems"} to fix before saving`}
+        hint={refusal && blocking.length === 0
+          ? "The server checked again and would not write this graph. Nothing was changed on disk."
+          : blocking.length === 0
           ? "Every step is reachable, every field a step reads is written before it gets there, and every branch goes somewhere."
-          : "Saving is still allowed — the server checks again and keeps the last good version if it refuses."}
+          : "Nothing is written while these stand. One that names a step takes you to it."}
       >
-        {blocking.length === 0 ? (
+        {refusal && (
+          <div role="alert" data-slot="save-refusal" className="flex items-start gap-2">
+            <CircleAlert aria-hidden className="mt-0.5 size-3.5 shrink-0 text-destructive" />
+            <div className="field-error wrap-pre min-w-0"><ProblemText message={refusal} /></div>
+          </div>
+        )}
+        {blocking.length === 0 ? refusal ? null : (
           <div className="flex items-center gap-2 text-base text-muted-foreground"><CircleCheck aria-hidden className="size-3.5 shrink-0" />Nothing outstanding.</div>
         ) : (
           <div className="flex flex-col gap-1">

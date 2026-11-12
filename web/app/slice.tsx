@@ -42,7 +42,7 @@
  * (`ApprovalCard`, `DriftView`, `MapProgressLine`, `slicePanes`, `SlicePane`, the glyphs) is
  * unchanged, so the card can be drawn in the conversation as it is drawn here.
  */
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { submitOnEnter } from "@/lib/keys";
 import type { GhostGroup, GhostRow, RunDetail, SliceComment, SliceDecision, SliceDrift, SliceMapProgress, SliceMapSnapshot, SliceProposal, SliceView } from "../derive";
 import { Button } from "@/components/ui/button";
@@ -474,6 +474,7 @@ export function ApprovalCard({ runId, slice, onChanged }: { runId: string; slice
         title={`Approve proposal #${p.proposal_id}?`}
         description="The run resumes into implementation and builds exactly this ghost set. The approval is bound to this proposal's hash and the snapshot it was drawn on — a later round cannot inherit it."
         confirmLabel="Approve the design"
+        tone="default"
       />
       <AlertDialog
         open={confirm === "feedback"}
@@ -483,6 +484,7 @@ export function ApprovalCard({ runId, slice, onChanged }: { runId: string; slice
         title={`Send feedback on proposal #${p.proposal_id}?`}
         description={`Your ${roundComments.length} pinned comment${roundComments.length === 1 ? "" : "s"} go back to the proposer, which redraws the design as a new round. This round is closed either way.`}
         confirmLabel="Send the feedback"
+        tone="default"
       />
 
       {slice.rounds.length > 1 && (
@@ -545,6 +547,17 @@ function usePinAffordance(entityId: string, runId: string, proposalId: number, c
   const [open, setOpen] = useState(false);
   const [text, setText] = useState("");
   const [state, setState] = useState<{ sending: boolean; error: string | null }>({ sending: false, error: null });
+  // D20: the form closing — Pin, Cancel or Esc — takes the focused field with it, and focus
+  // fell to <body>. It goes back to the control that opened the form.
+  const opener = useRef<HTMLButtonElement | null>(null);
+  const wasOpen = useRef(false);
+  useEffect(() => {
+    if (wasOpen.current && !open) {
+      const a = document.activeElement;
+      if (!a || a === document.body || !a.isConnected) opener.current?.focus();
+    }
+    wasOpen.current = open;
+  }, [open]);
 
   const pin = async () => {
     if (state.sending || text.trim() === "") return;
@@ -563,7 +576,7 @@ function usePinAffordance(entityId: string, runId: string, proposalId: number, c
 
   return {
     button: canPin ? (
-      <Button variant="ghost" size="sm" className="gr-pin" aria-expanded={open} aria-label={`pin a comment on ${entityId}`} onClick={() => setOpen(!open)}>Comment</Button>
+      <Button ref={opener} variant="ghost" size="sm" className="gr-pin" aria-expanded={open} aria-label={`pin a comment on ${entityId}`} onClick={() => setOpen(!open)}>Comment</Button>
     ) : null,
     form: open ? (
       <div className="gr-pin-form">
@@ -573,7 +586,11 @@ function usePinAffordance(entityId: string, runId: string, proposalId: number, c
           placeholder="Comment for the proposer…"
           value={text}
           onChange={(e) => setText(e.target.value)}
-          onKeyDown={submitOnEnter(() => void pin())}
+          onKeyDown={(e) => {
+            // Esc puts the form away, like every other one-line form (the waive reason)
+            if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); setOpen(false); return; }
+            submitOnEnter(() => void pin())(e);
+          }}
         />
         <Button size="sm" disabled={state.sending || text.trim() === ""} onClick={() => void pin()}>{state.sending ? "Pinning…" : "Pin"}</Button>
         <Button size="sm" variant="ghost" onClick={() => setOpen(false)}>Cancel</Button>

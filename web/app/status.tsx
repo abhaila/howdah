@@ -25,6 +25,20 @@ const SHAPE: Record<RunStatus, Shape> = {
   "failed-recoverable": "cross", "failed-terminal": "cross", done: "check", "harness-dead": "cross",
 };
 
+/**
+ * A step the timeline still calls "running" that NOTHING is running any more (D26): its turn
+ * was derived `died`, or the run's runner is dead. The Details timeline drew it with the
+ * running glyph, so a dead run showed a step in progress beside "Runner died". Decided from
+ * the read model's own two facts, never from a clock.
+ */
+export function stepInterrupted(
+  detail: { summary: { status: RunStatus }; turn_states: Record<string, string | undefined> },
+  row: { node: string; visit: number; status: string },
+): boolean {
+  if (row.status !== "running") return false;
+  return detail.summary.status === "harness-dead" || detail.turn_states[`${row.node}@${row.visit}`] === "died";
+}
+
 const STROKE = { fill: "none", stroke: "currentColor", strokeWidth: 1.7, strokeLinecap: "round" as const, strokeLinejoin: "round" as const };
 
 /**
@@ -57,10 +71,10 @@ export function StatusGlyph({ status, size = 14, label, className }: { status: R
   );
 }
 
-export function StatusBadge({ status, className }: { status: RunStatus; className?: string }) {
+export function StatusBadge({ status, className, label }: { status: RunStatus; className?: string; /** the words, when the frame knows a better one than the status's own (run/view.tsx "Resuming") */ label?: string }) {
   return (
     <span className={`status ${status}${className ? ` ${className}` : ""}`} data-status={status}>
-      <StatusGlyph status={status} /> {STATUS_LABEL[status]}
+      <StatusGlyph status={status} /> {label ?? STATUS_LABEL[status]}
     </span>
   );
 }

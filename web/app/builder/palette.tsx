@@ -42,6 +42,7 @@
 import { PencilLine } from "lucide-react";
 import { STEP_KINDS, nextNodeId, type PaletteKind } from "@/lib/spec-draft";
 import { freeSpotNear } from "@/lib/layout";
+import { specFlowEdges } from "../../../core/graph-spec";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -52,7 +53,7 @@ import { Separator } from "@/components/ui/separator";
 import { Tooltip } from "@/components/ui/tooltip";
 import type { Draft } from "@/lib/spec-draft";
 import type { Point } from "../../../core/graph-spec";
-import { STEP_KIND_MIME, useCanvasCentre, useCanvasReach } from "./canvas";
+import { STEP_KIND_MIME, useCanvasCentre } from "./canvas";
 import { KIND_ICON } from "./node-card";
 
 export function Palette({ draft, name, onName, onAdd, compact = false }: {
@@ -66,7 +67,6 @@ export function Palette({ draft, name, onName, onAdd, compact = false }: {
   compact?: boolean;
 }) {
   const centre = useCanvasCentre();
-  const reach = useCanvasReach();
   // the id the step WILL get, seeded with the RAW name and nothing else, because the add does
   // too: a second fallback here and a different one there is how an emptied box came to
   // preview one id and create another (HOW-26)
@@ -98,7 +98,8 @@ export function Palette({ draft, name, onName, onAdd, compact = false }: {
     },
     // an unmeasured pane answers `undefined`, and `add-step` places it below everything —
     // which is the right answer to "we do not know what is on screen"
-    onClick: () => onAdd(k.kind, freeSpotNear(draft.spec.nodes, centre(), reach())),
+    // clear of every card AND every wire; the canvas pans to it if that is off screen (D21)
+    onClick: () => onAdd(k.kind, freeSpotNear(draft.spec.nodes, centre(), { edges: specFlowEdges(draft.spec) })),
   });
 
   if (compact) {

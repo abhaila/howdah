@@ -412,6 +412,7 @@ main { position: relative; flex: 1; min-width: 0; min-height: 0; overflow: hidde
 .dag-node.kind-terminal rect { stroke-dasharray: 3 3; }
 .dag-kind { color: var(--fg-muted); }
 .dag-title { fill: var(--fg); font-family: var(--font-mono); font-size: var(--type-sm); font-weight: 500; }
+.dag-title-group { fill: var(--fg-muted); font-weight: 400; }
 .dag-sub { fill: var(--fg-muted); font-family: var(--font-display); font-size: var(--type-xs); }
 /* a route's condition, with a halo of the canvas ground so a wire never strikes through it */
 .dag-edge-label {

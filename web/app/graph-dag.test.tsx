@@ -277,3 +277,32 @@ describe("HOW-65: a draft's removed steps, and the row in focus", () => {
     expect(el.querySelectorAll(".dag-node.removed, .dag-node.highlight")).toHaveLength(0);
   });
 });
+
+describe("D23: a box prints the part of an id that tells steps apart", () => {
+  test("the step is never cut while the group can give way", async () => {
+    const { idParts, sharedGroupOf } = await import("./graph-dag");
+    // the three the review read as "implemen…al_review", "…an_review", "…nt_review"
+    const ids = ["implementation.local_review", "implementation.plan_review", "implementation.implement_review", "delivery.publish"];
+    expect(sharedGroupOf(ids)).toBeNull(); // two groups: the group is information, so it stays (dimmed)
+    const shown = ids.map((id) => idParts(id, 18, null));
+    expect(shown.map((p) => p.main)).toEqual(["local_review", "plan_review", "implement_review", "publish"]);
+    expect(shown[0]).toEqual({ dim: "impl….", main: "local_review" });
+    expect(shown[3]).toEqual({ dim: "delivery.", main: "publish" }); // fits whole: the group is only dimmed
+    for (const p of shown) expect((p.dim + p.main).length).toBeLessThanOrEqual(18);
+    expect(new Set(shown.map((p) => p.dim + p.main)).size).toBe(ids.length); // all four read differently
+  });
+
+  test("a group every step shares is omitted; an undotted id and an over-long step fall back to both-ends", async () => {
+    const { idParts, sharedGroupOf } = await import("./graph-dag");
+    const all = ["quick-task.work", "quick-task.review", "quick-task.done"];
+    expect(sharedGroupOf(all)).toBe("quick-task");
+    expect(idParts("quick-task.work", 18, "quick-task")).toEqual({ dim: "", main: "work" });
+    expect(sharedGroupOf(["quick-task.work", "done"])).toBeNull(); // not EVERY node is in it
+    expect(sharedGroupOf(["solo.step"])).toBeNull(); // one node has nothing to be told apart from
+    expect(idParts("work", 18, null)).toEqual({ dim: "", main: "work" });
+    const long = idParts("g.a_step_name_far_too_long_for_any_box", 18, null);
+    expect(long.dim).toBe("");
+    expect(long.main).toContain("…");
+    expect(long.main.length).toBeLessThanOrEqual(18);
+  });
+});

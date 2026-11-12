@@ -32,6 +32,7 @@ import { useEffect, useState } from "react";
 import { Bell, BellOff, Check, Copy, FolderGit2, GitBranch, Plus, RotateCw, Send, X } from "lucide-react";
 import type { GhRepoDto, Workspaces } from "@/lib/types";
 import { SETTINGS_CHANGED } from "@/lib/attention-sound";
+import { PRESENCE_CHANGED } from "@/lib/presence";
 import { notifyPermission, requestNotifyPermission, sendTestNotification, type NotifyPermission } from "@/lib/notify";
 import { getJSON } from "@/lib/net";
 import { useShortcuts, useSingleKeys } from "@/lib/shortcuts";
@@ -211,24 +212,29 @@ interface SettingsDto {
   typesafeApiKeyState?: "env" | "saved" | "unset";
   /** write-only: what the operator just typed. Blank means "leave it"; null means "clear it". */
   typesafeApiKey?: string | null;
+  /**
+   * A fact about this machine, not a setting (engine/attention.ts `notifierStatus`): whether
+   * the notification that fires with NO viewer open can be clicked, and the line that fixes it.
+   */
+  notifier?: { clickable: boolean; detail: string; fix?: string };
 }
 
 /** the browser's permission, in words, and what the operator can do about it */
 const PERMISSION_COPY: Record<NotifyPermission, string> = {
-  granted: "On. A run that starts waiting while this tab is in the background is announced with its name and what it is asking; clicking the notification opens the ask.",
+  granted: "On. A run that starts waiting while this tab is in the background is announced with its name and what it is asking; clicking the notification opens the ask. While a viewer tab is open, this is the only notification you get.",
   default: "Off. The browser has not been asked yet.",
   denied: "Blocked by the browser for this site. Allow notifications in the browser's site settings, then reload this page.",
   unsupported: "This browser cannot show notifications. The count beside “Needs you” and the tab's icon still change.",
 };
 
-function CopyPath({ what, text }: { what: string; text: string }) {
+function CopyPath({ what, text, noun = "path" }: { what: string; text: string; noun?: string }) {
   const [copied, setCopied] = useState(false);
   useEffect(() => {
     if (!copied) return;
     const t = setTimeout(() => setCopied(false), 1600);
     return () => clearTimeout(t);
   }, [copied]);
-  const name = copied ? `Copied the ${what} path` : `Copy the ${what} path`;
+  const name = copied ? `Copied the ${what} ${noun}` : `Copy the ${what} ${noun}`;
   return (
     <Tooltip content={name} side="left" align="center">
       <Button variant="ghost" size="icon-sm" aria-label={name} onClick={() => { void navigator.clipboard?.writeText(text).then(() => setCopied(true), () => setCopied(false)); }}>
@@ -273,6 +279,7 @@ export function Settings() {
   const enableNotifications = async () => {
     const next = await requestNotifyPermission(); // the ONLY call site: a click, never a page load
     setPermission(next);
+    window.dispatchEvent(new Event(PRESENCE_CHANGED)); // the server learns who delivers now, not in 20s
     if (next === "granted") toast("Desktop notifications are on");
     else if (next === "denied") toast("The browser blocked notifications for this site", "error");
   };
@@ -306,10 +313,28 @@ export function Settings() {
             {permission === "default" && <Button variant="outline" size="sm" onClick={enableNotifications}><Bell />Enable desktop notifications</Button>}
             <Button variant="outline" size="sm" disabled={permission !== "granted"} onClick={testNotification}><Send />Send a test notification</Button>
           </div>
-          <Hint>Applies at once, in this browser. With no viewer open, the terminal's own notification still fires.</Hint>
+          <Hint>Applies at once, in this browser. Nothing is posted while you are looking at this tab: the count beside “Needs you” says it.</Hint>
         </div>
+        {s.notifier && (
+          <div data-slot="os-notifier" data-clickable={s.notifier.clickable ? "yes" : "no"} className="flex flex-col gap-2">
+            <p className="m-0 text-sm leading-5">
+              <span className="font-medium">With no viewer open.</span>{" "}
+              <span className="text-muted-foreground">
+                {s.notifier.clickable
+                  ? "macOS shows the notification as Howdah's own, and clicking it opens the ask."
+                  : "macOS shows the notification as “Script Editor”, and clicking it does not open the ask. Install terminal-notifier to get one that does:"}
+              </span>
+            </p>
+            {s.notifier.fix && (
+              <div className="flex items-center gap-2">
+                <code className="m min-w-0 flex-1 rounded-[var(--radius-sm)] border border-border bg-card px-2 py-1 text-sm">{s.notifier.fix}</code>
+                <CopyPath what="install" noun="command" text={s.notifier.fix} />
+              </div>
+            )}
+          </div>
+        )}
         <Checkbox label="Play a sound when a run starts waiting on you" checked={s.chime === true} onChange={(e) => setS({ ...s, chime: e.target.checked })} />
-        <Hint>Off unless you turn it on. It plays once per run that newly waits, never on navigation. Saved with Save.</Hint>
+        <Hint>A short soft tone, off unless you turn it on. It plays once per run that newly waits, never on navigation. Saved with Save.</Hint>
       </Section>
 
       <Section title="Keyboard">

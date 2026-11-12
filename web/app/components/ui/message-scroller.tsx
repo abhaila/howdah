@@ -87,12 +87,15 @@ function MessageScrollerViewport({
         // and an ungenerated utility is a class with no rule, which is the exact defect
         // css-contract.test.ts exists to catch. `scrollbar-gutter` is spelled as the arbitrary
         // property it stands for; the thumb's width and colour are tokens.css's (HOW-68).
-        // `scroll-fade-y`, not the registry's `scroll-fade-b`: howdah renders BOTH pins (HOW-27),
-        // and a pin floats over the transcript. With a fade on one edge only, the Top pin sat on
-        // top of a row of live text with nothing softening it. The fade is edge-aware — it only
-        // appears on a side there is more content to reach — so a short transcript still shows
-        // neither pin and neither fade.
-        "size-full min-h-0 min-w-0 scroll-fade-y [scrollbar-gutter:stable] overflow-y-auto overscroll-contain contain-content data-pending-scroll:invisible",
+        // NO EDGE FADE (HOW-68 D26; a third documented deviation from the registry file). The
+        // registry's `scroll-fade-b` — `scroll-fade-y` here, since howdah renders both pins — is
+        // a mask whose stops are ANIMATED on a scroll timeline (`animation-timeline: scroll()`,
+        // vendor/shadcn-tailwind.css). DESIGN.md Motion: "only transform and opacity animate",
+        // and a mask-image re-rasterised on every scroll frame of the app's longest list is
+        // exactly what that rule is for. A STATIC mask is not an option either: it cannot know
+        // which edge has more to reach, so it would fade the first line of a transcript that is
+        // at its top. The pins are opaque buttons with a border; they do not need softening.
+        "size-full min-h-0 min-w-0 [scrollbar-gutter:stable] overflow-y-auto overscroll-contain contain-content data-pending-scroll:invisible",
         className
       )}
       {...props}

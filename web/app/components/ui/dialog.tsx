@@ -135,7 +135,7 @@ export function Dialog({ open, onClose, title, description, children, alert = fa
  * The destructive-confirmation shape, so no call site hand-rolls the button pair. Cancel
  * carries `data-autofocus`: the default answer to "really?" is no.
  */
-export function AlertDialog({ open, onClose, onConfirm, title, description, confirmLabel, cancelLabel = "Cancel", busy = false }: {
+export function AlertDialog({ open, onClose, onConfirm, title, description, confirmLabel, cancelLabel = "Cancel", busy = false, tone = "destructive" }: {
   open: boolean;
   onClose: () => void;
   onConfirm: () => void;
@@ -144,12 +144,18 @@ export function AlertDialog({ open, onClose, onConfirm, title, description, conf
   confirmLabel: string;
   cancelLabel?: string;
   busy?: boolean;
+  /**
+   * `default` for a confirmation that commits to something but destroys nothing (approving a
+   * design, sending feedback): the confirm is the primary, not red. DESIGN.md keeps the
+   * failure colour for what cannot be got back — "Send the feedback" was a red button (D26).
+   */
+  tone?: "destructive" | "default";
 }) {
   return (
     <Dialog alert open={open} onClose={onClose} title={title} description={description}>
       <div className="flex justify-end gap-2">
         <Button variant="outline" size="sm" data-autofocus disabled={busy} onClick={onClose}>{cancelLabel}</Button>
-        <Button variant="destructive" size="sm" disabled={busy} onClick={onConfirm}>{confirmLabel}</Button>
+        <Button variant={tone} size="sm" disabled={busy} onClick={onConfirm}>{confirmLabel}</Button>
       </div>
     </Dialog>
   );

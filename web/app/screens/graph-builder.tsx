@@ -72,6 +72,7 @@ import { ReactFlowProvider } from "@xyflow/react";
 import { CircleAlert, CircleCheck, Ellipsis, Lightbulb, Save, SlidersHorizontal } from "lucide-react";
 import type { GraphCatalog } from "@/lib/types";
 import { navigate } from "@/lib/nav";
+import { useDocumentTitle } from "@/lib/page";
 import { getJSON } from "@/lib/net";
 import { autoLayout } from "@/lib/layout";
 import { useEscapeLayer, useShortcuts } from "@/lib/shortcuts";
@@ -83,8 +84,8 @@ import {
 } from "@/lib/spec-draft";
 import { GraphCanvas, type Selection } from "../builder/canvas";
 import { Palette } from "../builder/palette";
-import { Properties, panelTitle } from "../builder/properties";
-import { plainProblem, problemProse } from "../builder/problem";
+import { PROBLEMS_SLOT, Properties, panelTitle } from "../builder/properties";
+import { plainProblem } from "../builder/problem";
 import { Button } from "@/components/ui/button";
 import { Drawer } from "@/components/ui/drawer";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -178,6 +179,7 @@ export function GraphBuilder({ name, fromRun }: { name?: string; fromRun?: strin
   const [loading, setLoading] = useState(!!name || !!fromRun);
   const [unopenable, setUnopenable] = useState<string | null>(null);
   const [taken, setTaken] = useState<string[]>([]);
+  useDocumentTitle(draft.saved && draft.spec.name ? `Editing ${draft.spec.name}` : "Build a graph");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const { toast } = useToast();
@@ -276,7 +278,28 @@ export function GraphBuilder({ name, fromRun }: { name?: string; fromRun?: strin
     setPanelOpen(true);
   }, [draft.spec, stepName]);
 
+  /**
+   * D25: where Save sends you when it will not save — the panel's problem list, opened (it may
+   * be a closed drawer), scrolled to and focused. ONE place; no banner, no toast.
+   */
+  const showProblems = useCallback(() => {
+    setSelection(null);
+    setPanelOpen(true);
+    const land = (tries: number) => {
+      const list = panelRef.current?.querySelector<HTMLElement>(`[data-slot="${PROBLEMS_SLOT}"]`);
+      if (list) { list.scrollIntoView({ block: "start" }); list.focus({ preventScroll: true }); }
+      else if (tries > 0) requestAnimationFrame(() => land(tries - 1)); // the drawer is still mounting
+    };
+    requestAnimationFrame(() => land(10));
+  }, []);
+
   const save = useCallback(async () => {
+    // A draft with no name has no address to be sent to: `/api/graphs//builder` matches no
+    // route, the server answers the request with the app's own page and a 200, and the builder
+    // announced " saved — it is in the catalog and ready to launch" for a graph that does not
+    // exist (found by pressing Save on a fresh draft, HOW-68 fix pass). The missing name is
+    // already the first problem in the list — go there.
+    if (!draft.spec.name.trim()) { setError(null); showProblems(); return; }
     setSaving(true);
     setError(null);
     try {
@@ -295,12 +318,23 @@ export function GraphBuilder({ name, fromRun }: { name?: string; fromRun?: strin
           ...(fromRun && !draft.saved ? { fromRun } : {}),
         }),
       });
-      const body = (await r.json().catch(() => ({}))) as { error?: string };
+      const body = (await r.json().catch(() => null)) as { error?: string; ok?: boolean } | null;
+      // a 2xx that is not the builder route's own JSON was answered by something else: not a save
+      if (r.ok && body?.ok !== true) throw new Error("the server did not confirm it");
       if (!r.ok) {
-        // the refusal is one of core's problem sentences, with its `**title**` and `` `key` ``
-        // markers: the banner draws them (problemProse); a toast is plain text, so they come out
-        setError(body.error ?? "The save was refused.");
-        toast(plainProblem(body.error ?? "The save was refused."), "error");
+        // The PUT is still sent with problems standing — the server is the authority and this
+        // is the same save it always was — but a refusal is SAID ONCE (D25). When the browser
+        // already lists what blocks the save, the server's 422 is one of those sentences: the
+        // operator is taken to the list and nothing is added. Only a refusal the browser could
+        // NOT predict (the server is stronger only where it must be) is new information: it is
+        // kept as the list's first row, where it can be re-read, and announced by ONE toast —
+        // plain text, so core's `**title**` and `` `key` `` markers come out.
+        const why = body?.error ?? "The save was refused.";
+        showProblems();
+        if (blocking.length === 0) {
+          setError(why);
+          toast(plainProblem(why), "error");
+        }
         return;
       }
       toast(`${draft.spec.name} saved — it is in the catalog and ready to launch`);
@@ -311,13 +345,16 @@ export function GraphBuilder({ name, fromRun }: { name?: string; fromRun?: strin
         navigate(`/graphs/${draft.spec.name}/build`);
       }
     } catch (e) {
-      const why = e instanceof Error ? e.message : String(e);
+      const why = `The save did not reach the server: ${e instanceof Error ? e.message : String(e)}`;
       setError(why);
+      showProblems();
       toast(plainProblem(why), "error");
     } finally {
       setSaving(false);
     }
-  }, [draft, toast, fromRun]);
+  }, [draft, toast, fromRun, blocking.length, showProblems]);
+  // a refusal is about the draft that was sent: the next edit makes it history
+  useEffect(() => { setError(null); }, [draft.spec, draft.prompts]);
 
   const ready = !loading && !unopenable;
   const showGraph = useCallback(() => {
@@ -388,7 +425,7 @@ export function GraphBuilder({ name, fromRun }: { name?: string; fromRun?: strin
   ];
   const panel = (
     <Properties
-      draft={draft} dispatch={dispatch} problems={problems} selection={live} onSelect={onSelect}
+      draft={draft} dispatch={dispatch} problems={problems} selection={live} onSelect={onSelect} refusal={error}
       onPreset={(id) => {
         const preset = PRESETS.find((x) => x.id === id);
         if (preset) {
@@ -415,11 +452,11 @@ export function GraphBuilder({ name, fromRun }: { name?: string; fromRun?: strin
         )}
         <span
           role="status"
-          aria-label={blocking.length ? `${blocking.length} to sort out` : "nothing outstanding"}
+          aria-label={blocking.length ? `${blocking.length} ${blocking.length === 1 ? "problem" : "problems"} to fix before saving` : "nothing outstanding"}
           className={`inline-flex shrink-0 items-center gap-1.5 text-base ${blocking.length ? "font-medium text-destructive" : "text-muted-foreground"}`}
         >
           {blocking.length
-            ? <><CircleAlert aria-hidden className="size-3.5" />{blocking.length} {blocking.length === 1 ? "problem" : "problems"}</>
+            ? <><CircleAlert aria-hidden className="size-3.5" />{blocking.length} {blocking.length === 1 ? "problem" : "problems"}<span className="max-[1199px]:sr-only"> to fix before saving</span></>
             : <><CircleCheck aria-hidden className="size-3.5" />Ready to save</>}
         </span>
         {advice.length > 0 && (
@@ -458,7 +495,6 @@ export function GraphBuilder({ name, fromRun }: { name?: string; fromRun?: strin
           Rather describe it? <a href={`/new?${new URLSearchParams({ graph: DRAFT_GRAPH })}`}>Draft a graph</a>
         </p>
       )}
-      {error && <div role="alert" className="field-error wrap-pre shrink-0 border-b border-border px-4 py-2">{problemProse(error)}</div>}
 
       <ReactFlowProvider>
         <div className="flex min-h-0 flex-1">

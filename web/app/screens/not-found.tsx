@@ -13,12 +13,14 @@
 import { Button, buttonVariants } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Kbd } from "@/components/ui/kbd";
+import { useDocumentTitle } from "@/lib/page";
 import { Mark } from "../brand";
 
 /** a link that reads as the primary button: going to Runs is navigation, so it is an `<a>` */
 const PRIMARY_LINK = buttonVariants({ variant: "default" });
 
 export function NotFound({ path, onOpenPalette }: { path: string; onOpenPalette?: () => void }) {
+  useDocumentTitle("Not found");
   return (
     <div className="runs" data-screen="not-found">
       <EmptyState

@@ -58,7 +58,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  Background, ConnectionMode, Panel, ReactFlow, useReactFlow, useStore,
+  Background, ConnectionMode, Panel, ReactFlow, useReactFlow, useStore, useStoreApi,
   MarkerType, type Edge, type Node, type NodeChange, type OnConnect, type OnNodesChange,
 } from "@xyflow/react";
 import { Maximize, Minus, Plus } from "lucide-react";
@@ -96,6 +96,8 @@ const NODE_WIDTH = 220;
 const NODE_HEIGHT = 72;
 /** how much air the framed draft keeps from the pane's edge */
 const FRAME_PAD = 32;
+/** how long after a step is added the canvas keeps it in view while the pane settles (the panel opening) */
+const REVEAL_SETTLE_MS = 600;
 /** what the operator may zoom to. The DEFAULT is always 1 — see `frameOf`. */
 const MIN_ZOOM = 0.4;
 const MAX_ZOOM = 1.5;
@@ -255,19 +257,28 @@ export function useCanvasCentre(): () => Point | undefined {
 }
 
 /**
- * How far from that middle a card can be placed and still be wholly on screen, in flow space —
- * what `freeSpotNear` needs to keep a clicked step where the operator is looking when the
- * middle itself is taken. `undefined` on an unmeasured pane, for the reason above.
+ * The viewport that brings a card wholly into view, or `null` when it already is (D21). Pure.
+ *
+ * A PAN, never a zoom and never a re-fit: the zoom the operator chose is kept and the view
+ * moves by the least that shows the card with `FRAME_PAD` around it. On an axis where the pane
+ * is too small to hold the card with its padding, the card's top-left is what is kept in view.
  */
-export function useCanvasReach(): () => Point | undefined {
-  const domNode = useStore((s) => s.domNode);
-  const zoom = useStore((s) => s.transform[2]);
-  return useCallback(() => {
-    if (!domNode) return undefined;
-    const r = domNode.getBoundingClientRect();
-    if (!r.width || !r.height || !zoom) return undefined;
-    return { x: Math.max(0, r.width / 2 / zoom - NODE_WIDTH / 2), y: Math.max(0, r.height / 2 / zoom - NODE_HEIGHT / 2) };
-  }, [domNode, zoom]);
+export function revealShift(
+  view: { x: number; y: number; zoom: number },
+  pane: { width: number; height: number },
+  at: Point,
+): { x: number; y: number; zoom: number } | null {
+  if (!pane.width || !pane.height || !view.zoom) return null;
+  const along = (t: number, pos: number, size: number, room: number) => {
+    const start = pos * view.zoom + t;
+    const end = start + size * view.zoom;
+    if (start < FRAME_PAD || size * view.zoom + FRAME_PAD * 2 > room) return FRAME_PAD - pos * view.zoom;
+    if (end > room - FRAME_PAD) return t - (end - (room - FRAME_PAD));
+    return t;
+  };
+  const x = Math.round(along(view.x, at.x, NODE_WIDTH, pane.width));
+  const y = Math.round(along(view.y, at.y, NODE_HEIGHT, pane.height));
+  return x === Math.round(view.x) && y === Math.round(view.y) ? null : { x, y, zoom: view.zoom };
 }
 
 /**
@@ -315,9 +326,16 @@ export function GraphCanvas({ draft, dispatch, problems, selection, onSelect, on
   const measured = paneWidth > 0 && paneHeight > 0;
   // A preset or a load replaces every step at once, and leaving the viewport where it was shows
   // an arrangement that is mostly off-screen — so each `generation` is framed once, as soon as
-  // the pane has a size. Adding ONE step deliberately does not reframe, and neither does the
-  // pane changing width when the panel opens: moving the view under someone mid-edit is worse
-  // than a box just outside it, and a clicked step is already placed inside the view.
+  // the pane has a size. The pane changing width when the panel opens does not reframe: moving
+  // the view under someone mid-edit is worse than a box just outside it.
+  //
+  // Adding ONE step used to move nothing either, on the theory that a clicked step is placed
+  // inside the view. That theory is what put a third step on a wire in a small pane: with the
+  // view fixed, "visible" and "clear" could not both be had, and visible won. D21 overturns it,
+  // narrowly — a step that was just ADDED is placed where it is clear (lib/layout.ts
+  // `freeSpotNear`) and the canvas PANS by the least that shows it (`revealShift`). It is a
+  // pan at the zoom the operator chose, never a re-fit or a zoom, and it is instant: a step
+  // can be added from the keyboard, and nothing keyboard-triggered animates (DESIGN.md Motion).
   const spec = useRef(draft.spec);
   spec.current = draft.spec;
   const frame = useCallback(
@@ -334,6 +352,30 @@ export function GraphCanvas({ draft, dispatch, problems, selection, onSelect, on
     () => specToFlow(draft.spec, problems, onSelect),
     [draft.spec, problems, onSelect],
   );
+
+  // D21: which step was just added, if exactly one was and the draft was not replaced wholesale.
+  // It stays "the one to reveal" for a moment, because adding a step also opens the panel, and
+  // below 1100px that narrows this pane a frame or two AFTER the step exists.
+  const known = useRef<{ generation: number; ids: Set<string> } | null>(null);
+  const reveal = useRef<{ id: string; until: number } | null>(null);
+  const getViewport = useStoreApi().getState;
+  useEffect(() => {
+    const ids = new Set(draft.spec.nodes.map((n) => n.id));
+    const was = known.current;
+    known.current = { generation, ids };
+    if (was && was.generation === generation && ids.size === was.ids.size + 1) {
+      const added = [...ids].filter((id) => !was.ids.has(id));
+      if (added.length === 1) reveal.current = { id: added[0]!, until: Date.now() + REVEAL_SETTLE_MS };
+    }
+    const r = reveal.current;
+    if (!r || !measured) return;
+    if (Date.now() > r.until) { reveal.current = null; return; }
+    const at = draft.spec.nodes.find((n) => n.id === r.id)?.position;
+    if (!at) return;
+    const [x, y, z] = getViewport().transform;
+    const to = revealShift({ x, y, zoom: z }, { width: paneWidth, height: paneHeight }, at);
+    if (to) void setViewport(to); // no duration: instant
+  }, [draft.spec.nodes, generation, measured, paneWidth, paneHeight, setViewport, getViewport]);
 
   // The frames of a drag, and nothing else. Keyed on `draft.spec` for the clear rather than
   // cleared inline: the overlay only drops once the draft already holds the same position, so

@@ -5,13 +5,18 @@ import { join } from "node:path";
 import {
   AttentionCenter,
   formatWait,
+  makeOsNotifier,
   notifierArgv,
+  notifierStatus,
+  OS_SOUND,
   pidAlive,
+  resolveViewerBase,
   readHeartbeat,
   writeHeartbeat,
   type Notification,
 } from "./attention";
 import { check } from "../watchdog/check";
+import { presencePath, readPresence, VIEWER_FRESH_MS, viewerDelivers, viewerMissedIt, writePresence } from "./viewer-presence";
 import { EventLog } from "../log/write";
 
 const dir = () => mkdtempSync(join(tmpdir(), "howdah-attn-"));
@@ -145,9 +150,12 @@ describe("AttentionCenter", () => {
       "-open", "http://localhost:4711/run/r#needs-input",
     ]);
     // HOW-68: silent unless the operator turned the sound on — and then on both deliverers
-    expect(notifierArgv(n, "/opt/homebrew/bin/terminal-notifier", true).slice(-2)).toEqual(["-sound", "Glass"]);
+    // D19: and then the soft system sound, not "Glass" (the expectation changed with the sound)
+    expect(OS_SOUND).toBe("Tink");
+    expect(notifierArgv(n, "/opt/homebrew/bin/terminal-notifier", true).slice(-2)).toEqual(["-sound", "Tink"]);
     expect(notifierArgv(n, null)[2]).not.toContain("sound name");
-    expect(notifierArgv(n, null, true)[2]).toContain('sound name "Glass"');
+    expect(notifierArgv(n, null, true)[2]).toContain('sound name "Tink"');
+    expect(JSON.stringify([notifierArgv(n, null, true), notifierArgv(n, "/x/terminal-notifier", true)])).not.toContain("Glass");
     const fallback = notifierArgv(n, null);
     expect(fallback[0]).toBe("osascript");
     expect(fallback[2]).toContain("http://localhost:4711/run/r#needs-input");
@@ -156,6 +164,143 @@ describe("AttentionCenter", () => {
 
   test("formatWait renders hours", () => {
     expect(formatWait("2026-09-13T10:00:00Z", new Date("2026-09-13T12:05:00Z"))).toBe("waiting 2h 5m");
+  });
+});
+
+describe("viewer presence decides whether the OS banner rings (HOW-68 D18)", () => {
+  const t0 = new Date("2026-11-12T10:00:00Z");
+  const at = (ms: number) => new Date(t0.getTime() + ms);
+  const n: Notification = { title: "Howdah needs you — r · n", body: "why", link: "http://localhost:4711/run/r#needs-input" };
+
+  test("viewerDelivers: only a NOTIFYING viewer seen inside the window stands in for the banner", () => {
+    const beat = { at: t0.toISOString(), notify: true };
+    expect(viewerDelivers(null, t0)).toBe(false); // no viewer was ever open
+    expect(viewerDelivers(beat, at(0))).toBe(true);
+    expect(viewerDelivers(beat, at(VIEWER_FRESH_MS))).toBe(true);
+    expect(viewerDelivers(beat, at(VIEWER_FRESH_MS + 1))).toBe(false); // two missed beats: gone
+    expect(viewerDelivers({ ...beat, notify: false }, at(1000))).toBe(false); // open, but may not notify
+    expect(viewerDelivers(beat, at(-5000))).toBe(false); // a beat from the future proves nothing
+  });
+
+  test("viewerMissedIt: a viewer that never beat again after the ask was not there", () => {
+    const deferred = t0.toISOString();
+    const before = { at: at(-10_000).toISOString(), notify: true };
+    const after = { at: at(15_000).toISOString(), notify: true };
+    expect(viewerMissedIt(before, deferred, at(20_000))).toBe(false); // too early to tell
+    expect(viewerMissedIt(before, deferred, at(VIEWER_FRESH_MS))).toBe(true);
+    expect(viewerMissedIt(after, deferred, at(10 * 60_000))).toBe(false); // it beat afterwards: it got the ask
+    expect(viewerMissedIt(null, deferred, at(VIEWER_FRESH_MS))).toBe(true);
+  });
+
+  test("presence round-trips through viewer.json, and a torn file is no viewer", () => {
+    const home = dir();
+    expect(readPresence(home)).toBeNull();
+    writePresence(home, { notify: true, base: "http://localhost:4841" }, () => t0);
+    expect(readPresence(home)).toEqual({ at: t0.toISOString(), notify: true, base: "http://localhost:4841" });
+    writeFileSync(presencePath(home), '{"at":');
+    expect(readPresence(home)).toBeNull();
+    writeFileSync(presencePath(home), '{"at":"not a date","notify":true}');
+    expect(readPresence(home)).toBeNull();
+  });
+
+  test("the OS notifier skips while a notifying viewer is fresh, and rings otherwise", async () => {
+    const home = dir();
+    const spawned: string[][] = [];
+    const os = (now: Date) => makeOsNotifier({ home, clock: () => now, spawn: (a) => void spawned.push(a), which: () => null });
+
+    expect(await os(t0)(n)).toBeUndefined(); // no viewer.json at all
+    expect(spawned).toHaveLength(1);
+    expect(spawned[0]![0]).toBe("osascript"); // no terminal-notifier: the fallback still rings
+
+    writePresence(home, { notify: true }, () => t0);
+    expect(await os(at(5000))(n)).toBe("viewer");
+    expect(spawned).toHaveLength(1); // nothing posted: the browser's notification is the one
+
+    expect(await os(at(VIEWER_FRESH_MS + 1000))(n)).toBeUndefined(); // the tab closed
+    expect(spawned).toHaveLength(2);
+
+    writePresence(home, { notify: false }, () => at(60_000)); // open, permission not granted
+    expect(await os(at(61_000))(n)).toBeUndefined();
+    expect(spawned).toHaveLength(3);
+  });
+
+  test("a ring left to the viewer is durable, counts as notified, and says who was trusted", async () => {
+    const attn = join(dir(), "attention");
+    let now = t0;
+    const center = new AttentionCenter(attn, [async () => "viewer" as const], { clock: () => now, presence: () => ({ at: t0.toISOString(), notify: true }) });
+    const r = await center.raise({ run: "r", node: "n", visit: 1, reason: "needs your reply" });
+    expect(r.notified_at).toBe(t0.toISOString());
+    expect(center.pending()[0]).toMatchObject({ id: "r:n:1", notified_via: "viewer" });
+    // a re-raise inside the cooldown keeps the stamp AND who it was left to
+    now = at(5000);
+    await center.raise({ run: "r", node: "n", visit: 1, reason: "park: no matching edge" });
+    expect(center.pending()[0]).toMatchObject({ notified_at: t0.toISOString(), notified_via: "viewer" });
+  });
+
+  test("the watchdog rings through the OS once the viewer is shown to have been gone", async () => {
+    const attn = join(dir(), "attention");
+    let now = t0;
+    let presence: { at: string; notify: boolean } | null = { at: at(-10_000).toISOString(), notify: true };
+    let viewerOpen = true;
+    const rung: string[] = [];
+    const notifier = async (x: Notification) => { if (viewerOpen) return "viewer" as const; rung.push(x.title); };
+    const center = new AttentionCenter(attn, [notifier], { clock: () => now, presence: () => presence });
+    await center.raise({ run: "r", node: "n", visit: 1, reason: "needs your reply" });
+    expect(rung).toEqual([]);
+
+    // 20s later: still inside the window — nothing is known yet, so nothing is due
+    now = at(20_000);
+    expect(await center.reRaise(30 * 60_000)).toEqual([]);
+
+    // a minute later the viewer has not beaten since the ask: it was never there. Due NOW,
+    // not at the 30-minute mark, and by now the notifier rings for real.
+    now = at(60_000);
+    viewerOpen = false;
+    const due = await center.reRaise(30 * 60_000);
+    expect(due.map((r) => r.id)).toEqual(["r:n:1"]);
+    await center.notify(due);
+    expect(rung).toEqual(["Howdah needs you — r · n"]);
+    expect(center.pending()[0]!.notified_via).toBeUndefined(); // delivered by the OS now
+
+    // whereas a viewer that DID beat after the ask delivered it: no early re-ring
+    const center2 = new AttentionCenter(join(dir(), "attention"), [async () => "viewer" as const], { clock: () => now, presence: () => presence });
+    now = t0;
+    await center2.raise({ run: "r", node: "n", visit: 1, reason: "needs your reply" });
+    presence = { at: at(15_000).toISOString(), notify: true };
+    now = at(5 * 60_000);
+    expect(await center2.reRaise(30 * 60_000)).toEqual([]);
+    now = at(31 * 60_000); // the ordinary re-notify still comes round
+    expect((await center2.reRaise(30 * 60_000)).map((r) => r.id)).toEqual(["r:n:1"]);
+  });
+
+  test("deep links follow the viewer's real port, not :4711", async () => {
+    const home = dir();
+    expect(resolveViewerBase(home, {})).toBe("http://localhost:4711");
+    expect(resolveViewerBase(home, { HOWDAH_PORT: "4841" })).toBe("http://localhost:4841");
+    expect(resolveViewerBase(home, { HOWDAH_PORT: "nonsense" })).toBe("http://localhost:4711");
+    // launchd's watchdog has no HOWDAH_PORT: it uses where a viewer last said it was
+    writePresence(home, { notify: false, base: "http://localhost:5005" });
+    expect(resolveViewerBase(home, {})).toBe("http://localhost:5005");
+    expect(resolveViewerBase(home, { HOWDAH_PORT: "4841" })).toBe("http://localhost:4841"); // the env wins
+    expect(resolveViewerBase(home, {}, { at: t0.toISOString(), notify: true, base: "https://evil.example" })).toBe("http://localhost:4711");
+    // and an AttentionCenter nobody told (the CLI, the watchdog, an executor) builds links from it
+    const prior = process.env.HOWDAH_PORT;
+    delete process.env.HOWDAH_PORT;
+    try {
+      const center = new AttentionCenter(join(home, "attention"), []);
+      const r = await center.raise({ run: "r", node: "n", visit: 1, reason: "x" });
+      expect(r.deep_link).toBe("http://localhost:5005/run/r#needs-input");
+    } finally {
+      if (prior !== undefined) process.env.HOWDAH_PORT = prior;
+    }
+  });
+
+  test("notifierStatus says which banner the operator gets, and the one line that fixes it", () => {
+    expect(notifierStatus(() => "/opt/homebrew/bin/terminal-notifier")).toMatchObject({ clickable: true, path: "/opt/homebrew/bin/terminal-notifier" });
+    expect(notifierStatus(() => "/x/terminal-notifier").fix).toBeUndefined();
+    const missing = notifierStatus(() => null);
+    expect(missing).toMatchObject({ clickable: false, path: null, fix: "brew install terminal-notifier" });
+    expect(missing.detail).toContain("Script Editor");
   });
 });
 

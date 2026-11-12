@@ -30,7 +30,7 @@ import { Row } from "./ui/row";
 import { Checkbox } from "./ui/checkbox";
 import { AlertDialog, Dialog } from "./ui/dialog";
 import { Tooltip } from "./ui/tooltip";
-import { Badge, scopeVariant } from "./ui/badge";
+import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Select } from "./ui/select";
 import { Table, TableBody, TableCell, TableRow } from "./ui/table";
@@ -214,9 +214,10 @@ describe("Badge — the static pills (P0.2)", () => {
   test("each context scope reads differently, and via a token rather than a loose hex", () => {
     const el = renderPrimitive(
       <>
-        <Badge variant={scopeVariant("cleared")}>cleared</Badge>
-        <Badge variant={scopeVariant("per-visit")}>per-visit</Badge>
-        <Badge variant={scopeVariant("sticky")}>sticky</Badge>
+        {/* HOW-68 D26: `scopeVariant` was exported for this test alone and is gone; the variants are named directly */}
+        <Badge variant="scope-cleared">cleared</Badge>
+        <Badge variant="scope-per-visit">per-visit</Badge>
+        <Badge variant="scope-sticky">sticky</Badge>
       </>,
     );
     const [cleared, perVisit, sticky] = $$(el, "span");

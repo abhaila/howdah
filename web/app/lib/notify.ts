@@ -8,6 +8,11 @@
  * viewer IS open in a tab the operator is not looking at: a real `Notification` carrying the
  * run's name and what it is asking, and a click that focuses the window on the ask.
  *
+ * ONE ASK, ONE NOTIFICATION (D18). While this path can deliver, the OS one stands down: the
+ * shell tells the server a notifying viewer is open (lib/presence.ts) and the engine's notifier
+ * skips its banner. That is also why the shell — not only the three screens that list runs —
+ * observes asks: a viewer left on Settings has to announce them too.
+ *
  * What is NEWS is not decided here. `decideNews` (lib/attention-sound.ts) names the runs that
  * newly started waiting — the same rule the sound uses, so navigation, a reload and the first
  * sight of a session announce nothing — and `observeAsks` hands them to `notifyRuns`. This
@@ -37,6 +42,8 @@ export interface RunNews {
   title: string;
   /** one sentence: what it is asking */
   body: string;
+  /** where a click lands when it is not the run's own ask (the harness record has no run page) */
+  href?: string;
 }
 
 function api(): typeof Notification | null {
@@ -64,14 +71,14 @@ export async function requestNotifyPermission(): Promise<NotifyPermission> {
  */
 export function decideNotify(
   fresh: readonly string[],
-  info: Readonly<Record<string, { name: string; body: string } | undefined>>,
+  info: Readonly<Record<string, { name: string; body: string; href?: string } | undefined>>,
   env: { permission: NotifyPermission; visible: boolean; focused: boolean },
 ): RunNews[] {
   if (env.permission !== "granted") return [];
   if (env.visible && env.focused) return [];
   return fresh.map((id) => {
     const note = info[id];
-    return { id, title: note?.name || id, body: note?.body || "A run is waiting on you." };
+    return { id, title: note?.name || id, body: note?.body || "A run is waiting on you.", ...(note?.href ? { href: note.href } : {}) };
   });
 }
 
@@ -95,14 +102,14 @@ function post(news: RunNews, onClick: () => void): boolean {
 }
 
 /** Post a notification for each run that is news, if one may be shown. Returns how many were. */
-export function notifyRuns(fresh: readonly string[], info: Readonly<Record<string, { name: string; body: string } | undefined>>): number {
+export function notifyRuns(fresh: readonly string[], info: Readonly<Record<string, { name: string; body: string; href?: string } | undefined>>): number {
   if (fresh.length === 0 || typeof document === "undefined") return 0;
   const news = decideNotify(fresh, info, {
     permission: notifyPermission(),
     visible: document.visibilityState === "visible",
     focused: typeof document.hasFocus === "function" ? document.hasFocus() : true,
   });
-  return news.filter((n) => post(n, () => navigate(runAskHref(n.id)))).length;
+  return news.filter((n) => post(n, () => navigate(n.href ?? runAskHref(n.id)))).length;
 }
 
 /** Settings' "Send a test notification": shown even while the page is focused — that is the point of a test. */

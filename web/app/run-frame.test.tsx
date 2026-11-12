@@ -383,3 +383,166 @@ describe("a step the timeline lists twice is one step in the conversation", () =
     expect(steps[0]!.getAttribute("data-status")).toBe("succeeded");
   });
 });
+
+describe("D20: an answered ask hands focus to the run's status line, and the tab is named", () => {
+  /** a plain agent step that failed and parked: the prose reply card */
+  function prosePark(): FakeLog {
+    const log = new FakeLog();
+    log.add({ type: "run-started", graph: "implement-ticket", inputs: { goal: "ship the headers" }, pinned_prompts: {} });
+    log.add({ type: "node-started", node: "implementation.plan", visit: 1, attempt_id: "implementation.plan#1" });
+    log.add({ type: "node-finished", node: "implementation.plan", visit: 1, status: "failed", writes: {} });
+    log.add({ type: "attention-raised", node: "implementation.plan", visit: 1, reason: "attempt failed", code: "attempt-failed" });
+    return log;
+  }
+
+  test("reply → the card goes, focus lands on #run-status (not <body>), and a polite toast says what happened", async () => {
+    const log = prosePark();
+    let body: unknown = deriveDetail("r1", log.events, {}, { graphs: GRAPHS });
+    const posted: string[] = [];
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+      const path = url.replace(/^https?:\/\/[^/]+/, "").split("?")[0] ?? url;
+      if ((init?.method ?? "GET") !== "GET") {
+        posted.push(path);
+        // the reply is in the log now: the park is resolved and the step runs again
+        log.add({ type: "attention-resolved", node: "implementation.plan", visit: 1, reply: "carry on" });
+        log.add({ type: "node-started", node: "implementation.plan", visit: 2, attempt_id: "implementation.plan#2" });
+        body = deriveDetail("r1", log.events, {}, { graphs: GRAPHS });
+        return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (!/\/api\/runs\/[^/]+(?:\/shell)?$/.test(path)) return new Response("[]", { status: 200, headers: { "content-type": "application/json" } });
+      return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+
+    const el = mount(<RunView id="r1" graceMs={OPEN_GRACE_MS} />);
+    await settle();
+    expect(document.title).toBe("ship the headers · Howdah");
+    const status = el.querySelector("#run-status") as HTMLElement;
+    expect(status.getAttribute("tabindex")).toBe("-1"); // a focus TARGET, not a Tab stop
+    expect(status.textContent).toContain("Waiting on you");
+
+    const box = el.querySelector("#needs-input textarea") as HTMLTextAreaElement;
+    act(() => box.focus());
+    expect(document.activeElement).toBe(box);
+    const reply = [...el.querySelectorAll("#needs-input button")].find((b) => b.textContent === "Reply") as HTMLButtonElement;
+    await act(async () => { reply.click(); await new Promise((r) => setTimeout(r, 20)); });
+    expect(posted).toEqual(["/api/runs/r1/reply"]);
+    // sending → delivered: the toast region is aria-live="polite", so this is the announcement
+    const live = document.querySelector('[role="status"][aria-live="polite"]')!;
+    expect(live.textContent).toContain("Reply sent. The run is resuming.");
+
+    await settle(700); // the collapse plays (420ms), then the reload takes the card away
+    expect(el.querySelector("#needs-input")).toBeNull();
+    expect(document.activeElement).not.toBe(document.body);
+    expect((document.activeElement as HTMLElement).id).toBe("run-status");
+    expect(document.activeElement!.textContent).toContain("Running"); // where the run now says what it is doing
+  });
+
+  test("a notification's deep link (#needs-input) lands ON the control, and a stale one is dropped only after the run loads", async () => {
+    const parked = deriveDetail("r1", prosePark().events, {}, { graphs: GRAPHS });
+    history.pushState(null, "", "/run/r1#needs-input");
+    try {
+      serve(parked);
+      const el = mount(<RunView id="r1" graceMs={OPEN_GRACE_MS} />);
+      await settle();
+      // the hash survived the loading render — it used to be stripped before the card existed
+      expect(location.hash).toBe("#needs-input");
+      expect(document.activeElement).toBe(el.querySelector("#needs-input textarea"));
+      act(() => root!.unmount());
+      host!.remove();
+
+      // a run that is NOT asking anything: the hash points at nothing, so it goes
+      const log = new FakeLog();
+      log.add({ type: "run-started", graph: "implement-ticket", inputs: { goal: "g" }, pinned_prompts: {} });
+      log.add({ type: "node-started", node: "implementation.plan", visit: 1, attempt_id: "implementation.plan#1" });
+      history.replaceState(null, "", "/run/r1#needs-input");
+      serve(deriveDetail("r1", log.events, {}, { graphs: GRAPHS }));
+      mount(<RunView id="r1" graceMs={OPEN_GRACE_MS} />);
+      await settle();
+      expect(location.hash).toBe("");
+    } finally {
+      history.pushState(null, "", "/");
+    }
+  });
+
+  test("focus is NOT taken from an operator who was never in the card", async () => {
+    const log = prosePark();
+    let body: unknown = deriveDetail("r1", log.events, {}, { graphs: GRAPHS });
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      const url = String(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+      const path = url.replace(/^https?:\/\/[^/]+/, "").split("?")[0] ?? url;
+      if (!/\/api\/runs\/[^/]+(?:\/shell)?$/.test(path)) return new Response("[]", { status: 200, headers: { "content-type": "application/json" } });
+      return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+    const el = mount(<RunView id="r1" graceMs={OPEN_GRACE_MS} />);
+    await settle();
+    const elsewhere = tabs(el).find((t) => t.getAttribute("aria-selected") === "true")!;
+    act(() => elsewhere.focus());
+    // the ask is answered from the CLI while the operator's focus is on the tab strip
+    log.add({ type: "attention-resolved", node: "implementation.plan", visit: 1, reply: "carry on" });
+    log.add({ type: "node-started", node: "implementation.plan", visit: 2, attempt_id: "implementation.plan#2" });
+    body = deriveDetail("r1", log.events, {}, { graphs: GRAPHS });
+    await settle(5600); // the page's own 5s refresh
+    expect(el.querySelector("#needs-input")).toBeNull();
+    expect(document.activeElement).toBe(elsewhere);
+  }, 15_000);
+});
+
+describe("D26: a dead run's interrupted step is not drawn running, and it says it died once", () => {
+  function deadDetail() {
+    const log = new FakeLog();
+    log.add({ type: "run-started", graph: "implement-ticket", inputs: { goal: "ship the headers" }, pinned_prompts: {} });
+    log.add({ type: "node-started", node: "implementation.plan", visit: 1, attempt_id: "implementation.plan#1" });
+    const detail = deriveDetail("r1", log.events, {}, { graphs: GRAPHS });
+    // the runner is gone: derive.ts says so from runner.pid, which a FakeLog has none of
+    return { ...detail, summary: { ...detail.summary, status: "harness-dead" as RunStatus }, turn_states: { "implementation.plan@1": "died" as const } };
+  }
+
+  test("stepInterrupted reads the read model's two facts and nothing else", async () => {
+    const { stepInterrupted } = await import("./status");
+    const row = { node: "n", visit: 1, status: "running" };
+    expect(stepInterrupted({ summary: { status: "harness-dead" }, turn_states: {} }, row)).toBe(true);
+    expect(stepInterrupted({ summary: { status: "running" }, turn_states: { "n@1": "died" } }, row)).toBe(true);
+    expect(stepInterrupted({ summary: { status: "running" }, turn_states: { "n@1": "live" } }, row)).toBe(false);
+    expect(stepInterrupted({ summary: { status: "harness-dead" }, turn_states: {} }, { ...row, status: "succeeded" })).toBe(false);
+  });
+
+  test("Details timeline: the cross and the word 'interrupted'; the page says it died in the header and ONE notice", async () => {
+    serve(deadDetail());
+    const el = mount(<RunView id="r1" graceMs={OPEN_GRACE_MS} />);
+    await settle();
+    press("i", MOD); // open Details
+    await settle();
+    const row = el.querySelector(".run-details-row") as HTMLElement;
+    expect(row.getAttribute("data-step-status")).toBe("interrupted");
+    expect(row.getAttribute("aria-label")).toContain("interrupted");
+    expect(row.querySelector("svg")!.getAttribute("data-shape")).toBe("cross"); // it drew the running half-disc
+    // said once in the header's status, once in the notice that names the action — and not a third time
+    expect(el.querySelector("#run-status")!.textContent!.trim()).toBe("Runner died");
+    const notices = [...el.querySelectorAll(".run-notice")].map((n) => n.textContent);
+    expect(notices).toEqual(["The runner stopped before the current step finished. Resume to pick the run back up."]);
+    expect(el.textContent).not.toContain("The process died inside this turn");
+    // Steps says the same thing the drawer says
+    act(() => tabs(el).find((t) => t.textContent!.startsWith("Steps"))!.click());
+    await settle();
+    expect(el.querySelector(".step-row[data-status='interrupted']")).not.toBeNull();
+    expect(el.querySelector(".step-row[data-status='running']")).toBeNull();
+  });
+
+  test("between runners is not dead: seconds after the run's last event the frame says Resuming, with no red notice", async () => {
+    const d = deadDetail();
+    serve({ ...d, summary: { ...d.summary, last_event_at: new Date().toISOString() } });
+    const el = mount(<RunView id="r1" graceMs={OPEN_GRACE_MS} />);
+    await settle();
+    expect(el.querySelector("#run-status")!.textContent!.trim()).toBe("Resuming");
+    expect(el.querySelector(".run-notice")).toBeNull();
+    // ...and the same run an hour later is what it looks like: dead
+    act(() => root!.unmount());
+    host!.remove();
+    serve({ ...d, summary: { ...d.summary, last_event_at: new Date(Date.now() - 3_600_000).toISOString() } });
+    const later = mount(<RunView id="r1" graceMs={OPEN_GRACE_MS} />);
+    await settle();
+    expect(later.querySelector("#run-status")!.textContent!.trim()).toBe("Runner died");
+    expect(later.querySelector(".run-notice")).not.toBeNull();
+  });
+});

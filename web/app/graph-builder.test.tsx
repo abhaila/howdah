@@ -36,13 +36,13 @@ import {
   type Draft, type DraftAction,
 } from "./lib/spec-draft";
 import { GraphBuilder } from "./screens/graph-builder";
-import { STEP_KIND_MIME, applyNodeChangesToDraft, frameOf, specToFlow } from "./builder/canvas";
+import { STEP_KIND_MIME, applyNodeChangesToDraft, frameOf, revealShift, specToFlow } from "./builder/canvas";
 import { installShortcuts, allShortcuts, isMac, resetShortcutsForTest } from "./lib/shortcuts";
 import { StepFields, choiceSentence, sayChoices } from "./builder/step-form";
 import { StepRoutes } from "./builder/branching";
 import { ProblemText, plainProblem } from "./builder/problem";
 import { FieldsPane } from "./builder/fields";
-import { freeSpotNear } from "./lib/layout";
+import { freeSpotNear, segmentHitsBox } from "./lib/layout";
 import { ToastProvider } from "./components/ui/toast";
 import { Input } from "./components/ui/input";
 import { useTypedText } from "./lib/hooks";
@@ -939,7 +939,8 @@ describe("the verdict is live, and drawn on the step that owns it (AC5)", () => 
     const calls = serve();
     const el = await mount();
     const before = calls.length;
-    expect(labelled(el, "1 to sort out")).toBeDefined();
+    // D25: the bar and the panel say it in the same words — it read "1 to sort out"
+    expect(labelled(el, "1 problem to fix before saving")).toBeDefined();
     type(nameBox(el), "my-review");
     expect(labelled(el, "nothing outstanding")).toBeDefined();
     expect(calls.length).toBe(before);
@@ -974,10 +975,11 @@ describe("the verdict is live, and drawn on the step that owns it (AC5)", () => 
     serve({ status: 201, body: { ok: true } }, ["taken-name"]);
     const el = await mount();
     type(nameBox(el), "taken-name");
-    expect(labelled(el, "1 to sort out")).toBeDefined();
+    // D25: the bar and the panel say it in the same words — it read "1 to sort out"
+    expect(labelled(el, "1 problem to fix before saving")).toBeDefined();
     const errors = [...el.querySelectorAll(".field-error")].map((n) => n.textContent);
     expect(errors.filter((t) => t?.includes("already a graph called"))).toHaveLength(1);
-    expect(el.textContent).toContain("1 thing to sort out");
+    expect(el.textContent).toContain("1 problem to fix before saving");
     expect(el.textContent).not.toContain("Ready to save");
   });
 });
@@ -1561,7 +1563,8 @@ describe("the canvas never takes the builder down with it (finding 1)", () => {
 
     expect(el.querySelector(".gb-canvas")).not.toBeNull();
     expect(cards(el).length).toBeGreaterThan(0);
-    expect(labelled(el, "1 to sort out")).toBeDefined();
+    // D25: the bar and the panel say it in the same words — it read "1 to sort out"
+    expect(labelled(el, "1 problem to fix before saving")).toBeDefined();
     expect(el.textContent).toContain('has a "go to" with no step picked');
   });
 });
@@ -2726,6 +2729,64 @@ describe("below 1100px the panel is a drawer, so the canvas keeps its width (HOW
   });
 });
 
+describe("D24/D25: one verdict, said once, in words that match the panel", () => {
+  const toasts = () => [...document.querySelectorAll("[data-tone]")].map((t) => ({ tone: (t as HTMLElement).dataset.tone, text: t.textContent }));
+
+  test("D24: the section core's sentences send you to is titled Branching", async () => {
+    serve();
+    const el = await mount();
+    click(openStep(el, "Do the work"));
+    const headings = [...el.querySelectorAll("h3")].map((h) => h.textContent);
+    expect(headings).toContain("Branching");
+    expect(headings).not.toContain("Goes to");
+  });
+
+  test("D25: nothing says saving is 'still allowed', and the bar and the panel count in the same words", async () => {
+    serve();
+    const el = await mount();
+    expect(el.textContent).not.toContain("Saving is still allowed");
+    expect(labelled(el, "1 problem to fix before saving")).toBeDefined();
+    expect([...el.querySelectorAll("h3")].map((h) => h.textContent)).toContain("1 problem to fix before saving");
+  });
+
+  test("D25: Save with a problem standing lands on the panel's list — no banner, no toast, no second copy", async () => {
+    // the server refuses exactly as it would: 422 with one of the sentences already listed
+    const calls = serve({ status: 422, body: { error: "Give the graph a name." } });
+    const el = await mount();
+    const before = [...el.querySelectorAll(".field-error")].length;
+    await act(async () => { byText(el, "Save and add to the catalog")!.click(); });
+    await act(async () => { await Bun.sleep(40); });
+    expect(calls.some((c) => c.method === "PUT")).toBe(true); // still the same PUT: the server is the authority
+    expect(toasts()).toEqual([]); // the browser already said it: nothing is announced a second time
+    expect(el.querySelector("[data-slot='save-refusal']")).toBeNull();
+    expect([...el.querySelectorAll(".field-error")].length).toBe(before); // no banner, no extra row
+    const list = el.querySelector("[data-slot='builder-problems']") as HTMLElement;
+    expect(list).not.toBeNull();
+    expect(document.activeElement).toBe(list); // Save explained itself by taking you there
+  });
+
+  test("D25: a refusal the browser could not predict is kept in the list and announced by ONE toast", async () => {
+    serve({ status: 422, body: { error: "**Do the work** is filed under `demo.work`, which is one of Howdah's own prompts." } });
+    const el = await mount();
+    type(nameBox(el), "my-review");
+    expect(labelled(el, "nothing outstanding")).toBeDefined();
+    await act(async () => { byText(el, "Save and add to the catalog")!.click(); });
+    await act(async () => { await Bun.sleep(40); });
+    const refusal = el.querySelector("[data-slot='save-refusal']") as HTMLElement;
+    expect(refusal.textContent).toBe("Do the work is filed under demo.work, which is one of Howdah's own prompts.");
+    expect(refusal.querySelector("strong")!.textContent).toBe("Do the work"); // markers drawn, not printed
+    expect(refusal.closest("[data-slot='builder-problems']")).not.toBeNull(); // IN the problem list, not a banner
+    expect(el.textContent).toContain("The save was refused");
+    const shown = toasts();
+    expect(shown).toHaveLength(1);
+    expect(shown[0]!.tone).toBe("error");
+    expect(shown[0]!.text).not.toContain("**");
+    // ...and it is about the draft that was sent: the next edit makes it history
+    type(nameBox(el), "my-review-2");
+    expect(el.querySelector("[data-slot='save-refusal']")).toBeNull();
+  });
+});
+
 describe("HOW-68 sign-off: what the builder says and where a clicked step lands", () => {
   test("a refusal in a toast carries no markdown markers", () => {
     // the 422 after a refused save printed `**Reproduce it** compares \`goal\` with nothing.`
@@ -2744,9 +2805,51 @@ describe("HOW-68 sign-off: what the builder says and where a clicked step lands"
     }
     // and a spot that is already clear is left exactly where it was asked for
     expect(freeSpotNear(nodes, { x: 900, y: 900 })).toEqual({ x: 900, y: 900 });
-    // told how far the view reaches, it takes a clear spot the operator can SEE over a nearer
-    // one past the edge of a narrow pane: the canvas does not move when one step is added
-    const tall = freeSpotNear(nodes, { x: 70, y: 120 }, { x: 100, y: 400 })!;
-    expect(Math.abs(tall.x - 70) <= 100 && Math.abs(tall.y - 120) <= 400, JSON.stringify(tall)).toBe(true);
+    // D21 changed this expectation: the function used to take the view's `reach` and prefer a
+    // spot the operator could SEE, settling for one ON a neighbour when the pane was small. The
+    // canvas pans to the new step now, so the spot is simply the nearest CLEAR one.
+  });
+
+  test("D21: a clicked step never lands on a wire or its caption, however small the pane", () => {
+    // Blank preset's two steps, wired, with a click aimed at the middle of the wire between them
+    const nodes = [
+      { id: "a", position: { x: 40, y: 40 } },
+      { id: "b", position: { x: 40, y: 400 } },
+    ] as unknown as NodeSpec[];
+    const edges = [{ from: "a", to: "b" }];
+    const onWire = (p: { x: number; y: number }) => segmentHitsBox({ x: 150, y: 76 }, { x: 150, y: 436 }, { x: p.x, y: p.y, w: 220, h: 72 });
+    // without the wires the middle is "clear" (both cards are far) — and it is ON the wire
+    const naive = freeSpotNear(nodes, { x: 40, y: 220 })!;
+    expect(onWire(naive)).toBe(true);
+    const spot = freeSpotNear(nodes, { x: 40, y: 220 }, { edges })!;
+    expect(onWire(spot), JSON.stringify(spot)).toBe(false);
+    // three more in a row, each seeing the last: none on the wire, none on each other
+    const all = [...nodes];
+    for (let i = 0; i < 3; i++) {
+      const next = freeSpotNear(all, { x: 40, y: 220 }, { edges })!;
+      expect(onWire(next), JSON.stringify(next)).toBe(false);
+      for (const n of all) expect(Math.abs(n.position!.x - next.x) >= 244 || Math.abs(n.position!.y - next.y) >= 136).toBe(true);
+      all.push({ id: `n${i}`, position: next } as unknown as NodeSpec);
+    }
+    // a self-loop and an edge to a step with no position are not wires to avoid
+    expect(freeSpotNear(nodes, { x: 900, y: 900 }, { edges: [{ from: "a", to: "a" }, { from: "a", to: "ghost" }] })).toEqual({ x: 900, y: 900 });
+  });
+
+  test("D21: the canvas pans — never zooms — by the least that shows the added step", () => {
+    const pane = { width: 600, height: 400 };
+    // wholly in view already: nothing moves
+    expect(revealShift({ x: 32, y: 32, zoom: 1 }, pane, { x: 100, y: 100 })).toBeNull();
+    // off the right and the bottom: moved just far enough, with the frame's padding, zoom kept
+    expect(revealShift({ x: 32, y: 32, zoom: 1 }, pane, { x: 700, y: 500 })).toEqual({ x: 600 - 32 - 700 - 220, y: 400 - 32 - 500 - 72, zoom: 1 });
+    // off the left and the top
+    expect(revealShift({ x: 0, y: 0, zoom: 1 }, pane, { x: -300, y: -200 })).toEqual({ x: 332, y: 232, zoom: 1 });
+    // zoomed out, the arithmetic is in screen pixels and the zoom is untouched
+    const half = revealShift({ x: 0, y: 0, zoom: 0.5 }, pane, { x: 2000, y: 0 })!;
+    expect(half.zoom).toBe(0.5);
+    expect(2000 * 0.5 + half.x + 220 * 0.5).toBe(600 - 32);
+    // a pane too small to hold a card keeps the card's top-left in view
+    expect(revealShift({ x: 0, y: 0, zoom: 1 }, { width: 200, height: 400 }, { x: 500, y: 40 })).toEqual({ x: 32 - 500, y: 0, zoom: 1 });
+    // an unmeasured pane answers nothing rather than a confident wrong pan
+    expect(revealShift({ x: 0, y: 0, zoom: 1 }, { width: 0, height: 0 }, { x: 500, y: 40 })).toBeNull();
   });
 });

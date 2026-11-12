@@ -40,13 +40,14 @@ import type { RunDetail } from "../../derive";
 import { applyLiveEvent, type CoalescedTurn } from "../../../log/coalesce";
 import type { LoggedEvent } from "../../../log/events";
 import { GraphDag, useGraphShape } from "../graph-dag";
-import { StatusBadge, StatusGlyph, askRowKey, resolveStepKey, stepKey } from "../status";
+import { StatusBadge, StatusGlyph, askRowKey, resolveStepKey, stepInterrupted, stepKey } from "../status";
 import { Row } from "@/components/ui/row";
 import { getJSON } from "@/lib/net";
 import { fmtClock, fmtDur, fmtWait, liveDuration, runLabel } from "@/lib/format";
 import { useAttentionSurfaces, useNow } from "@/lib/hooks";
 import { submitOnEnter } from "@/lib/keys";
 import { useShortcuts } from "@/lib/shortcuts";
+import { RUN_STATUS_ID, focusRunStatus, useDocumentTitle } from "@/lib/page";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs } from "@/components/ui/tabs";
@@ -538,10 +539,16 @@ export function RunView({ id, graceMs = OPEN_GRACE_MS }: { id: string; graceMs?:
       document.removeEventListener("visibilitychange", onFocus);
     };
   }, [detail?.summary.status, reload]);
+  // A `#needs-input` that points at nothing is dropped — but only once the run HAS LOADED and
+  // is seen to have no ask. This used to run while `detail` was still null, which is every
+  // first render: the hash was stripped before the card existed, so the card's own "the deep
+  // link lands on the control" never saw it. A notification's click opened the run with focus
+  // on <body> (found by driving it in a browser, HOW-68 fix pass).
+  const loaded = detail !== null;
   useEffect(() => {
-    if (detail?.ask || location.hash !== "#needs-input") return;
+    if (!loaded || detail?.ask || location.hash !== "#needs-input") return;
     history.replaceState(history.state, "", location.pathname + location.search);
-  }, [detail?.ask]);
+  }, [loaded, detail?.ask]);
   useEffect(() => {
     if (!detail) return;
     const es = new EventSource(`/api/runs/${id}/events?since=${detail.events_seq}`);
@@ -603,6 +610,9 @@ export function RunView({ id, graceMs = OPEN_GRACE_MS }: { id: string; graceMs?:
 
 
 
+  // the frame names the tab once the run has loaded; a parent's effect runs after its child's,
+  // so this must stay out of the way then (undefined = leave the title alone)
+  useDocumentTitle(detail ? undefined : missing ? "Run not found" : "Run");
   if (!detail && missing)
     return (
       <ScrollPane label="Run not found" className="p-8" data-screen="run-missing">
@@ -632,6 +642,9 @@ export function RunView({ id, graceMs = OPEN_GRACE_MS }: { id: string; graceMs?:
     />
   );
 }
+
+/** how long after a run's last event "no runner" reads as "resuming" rather than "died" */
+const RESUME_GRACE_MS = 4000;
 
 /** One line under the tabs for a fact about the run that is not an ask: it failed, it is paused. */
 function Notice({ tone = "neutral", children }: { tone?: "neutral" | "failed"; children: string }) {
@@ -669,6 +682,31 @@ function RunFrame({ id, detail, tab, setTab, picked, setPicked, liveGit, now, re
   const [actionError, setActionError] = useState<string | null>(null);
   const parked = summary.status === "needs-input";
   const ide = ideState(detail);
+  useDocumentTitle(runLabel({ ...summary, id }));
+
+  // D20: an answered ask takes its card — and whatever had focus inside it — off the page, and
+  // focus fell to <body>. When the standing ask goes (or is replaced) while focus was last
+  // inside it, focus moves to the header's status line, which is where the run now says what
+  // it is doing. ONE rule for every card (reply, answer, verdict, approval, retry, waive),
+  // keyed on the read model rather than on each card remembering to do it. `focusRunStatus`
+  // leaves focus alone if the operator has put it somewhere real in the meantime.
+  const askKey = ask ? `${ask.node}@${ask.visit}#${ask.seq}` : null;
+  const focusInAsk = useRef(false);
+  useEffect(() => {
+    const onFocus = (e: FocusEvent) => {
+      focusInAsk.current = (e.target as Element | null)?.closest?.("#needs-input, [data-slot='acceptance-card']") != null;
+    };
+    document.addEventListener("focusin", onFocus);
+    return () => document.removeEventListener("focusin", onFocus);
+  }, []);
+  const lastAsk = useRef(askKey);
+  useEffect(() => {
+    const was = lastAsk.current;
+    lastAsk.current = askKey;
+    if (was === null || was === askKey || !focusInAsk.current) return;
+    focusInAsk.current = false;
+    focusRunStatus();
+  }, [askKey]);
 
   const openIde = useCallback(async () => {
     const r = await fetch(`/api/runs/${id}/open-ide`, { method: "POST" }).catch(() => null);
@@ -724,6 +762,16 @@ function RunFrame({ id, detail, tab, setTab, picked, setPicked, liveGit, now, re
 
   const lastEventAgeMs = summary.last_event_at ? now - new Date(summary.last_event_at).getTime() : 0;
   const staleRunning = summary.status === "running" && lastEventAgeMs > 5 * 60_000;
+  // BETWEEN RUNNERS IS NOT DEAD. A parked run has no live runner — it exited when it parked —
+  // so the moment an answer, a verdict or a decision resolves the park, the read model sees a
+  // run with nothing standing and no runner, and says `harness-dead` until the runner the
+  // answer spawned takes the lock a second later. Found by answering from the page: every
+  // approval and every question flashed "Runner died" and a red "Resume to pick the run back
+  // up" at the operator who had just done exactly that. For a few seconds after the run's last
+  // event the frame says "Resuming" instead; a runner that really is gone still reads as dead
+  // once the grace is over.
+  // (`now` ticks once a second, so a brand-new event can be "in the future": that is recent too)
+  const resuming = summary.status === "harness-dead" && lastEventAgeMs < RESUME_GRACE_MS;
   // the step that needs a human wins the selection; otherwise the newest one
   const selectedKey = selectedStepKey(detail, picked);
   // the chat shows the loaded window. Steps above it stay on the Steps list; "Load earlier"
@@ -734,6 +782,12 @@ function RunFrame({ id, detail, tab, setTab, picked, setPicked, liveGit, now, re
     return first <= 0 ? detail : { ...detail, timeline: detail.timeline.slice(first) };
   })();
   const selectedRow = detail.timeline.find((t) => stepKey(t) === selectedKey) ?? null;
+  // D26: steps the timeline still calls running that nothing is running; their clock stops at
+  // the run's last event rather than counting up for as long as the page is open
+  const interrupted = {
+    keys: new Set(detail.timeline.filter((t) => stepInterrupted(detail, t)).map(stepKey)),
+    at: summary.last_event_at ? new Date(summary.last_event_at).getTime() : now,
+  };
   // HOW-68: a step chosen OUTSIDE the Steps list (the Build transcript, the Details timeline)
   // lands on that step's detail — narrow, the split would otherwise show the list it is in.
   // Leaving Steps forgets the request, so coming back by the tab strip shows the list again.
@@ -762,6 +816,9 @@ function RunFrame({ id, detail, tab, setTab, picked, setPicked, liveGit, now, re
             <a className={BACK_LINK} href="/" aria-label="back to runs"><ArrowLeft /></a>
           </Tooltip>
           <h1><Truncate>{runLabel({ ...summary, id })}</Truncate></h1>
+          {/* the status line is a focus TARGET (D20): where focus goes when an ask is answered.
+              tabIndex -1 keeps it out of the Tab order; the ring is the global :focus-visible */}
+          <span id={RUN_STATUS_ID} data-slot="run-status" tabIndex={-1} className="inline-flex shrink-0 items-center rounded-[var(--radius-sm)]">
           {parked ? (
             // the alarm, said once in the frame: one line that takes you to the card (DESIGN.md)
             <Button variant="ghost" size="sm" className="run-status-line" aria-label={`Waiting on you${waited ? ` for ${waited}` : ""} — go to what the run is asking`} onClick={jumpToAsk}>
@@ -769,8 +826,9 @@ function RunFrame({ id, detail, tab, setTab, picked, setPicked, liveGit, now, re
               <Kbd keys="a" decorative className="run-wide" />
             </Button>
           ) : (
-            <StatusBadge status={summary.status} />
+            resuming ? <StatusBadge status="queued" label="Resuming" /> : <StatusBadge status={summary.status} />
           )}
+          </span>
           <Toolbar label="Run actions" className="ml-auto">
             <RunControls
               runId={id} summary={summary} onAction={reload} now={now}
@@ -807,7 +865,7 @@ function RunFrame({ id, detail, tab, setTab, picked, setPicked, liveGit, now, re
         )}
         {overdue !== null && <Notice>{`The agent has not stopped after ${fmtDur(overdue)} — it may be inside one long tool call. Stop now interrupts it where it is.`}</Notice>}
         {staleRunning && <Notice tone="failed">{`No run events for ${fmtDur(lastEventAgeMs)}. The runner may be stuck even though its process is still alive.`}</Notice>}
-        {summary.status === "harness-dead" && <Notice tone="failed">The runner stopped before the current step finished. Resume to pick the run back up.</Notice>}
+        {summary.status === "harness-dead" && !resuming && <Notice tone="failed">The runner stopped before the current step finished. Resume to pick the run back up.</Notice>}
         {summary.paused && <Notice>Paused by you — the run holds at the node boundary until you resume it.</Notice>}
         {summary.outcome === "aborted" && <Notice tone="failed">Aborted by you.</Notice>}
         {summary.outcome !== "aborted" && (summary.status === "failed-recoverable" || summary.status === "failed-terminal") && (
@@ -835,7 +893,7 @@ function RunFrame({ id, detail, tab, setTab, picked, setPicked, liveGit, now, re
           ) : (
             <StepsSplit
               openRequest={stepOpen}
-              list={<RunSteps timeline={detail.timeline} ask={ask} selected={selectedKey} now={now} onSelect={setPicked} mapping={detail.slice?.mapping} />}
+              list={<RunSteps timeline={detail.timeline} ask={ask} selected={selectedKey} now={now} onSelect={setPicked} mapping={detail.slice?.mapping} interrupted={interrupted} />}
               detail={<StepDetail runId={id} row={selectedRow} detail={detail} ask={ask} now={now} onResolved={reload} />}
             />
           )}
@@ -906,16 +964,22 @@ function RunDetails({ id, detail, liveGit, now, tab, reload, resumeCommand, onCo
       <Group title="Timeline">
         {detail.timeline.length === 0 ? <p className="run-details-note">No step has started yet.</p> : (
           <ol className="run-details-list">
-            {detail.timeline.map((t) => (
-              <li key={stepKey(t)}>
-                {/* a row is the way to its step: it opens Steps on that step's detail */}
-                <Row className="run-details-row" onClick={() => onPickStep(stepKey(t))} aria-label={`open ${t.node}@${t.visit} in Steps — ${t.status}, ${fmtDur(liveDuration(t, now))}`}>
-                  <StatusGlyph status={STEP_STATUS[t.status]} size={12} label={t.status} />
-                  <span className="m run-details-step">{t.node}@{t.visit}</span>
-                  <span className="run-details-dur">{fmtDur(liveDuration(t, now))}</span>
-                </Row>
-              </li>
-            ))}
+            {detail.timeline.map((t) => {
+              // D26: a dead run's last step is not running — the cross and the word, clock stopped
+              const cut = stepInterrupted(detail, t);
+              const word = cut ? "interrupted" : t.status;
+              const took = fmtDur(liveDuration(t, cut && summary.last_event_at ? new Date(summary.last_event_at).getTime() : now));
+              return (
+                <li key={stepKey(t)}>
+                  {/* a row is the way to its step: it opens Steps on that step's detail */}
+                  <Row className="run-details-row" data-step-status={word} onClick={() => onPickStep(stepKey(t))} aria-label={`open ${t.node}@${t.visit} in Steps — ${word}, ${took}`}>
+                    <StatusGlyph status={cut ? "harness-dead" : STEP_STATUS[t.status]} size={12} label={word} />
+                    <span className="m run-details-step">{t.node}@{t.visit}</span>
+                    <span className="run-details-dur">{took}</span>
+                  </Row>
+                </li>
+              );
+            })}
           </ol>
         )}
       </Group>

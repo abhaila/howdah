@@ -19,7 +19,7 @@
  */
 import { useState } from "react";
 import type { RunDetail } from "../../derive";
-import { StatusGlyph, askRowKey, stepKey } from "../status";
+import { StatusGlyph, askRowKey, stepInterrupted, stepKey } from "../status";
 import { slicePanes, SlicePane, MapProgressLine, type SlicePaneId } from "../slice";
 import { fmtDur, liveDuration } from "@/lib/format";
 import { PanelTabs } from "@/components/ui/tabs";
@@ -38,8 +38,9 @@ import { OutputDocs, stepOutputs } from "./document";
 import { usageItems } from "./usage";
 import { describeProfile } from "../../../log/trajectory";
 
-type StepStatus = "running" | "succeeded" | "failed" | "needs-input";
-const STEP_WORD: Record<StepStatus, string> = { running: "running", succeeded: "succeeded", failed: "failed", "needs-input": "waiting on you" };
+/** `interrupted`: the timeline says running and nothing is running it any more (status.tsx `stepInterrupted`) */
+type StepStatus = "running" | "succeeded" | "failed" | "needs-input" | "interrupted";
+const STEP_WORD: Record<StepStatus, string> = { running: "running", succeeded: "succeeded", failed: "failed", "needs-input": "waiting on you", interrupted: "interrupted" };
 /** a quiet line of explanation inside a pane */
 const NOTE = "m-0 text-sm leading-[1.5] text-muted-foreground";
 
@@ -49,7 +50,7 @@ const NOTE = "m-0 text-sm leading-[1.5] text-muted-foreground";
  * statuses that draw them, so a step and a run can never be drawn two ways.
  */
 export function StepGlyph({ status }: { status: StepStatus }) {
-  const as = status === "needs-input" ? "needs-input" : status === "failed" ? "failed-recoverable" : status === "running" ? "running" : "done";
+  const as = status === "needs-input" ? "needs-input" : status === "failed" ? "failed-recoverable" : status === "running" ? "running" : status === "interrupted" ? "harness-dead" : "done";
   return <StatusGlyph status={as} label={STEP_WORD[status]} className={`step-glyph ${status}`} />;
 }
 
@@ -58,7 +59,7 @@ export function StepGlyph({ status }: { status: StepStatus }) {
  * time-proportional so the shape of the run is legible; a sub-second step still gets 3px,
  * because an invisible mark is a lie about what happened.
  */
-export function RunSteps({ timeline, ask, selected, now, onSelect, mapping }: {
+export function RunSteps({ timeline, ask, selected, now, onSelect, mapping, interrupted }: {
   timeline: RunDetail["timeline"];
   ask: RunDetail["ask"];
   selected: string | null;
@@ -66,6 +67,8 @@ export function RunSteps({ timeline, ask, selected, now, onSelect, mapping }: {
   onSelect: (key: string) => void;
   /** system-map 1d: an extraction in progress shows "mapping files done/total" on its row */
   mapping?: NonNullable<RunDetail["slice"]>["mapping"];
+  /** D26: rows still "running" in the timeline that nothing is running — drawn interrupted, clock stopped */
+  interrupted?: { keys: ReadonlySet<string>; at: number };
 }) {
   const split = useSplit();
   const keys = useListKeys({ ids: timeline.map(stepKey), selected, onSelect, name: "step" });
@@ -77,8 +80,10 @@ export function RunSteps({ timeline, ask, selected, now, onSelect, mapping }: {
   const row = (t: RunDetail["timeline"][number], i: number) => {
     const span = t.finished_at ? t.run_span_ms || 1 : Math.max(t.run_span_ms || 1, liveSpan);
     const waiting = askKey === stepKey(t);
-    const status: StepStatus = waiting ? "needs-input" : t.status;
-    const total = liveDuration(t, now);
+    const cut = interrupted?.keys.has(stepKey(t)) ?? false;
+    const status: StepStatus = waiting ? "needs-input" : cut ? "interrupted" : t.status;
+    // an interrupted step stopped when the run's last event was written, not "now"
+    const total = liveDuration(t, cut ? interrupted!.at : now);
     // the split that makes R3.3 visible: agent time, then the part that was me not looking
     const work = Math.max(0, total - t.waiting_ms);
     const pct = (ms: number) => (ms / span) * 100;
@@ -280,9 +285,10 @@ export function StepDetail({ runId, row, detail, ask, now, onResolved }: {
   ];
   const shown = panes.find((p) => p.value === pane)?.value ?? panes[0]!.value;
   const render = detail.renders.find((r) => r.node === row.node && r.visit === row.visit);
-  const total = liveDuration(row, now);
+  const cut = stepInterrupted(detail, row);
+  const total = liveDuration(row, cut && detail.summary.last_event_at ? new Date(detail.summary.last_event_at).getTime() : now);
   const work = Math.max(0, total - row.waiting_ms);
-  const status: StepStatus = isAsking ? "needs-input" : row.status;
+  const status: StepStatus = isAsking ? "needs-input" : cut ? "interrupted" : row.status;
   const bar = (label: string, ms: number, of: number, cls: string) => (
     <div className="sd-seg">
       <div className="flex justify-between text-xs text-muted-foreground"><span>{label}</span><span className="tabular-nums">{fmtDur(ms)}</span></div>
@@ -374,7 +380,9 @@ export function StepDetail({ runId, row, detail, ask, now, onResolved }: {
       {shown === "activity" && (
         <StepActivity
           turns={detail.turns} render={render} row={row} context={detail.context}
-          state={detail.turn_states[`${row.node}@${row.visit}`]} lastActivityAt={detail.last_agent_event_at}
+          // a dead run says so once, in its header and its notice: the turn's own "the process
+          // died" line would be the third copy on screen (D26)
+          state={detail.summary.status === "harness-dead" ? undefined : detail.turn_states[`${row.node}@${row.visit}`]} lastActivityAt={detail.last_agent_event_at}
         />
       )}
       {shown === "prompt" && (render
