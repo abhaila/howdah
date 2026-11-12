@@ -19,6 +19,7 @@ import { parseRunArgs } from "../../cli/main";
 import { parseDeps } from "../../core/stack";
 import type { AttemptResult } from "../run";
 import type { NodeDef } from "../../core/graph";
+import type { Registry } from "../../graphs/registry";
 
 const REPO = "/repos/api";
 const WORKSPACES: WorkspaceLookup = { repoNames: () => ["api", "web"], nameFor: (p) => (p === REPO ? "api" : p === "/repos/web" ? "web" : null) };
@@ -65,13 +66,13 @@ interface Harness {
  * left no run behind would make every re-attempt look like the "recorded but missing" case.
  * `deadSpawn` is that case on purpose: a child that never starts.
  */
-function harness(opts: { workspaces?: WorkspaceLookup; overrides?: Record<string, unknown>; deadSpawn?: boolean } = {}): Harness {
+function harness(opts: { workspaces?: WorkspaceLookup; overrides?: Record<string, unknown>; deadSpawn?: boolean; inputs?: Record<string, unknown>; registry?: () => Promise<Registry> } = {}): Harness {
   const dir = mkdtempSync(join(tmpdir(), "howdah-launch-"));
   const runsDir = join(dir, "runs");
   const runId = "plan-feature-abc";
   const log = new EventLog(join(runsDir, runId, "run.jsonl"));
   log.append({
-    type: "run-started", graph: "plan-feature", inputs: { goal: "g" }, pinned_prompts: {},
+    type: "run-started", graph: "plan-feature", inputs: { goal: "g", ...opts.inputs }, pinned_prompts: {},
     cwd: REPO, folder_kind: "repo", ...(opts.overrides ? { overrides: opts.overrides as never } : {}),
   });
   const spawned: string[][] = [];
@@ -79,6 +80,7 @@ function harness(opts: { workspaces?: WorkspaceLookup; overrides?: Record<string
     launch: {
       runsDir,
       workspaces: opts.workspaces ?? WORKSPACES,
+      ...(opts.registry ? { registry: opts.registry } : {}),
       spawn: (argv) => {
         spawned.push(argv);
         if (!opts.deadSpawn) seedChild(runsDir, flag(argv, "--id")!);
@@ -517,5 +519,78 @@ describe("launchOrder", () => {
 
   test("a dependency on a slice that is not in the plan is ignored, not waited for", () => {
     expect(launchOrder([s("a", ["ghost"])]).map((x) => x.id)).toEqual(["a"]);
+  });
+});
+
+// a parent's `child_graph` input picks the operator's own implement-ticket-shaped graph
+describe("child_graph", () => {
+  const graph = (inputs: string[]) => ({ def: { inputs } }) as unknown as Registry["graphs"][string];
+  const registry = (graphs: Record<string, string[]>) => async (): Promise<Registry> => ({
+    graphs: Object.fromEntries(Object.entries(graphs).map(([n, i]) => [n, graph(i)])),
+    source: Object.fromEntries(Object.keys(graphs).map((n) => [n, "local" as const])),
+    problems: [],
+  });
+  const DEEP = registry({ deep: ["goal", "work"], "deep-stacked": ["goal", "work", "deps"] });
+  const plan = (slices: ReturnType<typeof slice>[]) => ({
+    "plan.slices": { feature: "f", slices },
+    tickets: { tickets: slices.map((s, i) => ticket({ slice_id: s.id, identifier: `HOW-${40 + i}` })) },
+  });
+  const twoSlices = () => plan([slice({ id: "be-1" }), slice({ id: "be-2", depends_on: ["be-1"] })]);
+
+  test("a slice runs the named graph, and a dependent slice runs its stacked form", async () => {
+    const h = harness({ inputs: { child_graph: "deep" }, registry: DEEP });
+    const r = await h.run(twoSlices());
+    expect(r.status).toBe("succeeded");
+    expect(h.spawned.map((a) => [flag(a, "--id"), a[1]])).toEqual([
+      ["plan-feature-abc--be-1", "deep"],
+      ["plan-feature-abc--be-2", "deep-stacked"],
+    ]);
+    expect(input(h.spawned[1]!, "deps")).toBeDefined();
+    expect(h.events().filter((e) => e.type === "run-spawned").map((e) => (e.type === "run-spawned" ? e.graph : ""))).toEqual(["deep", "deep-stacked"]);
+    expect(childGraph({ depends_on: [] }, "deep")).toBe("deep");
+  });
+
+  test("an unknown graph launches nothing", async () => {
+    const h = harness({ inputs: { child_graph: "nope" }, registry: DEEP });
+    const r = await h.run(twoSlices());
+    expect(r.status).toBe("failed");
+    expect(r.reason).toContain('no graph is called "nope"');
+    expect(r.reason).toContain("NOTHING WAS LAUNCHED");
+    expect(h.spawned).toHaveLength(0);
+  });
+
+  test("a graph with no stacked form is refused only when a slice depends on another", async () => {
+    const flat = registry({ flat: ["goal", "work"] });
+    const refused = harness({ inputs: { child_graph: "flat" }, registry: flat });
+    const r = await refused.run(twoSlices());
+    expect(r.status).toBe("failed");
+    expect(r.reason).toContain('"flat" cannot run stacked');
+    expect(refused.spawned).toHaveLength(0);
+
+    const fine = harness({ inputs: { child_graph: "flat" }, registry: flat });
+    expect((await fine.run(plan([slice({ id: "be-1" })]))).status).toBe("succeeded");
+    expect(fine.spawned.map((a) => a[1])).toEqual(["flat"]);
+  });
+
+  test("a graph that wants an input no child is given is refused", async () => {
+    const h = harness({ inputs: { child_graph: "needy" }, registry: registry({ needy: ["goal", "work", "pull_request"] }) });
+    const r = await h.run(plan([slice({ id: "be-1" })]));
+    expect(r.status).toBe("failed");
+    expect(r.reason).toContain("needs pull_request");
+    expect(h.spawned).toHaveLength(0);
+  });
+
+  test("without a registry to check it against, a child_graph launches nothing", async () => {
+    const h = harness({ inputs: { child_graph: "deep" } });
+    const r = await h.run(plan([slice({ id: "be-1" })]));
+    expect(r.status).toBe("failed");
+    expect(r.reason).toContain("without a graph registry");
+    expect(h.spawned).toHaveLength(0);
+  });
+
+  test("an empty child_graph is refused rather than read as the default", async () => {
+    const h = harness({ inputs: { child_graph: "  " }, registry: DEEP });
+    expect((await h.run(plan([slice({ id: "be-1" })]))).status).toBe("failed");
+    expect(h.spawned).toHaveLength(0);
   });
 });

@@ -2,7 +2,9 @@
  * `runs:launch` — HOW-23's fan-out built-in: one detached run per approved slice of a
  * `plan-feature` decomposition, each with its own worktree, branch, PR and ticket. A slice with
  * no dependencies runs `implement-ticket`; one WITH dependencies runs `implement-stacked`
- * (HOW-57, G11), handed its dependencies as a `deps` input.
+ * (HOW-57, G11), handed its dependencies as a `deps` input. A parent started with
+ * `-i child_graph=<local graph>` runs that graph instead, and its `-stacked` form for a
+ * dependent slice (graphs/registry.ts derives it).
  *
  * It runs IN-PROCESS behind the command executor, beside the map built-ins and `probe:pr`, for
  * the same reasons: a shell command cannot read the node's declared reads, cannot append typed
@@ -56,8 +58,10 @@ import { launchArgs, type LaunchRequest } from "../../core/launch-args";
 import { normalizeRunName } from "../../core/run-name";
 // the slice-plan contract (the plan, its tickets, and what a launch publishes) is pure data
 // and lives with the graph that declares those keys — no graph imports an executor
-import { STACKED_GRAPH, type DepRef } from "../../core/stack";
+import { CHILD_GRAPH_INPUT, STACKED_GRAPH, stackedGraphName, type DepRef } from "../../core/stack";
 import { describeDep, validateSlicePlan, type LaunchResult, type Slice, type SlicePlan, type SliceTicket } from "../../graphs/slice-plan";
+import type { Registry } from "../../graphs/registry";
+import type { LoggedEvent } from "../../log/events";
 
 export type { LaunchResult, SliceTicket };
 
@@ -68,9 +72,49 @@ export const CHILD_GRAPH = "implement-ticket";
 /** HOW-57: the graph a slice WITH dependencies runs — it waits for them, then stacks or builds. */
 export const STACKED_CHILD_GRAPH = STACKED_GRAPH;
 
-/** The graph `slice` is launched as (G11): the one place the choice is made. */
-export function childGraph(slice: Pick<Slice, "depends_on">): string {
+/**
+ * The graph `slice` is launched as (G11): the one place the choice is made. `base` is the
+ * parent's `child_graph` input, when it names one: that graph, or its stacked form for a slice
+ * with dependencies.
+ */
+export function childGraph(slice: Pick<Slice, "depends_on">, base?: string): string {
+  if (base) return slice.depends_on.length > 0 ? stackedGraphName(base) : base;
   return slice.depends_on.length > 0 ? STACKED_CHILD_GRAPH : CHILD_GRAPH;
+}
+
+/** The inputs a child graph may declare: what childRequest hands it, and nothing else. */
+const CHILD_INPUTS = new Set(["goal", "work", "deps"]);
+
+/**
+ * The parent's `child_graph` input, checked against the registry before anything is spawned:
+ * a graph that is missing, cannot run stacked, or wants an input no child is given would fail
+ * in every child at once.
+ */
+async function checkedChildBase(
+  started: LoggedEvent | undefined,
+  slices: readonly Slice[],
+  registry: (() => Promise<Registry>) | undefined,
+): Promise<{ base: string | undefined } | Failed> {
+  const raw = started?.type === "run-started" ? started.inputs[CHILD_GRAPH_INPUT] : undefined;
+  if (raw === undefined) return { base: undefined };
+  const base = typeof raw === "string" ? raw.trim() : "";
+  if (!base) return failed(`${CHILD_GRAPH_INPUT} must name a graph. NOTHING WAS LAUNCHED.`);
+  if (!registry) return failed(`${LAUNCH_BUILTIN} cannot check ${CHILD_GRAPH_INPUT} "${base}": it was built without a graph registry. NOTHING WAS LAUNCHED.`);
+  const reg = await registry();
+  const needed = [...new Set(slices.map((s) => childGraph(s, base)))];
+  for (const name of needed) {
+    const graph = reg.graphs[name];
+    if (!graph) {
+      const why = name === base
+        ? `no graph is called "${base}"`
+        : `"${base}" cannot run stacked (it needs implement-ticket's create_worktree and delivery steps), so a slice with dependencies has no graph`;
+      return failed(`${CHILD_GRAPH_INPUT}: ${why}. NOTHING WAS LAUNCHED.`);
+    }
+    const extra = graph.def.inputs.filter((k) => !CHILD_INPUTS.has(k));
+    if (extra.length)
+      return failed(`${CHILD_GRAPH_INPUT}: "${name}" needs ${extra.join(", ")}, which ${LAUNCH_BUILTIN} cannot give a child (it gives goal, work and deps). NOTHING WAS LAUNCHED.`);
+  }
+  return { base };
 }
 
 /**
@@ -126,6 +170,8 @@ export interface LaunchBuiltinOpts {
   workspaces?: WorkspaceLookup;
   /** default: detached, unref'd `bun <cliEntry> <argv>` inheriting this process's env */
   spawn?: (argv: string[]) => void;
+  /** built-ins + local graphs — needed only to check a parent's `child_graph` input */
+  registry?: () => Promise<Registry>;
 }
 
 type Failed = AttemptResult & { status: "failed" };
@@ -143,6 +189,9 @@ export function launchBuiltinExecutor(opts: LaunchBuiltinOpts = {}): Executor {
     const started = log.read().find((e) => e.type === "run-started");
     const checked = precheck(reads, def, workspaces, started?.type === "run-started" ? started.cwd : undefined);
     if ("status" in checked) return checked;
+    const child = await checkedChildBase(started, checked.plan.slices, opts.registry);
+    if ("status" in child) return child;
+    const base = child.base;
 
     const cliEntry = opts.cliEntry ?? join(import.meta.dir, "..", "..", "cli", "main.ts");
     const spawn = opts.spawn ?? ((argv: string[]) => void Bun.spawn(["bun", cliEntry, ...argv], { stdout: "ignore", stderr: "ignore", env: { ...process.env } }).unref());
@@ -175,11 +224,11 @@ export function launchBuiltinExecutor(opts: LaunchBuiltinOpts = {}): Executor {
         continue;
       }
       const workspaceOf = (id: string) => checked.targets.find((t) => t.slice.id === id)?.workspace ?? workspace;
-      spawn(launchArgs(childRequest(slice, ticket, workspace, checked.plan, runId, overrides, workspaceOf), child));
+      spawn(launchArgs(childRequest(slice, ticket, workspace, checked.plan, runId, overrides, workspaceOf, base), child));
       effects.done(effect, { child, workspace, ticket: ticket.identifier });
       log.append({
         type: "run-spawned", node: nodeId, visit,
-        child, graph: childGraph(slice), slice_id: slice.id, ticket: ticket.identifier, workspace,
+        child, graph: childGraph(slice, base), slice_id: slice.id, ticket: ticket.identifier, workspace,
       });
       result.launched.push({ slice_id: slice.id, ticket: ticket.identifier, run_id: child, workspace });
     }
@@ -324,9 +373,10 @@ function childRequest(
   parentRunId: string,
   parentOverrides: ParentOverrides,
   workspaceOf: (sliceId: string) => string,
+  base?: string,
 ): LaunchRequest {
   const request: LaunchRequest = {
-    graph: childGraph(slice),
+    graph: childGraph(slice, base),
     inputs: {
       goal: childGoal(slice, plan),
       work: childWork(slice, ticket, plan),

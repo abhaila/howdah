@@ -81,6 +81,9 @@ CLI (there is no installed `howdah` binary — invoke the entrypoint):
 bun cli/main.ts run <graph> -i goal=... -i work=... --workspace <name> [--name <text>] [--parent <run-id>] [--model/--harness/--effort/...]
                                              # --name: display label only (HOW-18); the run id stays identity
                                              # --parent: which run launched this one (HOW-23); lineage only
+bun cli/main.ts run plan-feature -i goal=... -i work=... -i child_graph=<local graph> --workspace <name>
+                                             # child_graph: runs:launch starts that graph per slice, and its
+                                             # derived <name>-stacked form for a slice with dependencies
 bun cli/main.ts setup                        # create $HOWDAH_HOME's layout (config.json, runs/, repos/, attention/)
 bun cli/main.ts runs | graphs | doctor
 bun cli/main.ts reply <run-id> <text>        # answers the current ask, resumes if the runner died
