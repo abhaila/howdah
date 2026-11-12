@@ -14,6 +14,16 @@ function html(text: string): HTMLElement {
   return host;
 }
 
+describe("a document never adds an h1 to the screen it is shown on (HOW-68)", () => {
+  test("every heading is drawn one level down, and the deepest stays an h6", () => {
+    const el = html("# Title\n\n## Section\n\n##### Five\n\n###### Six");
+    expect(el.querySelector("h1")).toBeNull();
+    expect(el.querySelector("h2")!.textContent).toBe("Title");
+    expect(el.querySelector("h3")!.textContent).toBe("Section");
+    expect([...el.querySelectorAll("h6")].map((h) => h.textContent)).toEqual(["Five", "Six"]);
+  });
+});
+
 describe("parseMarkdown", () => {
   test("headings, paragraphs, rules and fenced code", () => {
     const b = parseMarkdown("# Title\n\nsome text\nmore\n\n---\n\n```ts\nconst a = `x`;\n\n# not a heading\n```");

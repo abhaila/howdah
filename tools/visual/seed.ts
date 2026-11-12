@@ -682,6 +682,25 @@ try {
   note(id, `implement-slice with the tree edited after approval → ${JSON.stringify({ state: r.state, code: (r as any).code, node: (r as any).node })}`);
 } catch (e) { console.error("implement-slice (stale-base) failed:", e); note("implement-slice-stale", "FAILED to seed: " + String(e)); }
 
+// P. HOW-68 confirming review: one long, hostile transcript — 600+ items, a 6,000-character single line,
+// a large JSON tool result and a 300-character token with nowhere to break. It exists so the run view's
+// overflow and scrolling are checked on content shaped like a real day of tool output.
+{
+  const UNBROKEN = "sha512-" + "A1b2C3d4E5f6G7h8".repeat(19).slice(0, 293);
+  const LONG_LINE = "WARN " + Array.from({ length: 400 }, (_, i) => `field_${i}=value_${i * 7}`).join(" ");
+  const BIG_JSON = JSON.stringify({ tenants: Array.from({ length: 220 }, (_, i) => ({ id: `tenant_${String(i).padStart(4, "0")}`, plan: i % 3 ? "team" : "enterprise", limits: { per_minute: 600 + i, burst: 40 + (i % 9), overrides: [`gateway/limits/tenant_${i}.yaml`] }, checksum: UNBROKEN.slice(0, 64) })) }, null, 2);
+  const steps: NodeScript["steps"] = [];
+  for (let i = 0; i < 300; i++) {
+    if (i % 3 === 0) steps.push(text(i === 150 ? `The lockfile pins one integrity hash I cannot shorten: ${UNBROKEN} — it is carried through unchanged.` : `Pass ${i / 3 + 1}: reading module ${i} and checking its limits against the tenant table.`));
+    steps.push(tool(i % 2 ? "Read" : "Bash", i % 2 ? { file_path: `gateway/src/main/kotlin/com/example/gateway/limits/Module${i}.kt` } : { command: `./gradlew :gateway:test --tests 'Module${i}Test' 2>&1 | tail -5` },
+      i === 10 ? BIG_JSON : i === 20 ? LONG_LINE : i === 30 ? UNBROKEN : `Module${i}: 14 tests completed, 0 failed\nBUILD SUCCESSFUL in ${3 + (i % 5)}s`, i % 41 === 40));
+  }
+  await run("quick-task-mhv7long", {
+    graph: quickTask, cwd: API, name: "Audit every limiter module", inputs: { goal: "Audit every limiter module against the tenant table and report what disagrees" },
+    script: () => ({ steps, say: "All 300 modules agree with the tenant table." }),
+  }, [8 * 60, 7 * 60], "finished quick-task with a 600+ item transcript (long line, big JSON, unbroken token)", "finished success");
+}
+
 // ---- 3. things that go through the viewer's own routes ------------------------------------------
 const server = createHowdahServer({ runsDir: RUNS, attentionDir: ATTENTION, port: 0, repoRoot: ROOT, resumeRun: () => {}, spawnReviser: () => {}, openTerminal: () => {} } as any);
 const base = `http://localhost:${server.port}`;

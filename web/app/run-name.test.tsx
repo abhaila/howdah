@@ -157,6 +157,23 @@ describe("the launch form (HOW-18)", () => {
     return nameField;
   }
 
+  // HOW-68 confirming review: the form used to open with an empty graph list when the catalog
+  // could not be read, and said "Still needed: a graph" as if there were none.
+  test("a catalog that cannot be read is said, with a retry that brings the form back", async () => {
+    globalThis.fetch = (async () => new Response(JSON.stringify({ error: "nope" }), { status: 500, headers: { "content-type": "application/json" } })) as unknown as typeof fetch;
+    // no clock: the stubbed fetch has already answered, so draining microtasks is the whole wait
+    const drain = () => act(async () => { for (let i = 0; i < 50; i++) await Promise.resolve(); });
+    const el = mount(<StartRun />);
+    await drain();
+    expect(el.textContent).toContain("Could not load the graphs");
+    expect(el.querySelector("select")).toBeNull();
+    serve(catalog);
+    await act(async () => ([...el.querySelectorAll("button")].find((b) => b.textContent === "Try again") as HTMLButtonElement).click());
+    await drain();
+    expect(el.textContent).not.toContain("Could not load the graphs");
+    expect([...el.querySelectorAll("select option")].map((o) => o.textContent)).toContain("research");
+  });
+
   test("the name field is the Input primitive, and the POST carries the trimmed name", async () => {
     const posted = serve(catalog, { id: "research-abc" });
     const assigned: string[] = [];

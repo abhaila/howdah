@@ -64,7 +64,7 @@ import { SectionLabel } from "@/components/ui/section-label";
 import { Truncate } from "@/components/ui/truncate";
 import { Mark } from "../brand";
 import { StatusGlyph } from "../status";
-import { KeyHints, LIST_HINTS, Screen, ScreenLoading } from "./frame";
+import { KeyHints, LIST_HINTS, LoadError, Screen, ScreenLoading } from "./frame";
 import { Line } from "./runs";
 
 /**
@@ -113,9 +113,14 @@ export function AttentionInbox() {
   const [items, setItems] = useState<InboxItem[] | null>(null);
   const [ready, setReady] = useState<ReadyItem[]>([]);
   const [board, setBoard] = useState<RunBoardRow[]>([]);
+  // HOW-68: a first read that fails is SAID. This screen used to swallow it and stay on its
+  // skeleton for as long as the server was down — on the one screen the operator opens to
+  // learn whether anything needs them. Once a list has loaded, a failed poll keeps it.
+  const [failed, setFailed] = useState(false);
+  const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     const load = () => {
-      getJSON<InboxItem[]>("/api/attention").then(setItems).catch(() => {});
+      getJSON<InboxItem[]>("/api/attention").then((i) => { setItems(i); setFailed(false); }).catch(() => setFailed(true));
       getJSON<ReadyItem[]>("/api/ready").then(setReady).catch(() => {});
       // names and parks for the rows; the inbox is still whole without it
       getJSON<RunBoardRow[]>("/api/runs").then((b) => setBoard(Array.isArray(b) ? b : [])).catch(() => {});
@@ -123,7 +128,7 @@ export function AttentionInbox() {
     load();
     const t = setInterval(load, 3000);
     return () => clearInterval(t);
-  }, []);
+  }, [attempt]);
   const now = Date.now();
   const byId = new Map(board.map((r) => [r.id, r]));
   const rows = (items ?? []).map((item) => ({ item, ...inboxLine(item, byId.get(item.run), now) }));
@@ -135,7 +140,9 @@ export function AttentionInbox() {
   } : null);
   const nav = useListNav({ noun: "ask", enabled: (items?.length ?? 0) + ready.length > 0 });
 
-  if (!items) return <ScreenLoading name="attention" title="Needs you" label="Loading what needs you" rows={4} />;
+  if (!items) return failed
+    ? <Screen name="attention" title="Needs you"><LoadError what="what needs you" onRetry={() => { setFailed(false); setAttempt((n) => n + 1); }} /></Screen>
+    : <ScreenLoading name="attention" title="Needs you" label="Loading what needs you" rows={4} />;
   const nothing = items.length === 0 && ready.length === 0;
   return (
     <Screen

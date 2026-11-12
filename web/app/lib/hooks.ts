@@ -1,6 +1,6 @@
 /**
  * The viewer's shared hooks, moved out of main.tsx (HOW-16 P1). Nothing here renders; the
- * surfaces that consume them are `components/scroll-shell.tsx` and the run screens.
+ * surfaces that consume them are the shell and the run screens.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { observeAsks, type Observation } from "./attention-sound";

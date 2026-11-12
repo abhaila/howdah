@@ -130,6 +130,26 @@ describe("opening a run that has not been written yet", () => {
     expect(el.textContent).not.toContain("failed to start");
   });
 
+  // HOW-68 confirming review: only a 404 means "no such run". A 500 (or no server at all) used to
+  // end on the same screen — "There is no run <id>" — which is a guess about the run, told as fact.
+  test("a server that fails is NOT told as 'no run with this id': it says it could not load, and retries", async () => {
+    const flush = () => act(async () => { for (let i = 0; i < 50; i++) await Promise.resolve(); });
+    const { calls } = serve([{ status: 500, body: { error: "disk on fire" } }, { status: 200, body: runDetail() }]);
+    const el = render(0); // grace 0: the first failed read is the last, so nothing here waits on a clock
+    await flush();
+    expect(el.querySelector('[data-screen="run-unreachable"]')).not.toBeNull();
+    expect(el.querySelector("h1")!.textContent).toBe("Could not load this run");
+    expect(el.textContent).not.toContain("No run with this id");
+    expect(el.textContent).not.toContain("disk on fire");
+    const before = calls().length;
+    const retry = [...el.querySelectorAll("button")].find((b) => b.textContent === "Try again")!;
+    await act(async () => { retry.click(); });
+    await flush();
+    expect(calls().length).toBeGreaterThan(before);
+    expect(el.querySelector('[data-screen="run-unreachable"]')).toBeNull();
+    expect(el.textContent).not.toContain("Could not load this run");
+  });
+
   test("a run that never lands gives up with a reason instead of spinning", async () => {
     serve([{ status: 404, body: { error: "unknown run" } }]);
     const el = render(400); // the real grace is 10s; the seam keeps the test honest and quick

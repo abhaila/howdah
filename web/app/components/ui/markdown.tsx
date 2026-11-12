@@ -317,7 +317,10 @@ function renderBlocks(bs: Block[]): React.ReactNode[] {
   return bs.map((b, i) => {
     switch (b.t) {
       case "heading": {
-        const H = `h${Math.min(6, b.level)}` as "h1";
+        // one level DOWN: the screen's header holds the only `h1`, and an agent's document
+        // opening with "# Plan" was a second one on the run it was written in. The look is
+        // unchanged — howdah.css sizes `.md h2` as the document's title.
+        const H = `h${Math.min(6, b.level + 1)}` as "h2";
         return <H key={i}>{renderInline(b.c)}</H>;
       }
       case "p": return <p key={i}>{renderInline(b.c)}</p>;

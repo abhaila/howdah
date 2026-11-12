@@ -198,11 +198,23 @@ describe("AttentionInbox", () => {
     expect(rows).toEqual(["/run/implement-ticket-mu9kvg39#needs-input", "/runs/draft-graph-mv1/draft"]);
   });
 
-  test("a failed read leaves the loading state alone rather than rendering a lie", async () => {
+  // HOW-68 confirming review: this used to expect the skeleton to STAY, which in a browser was a
+  // screen that loads for ever while the server is down. The half worth keeping is unchanged — a
+  // failed read is never drawn as "Nothing needs you" — and the failure is now said, with a retry.
+  test("a failed first read says so and offers a retry — never the loading state for ever, never 'nothing needs you'", async () => {
     serve({ error: "nope" }, 500);
     const el = await render();
-    expect(el.querySelector('[role="status"]')).not.toBeNull();
-    expect(el.querySelector(".empty")).toBeNull();
+    expect(el.querySelector('[role="alert"]')!.textContent).toContain("did not answer");
+    expect(el.textContent).toContain("Could not load what needs you");
+    expect(el.textContent).not.toContain("Nothing needs you");
+    expect(el.querySelector("h1")!.textContent).toBe("Needs you");
+    // Try again reads again, and a good answer replaces the error
+    serve([ITEM]);
+    const retry = [...el.querySelectorAll("button")].find((b) => b.textContent === "Try again")!;
+    await act(async () => { retry.click(); });
+    await act(async () => { await Promise.resolve(); });
+    expect(el.querySelector('[role="alert"]')).toBeNull();
+    expect(el.querySelector('a[href="/run/implement-ticket-mu9kvg39#needs-input"]')).not.toBeNull();
   });
   // HOW-68: the row says WHAT is being asked, in the sentence the run's own ask card uses
   test("a row joined to the board reads as name, question, step and wait — the long id never crowds out the reason", async () => {

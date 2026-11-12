@@ -169,7 +169,10 @@ describe("StepActivity", () => {
     // the plan is a document card with real structure
     const doc = el.querySelector(".out-doc")!;
     expect(doc.querySelector(".out-doc-name")!.textContent).toBe("implementation_plan");
-    expect(doc.querySelector("h2")!.textContent).toBe("Steps");
+    // HOW-68: a document's headings sit one level down, so "# Plan" is not a second h1 on the run
+    expect(doc.querySelector("h1")).toBeNull();
+    expect(doc.querySelector("h2")!.textContent).toBe("Plan");
+    expect(doc.querySelector("h3")!.textContent).toBe("Steps");
     expect(doc.querySelectorAll("ol > li")).toHaveLength(2);
     expect(doc.querySelector("ol li ul li")!.textContent).toBe("in-memory double");
     // a short value stays a value
@@ -187,7 +190,8 @@ describe("StepActivity", () => {
     expect(document.querySelector("dialog")).toBeNull();
     act(() => (doc.querySelector('[aria-label="read implementation_plan"]') as HTMLButtonElement).click());
     const dialog = document.querySelector("dialog")!;
-    expect(dialog.querySelector(".doc-reader h2")!.textContent).toBe("Plan");
+    // "## Plan" is an h3: a document's headings are drawn one level down (HOW-68, markdown.tsx)
+    expect(dialog.querySelector(".doc-reader h3")!.textContent).toBe("Plan");
   });
 
   test("HOW-29: an outputs object still streaming is named, not printed half-written", () => {

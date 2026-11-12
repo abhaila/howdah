@@ -439,7 +439,10 @@ export function GraphBuilder({ name, fromRun }: { name?: string; fromRun?: strin
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-      <header className="flex h-12 shrink-0 items-center gap-3 border-b border-border px-4">
+      {/* one row at every supported width. Below 800px — which is 200% browser zoom on a 1280px
+          window (WCAG 1.4.4), not a supported window — the bar WRAPS: its controls do not shrink,
+          so on one row Save and More were pushed past `main`'s edge, where nothing scrolls. */}
+      <header className="flex h-12 shrink-0 items-center gap-3 border-b border-border px-4 max-[799px]:h-auto max-[799px]:flex-wrap max-[799px]:gap-y-1.5 max-[799px]:py-1.5">
         <h1 className="m-0 flex min-w-0 shrink items-center text-lg font-semibold leading-6">
           <Truncate>{draft.saved ? `Editing ${draft.spec.name}` : "Build a graph"}</Truncate>
         </h1>

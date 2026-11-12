@@ -62,7 +62,14 @@ export function useRunDraft(runId: string, opts: { poll?: boolean } = {}): { dra
     let live = true;
     // not getJSON: a 404/409 here CARRIES the reason the page shows, so its body is the answer
     fetch(`/api/runs/${encodeURIComponent(runId)}/draft`)
-      .then((r) => r.json())
+      .then(async (r) => {
+        const d = (await r.json().catch(() => null)) as RunDraft | null;
+        // HOW-68: only a body that IS one of the route's answers is believed. A 500's
+        // `{error}` has no `state`, and was drawn as "No draft to review yet" with no reason
+        // — a server fault presented as a fact about the run.
+        if (d && typeof d === "object" && typeof (d as { state?: unknown }).state === "string") return d;
+        return { state: "unknown", reason: `Howdah could not read this draft: the server answered ${r.status}. Check the terminal running \`bun run web\`, then reload.` } satisfies RunDraft;
+      })
       .then((d: RunDraft) => live && setDraft(d))
       .catch(() => live && setDraft({ state: "unknown", reason: "Could not reach Howdah to read this draft." }));
     return () => { live = false; };

@@ -52,7 +52,7 @@ import { Tooltip } from "@/components/ui/tooltip";
 import { useToast } from "@/components/ui/toast";
 import { AddWorkspace } from "./settings";
 import { ConfigFields } from "./graphs";
-import { FieldError, Hint, Screen, Section } from "./frame";
+import { FieldError, Hint, LoadError, Screen, Section } from "./frame";
 import { LINK } from "./prompts";
 
 /** one argv word, quoted for a POSIX shell only when it needs to be */
@@ -72,6 +72,9 @@ export function launchCommand(request: LaunchRequest): string {
 
 export function StartRun() {
   const [catalog, setCatalog] = useState<GraphInfo[]>([]);
+  // HOW-68: a catalog that could not be read is said. The form used to open with an empty graph
+  // list and "Still needed: a graph", as if there were none to choose.
+  const [catalogFailed, setCatalogFailed] = useState(false);
   const [workspaces, setWorkspaces] = useState<Workspaces>({ repos: [], folders: [] });
   // HOW-65: a just-saved draft's receipt says "Run it" and lands here with the graph picked
   const [graph, setGraph] = useState<string>(() => new URLSearchParams(location.search).get("graph") ?? "");
@@ -89,10 +92,11 @@ export function StartRun() {
   const { toast } = useToast();
 
   const loadWorkspaces = () => getJSON<Workspaces>("/api/workspaces").then(setWorkspaces).catch(() => {});
+  // a graph another graph starts takes inputs only its parent can fill (implement-stacked's
+  // `deps` names sibling runs), so it is not offered here — the Graphs page says who starts it
+  const loadCatalog = () => getJSON<GraphCatalog>("/api/graphs").then((c) => { setCatalog(c.graphs); setCatalogFailed(false); }).catch(() => setCatalogFailed(true));
   useEffect(() => {
-    // a graph another graph starts takes inputs only its parent can fill (implement-stacked's
-    // `deps` names sibling runs), so it is not offered here — the Graphs page says who starts it
-    getJSON<GraphCatalog>("/api/graphs").then((c) => setCatalog(c.graphs)).catch(() => {});
+    void loadCatalog();
     loadWorkspaces();
   }, []);
   const graphs = catalog.filter((g) => !g.launched_by);
@@ -142,6 +146,8 @@ export function StartRun() {
     return () => clearTimeout(t);
   }, [copied]);
 
+  if (catalogFailed && catalog.length === 0)
+    return <Screen name="new-run" title="New run" width="form"><LoadError what="the graphs" onRetry={() => { void loadCatalog(); loadWorkspaces(); }} /></Screen>;
   return (
     <Screen
       name="new-run"

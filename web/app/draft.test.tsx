@@ -402,6 +402,17 @@ describe("/runs/:id/draft", () => {
     expect(el.textContent).toContain("There is no run called `r1`.");
   });
 
+  // HOW-68 confirming review: a 500's `{error}` body is not one of the route's answers. It was
+  // drawn as "No draft to review yet" with an empty reason.
+  test("a server fault is said as one, with its status — not as a run with no draft", async () => {
+    globalThis.fetch = (async () => new Response(JSON.stringify({ error: "derive blew up" }), { status: 500, headers: { "content-type": "application/json" } })) as unknown as typeof fetch;
+    const el = await mount(<DraftReview runId="r1" />);
+    expect(el.textContent).toContain("could not read this draft");
+    expect(el.textContent).toContain("500");
+    expect(el.textContent).not.toContain("derive blew up");
+    expect(linkNamed(el, "Back to the run")?.getAttribute("href")).toBe("/run/r1");
+  });
+
   test("ready, wide: the list, the picture beside it with the removed step struck through, Save and Open on canvas", async () => {
     setWidth(1440);
     serve([ready()]);

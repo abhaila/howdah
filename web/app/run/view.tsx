@@ -35,6 +35,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Play, Pause, OctagonX, RotateCcw, ExternalLink, CornerDownRight, X, FolderOpen, Copy, Hand,
   ArrowLeft, Ellipsis, PanelRight,
+  RotateCw,
 } from "lucide-react";
 import type { RunDetail } from "../../derive";
 import { applyLiveEvent, type CoalescedTurn } from "../../../log/coalesce";
@@ -42,7 +43,7 @@ import type { LoggedEvent } from "../../../log/events";
 import { GraphDag, useGraphShape } from "../graph-dag";
 import { StatusBadge, StatusGlyph, askRowKey, resolveStepKey, stepInterrupted, stepKey } from "../status";
 import { Row } from "@/components/ui/row";
-import { getJSON } from "@/lib/net";
+import { getJSON, HttpError } from "@/lib/net";
 import { fmtClock, fmtDur, fmtWait, liveDuration, runLabel } from "@/lib/format";
 import { useAttentionSurfaces, useNow } from "@/lib/hooks";
 import { submitOnEnter } from "@/lib/keys";
@@ -410,6 +411,12 @@ export function RunView({ id, graceMs = OPEN_GRACE_MS }: { id: string; graceMs?:
   const [picked, setPicked] = useState<string | null>(null);
   const [liveGit, setLiveGit] = useState<LiveGit | null>(null);
   const [missing, setMissing] = useState(false);
+  // HOW-68: WHY the first read has not arrived. Only a 404 means "no such run (yet)"; a 500 or
+  // a server that is not there is a different fact, and after the grace period it used to be
+  // told as "There is no run <id>" — a guess presented as one.
+  const [unreachable, setUnreachable] = useState(false);
+  /** bumped by "Try again": the open poll below runs once more from the start */
+  const [openAttempt, setOpenAttempt] = useState(0);
   /** index of the first loaded turn; above 0, the chat offers the previous window */
   const [transcriptStart, setTranscriptStart] = useState(0);
   const now = useNow();
@@ -460,7 +467,12 @@ export function RunView({ id, graceMs = OPEN_GRACE_MS }: { id: string; graceMs?:
       }
       setDetail({ ...shell, turns: turnsRef.current ?? shell.turns });
       setMissing(false);
-    } catch { /* a 404 while the run dir is still being created: leave the loading state */ }
+      setUnreachable(false);
+    } catch (e) {
+      // a 404 while the run dir is still being created: leave the loading state. Anything else
+      // is the server failing or absent, which the not-found screen must not call "no run".
+      if (mine === gen.current) setUnreachable(!(e instanceof HttpError && e.status === 404));
+    }
   }, [id]);
   // one fetch in flight at a time; a request that arrives during it marks the view dirty and
   // is served by ONE follow-up fetch after RELOAD_GAP_MS, however many arrived
@@ -524,7 +536,7 @@ export function RunView({ id, graceMs = OPEN_GRACE_MS }: { id: string; graceMs?:
     };
     void tick();
     return () => { stop = true; if (timer !== undefined) clearTimeout(timer); };
-  }, [detail, reload, graceMs]);
+  }, [detail, reload, graceMs, openAttempt]);
   useEffect(() => {
     if (!detail) return;
     const active = ["running", "needs-input", "waiting", "harness-dead", "failed-recoverable"].includes(detail.summary.status);
@@ -612,7 +624,22 @@ export function RunView({ id, graceMs = OPEN_GRACE_MS }: { id: string; graceMs?:
 
   // the frame names the tab once the run has loaded; a parent's effect runs after its child's,
   // so this must stay out of the way then (undefined = leave the title alone)
-  useDocumentTitle(detail ? undefined : missing ? "Run not found" : "Run");
+  useDocumentTitle(detail ? undefined : missing ? (unreachable ? "Run not loaded" : "Run not found") : "Run");
+  if (!detail && missing && unreachable)
+    return (
+      <ScrollPane label="Run not loaded" className="p-8" data-screen="run-unreachable">
+        <EmptyState
+          as="h1"
+          title="Could not load this run"
+          actions={<><Button variant="outline" onClick={() => setOpenAttempt((n) => n + 1)}><RotateCw />Try again</Button><a className={PRIMARY_LINK} href="/">Back to runs</a></>}
+        >
+          <p className="m-0 mx-auto max-w-[60ch]" role="alert">
+            The viewer's server did not answer for <code className="[overflow-wrap:anywhere]">{id}</code>. Check the terminal
+            running <code>bun run web</code>, then try again. Nothing here says the run does not exist.
+          </p>
+        </EmptyState>
+      </ScrollPane>
+    );
   if (!detail && missing)
     return (
       <ScrollPane label="Run not found" className="p-8" data-screen="run-missing">
