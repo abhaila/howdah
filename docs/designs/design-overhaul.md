@@ -140,12 +140,12 @@ Status: ☐ not started · ◐ in progress · ☑ passes.
 | ☑ | Sound: off by default, setting honoured, only for news (viewer and OS) |
 | ☑ | `PRODUCT.md`, `DESIGN.md` |
 | ☑ | Tokens, type scale, bundled fonts, contrast test (`web/app/tokens.test.ts`) |
-| ☐ | Primitives: Menu, Popover, CommandPalette, Drawer, Kbd, Truncate, Toolbar, KeyValue, ScrollPane |
-| ☐ | Existing primitives: targets ≥24px, focus ring everywhere, states complete |
-| ☐ | Shell: rail, palette, shortcuts, `?` sheet, 404 |
+| ☑ | Primitives: Menu, Popover, CommandPalette, Drawer, Kbd, Truncate, Toolbar, KeyValue, ScrollPane (+ SectionLabel, ShortcutSheet) |
+| ◐ | Existing primitives: targets ≥24px, focus ring everywhere, states complete — done and measured on `/dev/components`; `message-scroller` and `questionnaire` (the chat pane's vendored pair) are judged with the Build surface |
+| ☑ | Shell: rail, palette, shortcuts (`lib/shortcuts.ts`), `?` sheet, 404, skip link |
 | ☐ | Scroll contract |
 | ☐ | Native notifications |
-| ☐ | Component gallery route |
+| ☑ | Component gallery route (`/dev/components`; harness step `components-gallery`) |
 
 ### Surfaces
 | | Surface | Known defects to clear (audit §) |

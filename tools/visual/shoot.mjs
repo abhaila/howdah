@@ -238,6 +238,29 @@ async function fullPass(theme) {
     await step("runs-row-hover", async () => { await go("/"); await page.locator("a.run-row").nth(9).hover(); await snap("runs-list-hover-long-name"); });
     await step("nav-rail", async () => { await go("/"); await page.getByRole("button", { name: /sidebar/i }).first().click(); await snap("runs-list-nav-collapsed"); await page.getByRole("button", { name: /sidebar/i }).first().click(); });
     await step("attention", async () => { await go("/attention"); await snap("attention-inbox", aud); });
+    // HOW-68: every primitive in every state — the page the component layer is judged on. The
+    // gallery scrolls inside its own pane, so the viewport is grown to hold all of it for the
+    // one full shot, then put back for the layered states (which have to be opened to be seen).
+    await step("components-gallery", async () => {
+      await go("/dev/components");
+      const tall = await page.evaluate(() => { const p = document.querySelector('[data-screen="gallery"] [data-slot="scroll-pane"]'); return p ? p.scrollHeight + 80 : 900; });
+      await page.setViewportSize({ width: 1440, height: Math.min(Math.max(tall, 900), 12000) });
+      await snap("components-gallery", { audit: true, focus: A ? 120 : false });
+      await page.setViewportSize({ width: 1440, height: 900 });
+      await go("/dev/components");
+      await page.locator('[data-gallery^="Tooltip"]').scrollIntoViewIfNeeded();
+      await page.locator('[data-gallery^="Tooltip"]').getByRole("button", { name: /^More/ }).click(); await snap("components-gallery-menu");
+      await page.keyboard.press("Escape");
+      await page.locator('[data-gallery^="Tooltip"]').getByRole("button", { name: "Popover" }).click(); await snap("components-gallery-popover");
+      await page.keyboard.press("Escape");
+      await page.locator('[data-gallery^="Truncate"]').scrollIntoViewIfNeeded();
+      await page.locator('[data-gallery^="Truncate"] [data-truncated]').first().focus(); await snap("components-gallery-truncate-focused");
+      await page.keyboard.press("Control+k"); await page.keyboard.type("go"); await snap("components-gallery-palette");
+      await page.keyboard.press("Escape");
+      await page.locator("main").click({ position: { x: 400, y: 20 } }); await page.keyboard.press("?"); await snap("components-gallery-shortcut-sheet");
+      await page.keyboard.press("Escape");
+    });
+    await step("not-found", async () => { await go("/no/such/screen"); await snap("not-found", aud); });
     await step("new-run", async () => { await go("/new"); await snap("new-run-empty", aud); });
     await step("new-run-ticket", async () => { await page.locator("main select").first().selectOption("implement-ticket"); await snap("new-run-implement-ticket", { audit: true }); });
     await step("new-run-draft", async () => { await page.locator("main select").first().selectOption("draft-graph"); await snap("new-run-draft-graph"); });
@@ -361,6 +384,7 @@ async function narrowPass() {
     const aud = { audit: true };
     await step("runs-list", async () => { await go("/"); await snap("runs-list", aud); });
     await step("attention", async () => { await go("/attention"); await snap("attention-inbox", aud); });
+    await step("components-gallery", async () => { await go("/dev/components"); await snap("components-gallery", aud); });
     for (const [key, id] of [["run-done", R.done], ["run-needs-input-prose", R.prose], ["run-needs-input-long-id-name", R.long], ["run-needs-input-question", R.question]]) {
       await step(key, async () => { await go(`/run/${id}`); await snap(`${key}-build-chat`, { ...aud, wait: 900 }); });
       for (const t of ["Plan", "Report", "Steps", "Context", "Logs", "Graph"]) await step(`${key}-${t}`, async () => { await tab(t); await snap(`${key}-${t.toLowerCase()}`, { ...aud, wait: 700 }); });
