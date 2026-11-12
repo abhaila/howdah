@@ -16,12 +16,19 @@
  *
  * The same card serves the Output pane and the Context detail, so a plan reads the same
  * wherever it is found.
+ *
+ * HOW-68: a collapsed document is its OPENING — the first lines, rendered — not the whole
+ * document clipped at 220px behind a fading mask. Clipping with `overflow: hidden` is the
+ * layout habit DESIGN.md bans (a keyboard could tab to a link the mask had hidden); a preview
+ * that is simply shorter has nothing hidden in it. The reader's actions sit above the text,
+ * so Copy and Close are reachable without scrolling a long plan to its end.
  */
 import { useState } from "react";
 import { FileText, Maximize2, Copy, Check, ChevronDown, ChevronUp } from "lucide-react";
 import { Markdown } from "@/components/ui/markdown";
 import { Dialog } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { CodeBlock } from "@/components/ui/markdown";
 import type { RunDetail } from "../../derive";
 import { splitOutputs } from "../../../core/outputs";
 
@@ -57,6 +64,16 @@ export function stepOutputs(detail: Pick<RunDetail, "turns" | "context">, node: 
   return mine.length ? Object.fromEntries(mine.map((c) => [c.key, c.value])) : null;
 }
 
+/** how much of a document its collapsed card shows */
+const PREVIEW_LINES = 14;
+
+/** the opening of a document, cut on a line boundary; `more` says whether anything was left out */
+export function previewOf(text: string): { text: string; more: boolean } {
+  const lines = text.split("\n");
+  if (lines.length <= PREVIEW_LINES) return { text, more: false };
+  return { text: lines.slice(0, PREVIEW_LINES).join("\n").trimEnd(), more: true };
+}
+
 export function OutputDocs({ outputs }: { outputs: Record<string, unknown> }) {
   const keys = Object.keys(outputs);
   if (keys.length === 0) return null;
@@ -71,10 +88,10 @@ export function OutputValue({ name, value }: { name: string; value: unknown }) {
   if (isDocument(value)) return <OutputDoc name={name} text={value} />;
   return (
     <div className="out-value">
-      <span className="m out-doc-name">{name}</span>
+      <span className="out-doc-name font-mono text-code text-muted-foreground">{name}</span>
       {typeof value === "string"
-        ? <span className="out-value-v">{value || "—"}</span>
-        : <pre className="act-pre">{JSON.stringify(value, null, 2)}</pre>}
+        ? <span className="min-w-0 text-sm text-foreground [overflow-wrap:anywhere]">{value || "—"}</span>
+        : <CodeBlock wrap clamp label={`${name} value`} className="min-w-0 basis-full">{JSON.stringify(value, null, 2)}</CodeBlock>}
     </div>
   );
 }
@@ -82,24 +99,28 @@ export function OutputValue({ name, value }: { name: string; value: unknown }) {
 export function OutputDoc({ name, text }: { name: string; text: string }) {
   const [expanded, setExpanded] = useState(false);
   const [reading, setReading] = useState(false);
+  const preview = previewOf(text);
   return (
     <div className="out-doc" data-expanded={expanded ? "open" : "closed"}>
       <div className="out-doc-head">
-        <FileText size={13} aria-hidden />
-        <span className="m out-doc-name">{name}</span>
-        <span className="out-doc-meta">{words(text).toLocaleString()} words</span>
-        <span className="out-doc-actions">
-          <Button variant="ghost" size="sm" aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>
-            {expanded ? <ChevronUp size={12} aria-hidden /> : <ChevronDown size={12} aria-hidden />}
-            {expanded ? "Collapse" : "Expand"}
-          </Button>
+        <FileText size={14} aria-hidden className="shrink-0 text-muted-foreground" />
+        <span className="out-doc-name min-w-0 font-mono text-code text-foreground [overflow-wrap:anywhere]">{name}</span>
+        <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{words(text).toLocaleString()} words</span>
+        <span className="ml-auto flex shrink-0 gap-1">
+          {preview.more && (
+            <Button variant="ghost" size="sm" aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>
+              {expanded ? <ChevronUp aria-hidden /> : <ChevronDown aria-hidden />}
+              {expanded ? "Collapse" : "Expand"}
+            </Button>
+          )}
           <Button variant="outline" size="sm" aria-label={`read ${name}`} onClick={() => setReading(true)}>
-            <Maximize2 size={12} aria-hidden />
+            <Maximize2 aria-hidden />
             Read
           </Button>
         </span>
       </div>
-      <Markdown className="out-doc-body" text={text} />
+      <Markdown className="out-doc-body" text={expanded ? text : preview.text} />
+      {preview.more && !expanded && <div className="px-3 pb-2 text-xs text-muted-foreground">The opening of {words(text).toLocaleString()} words — Expand or Read for the rest.</div>}
       <DocReader open={reading} onClose={() => setReading(false)} name={name} text={text} />
     </div>
   );
@@ -116,15 +137,16 @@ export function DocReader({ open, onClose, name, text }: { open: boolean; onClos
     }, () => {});
   };
   return (
-    <Dialog open={open} onClose={onClose} title={name} className="w-[min(94vw,880px)]">
-      <Markdown className="doc-reader" text={text} />
-      <div className="flex justify-end gap-2">
+    <Dialog open={open} onClose={onClose} title={name} className="w-[min(94vw,800px)]">
+      <div className="flex items-center gap-2">
+        <span className="mr-auto text-xs tabular-nums text-muted-foreground">{words(text).toLocaleString()} words</span>
         <Button variant="outline" size="sm" onClick={copy}>
-          {copied ? <Check size={12} aria-hidden /> : <Copy size={12} aria-hidden />}
+          {copied ? <Check aria-hidden /> : <Copy aria-hidden />}
           {copied ? "Copied" : "Copy markdown"}
         </Button>
         <Button size="sm" autoFocus onClick={onClose}>Close</Button>
       </div>
+      <Markdown className="doc-reader" text={text} />
     </Dialog>
   );
 }

@@ -45,7 +45,9 @@ export type MenuEntry =
       destructive?: boolean;
     }
   | { separator: true }
-  | { heading: string };
+  | { heading: string }
+  /** a sentence of explanation under the items it is about: plain text, not an item, never focusable */
+  | { note: string };
 
 const ITEM =
   "flex min-h-8 cursor-default select-none items-center gap-2 rounded-[var(--radius-sm)] px-2 text-base text-foreground no-underline outline-none data-[highlighted]:bg-accent data-[disabled]:pointer-events-none data-[disabled]:text-faint [&_svg]:size-3.5 [&_svg]:shrink-0 [&_svg]:text-muted-foreground";
@@ -78,6 +80,7 @@ export function Menu({ trigger, items, label, side = "bottom", align = "end", cl
           >
             {items.map((it, i) => {
               if ("separator" in it) return <MenuPrimitive.Separator key={i} className="mx-1 my-1 h-px bg-border" />;
+              if ("note" in it) return <p key={i} role="presentation" className="m-0 px-2 pb-1.5 pt-0.5 text-xs leading-[1.45] text-muted-foreground">{it.note}</p>;
               if ("heading" in it) return <div key={i} role="presentation" className="px-2 pb-0.5 pt-1.5 text-xs font-semibold text-muted-foreground">{it.heading}</div>;
               const body = (
                 <>

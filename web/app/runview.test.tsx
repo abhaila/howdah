@@ -86,6 +86,12 @@ async function settle(ms: number) {
   await act(async () => { await new Promise((r) => setTimeout(r, ms)); });
 }
 
+/**
+ * HOW-68: Details is a drawer, closed by default below 1280px (happy-dom's window is 1024).
+ * A test about what the drawer holds opens it the way the operator's remembered choice would.
+ */
+const DETAILS_OPEN = "howdah.run.details.open";
+
 beforeEach(() => {
   (globalThis as { EventSource?: unknown }).EventSource = StubEventSource;
 });
@@ -94,6 +100,7 @@ afterEach(() => {
   host?.remove();
   root = host = null;
   globalThis.fetch = realFetch;
+  localStorage.removeItem(DETAILS_OPEN);
 });
 
 describe("opening a run that has not been written yet", () => {
@@ -166,6 +173,8 @@ describe("the fan-out is visible from both ends (HOW-23)", () => {
     return { parent: deriveDetail("p", log.events), child: deriveDetail("p--api", child.events) };
   }
 
+  beforeEach(() => localStorage.setItem(DETAILS_OPEN, "1"));
+
   test("the parent lists every run it launched, linked, with the ticket it came from", async () => {
     serve([{ status: 200, body: fanOut().parent }]);
     const el = render(OPEN_GRACE_MS);
@@ -184,7 +193,7 @@ describe("the fan-out is visible from both ends (HOW-23)", () => {
     serve([{ status: 200, body: child }]);
     const el = render(OPEN_GRACE_MS);
     await settle(50);
-    expect(el.textContent).toContain("planned by");
+    expect(el.textContent).toContain("Planned by"); // HOW-68: a KeyValue label, in sentence case
     expect(el.querySelector("a[href='/run/p']")!.textContent).toBe("p");
     expect(el.textContent).not.toContain("Launched runs"); // a child launched nothing
     act(() => root!.unmount());
@@ -192,21 +201,25 @@ describe("the fan-out is visible from both ends (HOW-23)", () => {
     serve([{ status: 200, body: runDetail() }]);
     const plain = render(OPEN_GRACE_MS);
     await settle(50);
-    expect(plain.textContent).not.toContain("planned by");
+    expect(plain.textContent).not.toContain("Planned by");
     expect(plain.textContent).not.toContain("Launched runs");
     expect(parent.children).toHaveLength(2); // the fixture really is a fan-out
   });
 });
 
 describe("aborting a run", () => {
-  const controls = (el: HTMLElement) => [...el.querySelectorAll(".run-controls button")] as HTMLButtonElement[];
-  const abortButton = (el: HTMLElement) => controls(el).find((b) => b.textContent!.startsWith("Abort"))!;
+  // HOW-68: Abort is a secondary action, so it is an item in the header's one More menu
+  // (DESIGN.md: "secondary actions go behind one More menu") rather than a button in the row.
+  // What these tests pin is unchanged: it asks first, and the dialog never outlives a refusal.
+  const moreButton = (el: HTMLElement) => el.querySelector('.run-controls button[aria-haspopup="menu"]') as HTMLButtonElement;
+  const abortItem = () => [...document.querySelectorAll('[role="menuitem"]')].find((i) => i.textContent!.startsWith("Abort")) as HTMLElement | undefined;
   const confirmButton = (el: HTMLElement) =>
     [...el.querySelectorAll("dialog button")].find((b) => b.textContent === "Abort the run") as HTMLButtonElement | undefined;
 
   async function openConfirm(el: HTMLElement) {
     await settle(50);
-    await act(async () => abortButton(el).click());
+    await act(async () => moreButton(el).click());
+    await act(async () => abortItem()!.click());
     return el.querySelector("dialog")!;
   }
 
@@ -235,8 +248,10 @@ describe("aborting a run", () => {
     expect(el.querySelector(".field-error")!.textContent).toBe("runner lock held by another process");
     expect(el.querySelector('[aria-live="polite"]')!.textContent).toContain("runner lock held by another process");
     // and the control is offered again rather than left saying "Aborting…"
-    expect(abortButton(el).textContent).toBe("Abort");
-    expect(abortButton(el).disabled).toBe(false);
+    expect(moreButton(el).getAttribute("aria-label")).toBe("More run actions");
+    expect(moreButton(el).disabled).toBe(false);
+    await act(async () => moreButton(el).click());
+    expect(abortItem()!.getAttribute("aria-disabled")).not.toBe("true");
   });
 
   test("an accepted abort closes the dialog and announces the outcome", async () => {
@@ -251,8 +266,9 @@ describe("aborting a run", () => {
 });
 
 describe("HOW-49: the live progress panel on the run page", () => {
-  test("a `git-live` push lands in the pinned panel and the rail while the step is live", async () => {
+  test("a `git-live` push lands in the pinned panel and the Details drawer while the step is live", async () => {
     StubEventSource.open = [];
+    localStorage.setItem(DETAILS_OPEN, "1"); // the second panel is in the Details drawer
     const log = new FakeLog();
     log.add({ type: "run-started", graph: "write-doc", inputs: { goal: "g" }, pinned_prompts: {} });
     log.add({ type: "node-started", node: "doc.draft", visit: 1, attempt_id: "doc.draft#1" });
@@ -260,7 +276,7 @@ describe("HOW-49: the live progress panel on the run page", () => {
     serve([{ status: 200, body: deriveDetail("r1", log.events, {}, { runnerAlive: true }) }]);
     const el = render(OPEN_GRACE_MS);
     await settle(50);
-    expect(el.querySelectorAll(".progress-panel")).toHaveLength(2); // pinned + rail
+    expect(el.querySelectorAll(".progress-panel")).toHaveLength(2); // pinned + Details
     expect(el.textContent).toContain("worktree not probed yet");
     const at = new Date().toISOString();
     act(() => StubEventSource.open.at(-1)!.listeners.get("git-live")!({

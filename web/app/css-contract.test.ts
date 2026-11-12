@@ -50,7 +50,6 @@ const SOURCES = walk(APP).sort();
  * is the only place a class may be exempt, and adding to it is a deliberate act.
  */
 const COMPOSED_PREFIXES: Array<{ prefix: string; fedBy: string }> = [
-  { prefix: "depth-", fedBy: "run/logs.tsx: `log-row ${r.kind} depth-${r.depth}`" },
   { prefix: "kind-", fedBy: "graph-dag.tsx `dag-node … kind-${n.kind}`, builder/node-card.tsx `gb-node kind-${kind}`" },
 ];
 
@@ -67,6 +66,9 @@ const COMPOSED_PREFIXES: Array<{ prefix: string; fedBy: string }> = [
 const STRUCTURAL: string[] = [
   "dag",            // the <svg> itself; every rule targets what is inside it
   "ap-traces", "ap-rounds", "ghost-item", "map-pane",  // slice.tsx grouping wrappers
+  // slice.tsx cells whose appearance is utilities (HOW-68) and whose name is what a row is
+  // found by — the id cell, a trace's steps, a pinned comment's key and text, drift's count
+  "gr-id", "ap-trace-steps", "ap-comment-key", "ap-comment-text", "plan-feature", "plan-deps", "dv-evidence", "dv-count",
   "dv-group", "dv-reason",                             // drift grouping + its prose line
   "gr-prose",                                          // inherits .gr-sub entirely
   "sd-rowless-ask",                                    // the panel-carried ask; has a testid
@@ -86,15 +88,14 @@ const BEHAVIOURAL: Array<{ name: string; readBy: string }> = [
 ];
 
 const COMPOSED_NAMES: Array<{ name: string; fedBy: string }> = [
-  { name: "meta", fedBy: "screens/prompts.tsx Diff: `dl ${cls}`" },
-  { name: "hunk", fedBy: "screens/prompts.tsx Diff: `dl ${cls}`" },
-  { name: "add", fedBy: "screens/prompts.tsx Diff: `dl ${cls}`" },
-  { name: "del", fedBy: "screens/prompts.tsx Diff: `dl ${cls}`" },
-  { name: "ctx", fedBy: "screens/prompts.tsx Diff: `dl ${cls}`" },
+  // `meta`, `hunk`, `add`, `del` and `ctx` were fed by screens/prompts.tsx's Diff (`dl ${cls}`).
+  // The diff is drawn with utilities and a sign in its own gutter now (HOW-68), so its rules
+  // went from howdah.css and the exemptions go with them.
   // `model`, `tool`, `operator` and `error` were fed by run/view.tsx's TranscriptRow, which
   // went with the Thread tab. Their rules went too, so the exemptions go — which is exactly
   // what the "allowlist stays honest" test below demands, and why it exists.
-  { name: "attention", fedBy: "run/logs.tsx: `log-row ${r.kind}` — deriveLogRows' kind" },
+  // `attention` was fed by run/logs.tsx's `log-row ${r.kind}`. A logged attention event is
+  // history, not a run waiting on you, so its amber rule went (HOW-68) and the exemption with it.
 ];
 
 /** Element/pseudo/at-rule noise a class regex must not mistake for a class name. */
@@ -325,29 +326,7 @@ describe("an ellipsis is written with Truncate, never by hand (HOW-68)", () => {
   const HAND_WRITTEN = SHEETS.filter((f) => !f.endsWith("tokens.css"));
   /** `file-basename | selector` for every rule that sets `text-overflow: ellipsis` */
   const RAW_ELLIPSIS_ALLOWLIST: string[] = [
-    "howdah.css | .run-goal",            // runs list, inbox, settings workspace names
-    "howdah.css | .topbar h1",           // the run's name
-    "howdah.css | .tl-node",             // inspector timeline (455 hits in the audit)
-    "howdah.css | .kv .path",
-    "howdah.css | .home-strip code",
     "howdah.css | .pr-link",
-    "howdah.css | .ws-row .run-meta",
-    "howdah.css | .gb-node-open",
-    "howdah.css | .gb-node-sub",
-    "howdah.css | .pd-row > span:last-child, .pd-row > a:first-child",
-    "howdah.css | .step-node",
-    "howdah.css | .log-node",
-    "howdah.css | .ctx-key",
-    "howdah.css | .ctx-value",
-    "howdah.css | .ctx-writer",
-    "howdah.css | .chat-eyebrow",
-    "howdah.css | .act-tool-sum",
-    "howdah.css | .pp-subject",
-    "howdah.css | .board-vitals > span",
-    "howdah.css | .bv-step-text",
-    "howdah.css | .ev-thumb-path",
-    "globals.css | .gr-id",
-    "globals.css | .dv-key",
   ];
 
   function rawEllipsis(): string[] {

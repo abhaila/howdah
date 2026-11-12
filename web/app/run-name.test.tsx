@@ -102,28 +102,42 @@ describe("the Runs list (HOW-18)", () => {
     serve({ "/api/runs": [deriveSummary("named-1", logFor("Fix login", "goal A")), deriveSummary("plain-1", logFor(undefined, "goal B"))] });
     const el = mount(<RunsList />);
     await settle();
-    const labels = [...el.querySelectorAll(".run-goal")].map((n) => n.textContent);
+    // HOW-68: the name is the row's `data-col="name"` cell (was the `.run-goal` span)
+    const labels = [...el.querySelectorAll('a[data-nav-row] [data-col="name"]')].map((n) => n.textContent);
     expect(labels).toEqual(["Fix login", "goal B"]);
   });
 });
 
+/**
+ * HOW-68: Details is a drawer, closed by default below 1280px (happy-dom's window is 1024).
+ * The operator's remembered choice opens it, exactly as it would in the browser.
+ */
+const openDetails = () => localStorage.setItem("howdah.run.details.open", "1");
+const detailsRows = (el: HTMLElement) =>
+  [...el.querySelectorAll('[data-slot="drawer"] dt')].map((dt) => [dt.textContent, dt.nextElementSibling?.firstElementChild?.textContent]);
+
 describe("the run page (HOW-18)", () => {
+  beforeEach(openDetails);
+  afterEach(() => localStorage.removeItem("howdah.run.details.open"));
+
   test("the heading is the name, and the Identity rail lists it beside the graph", async () => {
     serve({ "/api/runs/write-doc-abc/shell": deriveDetail("write-doc-abc", logFor("Fix login")) });
     const el = mount(<RunView id="write-doc-abc" graceMs={OPEN_GRACE_MS} />);
     await settle();
-    expect(el.querySelector(".topbar h1")!.textContent).toBe("Fix login");
-    const rows = [...el.querySelectorAll(".rail .kv")].map((r) => [r.querySelector(".k")?.textContent, r.lastElementChild?.textContent]);
-    expect(rows).toContainEqual(["name", "Fix login"]);
-    expect(rows).toContainEqual(["run", "write-doc-abc"]); // the id is still shown — it is identity
+    expect(el.querySelector(".run-head h1")!.textContent).toBe("Fix login");
+    // HOW-68: the inspector rail is the Details drawer, and its rows are a KeyValue <dl>
+    const rows = detailsRows(el);
+    expect(rows).toContainEqual(["Name", "Fix login"]);
+    expect(rows).toContainEqual(["Run", "write-doc-abc"]); // the id is still shown — it is identity
   });
 
   test("an unnamed run renders as before: goal heading, no name row", async () => {
     serve({ "/api/runs/write-doc-abc/shell": deriveDetail("write-doc-abc", logFor()) });
     const el = mount(<RunView id="write-doc-abc" graceMs={OPEN_GRACE_MS} />);
     await settle();
-    expect(el.querySelector(".topbar h1")!.textContent).toBe("add a user endpoint");
-    expect([...el.querySelectorAll(".rail .kv .k")].map((k) => k.textContent)).not.toContain("name");
+    expect(el.querySelector(".run-head h1")!.textContent).toBe("add a user endpoint");
+    expect(detailsRows(el).map(([k]) => k)).not.toContain("Name");
+    expect(detailsRows(el).map(([k]) => k)).toContain("Run"); // the drawer really is open
   });
 });
 

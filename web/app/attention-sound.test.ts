@@ -6,7 +6,7 @@
  * read. `decideRing` is the whole decision, so it is pinned here without a DOM.
  */
 import { describe, expect, test } from "bun:test";
-import { decideRing } from "@/lib/attention-sound";
+import { decideNews, decideRing } from "@/lib/attention-sound";
 
 describe("decideRing", () => {
   test("the first sight of a session seeds what is known and stays silent", () => {
@@ -37,5 +37,39 @@ describe("decideRing", () => {
   test("a run's own page clears only that run", () => {
     expect(decideRing(["a", "b"], { waiting: [], cleared: ["a"] }, true).seen).toEqual(["b"]);
     expect(decideRing(["b"], { waiting: ["a"], cleared: [] }, true)).toEqual({ ring: true, seen: ["b", "a"] });
+  });
+});
+
+/**
+ * HOW-68: the same decision drives the browser notification, which needs to know WHICH runs
+ * are new (it names each one). `decideRing` is `decideNews` plus the sound setting, so the two
+ * surfaces cannot disagree about what counts as news.
+ */
+describe("decideNews", () => {
+  test("names the runs that newly started waiting, and only those", () => {
+    expect(decideNews(["a"], { waiting: ["a", "c", "d"], cleared: "others" })).toEqual({ fresh: ["c", "d"], seen: ["a", "c", "d"] });
+  });
+
+  test("the first sight of a session is not news, whatever is standing", () => {
+    expect(decideNews(null, { waiting: ["a", "b"], cleared: "others" })).toEqual({ fresh: [], seen: ["a", "b"] });
+  });
+
+  test("a run already seen is never fresh again until a screen says it stopped waiting", () => {
+    expect(decideNews(["a"], { waiting: ["a"], cleared: [] }).fresh).toEqual([]);
+    const answered = decideNews(["a"], { waiting: [], cleared: ["a"] });
+    expect(decideNews(answered.seen, { waiting: ["a"], cleared: [] }).fresh).toEqual(["a"]);
+  });
+
+  test("the notes a screen passes along do not change what is news", () => {
+    const info = { a: { name: "A", body: "x" }, b: { name: "B", body: "y" } };
+    expect(decideNews(["a"], { waiting: ["a", "b"], cleared: "others", info })).toEqual(decideNews(["a"], { waiting: ["a", "b"], cleared: "others" }));
+  });
+
+  test("decideRing agrees with it: a ring exactly when something is fresh and the sound is on", () => {
+    for (const o of [{ waiting: ["a"], cleared: "others" as const }, { waiting: ["a", "b"], cleared: "others" as const }]) {
+      const news = decideNews(["a"], o);
+      expect(decideRing(["a"], o, true)).toEqual({ ring: news.fresh.length > 0, seen: news.seen });
+      expect(decideRing(["a"], o, false).ring).toBe(false);
+    }
   });
 });

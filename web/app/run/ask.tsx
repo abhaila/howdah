@@ -11,11 +11,31 @@
  * That is exactly the defect HOW-25 was filed to fix, still live in the other pane, and a
  * second caller was always going to re-introduce it. One dispatcher means a new park kind is
  * added in one place and every pane gets it.
+ *
+ * HOW-68 (DESIGN.md "Asking the operator something"): ONE SHELL, written for a person. Every
+ * card used to open with "Needs you — node@visit" and then print the engine's `reason` as its
+ * body — for the acceptance park that is five sentences with a CLI command in the middle, and
+ * the run header's banner printed the same five sentences again above it. `AskShell` is the one
+ * frame now: the glyph, a one-sentence heading from `core/park-summary.ts` (derived from the
+ * park's CODE, never by parsing the reason), how long it has stood, the items in question where
+ * the read model has them, the card's own controls, and a "Full message" disclosure holding the
+ * engine's reason VERBATIM. A short reason starts open — hiding one sentence behind a click
+ * would be chrome — and a long one starts closed. An approval park draws the approval card
+ * itself (`slice.tsx` ApprovalCard), so Approve is in the conversation and no longer three
+ * clicks away under Steps.
+ *
+ * THE ENTRANCE IS THE ONE AUTHORED MOTION MOMENT, and it plays once per ask. It used to be a
+ * `@starting-style` on `.ask-card`, which fires on every INSERTION — so it replayed on every
+ * tab switch and every navigation to a run that had been parked for hours. `useArriving` plays
+ * it only for an ask that is new (raised seconds ago) and has not been drawn before in this
+ * session; anything else is simply there.
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { RotateCcw, Send } from "lucide-react";
 import type { RunDetail } from "../../derive";
+import { parkSummary } from "../../../core/park-summary";
 import { Button } from "@/components/ui/button";
+import { Kbd } from "@/components/ui/kbd";
 import { Textarea } from "@/components/ui/textarea";
 import {
   Questionnaire,
@@ -33,7 +53,111 @@ import {
   QuestionnaireTitle,
 } from "@/components/ui/questionnaire";
 import { submitOnEnter } from "@/lib/keys";
+import { fmtWait } from "@/lib/format";
+import { useNow } from "@/lib/hooks";
 import { useToast } from "@/components/ui/toast";
+import { StatusGlyph } from "../status";
+import { ApprovalCard } from "../slice";
+
+type Ask = NonNullable<RunDetail["ask"]>;
+
+/** a reason this short is shown open: one sentence behind a disclosure is chrome, not tidiness */
+const SHORT_REASON = 180;
+/** an ask raised longer ago than this was already standing when the page opened — it does not "arrive" */
+const ARRIVAL_WINDOW_MS = 5000;
+const ARRIVED = new Set<string>();
+
+/**
+ * Whether THIS mount is the ask arriving (DESIGN.md Motion: "it plays once per ask, never on
+ * navigation"). Decided once, at mount: the ask must be seconds old and not drawn before.
+ */
+function useArriving(runId: string, ask: Ask): boolean {
+  const [arriving] = useState(() => {
+    const key = `${runId}#${ask.node}@${ask.visit}#${ask.seq}`;
+    if (ARRIVED.has(key)) return false;
+    ARRIVED.add(key);
+    const age = Date.now() - new Date(ask.ts).getTime();
+    return Number.isFinite(age) && age >= 0 && age < ARRIVAL_WINDOW_MS;
+  });
+  return arriving;
+}
+
+/** The engine's own words, unchanged, one click away (DESIGN.md: "Full message"). */
+function FullMessage({ reason, closed = false }: { reason: string; closed?: boolean }) {
+  return (
+    <details className="ask-full" open={!closed && reason.length <= SHORT_REASON}>
+      <summary>Full message</summary>
+      <div className="ask-message">{reason}</div>
+    </details>
+  );
+}
+
+/**
+ * The one frame every park is drawn in. `id="needs-input"` is the notification's deep link
+ * and the run header's "Waiting on you" target; `collapsing` is the exit half of the
+ * sending → delivered → collapsing moment.
+ */
+function AskShell({ runId, ask, title, hint, collapsing = false, messageClosed = false, shellRef, children }: {
+  runId: string;
+  ask: Ask;
+  title: string;
+  hint?: string | null;
+  collapsing?: boolean;
+  /** the card already shows what the message says (a question card shows the question) */
+  messageClosed?: boolean;
+  shellRef?: React.RefObject<HTMLElement | null>;
+  children: React.ReactNode;
+}) {
+  const headingId = useId();
+  const now = useNow(30_000);
+  const arriving = useArriving(runId, ask);
+  return (
+    <section
+      ref={shellRef}
+      tabIndex={-1}
+      id="needs-input"
+      aria-labelledby={headingId}
+      data-arriving={arriving ? "true" : undefined}
+      className={`ask-card${collapsing ? " collapsing" : ""}`}
+    >
+      <header className="ask-head">
+        <StatusGlyph status="needs-input" className="ask-glyph" />
+        <h3 id={headingId}>{title}</h3>
+        <span className="ask-wait">{ask.ts ? fmtWait(ask.ts, now) : ""}</span>
+      </header>
+      <div className="ask-where"><span className="m">{ask.node}@{ask.visit}</span>{hint ? <> · {hint}</> : null}</div>
+      {children}
+      <FullMessage reason={ask.reason} closed={messageClosed} />
+    </section>
+  );
+}
+
+/**
+ * The items a park is ABOUT, where the read model has them. Today that is the acceptance
+ * park's unproven criteria — the same rows the publish step discloses (`not_proven`), else
+ * the live rows still failing and unwaived. Nothing here is parsed out of the reason.
+ */
+function AskItems({ ask, detail }: { ask: Ask; detail: RunDetail }) {
+  if (ask.code !== "acceptance-unmet" || !detail.acceptance) return null;
+  const acc = detail.acceptance;
+  const rows = acc.not_proven.length > 0
+    ? acc.not_proven.map((r) => ({ id: r.id, text: r.text, why: r.reason }))
+    : acc.rows.filter((r) => !r.superseded && !r.passes && !r.waived).map((r) => ({ id: r.id, text: r.text, why: r.unprovable ?? "No evidence yet." }));
+  if (rows.length === 0) return null;
+  return (
+    <ul className="ask-items" aria-label="criteria not proven">
+      {rows.map((r) => (
+        <li key={r.id} className="ask-item">
+          <span className="m ask-item-id">{r.id}</span>
+          <span className="ask-item-body">
+            <span>{r.text}</span>
+            <span className="ask-item-why">{r.why}</span>
+          </span>
+        </li>
+      ))}
+    </ul>
+  );
+}
 
 export function attentionContext(detail: RunDetail, ask: NonNullable<RunDetail["ask"]>): string | null {
   const turn = detail.turns.findLast((t) => t.node === ask.node && t.visit === ask.visit);
@@ -146,46 +270,43 @@ export function AskCard({ runId, ask, detail, onResolved }: { runId: string; ask
     }
   }, [runId, text, onResolved, toast, ask.node, ask.visit]);
 
+  const busy = state === "sending" || state === "delivered";
+  const summary = parkSummary({ code: ask.code, node: ask.node, ask: ask.ask });
   return (
-    <div className={`ask-card ${state === "delivered" ? "collapsing" : ""}`} id="needs-input">
-      <h3>Needs you — {ask.node}@{ask.visit}</h3>
-      <div>{ask.reason}</div>
+    <AskShell runId={runId} ask={ask} title={summary.title} hint={summary.hint} collapsing={state === "delivered"}>
+      <AskItems ask={ask} detail={detail} />
       {elicitation && (
         <div className="field-hint">
           {elicitation.url && <><a className="pr-link" href={elicitation.url} target="_blank" rel="noreferrer">Open {elicitation.server}'s link</a>, do what it asks, then </>}
           send an empty reply or "done" to let the agent continue. Reply "decline" to refuse — the tool call fails and the agent carries on without it.
         </div>
       )}
-      {context && (
-        <div className="field-error">
-          {context}
-        </div>
-      )}
+      {context && <div className="field-error ask-context">{context}</div>}
       {ask.code === "harness-unauthenticated" && <HarnessLogin runId={runId} ask={ask} detail={detail} />}
-      {(ask.code === "attempt-failed" || ask.reason === "attempt failed") && (
-        <div className="field-hint">Reply with instructions to change the retry, or send an empty reply to retry the step as-is.</div>
-      )}
       <Textarea
         ref={ref}
+        rows={2}
+        className="ask-reply"
         aria-label="your reply"
         value={text}
         onChange={(e) => setText(e.target.value)}
-        onKeyDown={submitOnEnter(() => void send(), { enabled: state !== "sending" && state !== "delivered" })}
-        placeholder="Your reply… (Enter to send, Shift+Enter for a new line)"
-        disabled={state === "sending" || state === "delivered"}
+        onKeyDown={submitOnEnter(() => void send(), { enabled: !busy })}
+        placeholder={ask.code === "attempt-failed" || ask.reason === "attempt failed" ? "What should it do differently? An empty reply retries the step as it is." : "Your reply…"}
+        disabled={busy}
       />
       <div className="actions">
-        <Button onClick={send} disabled={state === "sending" || state === "delivered"}>
-          <Send />{state === "sending" ? "Sending…" : state === "delivered" ? "Delivered" : "Reply"}
+        <Button onClick={send} loading={state === "sending"} disabled={busy}>
+          {state !== "sending" && <Send />}{state === "sending" ? "Sending…" : state === "delivered" ? "Delivered" : "Reply"}
         </Button>
+        <span className="ask-keys"><Kbd keys="enter" /> to send · <Kbd keys="shift+enter" /> for a new line · <Kbd keys="r" /> to come back here</span>
         {state === "failed" && (
-          <span className="send-state">
-            failed — <Button variant="link" size="inline" onClick={send}>retry</Button>
+          <span className="send-state" role="alert">
+            The reply did not reach the runner. <Button variant="link" size="inline" onClick={send}>retry</Button>
           </span>
         )}
       </div>
-      {state === "refused" && refusal && <div className="send-state" role="alert">{refusal}</div>}
-    </div>
+      {state === "refused" && refusal && <div className="send-state ask-refusal" role="alert">{refusal}</div>}
+    </AskShell>
   );
 }
 
@@ -237,7 +358,7 @@ export function AskQuestionCard({ runId, ask, questions, onResolved }: {
   const [other, setOther] = useState<Record<string, string>>({});
   const [state, setState] = useState<"idle" | "sending" | "delivered" | "failed" | "refused">("idle");
   const [refusal, setRefusal] = useState<string | null>(null);
-  const card = useRef<HTMLDivElement>(null);
+  const card = useRef<HTMLElement>(null);
   const { toast } = useToast();
   // the deep link lands on the card; the questionnaire moves focus to the active item itself
   useEffect(() => { if (location.hash === "#needs-input") card.current?.focus(); }, []);
@@ -293,26 +414,24 @@ export function AskQuestionCard({ runId, ask, questions, onResolved }: {
     choices: q.options.map((o) => ({ value: o.label, disabled: busy })),
   }));
 
+  // the heading says what KIND of thing this is; the question itself is the questionnaire's own
+  // legend one line below, so parkSummary's title (the first question) would print it twice
+  const title = questions.length === 1 ? "The agent has a question." : `The agent has ${questions.length} questions.`;
   return (
-    <div
-      ref={card}
-      tabIndex={-1}
-      className={`ask-card ${state === "delivered" ? "collapsing" : ""}`}
-      id="needs-input"
-    >
-      <h3>Needs you — {ask.node}@{ask.visit}</h3>
+    <AskShell runId={runId} ask={ask} title={title} collapsing={state === "delivered"} shellRef={card} messageClosed>
       <Questionnaire
+        className="ask-questions gap-3"
         items={items}
         shortcuts="numbers"
         onSubmit={(e) => { e.preventDefault(); if (answers.length > 0 && !busy) void send(); }}
       >
         {questions.length > 1 && <QuestionnaireProgress />}
         {questions.map((q) => (
-          <QuestionnaireItem key={q.id} name={q.id} required multiple={q.multiSelect}>
+          <QuestionnaireItem key={q.id} name={q.id} required multiple={q.multiSelect} className="gap-2.5">
             <div className="auq-header">{q.header}</div>
-            <QuestionnaireTitle>{q.question}</QuestionnaireTitle>
+            <QuestionnaireTitle className="text-md [&:not(:has(~[data-slot=questionnaire-description]))]:mb-0">{q.question}</QuestionnaireTitle>
             {q.options.length > 0 && (
-              <QuestionnaireChoices>
+              <QuestionnaireChoices className="gap-1.5">
                 {q.options.map((o) => (
                   <QuestionnaireChoice
                     key={o.label}
@@ -323,7 +442,7 @@ export function AskQuestionCard({ runId, ask, questions, onResolved }: {
                   >
                     <span>{o.label}</span>
                     {o.description && (
-                      <QuestionnaireChoiceDescription className="text-xs">
+                      <QuestionnaireChoiceDescription className="text-sm">
                         {o.description}
                       </QuestionnaireChoiceDescription>
                     )}
@@ -350,15 +469,15 @@ export function AskQuestionCard({ runId, ask, questions, onResolved }: {
         </QuestionnaireActions>
       </Questionnaire>
       {answers.length === 0 && state === "idle" && (
-        <span className="send-state">pick an option or type an answer</span>
+        <span className="send-state">Pick an option with its number, or type an answer. <Kbd keys="enter" /> moves on.</span>
       )}
       {state === "failed" && (
-        <span className="send-state">
-          failed — <Button variant="link" size="inline" onClick={send}>retry</Button>
+        <span className="send-state" role="alert">
+          The answer did not reach the runner. <Button variant="link" size="inline" onClick={send}>retry</Button>
         </span>
       )}
-      {state === "refused" && refusal && <div className="send-state" role="alert">{refusal}</div>}
-    </div>
+      {state === "refused" && refusal && <div className="send-state ask-refusal" role="alert">{refusal}</div>}
+    </AskShell>
   );
 }
 
@@ -423,39 +542,40 @@ export function EffectCard({
   );
 
   const busy = state === "sending" || state === "recorded";
+  const summary = parkSummary({ code: ask.code, node: ask.node, ask: ask.ask });
   return (
-    <div className={`ask-card ${state === "recorded" ? "collapsing" : ""}`} id="needs-input">
-      <h3>Needs you — {ask.node}@{ask.visit}</h3>
-      <div>{ask.reason}</div>
-      <div className="field-hint">
-        The step was interrupted after it started this work, and nothing proved whether it finished. Only you can say.
-      </div>
+    <AskShell
+      runId={runId}
+      ask={ask}
+      title={summary.title}
+      hint="The step was interrupted after it started this work, and nothing proved whether it finished. Only you can say."
+      collapsing={state === "recorded"}
+    >
       {effects.length === 0 ? (
         <div className="send-state">Recorded — waiting for the run to resume.</div>
       ) : (
         effects.map((e) => (
           <div key={`${e.node}\u0000${e.effect}`} className="effect-row" role="group" aria-label={`${e.effect} at ${e.node}@${e.visit}`}>
-            <div>
-              <code>{e.effect}</code> · {e.node}@{e.visit}
+            <div className="effect-name">
+              <code>{e.effect}</code> <span className="m">{e.node}@{e.visit}</span>
             </div>
-            <div className="actions">
-              <Button onClick={() => resolve(e, "happened")} disabled={busy}>
-                It happened
-              </Button>
-              <Button variant="outline" onClick={() => resolve(e, "not-happened")} disabled={busy}>
-                It didn't happen
-              </Button>
-            </div>
-            <div className="field-hint">
-              “It happened” skips this step's effect for good. “It didn't happen” runs it again on the retry.
+            <div className="effect-verdicts">
+              <div className="effect-verdict">
+                <Button onClick={() => resolve(e, "happened")} disabled={busy}>It happened</Button>
+                <span className="field-hint">Skips this step's effect for good.</span>
+              </div>
+              <div className="effect-verdict">
+                <Button variant="outline" onClick={() => resolve(e, "not-happened")} disabled={busy}>It didn't happen</Button>
+                <span className="field-hint">Runs it again on the retry.</span>
+              </div>
             </div>
           </div>
         ))
       )}
-      {state === "recorded" && <div className="send-state">Recorded — resuming…</div>}
-      {state === "failed" && <div className="send-state" role="alert">failed — try again</div>}
-      {refusal && <div className="send-state" role="alert">{refusal}</div>}
-    </div>
+      {state === "recorded" && <div className="send-state" role="status">Recorded — resuming…</div>}
+      {state === "failed" && <div className="send-state" role="alert">The verdict did not reach the run. Try again.</div>}
+      {refusal && <div className="send-state ask-refusal" role="alert">{refusal}</div>}
+    </AskShell>
   );
 }
 
@@ -507,21 +627,22 @@ export function NoReplyCard({ runId, ask, detail, refusal, retry, onResolved }: 
     }
   }, [runId, onResolved, toast, ask.node, ask.visit]);
 
+  const busy = state === "sending" || state === "delivered";
+  const summary = parkSummary({ code: ask.code, node: ask.node, ask: ask.ask });
   return (
-    <div className={`ask-card ${state === "delivered" ? "collapsing" : ""}`} id="needs-input">
-      <h3>Needs you — {ask.node}@{ask.visit}</h3>
-      <div>{ask.reason}</div>
-      {context && <div className="field-error">{context}</div>}
+    <AskShell runId={runId} ask={ask} title={summary.title} hint={summary.hint} collapsing={state === "delivered"}>
+      <AskItems ask={ask} detail={detail} />
+      {context && <div className="field-error ask-context">{context}</div>}
       <div className="field-hint">
         {retry
-          ? "A reply can't help here — this step has no agent to read one. Fix the cause if there is one, then retry the step."
+          ? "There is no reply box because this step has no agent to read one:"
           : "A reply can't move this run. Here is what can:"}
       </div>
       <div className="send-state no-reply-why">{refusal}</div>
       {retry && (
         <div className="actions">
-          <Button onClick={resume} disabled={state === "sending" || state === "delivered"}>
-            <RotateCcw />{state === "sending" ? "Retrying…" : state === "delivered" ? "Retry requested" : "Retry this step"}
+          <Button onClick={resume} loading={state === "sending"} disabled={busy}>
+            {state !== "sending" && <RotateCcw />}{state === "sending" ? "Retrying…" : state === "delivered" ? "Retry requested" : "Retry this step"}
           </Button>
           {state === "failed" && (
             <span className="send-state">
@@ -530,16 +651,35 @@ export function NoReplyCard({ runId, ask, detail, refusal, retry, onResolved }: 
           )}
         </div>
       )}
-      {state === "failed" && error && <div className="send-state" role="alert">{error}</div>}
-    </div>
+      {state === "failed" && error && <div className="send-state ask-refusal" role="alert">{error}</div>}
+    </AskShell>
+  );
+}
+
+/**
+ * HOW-68 — an approval park, drawn as what it is: the approval card. The Build pane used to
+ * answer this park with the no-reply card ("A reply can't move this run" and two CLI
+ * commands) while Approve, Send feedback and the pins sat under Steps → the approval step →
+ * Approval. The card is `slice.tsx`'s own, unchanged — one implementation of a decision that
+ * is bound to a proposal hash — in a frame that gives it the deep-link target and the engine's
+ * message. It is deliberately NOT wrapped in `AskShell`: the approval card is already a card
+ * with its own needs-you edge, and a card inside a card is the thing DESIGN.md forbids.
+ */
+function ApprovalAsk({ runId, ask, slice, onResolved }: { runId: string; ask: Ask; slice: NonNullable<RunDetail["slice"]>; onResolved: () => void }) {
+  return (
+    // no id here: the approval card carries `id="needs-input"` itself while it awaits a decision
+    <section className="ask-approval" aria-label="the proposal waiting for your decision">
+      <ApprovalCard runId={runId} slice={slice} onChanged={onResolved} />
+      <FullMessage reason={ask.reason} />
+    </section>
   );
 }
 
 /**
  * The park, drawn as whatever it actually is. The ONE place that maps an ask to its card:
- * a question gets the question card, an ambiguous side effect gets the effect card, a park a
- * reply would be refused for gets the no-reply card (HOW-69), and everything else is answered
- * in prose. Every pane that shows a standing ask calls this.
+ * a question gets the question card, an ambiguous side effect gets the effect card, an approval
+ * gets the approval card (HOW-68), a park a reply would be refused for gets the no-reply card
+ * (HOW-69), and everything else is answered in prose. Every pane that shows a standing ask calls this.
  */
 export function StandingAsk({ runId, detail, ask, onResolved }: {
   runId: string;
@@ -553,6 +693,9 @@ export function StandingAsk({ runId, detail, ask, onResolved }: {
     return <AskQuestionCard runId={runId} ask={ask} questions={detail.ask_questions} onResolved={onResolved} />;
   if (ask.code === "ambiguous-effect")
     return <EffectCard runId={runId} ask={ask} effects={detail.ambiguous_effects} onResolved={onResolved} />;
+  // an approval is decided on the approval card, wherever the park is shown (HOW-68)
+  if (ask.code === "awaiting-approval" && detail.slice?.proposal && detail.slice.approval && askIsCurrent(detail, ask))
+    return <ApprovalAsk runId={runId} ask={ask} slice={detail.slice} onResolved={onResolved} />;
   // HOW-69: the read model already knows whether the reply route would accept a reply to THIS
   // park; where it would not, drawing the box only invites a refusal
   const verdict = detail.ask_reply;

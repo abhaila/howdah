@@ -81,7 +81,9 @@ describe("the Acceptance card", () => {
     const rows = [...el.querySelectorAll(".ac-row")];
     expect(rows.map((r) => r.textContent!.includes("proposed by plan"))).toEqual([false, false, true, false, true]);
     expect(rows[3]!.textContent).toContain("old wording");
-    expect(rows[3]!.textContent).toContain("superseded");
+    // HOW-68: each row's state is a glyph AND a word in its own column ("Superseded"), not a
+    // lower-case aside in the meta line
+    expect(rows[3]!.textContent).toContain("Superseded");
   });
 
   test("waiving asks for a reason and posts the decision; a refusal is shown verbatim", async () => {

@@ -13,7 +13,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import type { InboxItem } from "../../engine/attention-inbox";
 import type { ReadyItem } from "../draft";
-import { AttentionInbox } from "./screens/attention";
+import { AttentionInbox, inboxLine } from "./screens/attention";
 
 let root: Root | null = null;
 let host: HTMLElement | null = null;
@@ -109,12 +109,17 @@ describe("AttentionInbox", () => {
   test("a waiting run reads as run, node, reason and wait — and links to its ask", async () => {
     serve([ITEM]);
     const el = await render();
-    const row = el.querySelector("a.run-row") as HTMLAnchorElement;
+    // HOW-68: rows are found by `data-nav-row` and cells by `data-col` — `.run-row` and
+    // `.wait-timer` were howdah.css hooks, and the row is drawn with primitives now
+    const row = el.querySelector("a[data-nav-row]") as HTMLAnchorElement;
     expect(row).not.toBeNull();
     expect(row.getAttribute("href")).toBe("/run/implement-ticket-mu9kvg39#needs-input");
     expect(row.textContent).toContain("attempt failed");
     expect(row.textContent).toContain("implementation.plan");
-    expect(row.querySelector(".wait-timer")!.textContent).toBe("waiting 2h 11m");
+    expect(row.querySelector('[data-col="waited"]')!.textContent).toBe("waiting 2h 11m");
+    // the wait is plain text: the triangle already said "waiting on you" (DESIGN.md rule 1)
+    expect(row.querySelector('[data-col="waited"]')!.className).not.toContain("attention");
+    expect(row.querySelector("svg.status-glyph")!.getAttribute("data-shape")).toBe("triangle");
     // HOW-68: the row carries the FACT and no paint. It used to assert the amber tint
     // (`--attention-bg`); DESIGN.md rule 1 says the alarm is said once, and a tinted row beside
     // an amber glyph and an amber nav count said it three times. Row keeps `data-needs-input`.
@@ -126,16 +131,17 @@ describe("AttentionInbox", () => {
     serve([HARNESS_ITEM]);
     const el = await render();
     expect(el.querySelectorAll("a")).toHaveLength(0); // /run/howdah says "No run howdah"
-    const row = el.querySelector(".run-row")!;
+    const row = el.querySelector("[data-needs-input]")!;
     expect(row.textContent).toContain("howdah up"); // the fix is in the reason, where it reads
-    expect(row.querySelector(".wait-timer")!.textContent).toBe("waiting 20m");
+    expect(row.querySelector('[data-col="waited"]')!.textContent).toBe("waiting 20m");
+    expect(row.querySelector('[data-col="step"]')!.textContent).toBe(""); // `__harness__` is not a step anyone can open
   });
 
   test("nothing waiting says so", async () => {
     serve([]);
     const el = await render();
     expect(el.querySelector(".empty")!.textContent).toContain("nothing needs you");
-    expect(el.querySelectorAll("a.run-row")).toHaveLength(0);
+    expect(el.querySelectorAll("a[data-nav-row]")).toHaveLength(0);
   });
 
   test("a finished draft sits under Ready for you — quiet: no amber, no chime, no favicon raise", async () => {
@@ -144,16 +150,19 @@ describe("AttentionInbox", () => {
     const el = await render();
     const group = el.querySelector('section[aria-label="Ready for you"]')!;
     expect(group.querySelector("h2")!.textContent).toContain("Ready for you");
-    const row = group.querySelector("a.run-row") as HTMLAnchorElement;
+    const row = group.querySelector("a[data-nav-row]") as HTMLAnchorElement;
     expect(row.getAttribute("href")).toBe("/runs/draft-graph-mv1/draft");
     expect(row.textContent).toContain("like quick-task with a review");
     expect(row.textContent).toContain("finished 4m ago");
     expect(row.className).not.toContain("--attention"); // not the needs-input row state
-    const badge = row.querySelector('[data-slot="badge"]') ?? row.firstElementChild!;
+    // HOW-68: the chip sits in the row's middle cell now (the first cell is the status glyph)
+    const badge = [...row.querySelectorAll("span")].find((x) => x.textContent === "ready" && x.className.includes("border"))!;
     expect(badge.className).toContain("border-border"); // the outline badge…
     expect(badge.className).not.toContain("bg-primary"); // …never the amber one
     expect(badge.querySelector("svg")).not.toBeNull(); // the neutral glyph
-    expect(el.querySelector(".wait-timer")).toBeNull(); // the amber timer is the asks' alone
+    expect(row.querySelector("svg.status-glyph")!.getAttribute("data-shape")).toBe("check"); // a finished run, not a waiting one
+    expect(row.outerHTML).not.toContain("attention"); // nothing amber anywhere in a ready row
+    expect(el.querySelector('[data-col="waited"]')).toBeNull(); // the wait column is the asks' alone
     expect(el.querySelector(".empty")).toBeNull();
     expect(el.textContent).toContain("nothing is waiting on you");
     await act(async () => { await Bun.sleep(1000); });
@@ -169,7 +178,7 @@ describe("AttentionInbox", () => {
     sessionStorage.setItem("howdah-asks-seen", "[]");
     serve([REFUSED_DRAFT], 200, []);
     const el = await render();
-    const row = el.querySelector("a.run-row") as HTMLAnchorElement;
+    const row = el.querySelector("a[data-nav-row]") as HTMLAnchorElement;
     expect(row.getAttribute("href")).toBe("/run/draft-graph-mv2#needs-input");
     // HOW-68: marked as waiting, not tinted (see the first test in this file)
     expect(row.getAttribute("data-needs-input")).toBe("true");
@@ -183,7 +192,7 @@ describe("AttentionInbox", () => {
   test("asks and ready drafts together: the asks first, the quiet group under them", async () => {
     serve([ITEM], 200, [READY]);
     const el = await render();
-    const rows = [...el.querySelectorAll("a.run-row")].map((a) => a.getAttribute("href"));
+    const rows = [...el.querySelectorAll("a[data-nav-row]")].map((a) => a.getAttribute("href"));
     expect(rows).toEqual(["/run/implement-ticket-mu9kvg39#needs-input", "/runs/draft-graph-mv1/draft"]);
   });
 
@@ -192,5 +201,39 @@ describe("AttentionInbox", () => {
     const el = await render();
     expect(el.querySelector('[role="status"]')).not.toBeNull();
     expect(el.querySelector(".empty")).toBeNull();
+  });
+  // HOW-68: the row says WHAT is being asked, in the sentence the run's own ask card uses
+  test("a row joined to the board reads as name, question, step and wait — the long id never crowds out the reason", async () => {
+    const LONG = "implement-ticket-how-431-add-rate-limit-headers-to-the-public-api-gateway-and-document-them-mhv3a7xw";
+    const item: InboxItem = { ...ITEM, id: `${LONG}:delivery.publish:1`, run: LONG, node: "delivery.publish", reason: "five sentences\nand a CLI command", href: `/run/${LONG}#needs-input` };
+    const board = [{
+      id: LONG, graph: "implement-ticket", name: "HOW-431 Rate-limit headers", parent: null, goal: "g", status: "needs-input", started_at: null, last_event_at: null,
+      waiting_since: "2026-09-20T12:00:00.000Z", needs_input_reason: item.reason, failure: null, paused: false, outcome: null,
+      current: { node: "delivery.publish", visit: 1, since: "2026-09-20T12:00:00.000Z" }, last_activity_at: null, cost_usd: 0, cost_partial: false, commits: null, pr: null,
+      park: { code: "acceptance-unmet", node: "delivery.publish", visit: 1, ask: null },
+    }];
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      const url = String(input instanceof Request ? input.url : input);
+      const body = url.includes("/api/ready") ? [] : url.includes("/api/runs") ? board : url.includes("/api/settings") ? {} : [item];
+      return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+    const el = await render();
+    await act(async () => { await Bun.sleep(20); });
+    const row = el.querySelector("a[data-nav-row]")!;
+    const cell = (name: string) => row.querySelector(`[data-col="${name}"]`)!.textContent!.replace(/\s+/g, " ").trim();
+    expect(cell("name")).toBe("HOW-431 Rate-limit headers"); // the NAME, not the 100-character id
+    expect(cell("line")).toBe("Publish? Some acceptance criteria are not proven.");
+    expect(cell("step")).toBe("delivery.publish");
+    expect(cell("waited")).toBe("waiting 2h 11m");
+    expect(row.textContent).not.toContain(LONG);
+    // every cell that can be long is a Truncate, so nothing wraps into the next row (audit 3.1.8)
+    for (const name of ["name", "line", "step"]) expect(row.querySelector(`[data-col="${name}"] [data-slot="truncate"]`), name).not.toBeNull();
+  });
+
+  test("inboxLine: a run the board does not know, or whose park is a different ask, falls back to the record's own first line", () => {
+    const fallback = inboxLine({ ...ITEM, reason: "\nfirst line\nsecond" }, undefined, Date.now());
+    expect(fallback).toMatchObject({ name: ITEM.run, named: false, body: "first line", step: "implementation.plan" });
+    expect(fallback.line.parts.map((p) => p.value)).toEqual(["Needs you.", "first line"]);
+    expect(inboxLine(HARNESS_ITEM, undefined, Date.now()).step).toBeNull();
   });
 });

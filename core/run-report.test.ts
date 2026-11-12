@@ -83,7 +83,17 @@ describe("renderRunReport", () => {
     expect(html).toContain("<title>Xero overpayment applications</title>");
     expect(html).toContain('<svg class="map"');
     expect(html).toContain('class="wire dashed"');
-    expect(html).toContain("REUSED AS IS");
+    // HOW-68: every status is still a WORD as well as a colour — in sentence case now, like
+    // every other label in the viewer (DESIGN.md: no uppercase labels)
+    expect(html).toContain("Reused as is");
+    // the page wears the viewer's system and loads nothing: its own light-dark() tokens, the
+    // viewer's faces first with system fallbacks, and the theme it is told when framed
+    expect(html).toContain("color-scheme:light dark");
+    expect(html).toContain('"DM Sans",system-ui');
+    expect(html).toContain("[?&]theme=(light|dark)");
+    expect(html).not.toMatch(/text-transform:\s*uppercase|letter-spacing/);
+    expect(html).not.toMatch(/font-size:(9|10|11)px|font:[^;}]*\b(9|10|11)px/);
+    expect(html).not.toMatch(/@font-face|url\(/);
     expect(html).toContain("How the run got here");
     expect(html).toContain("27 · 23:33");
     expect(html).toContain("28 · 00:01"); // a new UTC day says so

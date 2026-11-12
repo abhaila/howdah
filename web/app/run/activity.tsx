@@ -35,7 +35,9 @@ import { fmtAgo, liveness } from "@/lib/liveness";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Badge } from "@/components/ui/badge";
 import { Row } from "@/components/ui/row";
-import { Markdown } from "@/components/ui/markdown";
+import { CodeBlock, Markdown } from "@/components/ui/markdown";
+import { SectionLabel } from "@/components/ui/section-label";
+import { Truncate } from "@/components/ui/truncate";
 import { splitOutputs } from "../../../core/outputs";
 import { OutputDocs } from "./document";
 
@@ -127,17 +129,17 @@ export function ToolBeat({ call, result }: { call: TurnPart; result?: TurnPart }
         <ChevronRight className="act-caret" size={12} aria-hidden />
         {failed ? <TriangleAlert size={12} aria-hidden /> : <Wrench size={12} aria-hidden />}
         <span className="act-tool-name">{toolLabel(call.tool_name ?? "tool")}</span>
-        <span className="m act-tool-sum">{toolSummary(call.content)}</span>
+        <Truncate mono className="act-tool-sum">{toolSummary(call.content)}</Truncate>
         {failed && <Badge variant="destructive">failed</Badge>}
       </Row>
       {open && (
         <div className="act-tool-body">
-          <div className="act-label">input</div>
-          <pre className="act-pre">{call.content}</pre>
+          <SectionLabel>Input</SectionLabel>
+          <CodeBlock wrap clamp label="Tool input">{call.content}</CodeBlock>
           {result && (
             <>
-              <div className="act-label">output</div>
-              <pre className="act-pre">{result.content}</pre>
+              <SectionLabel>Output</SectionLabel>
+              <CodeBlock wrap clamp label="Tool output">{result.content}</CodeBlock>
             </>
           )}
         </div>
@@ -192,7 +194,7 @@ export function ToolGroup({ beats }: { beats: Beat[] }) {
         <ChevronRight className="act-caret" size={12} aria-hidden />
         {failedCount ? <TriangleAlert size={12} aria-hidden /> : <Wrench size={12} aria-hidden />}
         <span className="act-tool-name">Used {beats.length} tools</span>
-        <span className="act-tool-sum">{shown}</span>
+        <Truncate className="act-tool-sum">{shown}</Truncate>
         {failedCount > 0 && <Badge variant="destructive">{failedCount} failed</Badge>}
       </Row>
       {open && (
@@ -298,7 +300,7 @@ export function StepActivity({ turns, render, row, context, state, lastActivityA
   const wrote = context.filter((c) => c.writes.some((w) => w.node === row.node && w.visit === row.visit)).map((c) => c.key);
 
   if (!render && beats.length === 0)
-    return <EmptyState>nothing ran in this step yet</EmptyState>;
+    return <EmptyState title="Nothing ran here yet">What the agent says and each tool it calls appear here as the step runs.</EmptyState>;
 
   return (
     <div className="activity">
@@ -306,9 +308,9 @@ export function StepActivity({ turns, render, row, context, state, lastActivityA
         <div className="act-beat act-prompt">
           <Sparkles size={12} aria-hidden />
           <div className="act-beat-body">
-            <span className="m act-prompt-id">{render.prompt} v{render.prompt_version}</span>
+            <span className="act-prompt-id"><span className="font-mono">{render.prompt}</span> v{render.prompt_version}</span>
             <span className="act-prompt-read">
-              read {Object.keys(render.context_read).join(", ") || "nothing"}
+              read <span className="font-mono">{Object.keys(render.context_read).join(", ") || "nothing"}</span>
             </span>
           </div>
         </div>
@@ -330,7 +332,7 @@ export function StepActivity({ turns, render, row, context, state, lastActivityA
         <div className="act-beat act-wrote">
           <FileOutput size={12} aria-hidden />
           <div className="act-beat-body">
-            wrote {wrote.map((k) => <Badge key={k} variant="id">{k}</Badge>)}
+            Wrote {wrote.map((k) => <Badge key={k} variant="id">{k}</Badge>)}
           </div>
         </div>
       )}

@@ -9,6 +9,22 @@
  * reason and the confirmation are one decision (P1.4). Accept, reject and re-draft all
  * report through a toast; the inline banner stays, because a toast that has faded cannot be
  * re-read.
+ *
+ * HOW-68 put it on the shared split frame (screens/frame.tsx), each side its own scroller,
+ * the proposal replacing the list below 1100px. Inside:
+ *
+ *   ONE primary action: Accept. Reject is the destructive outline beside it; "Re-draft" spends
+ *   tokens but destroys nothing, so it is an ordinary outline button, not a red one.
+ *   A refusal, a stale base and an orphaned proposal are inline notices that say what is wrong
+ *   and what to do, with the refusal VERBATIM — not full-bleed red banners.
+ *   "pending" was the amber attention badge. A proposal waiting for review is not a run waiting
+ *   on you (the nav counts it in grey for the same reason), so it is a neutral chip.
+ *   The diff carries a sign as well as a colour (screens/prompts.tsx `Diff`), and neither it
+ *   nor the proposed template is a scroller inside the scroller.
+ *
+ * The audit's "unexplained 502 in the console on /proposals" was not this screen and not a
+ * proposals route: every request this screen makes was traced and answers 200. See the report
+ * of this change for what it was.
  */
 import { useCallback, useEffect, useState } from "react";
 import { RotateCcw, ThumbsUp, X } from "lucide-react";
@@ -16,15 +32,34 @@ import type { ProposalView } from "../../../prompts/proposals";
 import { PROPOSALS_CHANGED } from "@/lib/types";
 import { getJSON } from "@/lib/net";
 import { fmtWhen } from "@/lib/format";
+import { useListNav } from "@/lib/list-nav";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Row } from "@/components/ui/row";
 import { Dialog } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/ui/empty-state";
-import { LoadingBlock } from "@/components/ui/skeleton";
+import { KeyValue } from "@/components/ui/key-value";
+import { Label } from "@/components/ui/label";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Truncate } from "@/components/ui/truncate";
 import { useToast } from "@/components/ui/toast";
-import { Diff } from "./prompts";
+import { CODE, Hint, KeyHints, LIST_HINTS, LoadError, Section, SplitScreen } from "./frame";
+import { Diff, FeedbackEntry, LINK, PRE } from "./prompts";
+
+/** a fact about the proposal that changes what may be done with it; the refusal is shown whole */
+function Notice({ tone = "plain", slot, children }: { tone?: "error" | "plain"; slot: string; children: React.ReactNode }) {
+  return (
+    <div
+      role={tone === "error" ? "alert" : "status"} data-slot={slot}
+      className={`flex flex-wrap items-center gap-x-3 gap-y-2 rounded-[var(--radius-sm)] border border-border bg-card px-3 py-2 text-sm leading-5 [overflow-wrap:anywhere] ${tone === "error" ? "text-destructive" : "text-foreground"}`}
+    >
+      {children}
+    </div>
+  );
+}
+
+const statusBadge = (p: Pick<ProposalView, "status">) => <Badge variant={p.status === "pending" ? "default" : "outline"}>{p.status}</Badge>;
 
 export function ProposalsScreen({ selected }: { selected: string | null }) {
   const [list, setList] = useState<ProposalView[] | null>(null);
@@ -34,7 +69,8 @@ export function ProposalsScreen({ selected }: { selected: string | null }) {
   const [rejecting, setRejecting] = useState(false);
   const [reason, setReason] = useState("");
   const { toast } = useToast();
-  const load = useCallback(() => getJSON<ProposalView[]>("/api/proposals").then(setList).catch(() => setList([])), []);
+  const [failed, setFailed] = useState(false);
+  const load = useCallback(() => { setFailed(false); return getJSON<ProposalView[]>("/api/proposals").then(setList).catch(() => setFailed(true)); }, []);
   useEffect(() => { load(); }, [load]);
 
   const act = async (file: string, verb: "accept" | "reject" | "redraft", body?: unknown) => {
@@ -55,7 +91,7 @@ export function ProposalsScreen({ selected }: { selected: string | null }) {
       return;
     }
     if (verb === "accept") {
-      setNotice(`accepted — the prompt is now v${payload.version}. New runs pin it; runs in flight keep what they started with (OV-2).`);
+      setNotice(`accepted — the prompt is now v${payload.version}. New runs pin it; runs in flight keep what they started with.`);
       toast(`accepted — now v${payload.version}, for new runs only`);
     }
     if (verb === "redraft") {
@@ -70,142 +106,175 @@ export function ProposalsScreen({ selected }: { selected: string | null }) {
     window.dispatchEvent(new Event(PROPOSALS_CHANGED));
   };
 
-  if (!list) return <LoadingBlock label="Loading proposals" rows={6} />;
-  if (list.length === 0)
-    return <EmptyState>no proposals — add feedback to a prompt, then <code>bun reviser/revise.ts &lt;id&gt;</code></EmptyState>;
+  const nav = useListNav({ noun: "proposal", arrows: "list", enabled: !!list?.length });
+  const frame = { name: "proposals", title: "Proposals", description: "Revisions the reviser drafted from your feedback. Nothing changes until you accept one.", listLabel: "Proposals", backHref: "/proposals", backLabel: "Proposals" } as const;
+
+  if (!list && failed) {
+    return <SplitScreen {...frame} list={<Hint className="px-2">Not loaded.</Hint>} detail={<LoadError what="the proposals" onRetry={() => void load()} />} detailLabel="Proposal" hasDetail />;
+  }
+  if (!list) {
+    const bars = (n: number, h: string) => <div role="status" aria-busy="true" className="flex flex-col gap-2 px-2"><span className="sr-only">Loading proposals</span>{Array.from({ length: n }, (_, i) => <Skeleton key={i} className={h} />)}</div>;
+    return <SplitScreen {...frame} list={bars(6, "h-10 w-full")} detail={bars(3, "h-24 w-full")} detailLabel="Proposal" hasDetail={false} />;
+  }
+  if (list.length === 0) {
+    return (
+      <SplitScreen
+        {...frame}
+        list={<Hint className="px-2">No proposals yet.</Hint>}
+        detail={
+          <EmptyState title="No proposals yet">
+            A proposal is a drafted revision of a prompt. Add feedback to a turn in a run, then draft one with <code>bun reviser/revise.ts &lt;prompt-id&gt;</code>.
+          </EmptyState>
+        }
+        detailLabel="Proposal" hasDetail={false}
+      />
+    );
+  }
 
   const current = list.find((p) => p.file === selected) ?? list[0]!;
   const reject = () => { setRejecting(false); act(current.file, "reject", { reason }); };
   return (
-    <div className="library-layout">
-      <div className="runs">
-        {list.map((p) => (
-          <Row key={p.file} className="run-row" selected={p.file === current.file} href={`/proposals/${encodeURIComponent(p.file)}`}>
-            <span className="run-goal">{p.id}</span>
-            <span className="run-meta">
-              v{p.base_version}→v{p.proposed_version}
-              <Badge variant={p.status === "pending" ? "attention" : p.status === "accepted" ? "success" : "outline"}>{p.status}</Badge>
-              {p.stale && <Badge variant="destructive">stale</Badge>}
-            </span>
-          </Row>
-        ))}
-      </div>
-
-      <div className="prompt-detail">
-        <div className="topbar">
-          <h1>{current.id}</h1>
-          <Badge variant="outline">v{current.base_version} → v{current.proposed_version}</Badge>
-          <Badge variant={current.status === "pending" ? "attention" : current.status === "accepted" ? "success" : "outline"}>{current.status}</Badge>
-          <span className="meta">{current.created ? fmtWhen(current.created) : ""}</span>
-          <a className="linkish" href={`/prompts/${encodeURIComponent(current.id)}`}>open prompt →</a>
+    <SplitScreen
+      {...frame}
+      footer={<KeyHints hints={LIST_HINTS} />}
+      detailLabel={current.id}
+      hasDetail={selected !== null}
+      list={
+        <div ref={nav.ref} {...nav.containerProps} className="flex flex-col">
+          {list.map((p) => (
+            <Row
+              key={p.file}
+              className="flex flex-col gap-0.5 border-b border-border px-2 py-1.5 text-sm leading-[1.4] no-underline"
+              selected={p.file === current.file} aria-current={p.file === current.file ? "page" : undefined}
+              href={`/proposals/${encodeURIComponent(p.file)}`} data-nav-row={p.file}
+            >
+              <Truncate mono className="text-code font-medium text-foreground">{p.id}</Truncate>
+              <span className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
+                <span className="tabular-nums">v{p.base_version} to v{p.proposed_version}</span>
+                {statusBadge(p)}
+                {p.stale && <Badge variant="destructive">stale</Badge>}
+              </span>
+            </Row>
+          ))}
         </div>
-
-        {current.stale && (
-          <div className="banner failed">
-            Stale base — drafted against v{current.base_version}, but {current.id} is now v{current.current_version}.
-            Accepting would silently drop whatever moved it (D7).
-            <Button variant="destructive" size="sm" className="ml-auto" disabled={busy !== null} onClick={() => act(current.file, "redraft")}>
-              <RotateCcw />{busy === "redraft" ? "re-drafting…" : "Re-draft (spends tokens)"}
-            </Button>
+      }
+      detail={
+        <>
+          <div className="flex flex-col gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="m-0 font-mono text-lg font-medium leading-7 [overflow-wrap:anywhere]">{current.id}</h2>
+              <Badge variant="outline">v{current.base_version} to v{current.proposed_version}</Badge>
+              {statusBadge(current)}
+            </div>
+            <Hint>
+              {current.created ? `Drafted ${fmtWhen(current.created)}. ` : ""}
+              <a className={LINK} href={`/prompts/${encodeURIComponent(current.id)}`}>Open the prompt</a>
+            </Hint>
           </div>
-        )}
-        {current.current_version === null && (
-          <div className="banner failed">Orphaned — {current.id} no longer exists in <code>prompts/</code>.</div>
-        )}
-        {error && <div className="banner failed">{error}</div>}
-        {notice && <div className="banner paused">{notice}</div>}
 
-        {/* Reject is offered on EVERY pending proposal: a stale one used to show only Re-draft,
-            and one with no feedback to re-draft from was a dead end nothing on screen could close */}
-        {current.status === "pending" && (
-          <div className="proposal-actions">
-            {!current.stale && current.current_version !== null && (
-              <Button size="sm" disabled={busy !== null} onClick={() => act(current.file, "accept")}>
-                <ThumbsUp />{busy === "accept" ? "accepting…" : `Accept → v${current.proposed_version}`}
+          {current.stale && (
+            <Notice tone="error" slot="proposal-stale">
+              <span className="min-w-0 flex-1 basis-[280px]">
+                Stale base: this was drafted against v{current.base_version}, but {current.id} is now v{current.current_version}.
+                Accepting it would silently drop whatever moved the prompt on.
+              </span>
+              <Button variant="outline" size="sm" disabled={busy !== null} loading={busy === "redraft"} onClick={() => act(current.file, "redraft")}>
+                {busy !== "redraft" && <RotateCcw />}{busy === "redraft" ? "Re-drafting" : "Re-draft (spends tokens)"}
               </Button>
-            )}
-            <Button variant="destructive-outline" size="sm" disabled={busy !== null} onClick={() => setRejecting(true)}><X />{busy === "reject" ? "rejecting…" : "Reject"}</Button>
-          </div>
-        )}
+            </Notice>
+          )}
+          {current.current_version === null && (
+            <Notice tone="error" slot="proposal-orphaned">Orphaned: {current.id} no longer exists in <code className={CODE}>prompts/</code>, so there is nothing to apply this to. Reject it to close it.</Notice>
+          )}
+          {error && <Notice tone="error" slot="proposal-error">{error}</Notice>}
+          {notice && <Notice slot="proposal-notice">{notice}</Notice>}
 
-        <Dialog
-          alert
-          open={rejecting}
-          onClose={() => setRejecting(false)}
-          title={`Reject the ${current.id} revision?`}
-          description="The draft is closed and your reason is filed as feedback — the reviser reads exactly this when it drafts the next one. Nothing about the live prompt changes."
-        >
-          <Input
-            autoFocus
-            aria-label="why this revision is rejected"
-            placeholder="Why? The reviser reads this."
-            value={reason}
-            onChange={(e) => setReason(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter" && reason.trim()) reject(); }}
-          />
-          {/* the dialog closes before the POST, like every other confirmation here: it is
-              modal, so a refusal banner and a toast raised behind it are unreadable and
-              non-interactive. The reason is kept on a refusal, so Reject reopens where it
-              left off; it is cleared only once the reject lands. */}
-          <div className="flex justify-end gap-2">
-            <Button variant="outline" size="sm" onClick={() => setRejecting(false)}>Cancel</Button>
-            <Button variant="destructive" size="sm" disabled={!reason.trim() || busy !== null} onClick={reject}>Reject the revision</Button>
-          </div>
-        </Dialog>
+          {/* Reject is offered on EVERY pending proposal: a stale one used to show only Re-draft,
+              and one with no feedback to re-draft from was a dead end nothing on screen could close */}
+          {current.status === "pending" && (
+            <div data-slot="proposal-actions" className="flex flex-wrap items-center gap-2">
+              {!current.stale && current.current_version !== null && (
+                <Button disabled={busy !== null} loading={busy === "accept"} onClick={() => act(current.file, "accept")}>
+                  {busy !== "accept" && <ThumbsUp />}{busy === "accept" ? "Accepting" : `Accept as v${current.proposed_version}`}
+                </Button>
+              )}
+              <Button variant="destructive-outline" disabled={busy !== null} loading={busy === "reject"} onClick={() => setRejecting(true)}>{busy !== "reject" && <X />}Reject</Button>
+            </div>
+          )}
 
-        {current.status === "rejected" && current.rejection_reason && (
-          <div className="pd-note">rejected {fmtWhen(current.rejected_at)} — “{current.rejection_reason}” (the reviser reads this as feedback)</div>
-        )}
-        {current.status === "accepted" && (
-          <div className="pd-note">accepted {fmtWhen(current.accepted_at)} — applies to new runs only (OV-2)</div>
-        )}
+          <Dialog
+            alert
+            open={rejecting}
+            onClose={() => setRejecting(false)}
+            title={`Reject the ${current.id} revision?`}
+            description="The draft is closed and your reason is filed as feedback — the reviser reads exactly this when it drafts the next one. Nothing about the live prompt changes."
+          >
+            <Label>
+              Why? The reviser reads this.
+              <Input
+                autoFocus
+                aria-label="why this revision is rejected"
+                placeholder="What is wrong with this revision"
+                value={reason}
+                onChange={(e) => setReason(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter" && reason.trim()) reject(); }}
+              />
+            </Label>
+            {/* the dialog closes before the POST, like every other confirmation here: it is
+                modal, so a refusal banner and a toast raised behind it are unreadable and
+                non-interactive. The reason is kept on a refusal, so Reject reopens where it
+                left off; it is cleared only once the reject lands. */}
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" size="sm" onClick={() => setRejecting(false)}>Cancel</Button>
+              <Button variant="destructive" size="sm" disabled={!reason.trim() || busy !== null} onClick={reject}>Reject the revision</Button>
+            </div>
+          </Dialog>
 
-        <section className="pd-section">
-          <h2>Eval</h2>
-          {current.eval.score
-            ? <>
-                <div className="kv"><span className="k">score</span><span>{current.eval.score} — {current.eval.verdict}</span></div>
-                {/* HOW-42: the full A/B report — paired table, cost, trajectory deltas */}
-                {current.eval.report && <div className="kv"><span className="k">report</span><span className="font-mono">{current.eval.report}</span></div>}
-              </>
-            : current.eval.case
-              ? <div className="pd-note">an eval case exists but has not been run: <code>bun {current.eval.case} --score-only --stamp</code></div>
-              : <div className="pd-note">no eval case for this prompt yet — cases are authored at first feedback (D8), so judge the diff</div>}
-        </section>
+          {current.status === "rejected" && current.rejection_reason && (
+            <Hint>Rejected {fmtWhen(current.rejected_at)}: “{current.rejection_reason}”. The reviser reads this as feedback.</Hint>
+          )}
+          {current.status === "accepted" && (
+            <Hint>Accepted {fmtWhen(current.accepted_at)}. It applies to new runs only; a run in flight keeps the prompt it started with.</Hint>
+          )}
 
-        <section className="pd-section">
-          <h2>Evidence — feedback this answers ({current.feedback.length})</h2>
-          {current.feedback.length === 0
-            ? <div className="pd-note">no feedback on file for {current.id}</div>
-            : current.feedback.map((f, i) => (
-                <div key={i} className="fb-entry">
-                  <div className="fb-head">
-                    <Badge variant={f.verdict === "reject" ? "destructive" : "success"}>{f.verdict}</Badge>
-                    <a href={`/run/${f.run}`}>{f.run}</a>
-                    <span className="mono-note">{f.node}@{f.visit}</span>
-                  </div>
-                  <div className="fb-note">{f.note}</div>
-                </div>
-              ))}
-        </section>
+          <Section title="Eval">
+            {current.eval.score
+              ? (
+                <KeyValue
+                  labelWidth={72}
+                  items={[
+                    { label: "Score", value: `${current.eval.score} — ${current.eval.verdict}` },
+                    // HOW-42: the full A/B report — paired table, cost, trajectory deltas
+                    ...(current.eval.report ? [{ label: "Report", value: current.eval.report, mono: true, copy: true }] : []),
+                  ]}
+                />
+              )
+              : current.eval.case
+                ? <Hint>An eval case exists but has not been run: <code className={CODE}>bun {current.eval.case} --score-only --stamp</code></Hint>
+                : <Hint>No eval case for this prompt yet. Cases are authored at first feedback, so judge the diff.</Hint>}
+          </Section>
 
-        {current.reflection && (
-          <section className="pd-section">
-            <h2>Reviser's reasoning</h2>
-            <div className="fb-note">{current.reflection}</div>
-          </section>
-        )}
+          <Section title="Feedback this answers" count={current.feedback.length}>
+            {current.feedback.length === 0
+              ? <Hint>No feedback on file for {current.id}.</Hint>
+              : <div className="flex flex-col">{current.feedback.map((f, i) => <FeedbackEntry key={i} f={f} />)}</div>}
+          </Section>
 
-        <section className="pd-section">
-          <h2>Diff</h2>
-          {current.diff ? <Diff text={current.diff} /> : <div className="pd-note">no diff on file — compare the revision below by eye</div>}
-        </section>
+          {current.reflection && (
+            <Section title="The reviser's reasoning">
+              <p className="m-0 max-w-[72ch] whitespace-pre-wrap text-body leading-normal [overflow-wrap:anywhere]">{current.reflection}</p>
+            </Section>
+          )}
 
-        <section className="pd-section">
-          <h2>Proposed template (v{current.proposed_version})</h2>
-          <pre className="pd-body">{current.body}</pre>
-        </section>
-      </div>
-    </div>
+          <Section title="Diff">
+            {current.diff ? <Diff text={current.diff} /> : <Hint>No diff on file. Compare the proposed template below with the prompt by eye.</Hint>}
+          </Section>
+
+          <Section title={`Proposed template, v${current.proposed_version}`}>
+            <pre data-slot="proposal-body" className={PRE}>{current.body}</pre>
+          </Section>
+        </>
+      }
+    />
   );
 }

@@ -35,8 +35,10 @@ export interface Pitch {
 
 /** the read-only picture's own numbers — its boxes are 180x52 and its captions sit beside the wire */
 const SVG_PITCH: Pitch = { x: 210, y: 92, stagger: 60, origin: 40 };
-/** the canvas: taller cards, and a condition printed IN the gap rather than beside it */
-const CANVAS_PITCH: Pitch = { x: 240, y: 150, stagger: 60, origin: 40 };
+/** the canvas: wider, taller cards (220px since HOW-68, so their text reads at 12-13px), and a
+ *  condition printed IN the gap rather than beside it — two stacked 28px captions fit between
+ *  two rows. The read-only picture's pitch above is untouched. */
+const CANVAS_PITCH: Pitch = { x: 264, y: 168, stagger: 60, origin: 40 };
 
 /** Where the first box goes; also where an unplaceable one lands. */
 const ORIGIN: Point = { x: SVG_PITCH.origin, y: SVG_PITCH.origin };
@@ -85,13 +87,13 @@ export function autoLayout(spec: GraphSpec): GraphSpec {
 }
 
 /** How big a card is on the canvas, for the two things that have to reason about overlap.
- *  The width is the shared box width; the height is a rough one, because a card grows with an
- *  entry marker and a problem count and React Flow measures what it renders. */
-const CARD: Point = { x: 180, y: 64 };
+ *  The width is the canvas card's (builder/canvas.tsx NODE_WIDTH); the height is a rough one,
+ *  because a titled step has an id line and React Flow measures what it renders. */
+const CARD: Point = { x: 220, y: 72 };
 /** How far a crowded-out step steps aside. The y is a whole card, so one already-placed step
  *  can rule out at most ONE candidate — which is what makes the search below terminate with a
  *  free spot rather than merely terminate. */
-const CASCADE: Point = { x: 48, y: 72 };
+const CASCADE: Point = { x: 48, y: 80 };
 
 /**
  * `at`, unless a step is already sitting there — then the next clear spot down-and-right.

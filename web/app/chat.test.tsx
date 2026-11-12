@@ -360,20 +360,21 @@ describe("the run reads as one conversation", () => {
   test("every row is its own scroller item, and a step is the anchor a new turn lands on", () => {
     const el = render(askingLog());
     const rows = [...el.querySelectorAll('[data-slot="message-scroller-item"]')];
-    // step, beats, asked, and the standing ask
-    expect(rows).toHaveLength(4);
+    // step, beats, and the standing ask. HOW-68: the engine's `attention-raised` row for the
+    // park that is STILL standing is not drawn — its card, directly below, is where the ask
+    // is said, once (DESIGN.md "the alarm is said once"). A past ask keeps its row.
+    expect(rows).toHaveLength(3);
     // each row is addressable, which is what lets the viewport hold a position across renders.
     // The ask row's id carries its log seq, so it is matched rather than pinned — the seq is an
     // artefact of the fixture, not part of the contract.
     const ids = rows.map((r) => r.getAttribute("data-message-id"));
     expect(ids[0]).toBe("step:do@1");
     expect(ids[1]).toBe("beats:do@1");
-    expect(ids[2]).toMatch(/^ask:\d+$/);
-    expect(ids[3]).toBe("needs-input");
+    expect(ids[2]).toBe("needs-input");
     // HOW-27: a step boundary IS the turn boundary, so a step is what the viewport anchors to
     // and the agent's own prose is not — otherwise every chunk would re-anchor the view
     expect(rows.map((r) => r.getAttribute("data-scroll-anchor"))).toEqual([
-      "true", "false", "false", "true",
+      "true", "false", "true",
     ]);
   });
 

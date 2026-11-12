@@ -20,34 +20,46 @@
  * the same list the PR carries, in neutral colours, never as attention. Waiving is offered ONLY
  * while the run is parked at an opted-in gate (`acc.waivable`): anywhere else a waiver would
  * change nothing, and inviting one taught operators to waive without reading.
+ *
+ * HOW-68: a LIST, not a card. It is drawn inside the Plan pane, the Details drawer and the
+ * transcript, and a bordered box in each of those was a card inside a card; the "not proven"
+ * and "unprovable" blocks were two more boxes inside that one. Now a heading, hairline rows,
+ * and each row's state as a glyph AND a word ("Met", "Unmet", "Waived", "After publish",
+ * "Superseded") so no state is told by colour. A waived row was amber: amber means a run is
+ * waiting on you, and a waiver is a decision already made, so it is neutral. How a row is
+ * checked is one small chip. Nothing is uppercase.
  */
 import { useState } from "react";
-import { CheckCircle2, CircleX, Clock, ShieldCheck, Ban } from "lucide-react";
+import { CheckCircle2, CircleX, Clock, ShieldCheck, Ban, MinusCircle } from "lucide-react";
 import type { RunDetail } from "../../derive";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { SectionLabel } from "@/components/ui/section-label";
 import { useToast } from "@/components/ui/toast";
 import { evidenceUrl } from "./evidence";
 
 type Row = NonNullable<RunDetail["acceptance"]>["rows"][number];
+type State = "pass" | "fail" | "waived" | "later" | "superseded";
 
 const ALL = "*unprovable";
 const CHECK_LABEL: Record<NonNullable<Row["check"]>, string> = {
   tests: "checked by tests", screenshot: "checked on screen", command: "checked by a command",
   human: "human judgement", "after-publish": "checked after publish",
 };
+const STATE_WORD: Record<State, string> = { pass: "Met", fail: "Unmet", waived: "Waived", later: "After publish", superseded: "Superseded" };
+const STATE_ICON: Record<State, typeof CheckCircle2> = { pass: CheckCircle2, fail: CircleX, waived: Ban, later: Clock, superseded: MinusCircle };
 
 function EvidenceLink({ runId, row, verify }: { runId: string; row: Row; verify: string | null }) {
   const ev = row.evidence;
   if (!ev) return null;
   switch (ev.kind) {
     case "verify.result":
-      return <span className="ac-evidence">tests passed{verify ? ` @ ${verify}` : ""}{ev.note ? ` — ${ev.note}` : ""}</span>;
+      return <span className="ac-evidence">tests passed{verify ? <> @ <span className="font-mono">{verify}</span></> : ""}{ev.note ? ` — ${ev.note}` : ""}</span>;
     case "screenshot":
-      return <a className="ac-evidence pr-link" href={evidenceUrl(runId, ev.file)} target="_blank" rel="noreferrer">screenshot {ev.file.split("/").at(-1)}{ev.note ? ` — ${ev.note}` : ""}</a>;
+      return <a className="ac-evidence text-primary underline underline-offset-2" href={evidenceUrl(runId, ev.file)} target="_blank" rel="noreferrer">screenshot {ev.file.split("/").at(-1)}{ev.note ? ` — ${ev.note}` : ""}</a>;
     case "command":
-      return <span className="ac-evidence"><code>{ev.command}</code> → {ev.output.length > 120 ? `${ev.output.slice(0, 117)}…` : ev.output}</span>;
+      return <span className="ac-evidence"><code className="font-mono text-code">{ev.command}</code> → {ev.output.length > 120 ? `${ev.output.slice(0, 117)}…` : ev.output}</span>;
   }
 }
 
@@ -85,21 +97,21 @@ export function AcceptanceCard({ runId, detail, onChanged }: { runId: string; de
   return (
     <section className="ac-card" data-met={acc.unmet === 0 ? "true" : "false"} data-held={acc.waivable && acc.unmet > 0 ? "true" : "false"} aria-label="Acceptance criteria">
       <div className="ac-head">
-        <ShieldCheck size={13} aria-hidden />
-        <span className="ac-title">Acceptance</span>
-        <span className="ac-score">{met} of {live.length} met</span>
+        <ShieldCheck size={14} aria-hidden className="shrink-0 text-muted-foreground" />
+        <h3 className="m-0 text-md font-semibold text-foreground">Acceptance</h3>
+        <span className="ac-score text-sm tabular-nums text-muted-foreground">{met} of {live.length} met</span>
         {acc.unmet > 0 && <Badge variant={acc.waivable ? "destructive" : "outline"}>{acc.unmet} unmet</Badge>}
-        <span className="ac-by">judged by {acc.written_by.node}@{acc.written_by.visit}</span>
+        <span className="ac-by">judged by <span className="font-mono">{acc.written_by.node}@{acc.written_by.visit}</span></span>
       </div>
       {acc.not_proven.length > 0 && (
         <div className="ac-not-proven">
-          <span className="ac-not-proven-title">Not proven by this run</span>
-          <ul className="ac-not-proven-list">
+          <SectionLabel className="ac-not-proven-title">Not proven by this run</SectionLabel>
+          <ul className="m-0 flex list-disc flex-col gap-1 pl-5 text-sm">
             {acc.not_proven.map((r) => (
-              <li key={r.id}><span className="ac-text">{r.text}</span> <span className="ac-not-proven-why">— {r.reason}</span></li>
+              <li key={r.id}><span className="ac-text">{r.text}</span> <span className="text-muted-foreground">— {r.reason}</span></li>
             ))}
           </ul>
-          <span className="ac-not-proven-note">Listed in the pull request description. Nothing to do here.</span>
+          <span className="text-xs text-muted-foreground">Listed in the pull request description. Nothing to do here.</span>
         </div>
       )}
       {acc.unprovable > 0 && acc.waivable && (
@@ -107,28 +119,28 @@ export function AcceptanceCard({ runId, detail, onChanged }: { runId: string; de
           <span>{acc.unprovable} of the unmet criteria can never be proved in this run — say why once to settle them all.</span>
           {waiving === ALL ? (
             <span className="ac-waive">
-              <Input aria-label="why the unprovable criteria are accepted without evidence" placeholder="why these are accepted without evidence" value={reason} onChange={(e) => setReason(e.target.value)} />
+              <Input aria-label="why the unprovable criteria are accepted without evidence" placeholder="Why these are accepted without evidence" value={reason} onChange={(e) => setReason(e.target.value)} />
               <Button size="sm" variant="destructive-outline" disabled={busy || !reason.trim()} onClick={() => waive(ALL)}>Waive {acc.unprovable}</Button>
               <Button size="sm" variant="ghost" disabled={busy} onClick={() => { setWaiving(null); setError(null); }}>Cancel</Button>
             </span>
           ) : (
-            <Button size="sm" variant="outline" onClick={() => { setWaiving(ALL); setReason(""); setError(null); }}>Waive all unprovable…</Button>
+            <Button size="sm" variant="outline" className="self-start" onClick={() => { setWaiving(ALL); setReason(""); setError(null); }}>Waive all unprovable…</Button>
           )}
         </div>
       )}
       <ul className="ac-rows">
         {acc.rows.map((r) => {
-          const state = r.superseded ? "superseded" : r.passes ? "pass" : r.waived ? "waived" : r.check === "after-publish" ? "later" : "fail";
+          const state: State = r.superseded ? "superseded" : r.passes ? "pass" : r.waived ? "waived" : r.check === "after-publish" ? "later" : "fail";
+          const Icon = STATE_ICON[state];
           return (
             <li key={r.id} className="ac-row" data-state={state}>
-              {state === "pass" ? <CheckCircle2 size={13} aria-hidden /> : state === "waived" ? <Ban size={13} aria-hidden /> : state === "later" ? <Clock size={13} aria-hidden /> : <CircleX size={13} aria-hidden />}
+              <span className="ac-state"><Icon aria-hidden />{STATE_WORD[state]}</span>
               <div className="ac-row-body">
                 <span className="ac-text">{r.text}</span>
                 <span className="ac-meta">
-                  <span className="m">{r.id}</span>
+                  <span className="font-mono">{r.id}</span>
                   {r.source === "plan" && <Badge variant="outline">proposed by plan</Badge>}
                   {r.check && <Badge variant="outline">{CHECK_LABEL[r.check]}</Badge>}
-                  {state === "superseded" && <span>superseded</span>}
                   {state === "pass" && <EvidenceLink runId={runId} row={r} verify={verifyCommit} />}
                   {state === "waived" && <span className="ac-waived">waived by the operator — {r.waived!.reason}</span>}
                   {state === "fail" && <span>{r.unprovable ? `can't be proved in this run: ${r.unprovable}` : "no evidence yet"}</span>}
@@ -137,12 +149,12 @@ export function AcceptanceCard({ runId, detail, onChanged }: { runId: string; de
                 {/* HOW-72: only a run parked at a gate has one to open — anywhere else a waiver changes nothing */}
                 {state === "fail" && acc.waivable && (waiving === r.id ? (
                   <span className="ac-waive">
-                    <Input aria-label={`why ${r.id} is accepted without evidence`} placeholder="why this is accepted without evidence" value={reason} onChange={(e) => setReason(e.target.value)} />
+                    <Input aria-label={`why ${r.id} is accepted without evidence`} placeholder="Why this is accepted without evidence" value={reason} onChange={(e) => setReason(e.target.value)} />
                     <Button size="sm" variant="destructive-outline" disabled={busy || !reason.trim()} onClick={() => waive(r.id)}>Waive</Button>
                     <Button size="sm" variant="ghost" disabled={busy} onClick={() => { setWaiving(null); setError(null); }}>Cancel</Button>
                   </span>
                 ) : (
-                  <Button size="sm" variant="ghost" className="ac-waive-open" onClick={() => { setWaiving(r.id); setReason(""); setError(null); }}>Waive…</Button>
+                  <Button size="sm" variant="outline" className="ac-waive-open" onClick={() => { setWaiving(r.id); setReason(""); setError(null); }}>Waive…</Button>
                 ))}
               </div>
             </li>

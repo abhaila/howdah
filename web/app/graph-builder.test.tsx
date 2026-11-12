@@ -36,7 +36,8 @@ import {
   type Draft, type DraftAction,
 } from "./lib/spec-draft";
 import { GraphBuilder } from "./screens/graph-builder";
-import { STEP_KIND_MIME, applyNodeChangesToDraft, specToFlow } from "./builder/canvas";
+import { STEP_KIND_MIME, applyNodeChangesToDraft, frameOf, specToFlow } from "./builder/canvas";
+import { installShortcuts, allShortcuts, isMac, resetShortcutsForTest } from "./lib/shortcuts";
 import { StepFields, choiceSentence, sayChoices } from "./builder/step-form";
 import { StepRoutes } from "./builder/branching";
 import { ProblemText } from "./builder/problem";
@@ -2534,5 +2535,193 @@ describe("a blank /graphs/new offers drafting (HOW-71)", () => {
     await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
     expect(host.querySelector("h1")?.textContent).toBe(`Editing ${spec.name}`);
     expect(host.querySelector(".gb-draft-hint")).toBeNull();
+  });
+});
+
+// ---- HOW-68: the redesigned shell — what folds, what the keyboard does, what the card says ----
+
+describe("the canvas opens readable, not fitted (HOW-68, audit 3.1.11)", () => {
+  test("a draft that fits is centred at zoom 1", () => {
+    const spec = doc().spec;
+    const at = frameOf(spec, { width: 2000, height: 2000 });
+    expect(at.zoom).toBe(1);
+    // centred: as much room left of the leftmost card as right of the rightmost
+    const xs = specToFlow(spec, [], () => {}).nodes.map((n) => n.position.x);
+    const left = Math.min(...xs) + at.x;
+    const right = 2000 - (Math.max(...xs) + 220 + at.x);
+    expect(Math.abs(left - right)).toBeLessThanOrEqual(1);
+  });
+
+  test("a draft taller than the pane is pinned to its start and still drawn at zoom 1", () => {
+    // the audit's case: five steps in a short pane were fitted down to 5px type
+    const spec = PRESETS.find((p) => p.id === "pr")!.build("p").spec;
+    const at = frameOf(spec, { width: 500, height: 300 });
+    expect(at.zoom).toBe(1);
+    const flow = specToFlow(spec, [], () => {}).nodes;
+    const top = Math.min(...flow.map((n) => n.position.y));
+    // the first row sits just under the pane's top edge, on screen
+    expect(top + at.y).toBeGreaterThan(0);
+    expect(top + at.y).toBeLessThan(80);
+  });
+
+  test("an unmeasured pane frames at zoom 1 too — never a guess at a fit", () => {
+    expect(frameOf(doc().spec, { width: 0, height: 0 }).zoom).toBe(1);
+  });
+});
+
+describe("a card counts what blocks in red and advice quietly — never in amber (HOW-68)", () => {
+  test("specToFlow carries both counts, and only what blocks marks the card", () => {
+    const spec = doc().spec;
+    const id = spec.nodes[0]!.id;
+    const flow = specToFlow(spec, [
+      { where: "steps", node: id, message: "blocks" },
+      { where: "steps", node: id, message: "advice", severity: "advice" },
+    ], () => {});
+    expect(flow.nodes.find((n) => n.id === id)!.data).toMatchObject({ problems: 1, advice: 1, id });
+  });
+
+  test("the card draws no attention badge: amber means a run is waiting on you", async () => {
+    const el = await mount();
+    type(nameBox(el), "my-review");
+    click(palette(el, "Run a command"));
+    const added = card(el, "command")!;
+    expect(added.className).toContain("needs-input");
+    expect(added.innerHTML).not.toContain("--attention");
+    expect(added.querySelector(".text-destructive")?.textContent).toBe("1");
+  });
+
+  test("every card is a named focus stop, and a wire is not one", () => {
+    const flow = specToFlow(doc().spec, [], () => {});
+    for (const n of flow.nodes) expect(n.ariaLabel).toMatch(/^Step .+ Enter selects it/);
+  });
+});
+
+describe("the two kinds of route are told apart without colour (HOW-68)", () => {
+  test("a condition is mono in a solid box; Otherwise is a word in a dashed one", async () => {
+    const el = await mount();
+    type(nameBox(el), "my-review");
+    click(byText(el, "Draft, review, revise"));
+    const otherwise = byLabel(el, "Route otherwise")!;
+    expect(otherwise.textContent).toBe("Otherwise");
+    expect(otherwise.className).toContain("border-dashed");
+    const conditional = byLabel(el, "Route review_verdict")!;
+    expect(conditional.className).toContain("font-mono");
+    expect(conditional.className).not.toContain("border-dashed");
+    // selecting a route is said on the control, not only painted
+    expect(conditional.getAttribute("aria-pressed")).toBe("false");
+    click(conditional);
+    expect(byLabel(el, "Route review_verdict")!.getAttribute("aria-pressed")).toBe("true");
+  });
+});
+
+describe("the builder's keyboard (HOW-68)", () => {
+  let uninstall: () => void = () => {};
+  beforeEach(() => { resetShortcutsForTest(); uninstall = installShortcuts(); });
+  afterEach(() => { uninstall(); });
+  const press = (key: string, init: KeyboardEventInit = {}, target: EventTarget = document.body) =>
+    act(async () => { target.dispatchEvent(new window.KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, ...init })); });
+
+  test("its shortcuts are registered, so the ? sheet and the palette list them", async () => {
+    await mount();
+    const mine = allShortcuts().filter((s) => s.scope === "Graph builder");
+    expect(mine.map((s) => s.id)).toEqual(expect.arrayContaining(["builder.save", "builder.palette", "builder.canvas", "builder.panel", "builder.deselect"]));
+    expect(mine.find((s) => s.id === "builder.save")!.keys).toBe("mod+s");
+    // nothing is bound to Delete or Backspace: removing a step is a named control (canvas.tsx)
+    expect(mine.flatMap((s) => [s.keys ?? []].flat()).some((k) => /delete|backspace/i.test(k))).toBe(false);
+  });
+
+  test("mod+S saves, from inside a text field too", async () => {
+    const calls = serve();
+    const el = await mount();
+    type(nameBox(el), "my-review");
+    await press("s", isMac() ? { metaKey: true } : { ctrlKey: true }, nameBox(el));
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+    expect(calls.filter((c) => c.method === "PUT")).toHaveLength(1);
+  });
+
+  test("Escape deselects: the panel goes back to the graph", async () => {
+    const el = await mount();
+    click(openStep(el, "Do the work")!);
+    expect(el.textContent).toContain("What this step is called");
+    await press("Escape");
+    expect(el.textContent).not.toContain("What this step is called");
+    expect(el.textContent).toContain("What is it called?");
+  });
+
+  test("Enter on a focused card selects it — React Flow's `select` change reaches the shell", async () => {
+    const el = await mount();
+    const wrapper = placed(card(el, "agent")!);
+    await press("Enter", {}, wrapper);
+    expect(el.textContent).toContain("What this step is called");
+  });
+
+  test("1 puts focus in the palette's name box", async () => {
+    const el = await mount();
+    await press("1");
+    expect(document.activeElement).toBe(nextNameBox(el));
+  });
+});
+
+describe("below 1100px the panel is a drawer, so the canvas keeps its width (HOW-68, audit 3.1.10)", () => {
+  let uninstall: () => void = () => {};
+  let restore: () => void = () => {};
+  const setWidth = (w: number) => {
+    const saved = Object.getOwnPropertyDescriptor(document.documentElement, "clientWidth");
+    Object.defineProperty(document.documentElement, "clientWidth", { configurable: true, get: () => w });
+    restore = () => {
+      if (saved) Object.defineProperty(document.documentElement, "clientWidth", saved);
+      else delete (document.documentElement as unknown as Record<string, unknown>).clientWidth;
+    };
+  };
+  beforeEach(() => { resetShortcutsForTest(); uninstall = installShortcuts(); });
+  afterEach(() => { uninstall(); restore(); restore = () => {}; });
+  const panel = (el: HTMLElement) => el.querySelector('[aria-label="Graph builder panel"]');
+
+  test("an unmeasured document folds nothing: the panel is docked and the palette is whole", async () => {
+    const el = await mount();
+    expect(panel(el)).not.toBeNull();
+    expect(el.textContent).toContain("Add a step");
+  });
+
+  test("closed until something is selected; the name stays reachable in the bar", async () => {
+    setWidth(1024);
+    const el = await mount();
+    expect(panel(el)).toBeNull();
+    // the one thing every new draft is blocked on can still be fixed with the panel shut
+    type(nameBox(el), "my-review");
+    expect(labelled(el, "nothing outstanding")).toBeDefined();
+    click(openStep(el, "Do the work")!);
+    expect(panel(el)?.textContent).toContain("What this step is called");
+  });
+
+  test("Escape closes it and deselects; Graph settings opens it on the graph", async () => {
+    setWidth(1024);
+    const el = await mount();
+    click(openStep(el, "Do the work")!);
+    await act(async () => { document.body.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })); });
+    expect(panel(el)).toBeNull();
+    click(byLabel(el, "Graph settings"));
+    expect(panel(el)?.textContent).toContain("What is it called?");
+  });
+
+  test("the palette is a strip of the same six named, draggable controls", async () => {
+    setWidth(1024);
+    const el = await mount();
+    for (const label of ["Ask an agent", "Run a command", "Make or clean up a worktree", "Wait", "Get my approval", "Finish"]) {
+      const b = palette(el, label)!;
+      expect(b, label).toBeDefined();
+      expect(b.getAttribute("draggable")).toBe("true");
+    }
+    // the words are gone from the strip, the controls are not: pressing one still adds the step
+    expect(el.textContent).not.toContain("Give an agent instructions");
+    click(palette(el, "Wait"));
+    expect(card(el, "wait")).toBeDefined();
+  });
+
+  test("between 1100 and 1200px only the palette folds", async () => {
+    setWidth(1150);
+    const el = await mount();
+    expect(panel(el)).not.toBeNull();
+    expect(el.textContent).not.toContain("Give an agent instructions");
   });
 });

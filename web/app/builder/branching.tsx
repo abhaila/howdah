@@ -38,10 +38,16 @@
  *   form already has. Without it the panel stayed open on whatever slid into that index and a
  *   second press destroyed a route nobody selected (HOW-24 review, finding 1). `update-edge`
  *   alone cannot renumber, which is why editing a condition keeps the panel where it is.
+ *
+ * HOW-68 (DESIGN.md), layout only. A row was a wrapping flex line of full-width selects, so in
+ * a 360px panel the sentence fell apart into a stack with its words stranded between boxes.
+ * It is a two-column grid now — the word on the left ("When", "go to", "Otherwise"), what it
+ * governs on the right — which still reads as the sentence and never needs to wrap. A field
+ * key is machine text, so the pickers that hold one are mono; the words are not. A problem is
+ * a glyph and words (`Problem`), and nothing here is amber.
  */
 import { ArrowDown, ArrowUp, Plus, Trash2 } from "lucide-react";
-import { isBlocking } from "../../../core/graph-spec";
-import { ProblemText } from "./problem";
+import { Problem } from "./problem";
 import {
   // coerceOperand lives in core beside Predicate and FieldKind, because a field's kind can
   // change AFTER a row is written and the reducer has to re-type the operand with the very
@@ -141,6 +147,11 @@ function Operand({ p, field, onText }: { p: Predicate; field: FieldSpec | undefi
   return <OperandInput p={p} field={field} onText={onText} />;
 }
 
+/** one route: the word on the left, what it governs on the right */
+const ROUTE = "grid grid-cols-[4.5rem_minmax(0,1fr)] items-start gap-x-2 gap-y-1.5 border-b border-border pb-3 last:border-b-0 last:pb-0";
+/** the sentence's own words — "When", "go to", "Otherwise" — level with the 32px control beside them */
+const WORD = "flex min-h-8 items-center text-sm text-muted-foreground";
+
 /**
  * ONE condition, as the sentence it is: When <field> [inside <part>] <op> <value>. The `nth`
  * only names the controls — every aria-label in the suite says "row N" — so the same component
@@ -155,28 +166,32 @@ function ConditionControls({ spec, when, nth, onChange }: {
   const field = spec.fields.find((f) => f.key === when.key);
   return (
     <>
-      <span className="field-hint">When</span>
-      <Select
-        value={when.key} aria-label={`the field row ${nth} tests`}
-        onChange={(ev) => onChange(repredicate(when, { key: ev.target.value, text: "" }, spec.fields))}
-      >
-        {spec.fields.map((f) => <option key={f.key} value={f.key}>{f.key}</option>)}
-        {!field && <option value={when.key}>{when.key} — no longer a field</option>}
-      </Select>
-      {field?.kind === "json" && (
-        <Input
-          value={when.path ?? ""} placeholder="inside (e.g. outcome)"
-          aria-label={`which part of ${when.key} row ${nth} tests`}
-          onChange={(ev) => onChange(repredicate(when, { path: ev.target.value }, spec.fields))}
-        />
-      )}
-      <Select
-        value={when.op} aria-label={`how row ${nth} compares`}
-        onChange={(ev) => onChange(repredicate(when, { op: ev.target.value as PredicateOp }, spec.fields))}
-      >
-        {OP_LABELS.map((o) => <option key={o.op} value={o.op}>{o.label}</option>)}
-      </Select>
-      <Operand p={when} field={field} onText={(text) => onChange(repredicate(when, { text }, spec.fields))} />
+      <span className={WORD}>When</span>
+      <div className="flex min-w-0 flex-col gap-1.5">
+        <Select
+          mono value={when.key} aria-label={`the field row ${nth} tests`}
+          onChange={(ev) => onChange(repredicate(when, { key: ev.target.value, text: "" }, spec.fields))}
+        >
+          {spec.fields.map((f) => <option key={f.key} value={f.key}>{f.key}</option>)}
+          {!field && <option value={when.key}>{when.key} — no longer a field</option>}
+        </Select>
+        {field?.kind === "json" && (
+          <Input
+            mono value={when.path ?? ""} placeholder="inside (e.g. outcome)"
+            aria-label={`which part of ${when.key} row ${nth} tests`}
+            onChange={(ev) => onChange(repredicate(when, { path: ev.target.value }, spec.fields))}
+          />
+        )}
+        <div className="flex min-w-0 gap-1.5">
+          <Select
+            value={when.op} aria-label={`how row ${nth} compares`}
+            onChange={(ev) => onChange(repredicate(when, { op: ev.target.value as PredicateOp }, spec.fields))}
+          >
+            {OP_LABELS.map((o) => <option key={o.op} value={o.op}>{o.label}</option>)}
+          </Select>
+          <Operand p={when} field={field} onText={(text) => onChange(repredicate(when, { text }, spec.fields))} />
+        </div>
+      </div>
     </>
   );
 }
@@ -216,19 +231,19 @@ export function ConditionEditor({ draft, index, dispatch, onRemoved }: {
   if (!edge) return null;
   const from = spec.nodes.find((n) => n.id === edge.from);
   return (
-    <div className="flex flex-col gap-2">
+    <div className="flex flex-col gap-3">
       <div className="field-hint">
         Leaving <strong>{from?.title?.trim() || edge.from}</strong>. The first condition that fits decides;
         "Otherwise" is what happens when none do.
       </div>
-      <div className="builder-branch-row">
+      <div className={ROUTE}>
         {edge.when
           ? <ConditionControls spec={spec} when={edge.when} nth={1} onChange={(when) => dispatch({ type: "update-edge", index, patch: { when } })} />
-          : <span className="field-hint">Otherwise</span>}
-        <span className="field-hint">go to</span>
+          : <span className={`${WORD} col-span-2 font-medium text-foreground`}>Otherwise — when no condition fits</span>}
+        <span className={WORD}>go to</span>
         <TargetPicker spec={spec} value={edge.to} label="where row 1 goes" onChange={(to) => dispatch({ type: "update-edge", index, patch: { to } })} />
       </div>
-      <div className="actions">
+      <div className="flex flex-wrap items-center gap-2">
         {edge.when
           ? (
             <Button
@@ -247,7 +262,7 @@ export function ConditionEditor({ draft, index, dispatch, onRemoved }: {
             </Button>
           )}
         <Button
-          variant="destructive" size="sm" aria-label="remove this route"
+          variant="destructive-outline" size="sm" className="ml-auto" aria-label="remove this route"
           onClick={() => { dispatch({ type: "remove-edge", index }); onRemoved?.(); }}
         >
           <Trash2 />Remove this route
@@ -306,25 +321,29 @@ export function StepRoutes({ draft, from, problems, dispatch }: {
   const shown = kept.length ? kept : [""];
 
   return (
-    <div className="flex flex-col gap-2">
+    <div className="flex flex-col gap-3">
       <div className="field-hint">The first row that fits decides. Order is priority — the top one wins.</div>
       {conditional.length === 0 && fallbacks.length === 0 && <div className="field-hint">No routes yet.</div>}
       {conditional.map((e, i) => (
-        <div key={i} className="builder-branch-row">
+        <div key={i} className={ROUTE}>
           <ConditionControls spec={spec} when={e.when} nth={i + 1} onChange={(when) => setRow(i, { when })} />
-          <span className="field-hint">go to</span>
+          <span className={WORD}>go to</span>
           <TargetPicker spec={spec} value={e.to} label={`where row ${i + 1} goes`} onChange={(to) => setRow(i, { to })} />
-          <Button variant="ghost" size="icon" aria-label={`move row ${i + 1} up`} disabled={i === 0} onClick={() => move(i, -1)}><ArrowUp size={13} /></Button>
-          <Button variant="ghost" size="icon" aria-label={`move row ${i + 1} down`} disabled={i === conditional.length - 1} onClick={() => move(i, 1)}><ArrowDown size={13} /></Button>
-          <Button
-            variant="ghost" size="icon" aria-label={`remove row ${i + 1}`}
-            onClick={() => emit(conditional.filter((_, j) => j !== i), kept)}
-          ><Trash2 size={13} /></Button>
+          <div className="col-span-2 flex items-center justify-end gap-0.5">
+            <span className="mr-auto text-xs text-faint">Priority {i + 1}</span>
+            <Button variant="ghost" size="icon" aria-label={`move row ${i + 1} up`} disabled={i === 0} onClick={() => move(i, -1)}><ArrowUp /></Button>
+            <Button variant="ghost" size="icon" aria-label={`move row ${i + 1} down`} disabled={i === conditional.length - 1} onClick={() => move(i, 1)}><ArrowDown /></Button>
+            <Button
+              variant="ghost" size="icon" aria-label={`remove row ${i + 1}`}
+              onClick={() => emit(conditional.filter((_, j) => j !== i), kept)}
+            ><Trash2 /></Button>
+          </div>
         </div>
       ))}
       {shown.map((to, i) => (
-        <div key={`otherwise-${i}`} className="builder-branch-row">
-          <span className="field-hint">{i === 0 ? "Otherwise" : "Otherwise, also"}</span>
+        <div key={`otherwise-${i}`} className={ROUTE}>
+          <span className={WORD}>{i === 0 ? "Otherwise" : "Also"}</span>
+          <div className="flex min-w-0 items-center gap-1.5">
           <Select
             value={to}
             aria-label={i === 0 ? `where ${from} goes when no row fits` : `where ${from} also goes when no row fits (${i + 1})`}
@@ -340,30 +359,27 @@ export function StepRoutes({ draft, from, problems, dispatch }: {
           </Select>
           {i > 0 && (
             <Button
-              variant="ghost" size="icon" aria-label={`remove otherwise ${i + 1}`}
+              variant="ghost" size="icon" className="shrink-0" aria-label={`remove otherwise ${i + 1}`}
               onClick={() => emit(conditional, shown.filter((_, j) => j !== i))}
-            ><Trash2 size={13} /></Button>
+            ><Trash2 /></Button>
           )}
+          </div>
           {i === 0 && fallbacks.length === 0 && (
-            <span className="field-hint">
+            <span className="field-hint col-span-2">
               With nothing else matching, the run stops here and waits for you. That is a real
               choice — leave it if there is no sensible default.
             </span>
           )}
         </div>
       ))}
-      <div className="actions">
+      <div className="flex flex-wrap items-center gap-2">
         <Button variant="outline" size="sm" disabled={spec.fields.length === 0} onClick={addRow}><Plus />Add a condition</Button>
         {spec.fields.length === 0 && <span className="field-hint">Add a field first — a condition tests one.</span>}
       </div>
       {/* by SEVERITY (HOW-26): a row compared against free text is ADVICE — the graph runs,
           the row merely may never fire — and printing it in the refusal colour would say the
           save is blocked when it is not. */}
-      {problems.map((p, i) => (
-        <div key={i} className={`${isBlocking(p) ? "field-error" : "field-advice"} builder-problem`}>
-          <ProblemText message={p.message} />
-        </div>
-      ))}
+      {problems.map((p, i) => <Problem key={i} problem={p} />)}
     </div>
   );
 }

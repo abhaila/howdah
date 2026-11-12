@@ -35,18 +35,42 @@
  *   so one stray keystroke used to destroy a step AND its instructions with no undo (review
  *   finding 2). Removing a step is a named control in the panel that says what it is about to
  *   destroy.
+ *
+ * HOW-68 (DESIGN.md), all of it presentation:
+ *
+ *   THE CANVAS OPENS AT 100%, NOT "FITTED". It used to `fitView` whatever arrived, so a
+ *   five-step graph in a short pane was drawn at 40% and its 13px labels at 5px (audit
+ *   3.1.11). A canvas pans; text that cannot be read does not. So a draft is FRAMED instead:
+ *   at zoom 1, centred where it fits and pinned to its top-left corner — where the run starts —
+ *   where it does not. Zooming out is the operator's own act (the controls, the wheel), never
+ *   the default.
+ *
+ *   A CARD IS A FOCUS STOP YOU CAN SEE. React Flow makes every node's wrapper focusable and
+ *   its own sheet removes the outline (audit 3.6). howdah.css puts the 2px ring back on that
+ *   wrapper (`:focus-visible:has(> .gb-node)`), and pressing Enter or Space there SELECTS the
+ *   step — React Flow reports that as a `select` change, which used to be dropped with every
+ *   other one.
+ *
+ *   THE CONTROLS ARE OURS. React Flow's own are bare 26px buttons with no ring and no names a
+ *   tooltip could show; these are `Button`s, so they get the focus ring, the press and the
+ *   tooltip every other control has. Edges are not focus stops at all: the caption `Button`
+ *   on each wire is the control, and a second ringless stop on the hairline was noise.
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  Background, Controls, ReactFlow, useReactFlow, useStore,
+  Background, Panel, ReactFlow, useReactFlow, useStore,
   MarkerType, type Edge, type Node, type NodeChange, type OnConnect, type OnNodesChange,
 } from "@xyflow/react";
+import { Maximize, Minus, Plus } from "lucide-react";
 import { isBlocking, point, predicateLabel, specFlowEdges, type GraphSpec, type Point, type SpecProblem } from "../../../core/graph-spec";
 import { autoLayout } from "@/lib/layout";
 import type { Draft, DraftAction, PaletteKind } from "@/lib/spec-draft";
 import { STEP_KINDS } from "@/lib/spec-draft";
-import { StepNode, stepSummary, type StepNodeData } from "./node-card";
+import { KIND_LABEL, StepNode, stepSummary, type StepNodeData } from "./node-card";
 import { ConditionEdge, type ConditionEdgeData } from "./edge";
+import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/empty-state";
+import { Tooltip } from "@/components/ui/tooltip";
 
 /** What the right-hand panel is showing. `null` is the graph itself. */
 export type Selection = { kind: "step"; id: string } | { kind: "edge"; index: number } | null;
@@ -60,12 +84,20 @@ export const STEP_KIND_MIME = "application/howdah-step-kind";
 const nodeTypes = { step: StepNode };
 const edgeTypes = { condition: ConditionEdge };
 
-/** The card's width is the SVG picture's box width, so one graph is one shape wherever it is
- *  drawn. The HEIGHT is not declared: an entry marker and a problem count are extra lines, and
- *  a fixed 52 would clip them — React Flow measures what it renders. */
-const NODE_WIDTH = 180;
-/** ...and its rough height, for the one thing that has to guess: centring a card on a point. */
-const NODE_HEIGHT = 64;
+/** The card's width. Wider than the read-only picture's 180px box since HOW-68: the card
+ *  prints a name, an id and a summary at 12-13px, and 180 cut all three. The PLACEMENT is
+ *  still the shared one (lib/layout.ts), so it is the same shape, drawn roomier. The HEIGHT is
+ *  not declared: a titled step has an id line the untitled one does not — React Flow measures
+ *  what it renders. */
+const NODE_WIDTH = 220;
+/** ...and its rough height, for the things that have to guess: centring a card on a point,
+ *  and framing a draft before anything has been measured. */
+const NODE_HEIGHT = 72;
+/** how much air the framed draft keeps from the pane's edge */
+const FRAME_PAD = 32;
+/** what the operator may zoom to. The DEFAULT is always 1 — see `frameOf`. */
+const MIN_ZOOM = 0.4;
+const MAX_ZOOM = 1.5;
 
 const isStepKind = (v: string): v is PaletteKind => STEP_KINDS.some((k) => k.kind === v);
 
@@ -88,21 +120,31 @@ export function specToFlow(
   // make the builder's own opinion read as a refusal on every box it has one about.
   const blocking = problems.filter(isBlocking);
   const countOf = (id: string) => blocking.filter((p) => p.node === id).length;
-  const nodes: Node[] = laid.nodes.map((n) => ({
-    id: n.id,
-    type: "step",
-    position: n.position ?? { x: 0, y: 0 },
-    width: NODE_WIDTH,
-    data: {
-      // the canvas speaks in TITLES; the id stays what the run DAG, the log and `node@visit` say
-      title: n.title?.trim() || n.id,
-      kind: n.kind,
-      summary: stepSummary(spec, n),
-      isEntry: spec.entry === n.id,
-      problems: countOf(n.id),
-      onOpen: () => open({ kind: "step", id: n.id }),
-    } satisfies StepNodeData,
-  }));
+  // advice IS counted on the card since HOW-68, as a neutral glyph and a number: that is not a
+  // tint and not the alarm, and it is what lets "2 worth a second look" in the bar be found on
+  // the picture. The card's `needs-input` class and the wire's flag stay about what BLOCKS.
+  const adviceOf = (id: string) => problems.filter((p) => !isBlocking(p) && p.node === id).length;
+  const nodes: Node[] = laid.nodes.map((n) => {
+    const title = n.title?.trim() || n.id;
+    return {
+      id: n.id,
+      type: "step",
+      position: n.position ?? { x: 0, y: 0 },
+      width: NODE_WIDTH,
+      ariaLabel: `Step ${title} — ${KIND_LABEL[n.kind]}. Enter selects it; the arrow keys then move it.`,
+      data: {
+        id: n.id,
+        // the canvas speaks in TITLES; the id stays what the run DAG, the log and `node@visit` say
+        title,
+        kind: n.kind,
+        summary: stepSummary(spec, n),
+        isEntry: spec.entry === n.id,
+        problems: countOf(n.id),
+        advice: adviceOf(n.id),
+        onOpen: () => open({ kind: "step", id: n.id }),
+      } satisfies StepNodeData,
+    };
+  });
   const leaving = new Map<string, number>();
   for (const e of laid.edges) leaving.set(e.from, (leaving.get(e.from) ?? 0) + 1);
   const nth = new Map<string, number>();
@@ -136,6 +178,31 @@ export function specToFlow(
     style: { strokeDasharray: "4 3" },
   }));
   return { nodes, edges: [...edges, ...implied] };
+}
+
+/**
+ * Where the view starts for a draft that has just arrived: ALWAYS at zoom 1 (HOW-68).
+ *
+ * `fitView` answered "show all of it", and for anything taller than the pane that meant
+ * shrinking the type until it was not type (audit 3.1.11). The question worth answering is
+ * "show the start of it, readable": centred on an axis where the draft fits, and pinned to its
+ * top-left — the entry step, in every layout `autoLayout` produces — on an axis where it does
+ * not. The rest is a pan away, which is what a canvas is for.
+ *
+ * Pure, and it reasons from the SPEC's positions with the card's nominal size rather than from
+ * measured nodes: the positions are the artifact, and waiting for React Flow to measure would
+ * frame one tick late.
+ */
+export function frameOf(spec: GraphSpec, pane: { width: number; height: number }): { x: number; y: number; zoom: number } {
+  const placed = autoLayout(spec).nodes.map((n) => n.position).filter((p): p is Point => !!p);
+  if (!placed.length || !pane.width || !pane.height) return { x: FRAME_PAD, y: FRAME_PAD, zoom: 1 };
+  const left = Math.min(...placed.map((p) => p.x));
+  const top = Math.min(...placed.map((p) => p.y));
+  const width = Math.max(...placed.map((p) => p.x)) + NODE_WIDTH - left;
+  const height = Math.max(...placed.map((p) => p.y)) + NODE_HEIGHT - top;
+  const along = (start: number, size: number, room: number) =>
+    Math.round(size + FRAME_PAD * 2 <= room ? (room - size) / 2 - start : FRAME_PAD - start);
+  return { x: along(left, width, pane.width), y: along(top, height, pane.height), zoom: 1 };
 }
 
 /**
@@ -198,12 +265,28 @@ export function GraphCanvas({ draft, dispatch, problems, selection, onSelect, on
   /** bumped when the WHOLE draft is replaced (a preset, a graph read back) — see below */
   generation: number;
 }) {
-  const { screenToFlowPosition, fitView } = useReactFlow();
-  // `fitView` as a prop only fits at mount. A preset or a load replaces every step at once, and
-  // leaving the viewport where it was shows an arrangement that is mostly off-screen. Adding
-  // ONE step deliberately does not refit: moving the view under someone mid-edit is worse than
-  // a box just outside it, and a clicked step is already placed inside the view.
-  useEffect(() => { void fitView({ maxZoom: 1, padding: 0.25 }); }, [generation, fitView]);
+  const { screenToFlowPosition, fitView, setViewport, zoomIn, zoomOut } = useReactFlow();
+  const paneWidth = useStore((s) => s.width);
+  const paneHeight = useStore((s) => s.height);
+  const zoom = useStore((s) => s.transform[2]);
+  const measured = paneWidth > 0 && paneHeight > 0;
+  // A preset or a load replaces every step at once, and leaving the viewport where it was shows
+  // an arrangement that is mostly off-screen — so each `generation` is framed once, as soon as
+  // the pane has a size. Adding ONE step deliberately does not reframe, and neither does the
+  // pane changing width when the panel opens: moving the view under someone mid-edit is worse
+  // than a box just outside it, and a clicked step is already placed inside the view.
+  const spec = useRef(draft.spec);
+  spec.current = draft.spec;
+  const frame = useCallback(
+    () => { void setViewport(frameOf(spec.current, { width: paneWidth, height: paneHeight })); },
+    [setViewport, paneWidth, paneHeight],
+  );
+  const framed = useRef(-1);
+  useEffect(() => {
+    if (!measured || framed.current === generation) return;
+    framed.current = generation;
+    frame();
+  }, [generation, measured, frame]);
   const { nodes, edges } = useMemo(
     () => specToFlow(draft.spec, problems, onSelect),
     [draft.spec, problems, onSelect],
@@ -218,8 +301,12 @@ export function GraphCanvas({ draft, dispatch, problems, selection, onSelect, on
     (changes) => {
       const flying = applyNodeChangesToDraft(changes, dispatch);
       if (flying) setInFlight(flying);
+      // Enter or Space on a focused card is React Flow's own "select this node", and it says so
+      // with a `select` change rather than a click. Selection is the SHELL's, so it is handed
+      // over — a deselect is not: the shell decides what Escape and an empty-canvas click mean.
+      for (const c of changes) if (c.type === "select" && c.selected) onSelect({ kind: "step", id: c.id });
     },
-    [dispatch],
+    [dispatch, onSelect],
   );
 
   // selection is the SHELL's, so it survives a step being renamed or an edge being re-indexed
@@ -277,16 +364,53 @@ export function GraphCanvas({ draft, dispatch, problems, selection, onSelect, on
         // DESCENDING index, because an edge is addressed by its index in `spec.edges` and
         // removing one renumbers the rest.
         deleteKeyCode={null}
-        fitView
-        // a two-step graph fitted to a wide pane would otherwise zoom to 2x, which is the
-        // default ceiling and reads as a mistake rather than as a fit
-        fitViewOptions={{ maxZoom: 1, padding: 0.25 }}
+        // zoom 1 until `frame()` has a pane to measure: never a fitted, shrunken first paint
+        defaultViewport={{ x: FRAME_PAD, y: FRAME_PAD, zoom: 1 }}
+        minZoom={MIN_ZOOM}
+        maxZoom={MAX_ZOOM}
+        // the caption Button on each wire is the control; the hairline is not a second stop
+        edgesFocusable={false}
+        // what a screen reader is told about a card. React Flow's default promises "press
+        // delete to remove it", which this canvas deliberately does not do.
+        ariaLabelConfig={{
+          // React Flow's two keys are named the wrong way round: `keyboardDisabled` is the one
+          // it reads while the keyboard IS enabled, which it always is here
+          "node.a11yDescription.keyboardDisabled": "Press Enter or Space to select this step, then the arrow keys to move it. Its Edit button opens it in the panel.",
+          "node.a11yDescription.default": "Press Enter or Space to select this step. Its Edit button opens it in the panel.",
+          "edge.a11yDescription.default": "Each route has a button on its wire that opens it in the panel.",
+        }}
+        // its 10px "React Flow" link is under the type floor and one more focus stop on every
+        // pass through the canvas; the library is credited in CLAUDE.md and package.json
+        proOptions={{ hideAttribution: true }}
         aria-label={`${draft.spec.name || "untitled"} — ${nodes.length} steps`}
       >
         <Background />
+        {nodes.length === 0 && (
+          <Panel position="top-center" className="gb-canvas-empty">
+            <EmptyState title="No steps yet">
+              Drag a kind of step from the palette onto the canvas, or press one to drop it in
+              the middle. A run needs a step to start at and a Finish step to end on.
+            </EmptyState>
+          </Panel>
+        )}
         {/* no minimap: the graphs this builds are five to ten steps, so one would cover a
             corner of the thing it is a map of, and pan/zoom already reaches everything */}
-        <Controls showInteractive={false} />
+        <Panel position="bottom-left" className="nodrag nopan flex items-center gap-1 rounded-[var(--radius)] border border-border bg-card p-1">
+          <Tooltip content="Zoom out" side="top">
+            <Button variant="ghost" size="icon-sm" aria-label="Zoom out" disabled={zoom <= MIN_ZOOM} onClick={() => void zoomOut()}><Minus /></Button>
+          </Tooltip>
+          <Tooltip content="Back to 100%, at the start of the graph" side="top">
+            <Button variant="ghost" size="sm" className="h-6 min-w-12 px-1.5 text-xs tabular-nums" aria-label={`Zoom ${Math.round(zoom * 100)}% — back to 100%`} onClick={frame}>
+              {Math.round(zoom * 100)}%
+            </Button>
+          </Tooltip>
+          <Tooltip content="Zoom in" side="top">
+            <Button variant="ghost" size="icon-sm" aria-label="Zoom in" disabled={zoom >= MAX_ZOOM} onClick={() => void zoomIn()}><Plus /></Button>
+          </Tooltip>
+          <Tooltip content="Show the whole graph" side="top">
+            <Button variant="ghost" size="icon-sm" aria-label="Show the whole graph" onClick={() => void fitView({ maxZoom: 1, minZoom: MIN_ZOOM, padding: 0.1 })}><Maximize /></Button>
+          </Tooltip>
+        </Panel>
       </ReactFlow>
     </div>
   );

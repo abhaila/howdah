@@ -319,7 +319,8 @@ describe("ApprovalCard", () => {
     proposeAndPark(log, ghostsV2(), 2);
     const el = render(<ApprovalCard runId="r1" slice={deriveSlice(log.events)!} onChanged={noop} />);
     const orphans = $(el, '[data-testid="orphaned"]')!;
-    expect($(orphans, ".rh")!.textContent).toBe("Orphaned (no longer in this proposal)");
+    // HOW-68: section labels are the SectionLabel primitive now (was a shared `.rh` h2)
+    expect($(orphans, '[data-slot="section-label"]')!.textContent).toBe("Orphaned (no longer in this proposal)");
     expect($(orphans, ".ap-comment-key")!.textContent).toBe("com.x.Users.legacy()");
     expect($(orphans, ".ap-comment-text")!.textContent).toBe("keep legacy for now");
     expect($(el, '.ghost-item[data-id="com.x.Users.legacy()"]')).toBeNull();
@@ -436,8 +437,10 @@ describe("ApprovalCard over a slice plan", () => {
     started(log, "quick-task");
     proposeAndPark(log, { something: "else" });
     const el = render(<ApprovalCard runId="r1" slice={deriveSlice(log.events)!} onChanged={noop} />);
-    expect($(el, ".pd-note")!.textContent).toContain("not a ghost set");
-    expect($(el, ".sd-raw")!.textContent).toContain("something");
+    // HOW-68: the note is a paragraph and the raw proposal the shared CodeBlock (were `.pd-note`
+    // and `.sd-raw`, two other surfaces' classes)
+    expect($(el, ".approval-card p")!.textContent).toContain("not a ghost set");
+    expect($(el, ".code-block")!.textContent).toContain("something");
     expect($$(el, ".plan-slice")).toHaveLength(0);
   });
 });
@@ -543,7 +546,8 @@ describe("slice panes and progress", () => {
     expect(failure).not.toBeNull();
     const el = render(<StatusBadge status={status} />);
     expect($(el, ".status")!.dataset.status).toBe("needs-input");
-    expect(el.textContent?.trim()).toBe("needs input");
+// HOW-68: the label is the operator's words; `data-status` above still carries the enum
+    expect(el.textContent?.trim()).toBe("Waiting on you");
   });
 });
 

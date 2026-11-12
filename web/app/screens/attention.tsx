@@ -3,91 +3,170 @@
  * notifications arrive, and then "what is the problem here, where are they so I can read
  * what the actual issues are?"
  *
- * One row per pending ask: which run, which node, the reason in the operator's own words,
- * and how long it has been standing — linking to `/run/:id#needs-input`, the card that can
- * actually answer it. It is the same list the watchdog rings by (GET /api/attention runs it
- * through engine/attention-inbox.ts's `stillNeedsHuman`), so the badge, the banner and this
- * screen always count the same thing.
+ * One row per pending ask, linking to `/run/:id#needs-input`, the card that can actually
+ * answer it. It is the same list the watchdog rings by (GET /api/attention runs it through
+ * engine/attention-inbox.ts's `stillNeedsHuman`), so the badge and this screen always count
+ * the same thing.
+ *
+ * HOW-68 gave it the Runs list's row language (the audit's 3.1.8: the badge wrapped inside a
+ * 26px row, "waiting 19h 0m" printed over the next row, and a 100-character run id took the
+ * row while the reason was cut to "output contract …"):
+ *
+ *   status glyph · run name · WHAT IT IS ASKING · step · how long
+ *
+ * Every column has a width and every cell that can be long is a `Truncate`, so a row is one
+ * 36px line that cannot wrap into its neighbour, and the columns that can be long give in the
+ * right order — the reason gets the most room, the step id the least, and an id is cut in the
+ * MIDDLE so its distinguishing tail survives. What it is asking is `parkSummary()`'s sentence,
+ * joined from the board (GET /api/runs carries each waiting run's park); a record the board
+ * does not know — the supervisor's own "harness died", a run whose log cannot be read — falls
+ * back to the first line of the record's own reason, which is what the row used to print.
  *
  * The wait comes from the server already phrased (`item.waited`, engine/attention.ts
  * formatWait) rather than being re-derived here — one wait phrasing for the notification and
- * the row, which is exactly what made the two disagree before.
+ * the row. It is plain text now, not amber: the triangle says "waiting on you" once.
  *
  * HOW-67 (D-7A) adds a SECOND, quiet group under the asks: "Ready for you", the finished
  * drafts nobody has saved or discarded (GET /api/ready, web/draft.ts `readyDrafts`). It is a
  * separate list on purpose, and it never feeds `useAttentionSurfaces` — amber, the favicon
- * trunk-raise and the chime mean a run cannot proceed without you, and a draft can wait. So its
- * rows are plain (no `needsInput`), its badge is the outline one with a neutral glyph, and its
- * time sits in the muted meta rather than the amber wait timer.
+ * trunk-raise, the chime and the browser notification mean a run cannot proceed without you,
+ * and a draft can wait. So its rows are plain (no `needsInput`), its glyph is the neutral
+ * "done" check, and its chip is the outline one.
  */
 import { useEffect, useState } from "react";
 import { Inbox } from "lucide-react";
 import type { InboxItem } from "../../../engine/attention-inbox";
+import type { RunBoardRow } from "../../board";
 import type { ReadyItem } from "../../draft";
+import { runLine, type RunLine } from "@/lib/board";
 import { getJSON } from "@/lib/net";
+import { runLabel } from "@/lib/format";
 import { fmtAgo } from "@/lib/liveness";
 import { useAttentionSurfaces } from "@/lib/hooks";
+import { useListNav } from "@/lib/list-nav";
+import { parkSummary } from "../../../core/park-summary";
 import { Badge } from "@/components/ui/badge";
+import { buttonVariants } from "@/components/ui/button";
 import { Row } from "@/components/ui/row";
 import { EmptyState } from "@/components/ui/empty-state";
-import { LoadingBlock } from "@/components/ui/skeleton";
+import { SectionLabel } from "@/components/ui/section-label";
+import { Truncate } from "@/components/ui/truncate";
 import { Mark } from "../brand";
+import { StatusGlyph } from "../status";
+import { KeyHints, LIST_HINTS, Screen, ScreenLoading } from "./frame";
+import { Line } from "./runs";
+
+/** glyph · name · what it asks · step · how long — one 36px line, nothing wraps */
+const INBOX_ROW = "grid min-h-9 grid-cols-[16px_minmax(0,5fr)_minmax(0,8fr)_minmax(0,3fr)_132px] items-center gap-x-3 border-b border-border px-2 py-1.5 text-sm leading-[1.4] no-underline";
+
+const firstLine = (s: string) => (s.split("\n").find((l) => l.trim() !== "") ?? "").trim();
+
+/**
+ * What one inbox row says, joined from the board when the board knows the run and its park is
+ * THIS ask. Pure, for the test. A harness-level record (`__harness__`) has no step to name.
+ */
+export function inboxLine(item: InboxItem, row: RunBoardRow | undefined, now: number): { name: string; named: boolean; line: RunLine; body: string; step: string | null } {
+  const same = row !== undefined && row.status === "needs-input" && (row.park === null || row.park.node === item.node);
+  const step = item.node.startsWith("__") ? null : item.node;
+  if (row !== undefined && same) {
+    const line = runLine(row, now);
+    return { name: runLabel(row), named: !!(row.name || row.goal), line, body: parkSummary(row.park ?? { node: item.node }).title, step };
+  }
+  const said = firstLine(item.reason);
+  return {
+    name: row ? runLabel(row) : item.run,
+    named: !!(row && (row.name || row.goal)),
+    line: { parts: [{ kind: "strong", value: "Needs you." }, { kind: "text", value: said }], quiet: false },
+    body: said,
+    step,
+  };
+}
 
 export function AttentionInbox() {
   const [items, setItems] = useState<InboxItem[] | null>(null);
   const [ready, setReady] = useState<ReadyItem[]>([]);
+  const [board, setBoard] = useState<RunBoardRow[]>([]);
   useEffect(() => {
     const load = () => {
       getJSON<InboxItem[]>("/api/attention").then(setItems).catch(() => {});
       getJSON<ReadyItem[]>("/api/ready").then(setReady).catch(() => {});
+      // names and parks for the rows; the inbox is still whole without it
+      getJSON<RunBoardRow[]>("/api/runs").then((b) => setBoard(Array.isArray(b) ? b : [])).catch(() => {});
     };
     load();
     const t = setInterval(load, 3000);
     return () => clearInterval(t);
   }, []);
-  // the AMBER list only — a ready draft must never raise the favicon or chime (HOW-67)
-  useAttentionSurfaces(!!items?.length, items ? { waiting: items.map((i) => i.run), cleared: "others" } : null);
+  const now = Date.now();
+  const byId = new Map(board.map((r) => [r.id, r]));
+  const rows = (items ?? []).map((item) => ({ item, ...inboxLine(item, byId.get(item.run), now) }));
+  // the AMBER list only — a ready draft must never raise the favicon, chime or notify (HOW-67)
+  useAttentionSurfaces(!!items?.length, items ? {
+    waiting: items.map((i) => i.run),
+    cleared: "others",
+    info: Object.fromEntries(rows.map((r) => [r.item.run, { name: r.name, body: r.body }])),
+  } : null);
+  const nav = useListNav({ noun: "ask", enabled: (items?.length ?? 0) + ready.length > 0 });
 
-  if (!items) return <LoadingBlock label="Loading what needs you" rows={4} />;
+  if (!items) return <ScreenLoading name="attention" title="Needs you" label="Loading what needs you" rows={4} />;
+  const nothing = items.length === 0 && ready.length === 0;
   return (
-    <div>
-      <h1>Needs you</h1>
-      {items.length === 0 ? (
-        ready.length === 0 ? (
-          <EmptyState mark={<Mark className="mark" />}>nothing needs you — every run is on its own</EmptyState>
-        ) : (
-          <p className="inbox-note">nothing is waiting on you</p>
-        )
+    <Screen
+      name="attention"
+      title="Needs you"
+      description="Runs that cannot go on until you answer."
+      footer={nothing ? undefined : <KeyHints hints={LIST_HINTS} />}
+    >
+      {nothing ? (
+        <EmptyState mark={<Mark className="mark" />} title="Nothing needs you" actions={<a className={buttonVariants({ variant: "outline" })} href="/">Go to Runs</a>}>
+          nothing needs you — every run is on its own. A run that parks on a question, a failure or
+          an approval appears here, and in the count beside “Needs you”.
+        </EmptyState>
       ) : (
-        items.map((item) => (
-          // href ?? undefined, never a guessed path: the harness record's "run" is the literal
-          // string "howdah", and /run/howdah is a page that says the run failed to start. The
-          // server decides what each row can link at (engine/attention-inbox.ts `href`); a row
-          // with nothing to link at reads as plain text, its reason already naming `howdah up`.
-          <Row key={item.id} className="run-row" needsInput href={item.href ?? undefined}>
-            <Badge variant="attention">needs you</Badge>
-            <span className="run-goal">{item.reason}</span>
-            <span className="run-meta">
-              {item.run} · {item.node}
-            </span>
-            <span className="wait-timer">{item.waited}</span>
-          </Row>
-        ))
+        <div ref={nav.ref} {...nav.containerProps} className="flex flex-col gap-6">
+          {items.length === 0 ? (
+            <p data-slot="inbox-note" className="m-0 text-sm text-muted-foreground">nothing is waiting on you</p>
+          ) : (
+            <section aria-label="Waiting on you" className="flex flex-col">
+              <SectionLabel as="h2" count={items.length} className="border-b border-border px-2 pb-1.5">Waiting on you</SectionLabel>
+              {rows.map(({ item, name, named, line, step }) => (
+                // href ?? undefined, never a guessed path: the harness record's "run" is the literal
+                // string "howdah", and /run/howdah is a page that says the run failed to start. The
+                // server decides what each row can link at (engine/attention-inbox.ts `href`); a row
+                // with nothing to link at reads as plain text, its reason already naming `howdah up`.
+                <Row key={item.id} className={INBOX_ROW} needsInput href={item.href ?? undefined} selected={nav.selected === item.id} data-nav-row={item.href ? item.id : undefined}>
+                  <StatusGlyph status="needs-input" label="waiting on you" />
+                  <span data-col="name" className="flex min-w-0">
+                    {named
+                      ? <Truncate className="text-body font-medium text-foreground">{name}</Truncate>
+                      : <Truncate mono middle={12} className="text-code text-foreground">{name}</Truncate>}
+                  </span>
+                  <span data-col="line" className="flex min-w-0"><Line line={line} /></span>
+                  <span data-col="step" className="flex min-w-0">{step !== null && <Truncate mono middle={14} className="text-code text-muted-foreground">{step}</Truncate>}</span>
+                  <span data-col="waited" className="whitespace-nowrap text-right tabular-nums text-muted-foreground">{item.waited}</span>
+                </Row>
+              ))}
+            </section>
+          )}
+          {ready.length > 0 && (
+            <section aria-label="Ready for you" className="flex flex-col">
+              <SectionLabel as="h2" count={ready.length} className="border-b border-border px-2 pb-1.5">Ready for you</SectionLabel>
+              {ready.map((item) => (
+                <Row key={item.run} className={INBOX_ROW} href={item.href} selected={nav.selected === `ready:${item.run}`} data-nav-row={`ready:${item.run}`}>
+                  <StatusGlyph status="done" label="finished" />
+                  <span data-col="name" className="flex min-w-0"><Truncate className="text-body font-medium text-foreground">{item.name || item.intent || item.run}</Truncate></span>
+                  <span data-col="line" className="flex min-w-0 items-center gap-2 text-muted-foreground">
+                    <Badge variant="outline"><Inbox aria-hidden />ready</Badge>
+                    <Truncate>A drafted graph, ready to review and save</Truncate>
+                  </span>
+                  <span data-col="step" className="flex min-w-0"><Truncate mono middle={12} className="text-code text-muted-foreground">{item.run}</Truncate></span>
+                  <span data-col="finished" className="whitespace-nowrap text-right tabular-nums text-muted-foreground">finished {fmtAgo(Date.now() - new Date(item.finished_at).getTime())} ago</span>
+                </Row>
+              ))}
+            </section>
+          )}
+        </div>
       )}
-      {ready.length > 0 && (
-        <section className="ready-group" aria-label="Ready for you">
-          <h2 className="board-group-head" data-group="ready">Ready for you <span className="bv-faint">{ready.length}</span></h2>
-          {ready.map((item) => (
-            <Row key={item.run} className="run-row" href={item.href}>
-              <Badge variant="outline"><Inbox aria-hidden />ready</Badge>
-              <span className="run-goal">{item.name || item.intent || item.run}</span>
-              <span className="run-meta">
-                {item.run} · finished {fmtAgo(Date.now() - new Date(item.finished_at).getTime())} ago
-              </span>
-            </Row>
-          ))}
-        </section>
-      )}
-    </div>
+    </Screen>
   );
 }

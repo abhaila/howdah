@@ -46,6 +46,20 @@ describe("the board row", () => {
     expect(r.status).toBe("needs-input");
     expect(r.needs_input_reason).toBe("attempt failed");
     expect(r.current).toMatchObject({ node: "build", visit: 1 });
+    // HOW-68: what it is waiting FOR, as data parkSummary() can read — never parsed from `reason`
+    expect(r.park).toEqual({ code: "attempt-failed", node: "build", visit: 1, ask: null });
+  });
+
+  test("HOW-68 a mid-turn ask carries its payload; a run that is not waiting carries no park", () => {
+    const ask = { kind: "user-question", questions: [{ question: "Cursor or offset pagination?" }] };
+    const asking = row(runLog([START, node("build"), { type: "attention-raised", node: "build", visit: 1, reason: "AskUserQuestion", ask }]));
+    expect(asking.park).toEqual({ code: null, node: "build", visit: 1, ask });
+    expect(row(runLog([START, node("build"), chunk("build")])).park).toBeNull();
+    const answered = row(runLog([START, node("build"), { type: "attention-raised", node: "build", visit: 1, reason: "r", code: "attempt-failed" }, { type: "run-finished", outcome: "failed" }]));
+    expect(answered.park).toBeNull();
+    // a dead runner outranks the park in the status, so the row must not still say "waiting on you"
+    const dead = row(runLog([START, node("build"), { type: "attention-raised", node: "build", visit: 1, reason: "r", code: "stuck" }]), new BoardCache(), { liveness: (s) => ({ ...s, status: "harness-dead" }) });
+    expect(dead.park).toBeNull();
   });
 
   test("done: no current step; the cost is the whole bill when every turn reported one", () => {

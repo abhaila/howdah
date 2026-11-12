@@ -98,7 +98,8 @@ describe("StepActivity", () => {
     ])]);
     const head = el.querySelector(".act-tool-head") as HTMLButtonElement;
     expect(head.getAttribute("aria-expanded")).toBe("false");
-    expect(el.querySelector(".act-pre")).toBeNull();
+    // HOW-68: a tool's input and output are the shared CodeBlock now (was a local `.act-pre`)
+    expect(el.querySelector(".code-block")).toBeNull();
     expect(el.textContent).toContain("bun test"); // the summary line names the work
 
     act(() => head.click());
@@ -197,7 +198,8 @@ describe("StepActivity", () => {
 
   test("a step with nothing in it says so instead of rendering an empty frame", () => {
     const el = render([]);
-    expect(el.textContent).toContain("nothing ran in this step yet");
+    // HOW-68: an empty state names the place and says what will appear (DESIGN.md Components)
+    expect(el.textContent).toContain("Nothing ran here yet");
   });
 });
 

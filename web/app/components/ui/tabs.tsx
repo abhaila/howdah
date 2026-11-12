@@ -91,6 +91,8 @@ const panelTabVariants = cva(
       look: {
         underline: "h-8 border-0 border-b-2 border-solid px-1 text-sm",
         chip: "rounded-[var(--radius-xs)] border px-2 text-sm",
+        /** one cell of a segmented control: the strip (the caller's className) is the well */
+        segment: "h-6 rounded-[var(--radius-xs)] border-0 px-2.5 text-sm",
       },
       on: { true: "", false: "" },
     },
@@ -100,6 +102,8 @@ const panelTabVariants = cva(
       { look: "underline", on: false, className: "border-b-transparent text-muted-foreground hover:text-foreground" },
       { look: "chip", on: true, className: "border-[var(--border-strong)] bg-card text-foreground" },
       { look: "chip", on: false, className: "border-border text-muted-foreground hover:border-[var(--border-strong)] hover:text-foreground" },
+      { look: "segment", on: true, className: "bg-card font-medium text-foreground shadow-[inset_0_0_0_1px_var(--border-strong)]" },
+      { look: "segment", on: false, className: "text-muted-foreground hover:text-foreground" },
     ],
     defaultVariants: { look: "underline", on: false },
   },
@@ -120,7 +124,7 @@ export function PanelTabs<T extends string>({ value, onValueChange, items, class
   onValueChange: (v: T) => void;
   items: ReadonlyArray<{ value: T; label: string }>;
   className?: string;
-  look?: "underline" | "chip";
+  look?: "underline" | "chip" | "segment";
 }) {
   return (
     <TabsPrimitive.Root

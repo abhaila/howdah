@@ -46,6 +46,13 @@
  *   ticket's graph could not be repaired without moving it, so there is one explicit rename
  *   that carries the prompt file, the edges and the entry with it (lib/spec-draft.ts
  *   renameStep), and says plainly what it costs.
+ *
+ * HOW-68 (DESIGN.md), presentation only: mono is kept for what is machine text — a field key,
+ * the prompt body, a script — and the labels around them are the reading face; the uppercase
+ * "IT PRODUCES" is a `SectionLabel`; the instructions box is tall enough to write in and
+ * scrolls inside itself rather than growing the panel; and "Remove this step" is `RemoveStep`,
+ * a destructive OUTLINE the panel places at its own foot (`removeControl={false}` here), so
+ * the one control that destroys something is last and is not the loudest thing on the form.
  */
 import { useMemo, useState } from "react";
 import { Plus, Trash2 } from "lucide-react";
@@ -64,6 +71,7 @@ import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { AlertDialog } from "@/components/ui/dialog";
+import { SectionLabel } from "@/components/ui/section-label";
 
 const DURATION_UNITS = [
   { unit: "ms", label: "milliseconds" },
@@ -97,11 +105,11 @@ function Produces({
   const legal = SPEC_FIELD_KEY.test(fresh) && !spec.fields.some((f) => f.key === fresh);
   return (
     <div className="flex flex-col gap-2">
-      <div className="text-xs uppercase tracking-[0.06em] text-muted-foreground">It produces</div>
+      <SectionLabel>It produces</SectionLabel>
       <div className="flex flex-col gap-1.5">
         {candidates.length === 0 && <div className="field-hint">No fields yet — make one below.</div>}
         {candidates.map((key) => (
-          <Checkbox key={key} label={<span className="font-mono text-base">{key}</span>} checked={value.includes(key)} onChange={() => toggle(key)} />
+          <Checkbox key={key} label={<span className="font-mono">{key}</span>} checked={value.includes(key)} onChange={() => toggle(key)} />
         ))}
       </div>
       <div className="field-hint">{hint}</div>
@@ -109,7 +117,7 @@ function Produces({
         <div className="flex items-end gap-2">
           <Label className="flex-1">
             New field
-            <Input value={fresh} placeholder="summary" onChange={(e) => setFresh(e.target.value)} />
+            <Input mono value={fresh} placeholder="summary" onChange={(e) => setFresh(e.target.value)} />
           </Label>
           <Button
             variant="outline" size="sm" disabled={!legal}
@@ -252,8 +260,8 @@ function RenameStep({ spec, node, dispatch, onRenamed }: {
   const suggested = nextNodeId(others, node.title?.trim() || node.id);
   const can = canRenameStep(spec, node.id, suggested);
   return (
-    <details className="builder-rename">
-      <summary className="cursor-pointer text-sm text-muted-foreground">
+    <details>
+      <summary className="min-h-6 cursor-pointer rounded-[var(--radius-xs)] py-0.5 text-sm text-muted-foreground">
         Step id <code>{node.id}</code> — change it
       </summary>
       <div className="flex flex-col gap-2 pt-2">
@@ -288,13 +296,15 @@ function RenameStep({ spec, node, dispatch, onRenamed }: {
  * One step, as forms. `onRemoved` is how the surface that OWNS the selection learns the step
  * is gone — the panel cannot just stop rendering, because the canvas still has it selected.
  */
-export function StepFields({ draft, id, dispatch, onRemoved, onRenamed }: {
+export function StepFields({ draft, id, dispatch, onRemoved, onRenamed, removeControl = true }: {
   draft: Draft;
   id: string;
   dispatch: (a: DraftAction) => void;
   onRemoved?: () => void;
   /** the panel is keyed by id, so a rename has to tell the surface which step it is now on */
   onRenamed?: (id: string) => void;
+  /** false when the surface places `RemoveStep` itself — the panel puts it at its foot */
+  removeControl?: boolean;
 }) {
   const spec = draft.spec;
   const node = spec.nodes.find((n) => n.id === id);
@@ -303,17 +313,9 @@ export function StepFields({ draft, id, dispatch, onRemoved, onRenamed }: {
   const body = node?.kind === "agent" ? draft.prompts[node.prompt] ?? "" : "";
   const given = useMemo(() => templateReads(body), [body]);
   const approvals = spec.nodes.filter((n) => n.kind === "approval");
-  const [confirming, setConfirming] = useState(false);
 
   if (!node) return null;
   const title = node.title ?? "";
-  const remove = () => { dispatch({ type: "remove-step", id }); onRemoved?.(); };
-  // exactly when the removal destroys text nothing can give back: an agent step with
-  // instructions written, filed under a prompt id no other step is also using
-  const destroysText =
-    node.kind === "agent" &&
-    body.trim() !== "" &&
-    spec.nodes.filter((n) => n.kind === "agent" && n.prompt === node.prompt).length === 1;
 
   return (
     <div className="flex flex-col gap-3">
@@ -328,7 +330,10 @@ export function StepFields({ draft, id, dispatch, onRemoved, onRenamed }: {
           <Label>
             Instructions for the agent
             <Textarea
-              rows={10} spellCheck={false} value={body}
+              mono rows={12} spellCheck={false} value={body}
+              // comfortable to write in, and it scrolls INSIDE itself: a long prompt must not
+              // push the routes and the rest of the form out of the panel
+              className="max-h-[55vh] min-h-48"
               aria-label="the agent's instructions"
               onChange={(e) => dispatch({ type: "set-prompt", id: node.prompt, body: e.target.value })}
             />
@@ -337,7 +342,7 @@ export function StepFields({ draft, id, dispatch, onRemoved, onRenamed }: {
             <span className="field-hint">Insert a field:</span>
             {spec.fields.map((f) => (
               <Button
-                key={f.key} variant="outline" size="sm"
+                key={f.key} variant="outline" size="sm" className="font-mono font-normal"
                 // on its OWN line: appending straight onto the body ran the reference into
                 // the end of whatever sentence was last typed, which reads as prose and
                 // renders as prose
@@ -349,7 +354,7 @@ export function StepFields({ draft, id, dispatch, onRemoved, onRenamed }: {
           </div>
           <div className="field-hint">
             This step will be given:{" "}
-            {given.length ? given.map((k) => <Badge key={k} variant="outline" className="mr-1 font-mono">{k}</Badge>) : "nothing — it reads no fields."}
+            {given.length ? given.map((k) => <Badge key={k} variant="id" className="mr-1">{k}</Badge>) : "nothing — it reads no fields."}
             {" "}Whatever the instructions mention is what it gets; there is nothing else to declare.
           </div>
           <Produces
@@ -360,7 +365,7 @@ export function StepFields({ draft, id, dispatch, onRemoved, onRenamed }: {
             spec={spec} writes={node.writes} body={body}
             onSay={(key, choices) => dispatch({ type: "set-prompt", id: node.prompt, body: sayChoices(body, key, choices) })}
           />
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+          <div className="grid grid-cols-1 gap-3">
             <Label>
               Retries before it parks
               <Input
@@ -382,7 +387,7 @@ export function StepFields({ draft, id, dispatch, onRemoved, onRenamed }: {
             onChange={(e) => set({ ...node, readOnly: e.target.checked ? true : undefined })}
           />
           <details>
-            <summary className="cursor-pointer text-sm text-muted-foreground">Which model runs this step</summary>
+            <summary className="min-h-6 cursor-pointer rounded-[var(--radius-xs)] py-0.5 text-sm text-muted-foreground">Which model runs this step</summary>
             <div className="flex flex-col gap-2 pt-2">
               <ConfigFields value={node.config ?? {}} onChange={(config) => set({ ...node, config: parseAgentConfig(config) })} />
             </div>
@@ -418,14 +423,14 @@ export function StepFields({ draft, id, dispatch, onRemoved, onRenamed }: {
             {builtin?.reads && (
               <div className="field-hint">
                 It works from{" "}
-                {builtin.reads.map((k) => <Badge key={k} variant="outline" className="mr-1 font-mono">{k}</Badge>)}
+                {builtin.reads.map((k) => <Badge key={k} variant="id" className="mr-1">{k}</Badge>)}
                 {" "}— the built-in reads those by name, so the graph has to produce them before this step runs.
               </div>
             )}
             {!builtin && (
               <Label>
                 The script
-                <Textarea rows={5} spellCheck={false} aria-label="the shell script" value={node.run} onChange={(e) => set({ ...node, run: e.target.value })} />
+                <Textarea mono rows={6} spellCheck={false} className="max-h-[40vh]" aria-label="the shell script" value={node.run} onChange={(e) => set({ ...node, run: e.target.value })} />
               </Label>
             )}
             <Produces
@@ -436,7 +441,7 @@ export function StepFields({ draft, id, dispatch, onRemoved, onRenamed }: {
                 ? "These are the only facts this built-in emits."
                 : "Your script's LAST line of output must be a single JSON object with exactly these keys, or the attempt fails."}
             />
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            <div className="grid grid-cols-2 gap-3">
               <Label>
                 Give up after (seconds)
                 <Input
@@ -544,19 +549,48 @@ export function StepFields({ draft, id, dispatch, onRemoved, onRenamed }: {
           </Label>
         </>
       )}
-      <div className="actions">
-        <Button
-          variant="destructive" size="sm"
-          onClick={() => (destroysText ? setConfirming(true) : remove())}
-        >
-          <Trash2 />Remove this step
-        </Button>
-      </div>
+      {removeControl && <div className="flex"><RemoveStep draft={draft} id={id} dispatch={dispatch} onRemoved={onRemoved} /></div>}
+    </div>
+  );
+}
+
+/**
+ * "Remove this step" — the only way to destroy one (the canvas has no delete key), and so the
+ * only control that has to say what goes. It asks first in exactly the case where the answer
+ * cannot be got back: an agent step whose instructions have been written and whose prompt file
+ * no other step shares. `onRemoved` is how the surface that OWNS the selection learns the step
+ * is gone — the panel cannot just stop rendering, because the canvas still has it selected.
+ */
+export function RemoveStep({ draft, id, dispatch, onRemoved }: {
+  draft: Draft;
+  id: string;
+  dispatch: (a: DraftAction) => void;
+  onRemoved?: () => void;
+}) {
+  const [confirming, setConfirming] = useState(false);
+  const node = draft.spec.nodes.find((n) => n.id === id);
+  if (!node) return null;
+  const body = node.kind === "agent" ? draft.prompts[node.prompt] ?? "" : "";
+  const remove = () => { dispatch({ type: "remove-step", id }); onRemoved?.(); };
+  // exactly when the removal destroys text nothing can give back: an agent step with
+  // instructions written, filed under a prompt id no other step is also using
+  const destroysText =
+    node.kind === "agent" &&
+    body.trim() !== "" &&
+    draft.spec.nodes.filter((n) => n.kind === "agent" && n.prompt === node.prompt).length === 1;
+  return (
+    <>
+      <Button
+        variant="destructive-outline" size="sm"
+        onClick={() => (destroysText ? setConfirming(true) : remove())}
+      >
+        <Trash2 />Remove this step
+      </Button>
       <AlertDialog
         open={confirming}
         onClose={() => setConfirming(false)}
         onConfirm={() => { setConfirming(false); remove(); }}
-        title={`Remove ${title.trim() || id}?`}
+        title={`Remove ${(node.title ?? "").trim() || id}?`}
         description={
           <>
             This takes the step, every route into and out of it, and the instructions you wrote
@@ -565,6 +599,6 @@ export function StepFields({ draft, id, dispatch, onRemoved, onRenamed }: {
         }
         confirmLabel="Remove the step and its instructions"
       />
-    </div>
+    </>
   );
 }

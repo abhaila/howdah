@@ -51,6 +51,10 @@ export interface RowProps {
   /** a disclosure row: says whether the thing it opens is open (activity's tool beats) */
   "aria-expanded"?: boolean;
   "data-testid"?: string;
+  /** HOW-68: this row's key in a keyboard-navigated list (lib/list-nav.ts moves J/K through them) */
+  "data-nav-row"?: string;
+  /** a link row that IS the current place: the open prompt in the prompts list */
+  "aria-current"?: "page" | "true";
 }
 
 export const Row = forwardRef<HTMLElement, RowProps>(function Row(

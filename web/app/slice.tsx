@@ -31,6 +31,16 @@
  * an AlertDialog and every decision reports through a toast. `post`, `OpGlyph`, `TierGlyph`
  * and `DriftGlyph` are untouched — the refused-vs-failed distinction and "shape before
  * colour" are the two things this file exists to protect.
+ *
+ * HOW-68 (DESIGN.md "Asking the operator something"): the card's border is amber ONLY while it
+ * is the thing waiting on you — a round `awaiting` a decision. A step parked for another
+ * reason is answered in its Ask pane, so the card there says so in words and stays neutral:
+ * two amber boxes for one ask is the alarm said twice. Inside the card everything is rows:
+ * the section labels are `SectionLabel` (no uppercase), ids are `Truncate` (the two raw
+ * ellipses, `.gr-id` and `.dv-key`, are gone), a pinned comment is a row with a glyph rather
+ * than a 2px stripe down its left edge, and every control is at least 24px. The exported API
+ * (`ApprovalCard`, `DriftView`, `MapProgressLine`, `slicePanes`, `SlicePane`, the glyphs) is
+ * unchanged, so the card can be drawn in the conversation as it is drawn here.
  */
 import { useRef, useState } from "react";
 import { submitOnEnter } from "@/lib/keys";
@@ -41,10 +51,22 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Row } from "@/components/ui/row";
 import { Tooltip } from "@/components/ui/tooltip";
+import { Truncate } from "@/components/ui/truncate";
+import { KeyValue } from "@/components/ui/key-value";
+import { SectionLabel } from "@/components/ui/section-label";
+import { CodeBlock } from "@/components/ui/markdown";
+import { MessageSquare } from "lucide-react";
 import { AlertDialog } from "@/components/ui/dialog";
 import { useToast } from "@/components/ui/toast";
 // the ONE "14:02" reading, shared with the decision routes' refusals (dependency-free leaf)
 import { clockTime as clock } from "../../core/clock-time";
+
+/** a path that may break after each slash, so it wraps between segments rather than mid-name */
+const breakable = (path: string): React.ReactNode[] => path.split("/").flatMap((seg, i, all) => (i < all.length - 1 ? [`${seg}/`, <wbr key={i} />] : [seg]));
+/** a quiet line of explanation */
+const NOTE = "m-0 text-sm leading-[1.5] text-muted-foreground";
+/** what an action just did, or why it cannot be done */
+const STATE = "text-sm text-muted-foreground [overflow-wrap:anywhere]";
 
 // ---- formatting ---------------------------------------------------------------------
 
@@ -65,7 +87,7 @@ const OP_PATH: Record<Op, string> = {
 
 export function OpGlyph({ op }: { op: Op }) {
   return (
-    <svg width="11" height="11" viewBox="0 0 16 16" className="op-glyph" data-op={op} role="img" aria-label={`op ${op}`}>
+    <svg width="12" height="12" viewBox="0 0 16 16" className="op-glyph" data-op={op} role="img" aria-label={`op ${op}`}>
       <title>{op}</title>
       <path d={OP_PATH[op]} {...STROKE} />
     </svg>
@@ -156,7 +178,7 @@ export function SlicePane({ pane, runId, slice, row, onChanged }: {
   if (pane === "approval") return <ApprovalCard runId={runId} slice={slice} onChanged={onChanged} />;
   if (pane === "drift") {
     const drift = slice.drifts.findLast((d) => at(d, row));
-    return drift ? <DriftView drift={drift} /> : <div className="pd-note">no drift report for this step</div>;
+    return drift ? <DriftView drift={drift} /> : <p className={NOTE}>No drift report for this step.</p>;
   }
   const progress = slice.mapping && at(slice.mapping, row) ? slice.mapping : null;
   const snap = slice.maps.findLast((m) => at(m, row)) ?? null;
@@ -170,8 +192,8 @@ export function MapProgressLine({ progress }: { progress: SliceMapProgress }) {
   const pct = progress.total > 0 ? Math.min(100, (progress.done / progress.total) * 100) : 0;
   return (
     <span className="map-progress" data-testid="map-progress">
-      <span className="m">mapping files {progress.done}/{progress.total}</span>
-      {progress.skipped > 0 && <span className="m mp-skipped"> · {progress.skipped} skipped</span>}
+      <span className="tabular-nums">mapping files {progress.done}/{progress.total}</span>
+      {progress.skipped > 0 && <span className="tabular-nums text-faint"> · {progress.skipped} skipped</span>}
       <span className="mp-track"><span className="mp-fill" style={{ width: `${pct}%` }} /></span>
     </span>
   );
@@ -179,21 +201,23 @@ export function MapProgressLine({ progress }: { progress: SliceMapProgress }) {
 
 function MapPane({ progress, snapshot }: { progress: SliceMapProgress | null; snapshot: SliceMapSnapshot | null }) {
   return (
-    <div className="map-pane">
+    <div className="map-pane flex flex-col gap-2">
       {progress && <MapProgressLine progress={progress} />}
       {snapshot && (
         <>
-          <h2 className="rh">Snapshot</h2>
-          <div className="kv"><span className="k">commit</span><Tooltip content={snapshot.commit ?? ""}><span className="v m">{snapshot.stamp}</span></Tooltip></div>
-          <div className="kv"><span className="k">manifest</span><Tooltip content={snapshot.manifest_hash}><span className="v m">{snapshot.manifest_hash.slice(0, 12)}</span></Tooltip></div>
-          <div className="kv"><span className="k">files</span><span className="v m">{snapshot.files}</span></div>
-          <div className="kv"><span className="k">skipped</span><span className="v m">{snapshot.skipped}</span></div>
-          <div className="kv"><span className="k">not checked</span><span className="v m">{snapshot.not_checked}</span></div>
-          <div className="kv"><span className="k">unparsed regions</span><span className="v m">{snapshot.unparsed}</span></div>
-          <div className="kv"><span className="k">tiers run</span><span className="v m">{snapshot.tiers_run.join(", ") || "none"}</span></div>
+          <SectionLabel as="h3">Snapshot</SectionLabel>
+          <KeyValue labelWidth={128} items={[
+            { label: "Commit", value: <Tooltip content={snapshot.commit ?? ""}><span>{snapshot.stamp}</span></Tooltip>, mono: true },
+            { label: "Manifest", value: <Tooltip content={snapshot.manifest_hash}><span>{snapshot.manifest_hash.slice(0, 12)}</span></Tooltip>, mono: true },
+            { label: "Files", value: String(snapshot.files) },
+            { label: "Skipped", value: String(snapshot.skipped) },
+            { label: "Not checked", value: String(snapshot.not_checked) },
+            { label: "Unparsed regions", value: String(snapshot.unparsed) },
+            { label: "Tiers run", value: snapshot.tiers_run.join(", ") || "none" },
+          ]} />
         </>
       )}
-      {!progress && !snapshot && <div className="pd-note">no extraction recorded for this step</div>}
+      {!progress && !snapshot && <p className={NOTE}>No extraction recorded for this step.</p>}
     </div>
   );
 }
@@ -285,7 +309,7 @@ export function ApprovalCard({ runId, slice, onChanged }: { runId: string; slice
   const [confirm, setConfirm] = useState<"approve" | "feedback" | null>(null);
   const { toast } = useToast();
 
-  if (!p || !slice.approval) return <div className="pd-note">nothing has been proposed yet</div>;
+  if (!p || !slice.approval) return <p className={NOTE}>Nothing has been proposed yet.</p>;
   const decision = slice.decision;
   const block = decisionBlock(decision);
   // both need the human now: a decision (awaiting) or a reply in the Ask pane (parked-other)
@@ -343,7 +367,7 @@ export function ApprovalCard({ runId, slice, onChanged }: { runId: string; slice
             : "Proposed design"}
         </h3>
         {/* "current": an older visit's panel shows today's round, never that visit's state */}
-        <span className="m ap-round">current round {p.round} · proposal #{p.proposal_id}</span>
+        <span className="ap-round">current round {p.round} · proposal #{p.proposal_id}</span>
       </div>
       {decision && <div className="ap-explain" data-testid="ap-explain">{explain(decision, slice.approval)}</div>}
 
@@ -357,11 +381,11 @@ export function ApprovalCard({ runId, slice, onChanged }: { runId: string; slice
           </div>
           {p.traces.length > 0 && (
             <div className="ap-traces">
-              <h2 className="rh">Traces <span className="ap-aside">the proposer's scenarios — drift checks them after the build</span></h2>
+              <SectionLabel as="h4" className="mt-3">Traces <span className="font-normal text-faint">the proposer's scenarios — drift checks them after the build</span></SectionLabel>
               {p.traces.map((t, i) => (
                 <div key={i} className="ap-trace">
-                  <span className="ap-trace-name">{t.scenario}</span>
-                  <span className="m ap-trace-steps">{t.steps.join(" → ")}</span>
+                  <span className="text-sm">{t.scenario}</span>
+                  <span className="ap-trace-steps font-mono text-code text-muted-foreground [overflow-wrap:anywhere]">{t.steps.join(" → ")}</span>
                 </div>
               ))}
             </div>
@@ -371,19 +395,19 @@ export function ApprovalCard({ runId, slice, onChanged }: { runId: string; slice
         <SlicePlanView plan={p.plan} slice={slice} runId={runId} canPin={block === null} proposalId={p.proposal_id} onChanged={onChanged} />
       ) : (
         <>
-          <div className="pd-note">this proposal is not a ghost set — shown as proposed</div>
-          <pre className="sd-raw">{JSON.stringify(p.raw, null, 2)}</pre>
+          <p className={NOTE}>This proposal is not a ghost set — shown as proposed.</p>
+          <CodeBlock wrap label="The proposal as proposed">{JSON.stringify(p.raw, null, 2)}</CodeBlock>
         </>
       )}
 
       {slice.orphaned.length > 0 && (
         <div className="ap-orphans" data-testid="orphaned">
-          <h2 className="rh">Orphaned (no longer in this proposal)</h2>
+          <SectionLabel as="h4" className="mt-3">Orphaned (no longer in this proposal)</SectionLabel>
           {slice.orphaned.map((c) => <CommentLine key={c.id} c={c} showKey />)}
         </div>
       )}
 
-      <div className="actions ap-actions">
+      <div className="ap-actions">
         <Tooltip content={feedbackBlock ?? ""}>
           <Button size="sm" variant="outline" disabled={busy || decidedHere || finished || feedbackBlock !== null} onClick={() => setConfirm("feedback")}>
             {busy && act.what === "feedback" ? "Sending…" : "Send feedback"}
@@ -395,12 +419,12 @@ export function ApprovalCard({ runId, slice, onChanged }: { runId: string; slice
           </Button>
         </Tooltip>
         <Button size="sm" variant="ghost" disabled={busy || finished} aria-expanded={redesignOpen} onClick={() => setRedesignOpen(!redesignOpen)}>Redesign</Button>
-        {block && <span className="send-state ap-block" data-testid="ap-block">{block}</span>}
-        {!block && feedbackBlock && <span className="send-state">{feedbackBlock} to send feedback</span>}
+        {block && <span className={STATE} data-testid="ap-block">{block}</span>}
+        {!block && feedbackBlock && <span className={STATE}>{feedbackBlock} to send feedback</span>}
       </div>
 
       {redesignOpen && (
-        <div className="ap-redesign">
+        <div className="mt-3 flex flex-col gap-2">
           <Textarea
             autoFocus
             aria-label="redesign message"
@@ -409,7 +433,7 @@ export function ApprovalCard({ runId, slice, onChanged }: { runId: string; slice
             onChange={(e) => setRedesignText(e.target.value)}
             onKeyDown={submitOnEnter(() => void requestRedesign(), { enabled: !busy && redesignText.trim() !== "" })}
           />
-          <div className="actions">
+          <div className="flex gap-2">
             <Button
               size="sm"
               disabled={busy || redesignText.trim() === ""}
@@ -422,12 +446,12 @@ export function ApprovalCard({ runId, slice, onChanged }: { runId: string; slice
         </div>
       )}
 
-      {decidedHere && act.state === "done" && <div className="send-state" role="status">{act.text}</div>}
+      {decidedHere && act.state === "done" && <div className={`mt-2 ${STATE}`} role="status">{act.text}</div>}
       {(act.state === "refused" || act.state === "error") && (
-        <div className="send-state ap-refusal" role="alert">
+        <div className="mt-2 text-sm text-foreground [overflow-wrap:anywhere]" role="alert">
           {/* kept across the reload a refusal triggers (it explains why the round moved), but
               named by its round once a newer one is on screen */}
-          {act.round !== p.proposal_id && <span className="m">proposal #{act.round}: </span>}
+          {act.round !== p.proposal_id && <span>proposal #{act.round}: </span>}
           {act.text}
         </div>
       )}
@@ -455,10 +479,10 @@ export function ApprovalCard({ runId, slice, onChanged }: { runId: string; slice
 
       {slice.rounds.length > 1 && (
         <div className="ap-rounds">
-          <h2 className="rh">Earlier rounds</h2>
+          <SectionLabel as="h4" className="mt-3">Earlier rounds</SectionLabel>
           {slice.rounds.filter((r) => r.proposal_id !== p.proposal_id).map((r) => (
             <div key={r.proposal_id} className="ap-round-row">
-              <span className="m">round {r.round} · #{r.proposal_id}</span>
+              <span className="tabular-nums text-foreground">round {r.round} · #{r.proposal_id}</span>
               <span>
                 {r.outcome === "approved" ? `approved at ${clock(r.decided_at!)}`
                   : r.outcome === "feedback" ? `feedback sent at ${clock(r.decided_at!)}`
@@ -475,10 +499,10 @@ export function ApprovalCard({ runId, slice, onChanged }: { runId: string; slice
 }
 
 function TierSummary({ proposal }: { proposal: NonNullable<SliceView["proposal"]> }) {
-  if (!proposal.tiers_known) return <div className="pd-note ap-tiers">tiers unknown — the base snapshot could not be read</div>;
+  if (!proposal.tiers_known) return <p className={NOTE}>Tiers unknown — the base snapshot could not be read.</p>;
   const known = Object.entries(proposal.tier_counts);
   return (
-    <div className="pd-note ap-tiers">
+    <div className="ap-tiers">
       {known.map(([t, n]) => <span key={t} className="ap-tier"><TierGlyph tier={t as Tier} /> {t} {n}</span>)}
       {proposal.untiered > 0 && <span className="ap-tier">{proposal.untiered} new (no tier until built)</span>}
     </div>
@@ -493,7 +517,7 @@ function GhostGroupView({ group, slice, runId, canPin, proposalId, onChanged }: 
     <section className="ghost-group" data-block={group.block}>
       {group.row
         ? <GhostRowView row={group.row} {...shared} />
-        : <div className="ghost-row ghost-context"><span className="m gr-id">{group.block || "other edges"}</span>{group.block && <span className="gr-kind">existing block</span>}</div>}
+        : <div className="ghost-row"><Truncate mono={!!group.block} className="gr-id-wrap text-sm text-muted-foreground">{group.block || "Other edges"}</Truncate>{group.block && <span className="gr-kind">existing block</span>}</div>}
       <div className="ghost-children">
         {group.entities.map((r) => <GhostRowView key={r.id} row={r} {...shared} />)}
         {group.edges.map((r) => <GhostRowView key={r.id} row={r} {...shared} />)}
@@ -531,7 +555,7 @@ function usePinAffordance(entityId: string, runId: string, proposalId: number, c
 
   return {
     button: canPin ? (
-      <Button variant="ghost" size="sm" className="gr-pin" aria-expanded={open} aria-label={`pin a comment on ${entityId}`} onClick={() => setOpen(!open)}>pin</Button>
+      <Button variant="ghost" size="sm" className="gr-pin" aria-expanded={open} aria-label={`pin a comment on ${entityId}`} onClick={() => setOpen(!open)}>Comment</Button>
     ) : null,
     form: open ? (
       <div className="gr-pin-form">
@@ -545,7 +569,7 @@ function usePinAffordance(entityId: string, runId: string, proposalId: number, c
         />
         <Button size="sm" disabled={state.sending || text.trim() === ""} onClick={() => void pin()}>{state.sending ? "Pinning…" : "Pin"}</Button>
         <Button size="sm" variant="ghost" onClick={() => setOpen(false)}>Cancel</Button>
-        {state.error && <div className="send-state ap-refusal" role="alert">{state.error}</div>}
+        {state.error && <div className="basis-full text-sm text-foreground [overflow-wrap:anywhere]" role="alert">{state.error}</div>}
       </div>
     ) : null,
   };
@@ -562,18 +586,16 @@ function GhostRowView({ row, slice, runId, canPin, proposalId, onChanged }: {
       <div className="ghost-row">
         <OpGlyph op={row.op} />
         <span className="gr-tier">{row.tier && <TierGlyph tier={row.tier} />}</span>
-        <Tooltip content={row.id} className="gr-id-wrap">
-          <span className="m gr-id">
-            {row.edge ? <>{row.edge.from} <span className="gr-arrow">→</span> {row.edge.to}</> : row.id}
-          </span>
-        </Tooltip>
+        <Truncate mono text={row.id} className="gr-id gr-id-wrap text-sm text-foreground">
+          {row.edge ? <>{row.edge.from} <span className="text-faint">→</span> {row.edge.to}</> : row.id}
+        </Truncate>
         <span className="gr-kind">{row.edge ? `${row.edge.kind} edge` : row.subject}</span>
         {button}
       </div>
       {(row.expected_file || row.prose) && (
         <div className="gr-sub">
-          {row.expected_file && <span className="m gr-file">{row.expected_file}</span>}
-          {row.prose && <span className="gr-prose">{row.prose} <span className="gr-unverified">prose, not verified</span></span>}
+          {row.expected_file && <span className="font-mono text-code text-muted-foreground [overflow-wrap:anywhere]">{breakable(row.expected_file)}</span>}
+          {row.prose && <span className="gr-prose">{row.prose} <span className="text-faint">(prose, not verified)</span></span>}
         </div>
       )}
       {comments.map((c) => <CommentLine key={c.id} c={c} current={c.proposal_id === proposalId} />)}
@@ -595,7 +617,7 @@ function SlicePlanView({ plan, slice, runId, canPin, proposalId, onChanged }: {
 }) {
   return (
     <div className="plan-list">
-      {plan.feature && <div className="pd-note plan-feature">{plan.feature}</div>}
+      {plan.feature && <p className={`plan-feature ${NOTE}`}>{plan.feature}</p>}
       {plan.slices.map((s, i) => (
         <SliceRowView key={s.id} n={i + 1} s={s} slice={slice} runId={runId} canPin={canPin} proposalId={proposalId} onChanged={onChanged} />
       ))}
@@ -615,18 +637,18 @@ function SliceRowView({ n, s, slice, runId, canPin, proposalId, onChanged }: {
   return (
     <section className="ghost-item plan-slice" data-id={s.id}>
       <div className="ghost-row">
-        <span className="m plan-n">{n}</span>
-        <Tooltip content={s.id} className="gr-id-wrap"><span className="gr-id">{s.title || s.id}</span></Tooltip>
-        {s.workspace && <span className="m gr-kind">{s.workspace}</span>}
+        <span className="plan-n">{n}</span>
+        <Truncate className="gr-id gr-id-wrap text-sm font-medium text-foreground">{s.title || s.id}</Truncate>
+        {s.workspace && <span className="gr-kind font-mono">{s.workspace}</span>}
         {button}
       </div>
       <div className="gr-sub plan-sub">
-        <span className="m gr-file">{s.id}</span>
+        <span className="font-mono text-code text-muted-foreground [overflow-wrap:anywhere]">{s.id}</span>
         <span className="gr-prose">{s.goal}</span>
       </div>
       {s.depends_on.length > 0 && (
         <div className="gr-sub plan-sub">
-          <span className="plan-deps">after {s.depends_on.map((d) => `${d.slice} · ${d.until}`).join(", ")} <span className="gr-unverified">launched now, waits until then</span></span>
+          <span className="plan-deps">after <span className="font-mono text-code">{s.depends_on.map((d) => `${d.slice} · ${d.until}`).join(", ")}</span> <span className="text-faint">(launched now, waits until then)</span></span>
         </div>
       )}
       {comments.map((c) => <CommentLine key={c.id} c={c} current={c.proposal_id === proposalId} />)}
@@ -638,8 +660,8 @@ function SliceRowView({ n, s, slice, runId, canPin, proposalId, onChanged }: {
 function PlanAside({ title, items }: { title: string; items: string[] }) {
   return (
     <div className="ap-traces">
-      <h2 className="rh">{title}</h2>
-      {items.map((t, i) => <div key={i} className="ap-trace"><span className="ap-trace-name">{t}</span></div>)}
+      <SectionLabel as="h4" className="mt-3">{title}</SectionLabel>
+      {items.map((t, i) => <div key={i} className="ap-trace"><span className="text-sm">{t}</span></div>)}
     </div>
   );
 }
@@ -647,9 +669,10 @@ function PlanAside({ title, items }: { title: string; items: string[] }) {
 function CommentLine({ c, current = true, showKey = false }: { c: SliceComment; current?: boolean; showKey?: boolean }) {
   return (
     <div className="ap-comment" data-comment={c.id}>
-      {showKey && <span className="m ap-comment-key">{c.entity_id}</span>}
-      <span className="ap-comment-text">{c.text}</span>
-      <span className="m ap-comment-meta">
+      <MessageSquare size={12} aria-label="your comment" className="mt-1 shrink-0 text-[var(--operator)]" />
+      {showKey && <span className="ap-comment-key shrink-0 font-mono text-code text-muted-foreground">{c.entity_id}</span>}
+      <span className="ap-comment-text min-w-0 flex-1 text-sm text-foreground [overflow-wrap:anywhere]">{c.text}</span>
+      <span className="shrink-0 whitespace-nowrap text-xs tabular-nums text-muted-foreground">
         {current ? "" : `round ${c.round} · `}{clock(c.at)}{c.sent ? " · sent" : ""}
       </span>
     </div>
@@ -664,51 +687,51 @@ export function DriftView({ drift }: { drift: SliceDrift }) {
   return (
     <div className="drift-view">
       <div className="dv-head">
-        <span className="dv-title">Drift</span>
-        <Tooltip content={drift.commit ?? ""}><span className="m dv-stamp" data-testid="drift-stamp">checked at {drift.stamp}</span></Tooltip>
-        {drift.base_commit && <Tooltip content={drift.base_commit}><span className="m dv-base">base {shortSha(drift.base_commit)}</span></Tooltip>}
+        <h3 className="m-0 text-md font-semibold">Drift</h3>
+        <Tooltip content={drift.commit ?? ""}><span className="text-xs text-muted-foreground" data-testid="drift-stamp">checked at <span className="font-mono">{drift.stamp}</span></span></Tooltip>
+        {drift.base_commit && <Tooltip content={drift.base_commit} className="ml-auto"><span className="text-xs text-muted-foreground">base <span className="font-mono">{shortSha(drift.base_commit)}</span></span></Tooltip>}
       </div>
       {drift.dirty && (
-        <div className="pd-note">The checked snapshot had uncommitted changes, so nothing in it is reported verified — commit them and drift can verify against a commit.</div>
+        <p className={NOTE}>The checked snapshot had uncommitted changes, so nothing in it is reported verified — commit them and drift can verify against a commit.</p>
       )}
       {drift.extractor_mismatch && (
-        <div className="pd-note">
-          Base and after were extracted by different map versions (<span className="m">{drift.extractor_mismatch.base}</span> vs{" "}
-          <span className="m">{drift.extractor_mismatch.after}</span>), so every ghost is not checked.
-        </div>
+        <p className={NOTE}>
+          Base and after were extracted by different map versions (<span className="font-mono">{drift.extractor_mismatch.base}</span> vs{" "}
+          <span className="font-mono">{drift.extractor_mismatch.after}</span>), so every ghost is not checked.
+        </p>
       )}
-      {drift.base_reextracted && <div className="pd-note">The base was re-extracted at its commit with the current map version before comparing.</div>}
+      {drift.base_reextracted && <p className={NOTE}>The base was re-extracted at its commit with the current map version before comparing.</p>}
       {drift.outdated && (
-        <div className="pd-note">HEAD is now <span className="m">{shortSha(drift.head_now)}</span> — this check does not cover the latest code.</div>
+        <p className={NOTE}>HEAD is now <span className="font-mono">{shortSha(drift.head_now)}</span> — this check does not cover the latest code.</p>
       )}
-      {drift.groups.length === 0 && <div className="pd-note">nothing to check — the approved design names nothing drift can see</div>}
+      {drift.groups.length === 0 && <p className={NOTE}>Nothing to check — the approved design names nothing drift can see.</p>}
       {drift.groups.map((g) => (
         <section key={g.outcome} className="dv-group" data-outcome={g.outcome}>
-          <h2 className="rh dv-group-head">
+          <SectionLabel as="h4" className="mt-3 items-center">
             <DriftGlyph outcome={g.outcome} problem={g.problem} /> {OUTCOME_LABEL[g.outcome]}{" "}
             <Badge variant={g.problem ? "destructive" : "default"} className="dv-count">{g.count}</Badge>
-          </h2>
+          </SectionLabel>
           {g.items.map((it, i) => (
             <div key={`${it.key}#${i}`} className="dv-item" data-outcome={it.outcome}>
               {/* a drift row is reachable by keyboard: `as="div"` only where it does nothing */}
               <Row as="div" className="dv-row">
                 <DriftGlyph outcome={it.outcome} problem={g.problem} />
-                <Tooltip content={it.key} className="dv-key-wrap"><span className="m dv-key">{it.key}</span></Tooltip>
-                <span className="dv-kind">{it.kind}{it.op ? ` · ${it.op}` : ""}</span>
+                <Truncate mono middle={14} className="dv-key-wrap text-sm text-foreground">{it.key}</Truncate>
+                <span className="ml-auto shrink-0 whitespace-nowrap text-xs text-muted-foreground">{it.kind}{it.op ? ` · ${it.op}` : ""}</span>
               </Row>
               {(it.reason || it.evidence) && (
                 <div className="dv-sub">
                   {it.reason && <span className="dv-reason">{it.reason}</span>}
-                  {it.evidence && <span className="m dv-evidence">{it.evidence}</span>}
+                  {it.evidence && <span className="dv-evidence font-mono text-code text-muted-foreground [overflow-wrap:anywhere]">{breakable(it.evidence)}</span>}
                 </div>
               )}
             </div>
           ))}
-          {g.count > g.items.length && <div className="pd-note">{g.count - g.items.length} more not listed</div>}
+          {g.count > g.items.length && <p className={NOTE}>{g.count - g.items.length} more not listed</p>}
         </section>
       ))}
       {drift.truncated > 0 && (
-        <div className="pd-note" data-testid="drift-truncated">{drift.truncated} item{drift.truncated === 1 ? "" : "s"} not listed ({listed} shown); the counts above cover every item</div>
+        <p className={NOTE} data-testid="drift-truncated">{drift.truncated} item{drift.truncated === 1 ? "" : "s"} not listed ({listed} shown); the counts above cover every item</p>
       )}
     </div>
   );

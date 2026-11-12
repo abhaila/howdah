@@ -15,8 +15,15 @@
  * It is two markers and a split, not a markdown parser. Anything else in the text — including
  * an unmatched marker — is passed through as the characters that were typed, because a
  * sentence that renders half-swallowed is worse than one with a stray asterisk in it.
+ *
+ * HOW-68: `Problem` is the one way a problem is drawn in the panel — a glyph and the words.
+ * What BLOCKS is the failure red with the alert glyph; advice is muted with a lightbulb, so it
+ * is visibly the quieter of the two and neither depends on colour to be told apart. Amber is
+ * not here at all: it means a RUN is waiting on you, and a draft that will not save is not that.
  */
 import type { ReactNode } from "react";
+import { CircleAlert, Lightbulb } from "lucide-react";
+import { isBlocking, type SpecProblem } from "../../../core/graph-spec";
 
 /** `**x**` → bold, `` `x` `` → code, in one pass, left to right. */
 export function problemProse(message: string): ReactNode[] {
@@ -39,4 +46,23 @@ export function problemProse(message: string): ReactNode[] {
 /** The message of one problem, in the class its severity earns. */
 export function ProblemText({ message }: { message: string }) {
   return <>{problemProse(message)}</>;
+}
+
+/** the glyph a problem's severity earns — shared with the rows that are buttons (properties.tsx) */
+export function ProblemGlyph({ problem }: { problem: SpecProblem }) {
+  return isBlocking(problem)
+    ? <CircleAlert role="img" aria-label="Blocks the save:" className="mt-0.5 size-3.5 shrink-0 text-destructive" />
+    : <Lightbulb role="img" aria-label="Worth a second look:" className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />;
+}
+
+/** One problem in the panel: its glyph, then its sentence in the class its severity earns. */
+export function Problem({ problem }: { problem: SpecProblem }) {
+  return (
+    <div className="flex items-start gap-2">
+      <ProblemGlyph problem={problem} />
+      <div className={`${isBlocking(problem) ? "field-error" : "field-advice"} min-w-0`}>
+        <ProblemText message={problem.message} />
+      </div>
+    </div>
+  );
 }

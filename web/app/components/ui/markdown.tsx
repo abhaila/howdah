@@ -20,9 +20,70 @@
  * is drawn as its text.
  *
  * `parseMarkdown` is pure and exported, so the grammar is tested without a DOM.
+ *
+ * HOW-68 (DESIGN.md Type): prose is 14px/1.5 with a 72ch measure where the container allows;
+ * a code block is DM Mono 12px in its OWN horizontal scroller and a table scrolls inside
+ * itself, so one long line can no longer widen — or be clipped by — the pane around it. Both
+ * scrollers are `SideScroll`: a focus stop with a name only while they actually overflow, so a
+ * keyboard can reach what is off to the right and a document of short snippets adds no stops.
+ * `CodeBlock` is the same block for callers that hold raw text (a tool's output, a stored
+ * event, a context value) rather than markdown.
  */
-import { memo, useMemo } from "react";
+import { memo, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
+
+/** a box that scrolls sideways, reachable by keyboard exactly when there is something to reach */
+function SideScroll({ as: Tag, label, className, children, lang }: {
+  as: "pre" | "div";
+  label: string;
+  className?: string;
+  children: React.ReactNode;
+  lang?: string;
+}) {
+  const ref = useRef<HTMLElement | null>(null);
+  const [overflows, setOverflows] = useState(false);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const measure = () => setOverflows(el.scrollWidth > el.clientWidth + 1 || el.scrollHeight > el.clientHeight + 1);
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [children]);
+  return (
+    <Tag
+      ref={ref as React.Ref<HTMLPreElement & HTMLDivElement>}
+      className={className}
+      data-lang={lang}
+      role={overflows ? "region" : undefined}
+      aria-label={overflows ? label : undefined}
+      tabIndex={overflows ? 0 : undefined}
+    >
+      {children}
+    </Tag>
+  );
+}
+
+/**
+ * Raw machine text as a block: DM Mono 12px on the inset ground. `wrap` breaks long lines
+ * (JSON, a tool's output — read top to bottom); without it lines keep their shape and the
+ * block scrolls sideways (code). `clamp` caps the height and scrolls inside.
+ */
+export function CodeBlock({ children, wrap = false, clamp = false, label = "Code", className }: {
+  children: string;
+  wrap?: boolean;
+  clamp?: boolean;
+  label?: string;
+  className?: string;
+}) {
+  return (
+    <SideScroll as="pre" label={label} className={cn("code-block", wrap && "wrap", clamp && "clamp", className)}>
+      {children}
+    </SideScroll>
+  );
+}
 
 export type Inline =
   | { t: "text"; v: string }
@@ -260,7 +321,7 @@ function renderBlocks(bs: Block[]): React.ReactNode[] {
         return <H key={i}>{renderInline(b.c)}</H>;
       }
       case "p": return <p key={i}>{renderInline(b.c)}</p>;
-      case "code": return <pre key={i} data-lang={b.lang || undefined}><code>{b.v}</code></pre>;
+      case "code": return <SideScroll key={i} as="pre" label="Code" lang={b.lang || undefined}><code>{b.v}</code></SideScroll>;
       case "quote": return <blockquote key={i}>{renderBlocks(b.c)}</blockquote>;
       case "hr": return <hr key={i} />;
       case "list": {
@@ -274,14 +335,14 @@ function renderBlocks(bs: Block[]): React.ReactNode[] {
       }
       case "table":
         return (
-          <div key={i} className="md-table">
+          <SideScroll key={i} as="div" label="Table" className="md-table">
             <table>
               <thead><tr>{b.head.map((c, j) => <th key={j} align={b.align[j] ?? undefined}>{renderInline(c)}</th>)}</tr></thead>
               <tbody>
                 {b.rows.map((r, k) => <tr key={k}>{b.head.map((_, j) => <td key={j} align={b.align[j] ?? undefined}>{renderInline(r[j] ?? [])}</td>)}</tr>)}
               </tbody>
             </table>
-          </div>
+          </SideScroll>
         );
     }
   });

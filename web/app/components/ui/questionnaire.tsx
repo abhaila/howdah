@@ -1,7 +1,7 @@
 /**
  * Questionnaire — shadcn/ui `questionnaire`, vendored from the `base-vega` style (HOW-27).
- * Provenance: `npx shadcn@latest add questionnaire`, kept VERBATIM — the only edit is this
- * header. The `cn-*` class names and the `IconPlaceholder` import in the registry's GitHub
+ * Provenance: `npx shadcn@latest add questionnaire`, kept verbatim apart from the three
+ * HOW-68 deviations listed at the end of this header. The `cn-*` class names and the `IconPlaceholder` import in the registry's GitHub
  * source are pre-substitution template artefacts; what `shadcn add` actually writes, and what
  * is below, is plain Tailwind against the standard colour contract that globals.css already
  * maps onto howdah's tokens.
@@ -35,6 +35,13 @@
  * `cn` comes from the `cn` package, not `@/lib/utils`, because that is what base-vega ships and
  * "a component pulled with `shadcn add` compiles unedited" is the contract `lib/utils.ts`
  * exists to keep. See message-scroller.tsx's header on the two merge helpers.
+ *
+ * HOW-68 deviations (DESIGN.md Components), each a class swap and nothing structural:
+ *   - FOCUS is the app's one ring — a 2px `--ring` outline at 2px offset — on a choice and on
+ *     the free-text field, instead of the registry's 3px translucent `ring-*` box-shadow.
+ *   - NO `shadow-xs` on the choice, its key cap or the field: only things that float cast a
+ *     shadow, and a choice is a row in a card.
+ *   - the key cap prints at 12px (`text-xs`), not 10px: nothing is under the 12px floor.
  */
 import * as React from "react"
 import { Questionnaire as QuestionnairePrimitive } from "@shadcn/react/questionnaire"
@@ -142,7 +149,7 @@ function QuestionnaireChoice({
     <QuestionnairePrimitive.Choice
       data-slot="questionnaire-choice"
       className={cn(
-        "group/questionnaire-choice relative flex min-h-11 cursor-pointer items-start gap-3 rounded-md border border-input bg-transparent px-4 py-3.5 text-start text-sm shadow-xs transition-colors outline-none select-none hover:bg-muted/50 has-[>input:focus-visible]:border-ring has-[>input:focus-visible]:ring-3 has-[>input:focus-visible]:ring-ring/50 data-invalid:border-destructive dark:bg-input/20 data-checked:border-primary/40 data-checked:bg-muted dark:data-checked:bg-muted",
+        "group/questionnaire-choice relative flex min-h-11 cursor-pointer items-start gap-3 rounded-md border border-input bg-transparent px-4 py-3.5 text-start text-sm transition-colors select-none hover:bg-muted/50 has-[>input:focus-visible]:outline-2 has-[>input:focus-visible]:outline-offset-2 has-[>input:focus-visible]:outline-[var(--ring)] data-invalid:border-destructive dark:bg-input/20 data-checked:border-primary/40 data-checked:bg-muted dark:data-checked:bg-muted",
         "data-disabled:pointer-events-none data-disabled:cursor-not-allowed data-disabled:opacity-50",
         className
       )}
@@ -171,7 +178,7 @@ function QuestionnaireChoice({
       </QuestionnairePrimitive.ChoiceLabel>
       <QuestionnairePrimitive.ChoiceShortcut
         data-slot="questionnaire-choice-shortcut"
-        className="pointer-events-none ms-auto hidden size-5 shrink-0 translate-y-[--spacing(0.45)] items-center justify-center rounded-md border border-input bg-background font-mono text-[0.625rem] leading-none font-medium text-muted-foreground shadow-xs group-has-data-[slot=questionnaire-choice-description]/questionnaire-choice:translate-y-0.5 group-data-[shortcut]/questionnaire-choice:inline-flex"
+        className="pointer-events-none ms-auto hidden size-5 shrink-0 translate-y-[--spacing(0.45)] items-center justify-center rounded-md border border-input bg-background font-mono text-xs leading-none font-medium text-muted-foreground group-has-data-[slot=questionnaire-choice-description]/questionnaire-choice:translate-y-0.5 group-data-[shortcut]/questionnaire-choice:inline-flex"
       />
     </QuestionnairePrimitive.Choice>
   )
@@ -202,7 +209,7 @@ function QuestionnaireInput({
       <QuestionnairePrimitive.Input
         data-slot="questionnaire-input"
         className={cn(
-          "h-9 min-h-11 w-full min-w-0 rounded-md border border-input bg-transparent px-2.5 py-1 text-base shadow-xs transition-[color,box-shadow,background-color] outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 sm:min-h-0 md:text-sm dark:bg-input/30 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40",
+          "h-9 min-h-11 w-full min-w-0 rounded-md border border-input bg-transparent px-2.5 py-1 text-base transition-[color,background-color] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--ring)] disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 sm:min-h-0 md:text-sm dark:bg-input/30 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40",
           "selection:bg-primary selection:text-primary-foreground placeholder:text-muted-foreground",
           className
         )}

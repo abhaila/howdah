@@ -159,16 +159,27 @@ describe("submitOnEnter", () => {
  * was cut off with `text-overflow: clip`, no ellipsis and no scroll. 192px of controls that
  * simply could not be reached. happy-dom computes no layout, so what is pinned here is the
  * property that makes the clip impossible rather than the pixels.
+ *
+ * HOW-68 changed HOW that is guaranteed, not whether. The first fix let the header wrap to a
+ * second row; DESIGN.md now says "a header is one row at every supported width; secondary
+ * actions go behind one More menu". So the row no longer wraps — and it still cannot hide a
+ * control, because the name is the only part allowed to shrink (it is cut by `Truncate`,
+ * which shows the whole of it on hover and focus) and the controls are not.
  */
 describe("the run header cannot hide its own controls", () => {
-  test("it wraps instead of clipping, and the title yields before the controls do", async () => {
+  test("it is one row: the title yields, and the controls never shrink", async () => {
     const css = await Bun.file(new URL("../public/howdah.css", import.meta.url)).text();
-    const topbar = css.match(/\.topbar\s*\{([^}]*)\}/)?.[1] ?? "";
-    expect(topbar).toContain("flex-wrap: wrap");
+    const head = css.match(/\.run-head\s*\{([^}]*)\}/)?.[1] ?? "";
+    expect(head).toContain("display: flex");
+    expect(head).not.toContain("flex-wrap"); // one row, by DESIGN.md
+    expect(head).not.toContain("overflow"); // and nothing in it is clipped to get there
 
-    const h1 = css.match(/\.topbar h1\s*\{([^}]*)\}/)?.[1] ?? "";
+    const h1 = css.match(/\.run-head h1\s*\{([^}]*)\}/)?.[1] ?? "";
     expect(h1).toContain("min-width: 0"); // or the long goal refuses to give way
-    expect(h1).toContain("flex-shrink: 1");
+    expect(h1).toContain("flex: 0 1 auto");
+
+    const controls = css.match(/\.run-controls\s*\{([^}]*)\}/)?.[1] ?? "";
+    expect(controls).toContain("flex-shrink: 0");
   });
 });
 

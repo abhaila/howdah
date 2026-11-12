@@ -1,8 +1,9 @@
 /**
  * GraphDag (T20) — the live graph picture (Orbital's Graph tab / autoresearcherUI's
  * board). Layered BFS layout from the entry node; back edges (loops) curve around the
- * left. The current node pulses; visit counts render as ×N badges so revisits are never
- * a linear lie.
+ * left. Visit counts render as ×N badges so revisits are never a linear lie. Nothing here
+ * animates (HOW-68): the picture used to draw itself in every time its tab was opened, and a
+ * tab switch is a keyboard action that DESIGN.md says is instant.
  *
  * HOW-16 P2.10: this was the one component in the app with NO accessibility at all — zero
  * aria-label, zero role, zero tabIndex, and an `onClick` on an SVG `<g>`, which is not a
@@ -31,9 +32,20 @@
  * `foreignObject`, whose overflow Safari clips — so the floating panel would be cut off
  * exactly when the id is long enough to need it. The label is read on focus by the same
  * assistive tech a tooltip would be for, and it cannot be clipped.
+ *
+ * HOW-68: every label is 12px or more (edge conditions were 9px), a node's id is DM Mono and
+ * its second line DM Sans; a route's condition is printed nearer its TARGET, alternating two
+ * heights among the routes leaving one step, with a halo of the canvas ground behind it — at
+ * the midpoint every condition out of a branching step landed on its siblings. A node's kind
+ * is a drawn icon, not a dingbat character. The step the run is ON carries the status glyph
+ * (half-disc running; the triangle, and the only amber in the picture, when it is parked
+ * waiting on you — `waiting`). A focused node shows the same 2px ring every other focus stop
+ * does. The picture keeps ITS OWN scroller, which is a focus stop while it overflows.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ZoomIn, ZoomOut, Maximize2, RotateCcw } from "lucide-react";
+import { ZoomIn, ZoomOut, Maximize2, RotateCcw, Sparkles, Terminal, GitBranch, Clock, Split, CircleDot, Circle } from "lucide-react";
+import { StatusGlyph } from "./status";
+import { Kbd } from "@/components/ui/kbd";
 import { Button } from "@/components/ui/button";
 import { Tooltip } from "@/components/ui/tooltip";
 // HOW-24: the layered-BFS placement moved to lib/layout.ts, because the builder's canvas
@@ -83,7 +95,21 @@ export interface GraphShapeDto {
   edges: Array<{ from: string; to: string; label?: string; weight?: number; kind?: "fork" | "join" }>;
 }
 
-const KIND_GLYPH: Record<string, string> = { agent: "◆", command: "▮", worktree: "⎇", wait: "◔", parallel: "⫴", terminal: "●" };
+/** a node's kind, as a drawn icon (never a dingbat character: DESIGN.md "Status is a shape") */
+const KIND_ICON: Record<string, typeof Sparkles> = { agent: Sparkles, command: Terminal, worktree: GitBranch, wait: Clock, parallel: Split, terminal: CircleDot };
+
+/**
+ * An id cut to fit its box, keeping BOTH ends: step ids share their prefix
+ * (`implementation.plan`, `implementation.implement`) and differ at the tail, which a trailing
+ * ellipsis throws away.
+ */
+const fitId = (s: string, max: number): string => (s.length <= max ? s : `${s.slice(0, Math.ceil((max - 1) / 2) - 1)}…${s.slice(-(Math.floor((max - 1) / 2) + 1))}`);
+
+/** a point on the cubic the forward edges are drawn with */
+const cubic = (t: number, a: number, b: number, c: number, d: number) => {
+  const u = 1 - t;
+  return u * u * u * a + 3 * u * u * t * b + 3 * u * t * t * c + t * t * t * d;
+};
 
 /** what the node's second line says — one reading, used by the box AND by its spoken label */
 function subtitle(n: GraphShapeDto["nodes"][number]): string {
@@ -107,6 +133,7 @@ export function GraphDag({
   canSelect = (node) => node.kind === "agent",
   removed,
   highlight,
+  waiting = false,
 }: {
   shape: GraphShapeDto;
   current?: string;
@@ -118,6 +145,8 @@ export function GraphDag({
   removed?: ReadonlySet<string>;
   /** HOW-65: the step whose row has focus in the list beside the picture */
   highlight?: string | null;
+  /** the run is parked on `current`, waiting on the operator — the one amber mark in the picture */
+  waiting?: boolean;
 }) {
   const pos = layout(shape);
   const width = Math.max(...[...pos.values()].map((p) => p.x)) + 230;
@@ -133,6 +162,18 @@ export function GraphDag({
    */
   const view = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(1);
+  // the canvas is a focus stop exactly while there is something to scroll to (as ScrollPane is)
+  const [overflows, setOverflows] = useState(false);
+  useEffect(() => {
+    const box = view.current;
+    if (!box) return;
+    const measure = () => setOverflows(box.scrollWidth > box.clientWidth + 1 || box.scrollHeight > box.clientHeight + 1);
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(measure);
+    ro.observe(box);
+    return () => ro.disconnect();
+  }, [scale, width, height]);
   const zoom = useCallback((to: number) => setScale(Math.min(2, Math.max(0.3, Math.round(to * 20) / 20))), []);
   const fit = useCallback(() => {
     const box = view.current;
@@ -206,24 +247,27 @@ export function GraphDag({
       <div className="dag-controls">
         <Tooltip content="Zoom out">
           <Button variant="outline" size="icon" aria-label="Zoom out" disabled={scale <= 0.3} onClick={() => zoom(scale - 0.1)}>
-            <ZoomOut size={13} />
+            <ZoomOut />
           </Button>
         </Tooltip>
-        <span className="m dag-zoom" aria-live="polite">{Math.round(scale * 100)}%</span>
+        <span className="dag-zoom" aria-live="polite">{Math.round(scale * 100)}%</span>
         <Tooltip content="Zoom in">
           <Button variant="outline" size="icon" aria-label="Zoom in" disabled={scale >= 2} onClick={() => zoom(scale + 0.1)}>
-            <ZoomIn size={13} />
+            <ZoomIn />
           </Button>
         </Tooltip>
         <Tooltip content="Fit the graph to the pane">
-          <Button variant="outline" size="icon" aria-label="Fit the graph to the pane" onClick={fit}><Maximize2 size={13} /></Button>
+          <Button variant="outline" size="icon" aria-label="Fit the graph to the pane" onClick={fit}><Maximize2 /></Button>
         </Tooltip>
         <Tooltip content="Reset to 100%">
-          <Button variant="outline" size="icon" aria-label="Reset zoom to 100%" onClick={() => zoom(1)}><RotateCcw size={13} /></Button>
+          <Button variant="outline" size="icon" aria-label="Reset zoom to 100%" onClick={() => zoom(1)}><RotateCcw /></Button>
         </Tooltip>
-        <span className="dag-hint">drag to pan · ⌘/ctrl + scroll to zoom</span>
+        <span className="dag-hint">Drag to pan · <Kbd decorative>⌘</Kbd> or <Kbd decorative>Ctrl</Kbd> + scroll to zoom</span>
       </div>
-      <div className="dag-scroll" ref={view} onPointerDown={onPanStart}>
+      <div
+        className="dag-scroll" ref={view} onPointerDown={onPanStart}
+        role={overflows ? "region" : undefined} aria-label={overflows ? `${shape.name} graph canvas` : undefined} tabIndex={overflows ? 0 : undefined}
+      >
       <svg
         width={Math.round(width * scale)}
         height={Math.round(height * scale)}
@@ -237,7 +281,9 @@ export function GraphDag({
             <path d="M0,0 L8,4 L0,8 z" fill="var(--fg-faint)" />
           </marker>
         </defs>
-        {shape.edges.map((e, i) => {
+        {/* Two passes: every wire first, then every condition — a condition drawn with its own
+            wire was struck through by each wire drawn after it, halo or no halo. */}
+        {(["wire", "label"] as const).map((pass) => shape.edges.map((e, i) => {
           const a = pos.get(e.from);
           const b = pos.get(e.to);
           // layout() places the steps that EXIST, so an edge naming one that does not has no
@@ -245,29 +291,33 @@ export function GraphDag({
           if (!a || !b) return null;
           const back = depthOf(e.to) <= depthOf(e.from) && e.from !== e.to;
           const x1 = a.x + 90, y1 = a.y + 52, x2 = b.x + 90, y2 = b.y - 2;
-          const d = back
-            ? `M ${a.x} ${a.y + 26} C ${a.x - 90} ${a.y + 26}, ${b.x - 90} ${b.y + 26}, ${b.x} ${b.y + 26}`
-            : `M ${x1} ${y1} C ${x1} ${y1 + 34}, ${x2} ${y2 - 34}, ${x2} ${y2}`;
-          const midX = back ? Math.min(a.x, b.x) - 66 : (x1 + x2) / 2;
-          const midY = back ? (a.y + b.y) / 2 + 26 : (y1 + y2) / 2;
-          const delay = Math.min(depthOf(e.from), depthOf(e.to)) / 92 * 55;
-          return (
-            <g key={i} aria-hidden>
+          if (pass === "wire") {
+            const d = back
+              ? `M ${a.x} ${a.y + 26} C ${a.x - 90} ${a.y + 26}, ${b.x - 90} ${b.y + 26}, ${b.x} ${b.y + 26}`
+              : `M ${x1} ${y1} C ${x1} ${y1 + 34}, ${x2} ${y2 - 34}, ${x2} ${y2}`;
+            return (
               <path
-                d={d} pathLength={100} className="dag-edge"
-                /* the draw-in delay IS this edge's depth in the layout — data, not style */
-                style={{ ["--dag-delay" as string]: `${140 + delay}ms` }}
+                key={`w${i}`} aria-hidden
+                d={d} className="dag-edge"
                 fill="none" stroke="var(--fg-faint)" strokeWidth="1.2" markerEnd="url(#arrow)" opacity={back ? 0.7 : 1}
                 /* HOW-73: a fork/join edge is the parallel step's, not a route — drawn dashed */
                 strokeDasharray={e.kind ? "4 3" : undefined}
                 data-edge-kind={e.kind}
               />
-              {e.label && (
-                <text x={midX} y={midY} className="dag-edge-label" style={{ ["--dag-delay" as string]: `${300 + delay}ms` }} textAnchor="middle">{e.label}</text>
-              )}
-            </g>
-          );
-        })}
+            );
+          }
+          if (!e.label) return null;
+          // A forward route's condition is printed just above its TARGET: the routes out of one
+          // step fan apart there, where at the midpoint they all sat on each other. Two routes
+          // into the same step (or two loops round the same side) step apart by a line.
+          const twin = shape.edges.slice(0, i).filter((o) => o.label && o.to === e.to && (depthOf(o.to) <= depthOf(o.from)) === back).length;
+          const midX = back ? Math.min(a.x, b.x) - 66 : cubic(0.82, x1, x1, x2, x2);
+          // …and the routes out of ONE step alternate two heights: neighbouring targets are a
+          // box apart, which is less than a long condition is wide
+          const sibling = back ? 0 : shape.edges.slice(0, i).filter((o) => o.label && o.from === e.from && depthOf(o.to) > depthOf(o.from)).length;
+          const midY = (back ? (a.y + b.y) / 2 + 26 : cubic(0.82, y1, y1 + 34, y2 - 34, y2) - 2) - (twin + (sibling % 2)) * 14;
+          return <text key={`l${i}`} aria-hidden x={midX} y={midY} className="dag-edge-label" textAnchor="middle">{e.label}</text>;
+        }))}
         {shape.nodes.map((n, i) => {
           const p = pos.get(n.id);
           // layout() gives every node in `shape.nodes` a position, an unreached one included
@@ -287,7 +337,7 @@ export function GraphDag({
             sub,
             v !== undefined && v > 0 ? `${v} visit${v === 1 ? "" : "s"}` : "",
             n.node_tuning ? "has a node override" : "",
-            isCurrent ? "current" : "",
+            isCurrent ? (waiting ? "current, waiting on you" : "current") : "",
             selected === n.id ? "selected" : "",
             highlight === n.id ? "highlighted" : "",
           ].filter(Boolean).join(", ");
@@ -296,8 +346,7 @@ export function GraphDag({
               key={n.id}
               ref={(el) => { nodeRefs.current[i] = el; }}
               transform={`translate(${p.x}, ${p.y})`}
-              className={`dag-node ${isCurrent ? "current" : ""} ${selected === n.id ? "selected" : ""} ${selectable ? "clickable" : ""} ${gone ? "removed" : ""} ${highlight === n.id ? "highlight" : ""} kind-${n.kind}`}
-              style={{ ["--dag-delay" as string]: `${(p.y / 92) * 55}ms` }}
+              className={`dag-node ${isCurrent ? "current" : ""} ${isCurrent && waiting ? "waiting" : ""} ${selected === n.id ? "selected" : ""} ${selectable ? "clickable" : ""} ${gone ? "removed" : ""} ${highlight === n.id ? "highlight" : ""} kind-${n.kind}`}
               role={selectable ? "button" : "listitem"}
               aria-label={label}
               aria-pressed={selectable ? selected === n.id : undefined}
@@ -316,11 +365,16 @@ export function GraphDag({
                 else if (e.key === "End") { e.preventDefault(); focusNode(walk.length - 1); }
               }}
             >
-              <rect width="180" height="52" rx="9" />
-              <text x="12" y="21" className="dag-title" aria-hidden>
-                {gone ? "−" : KIND_GLYPH[n.kind] ?? "?"} {shown.length > 20 ? shown.slice(0, 19) + "…" : shown}
+              {/* the box cuts a long id; hovering it reads the whole label, as focusing it does */}
+              <title>{label}</title>
+              <rect width="180" height="52" rx="8" />
+              {/* a kind is an icon; a removed step keeps its minus sign as text (it is the word) */}
+              {!gone && (() => { const Icon = KIND_ICON[n.kind] ?? Circle; return <g transform="translate(10, 11)" className="dag-kind" aria-hidden><Icon size={13} /></g>; })()}
+              <text x={gone ? 12 : 29} y="22" className="dag-title" aria-hidden>
+                {gone ? "− " : ""}{fitId(shown, isCurrent || gone ? 16 : 18)}
               </text>
-              <text x="12" y="40" className="dag-sub" aria-hidden>{sub}</text>
+              <text x="12" y="40" className="dag-sub" aria-hidden>{sub.length > 26 ? sub.slice(0, 25) + "…" : sub}</text>
+              {isCurrent && <g transform="translate(158, 11)" aria-hidden><StatusGlyph status={waiting ? "needs-input" : "running"} size={13} /></g>}
               {v !== undefined && v > 0 && <g aria-hidden><rect x="150" y="-9" width="30" height="18" rx="9" className="dag-visits" /><text x="165" y="4" textAnchor="middle" className="dag-visits-text">×{v}</text></g>}
               {n.node_tuning && <circle cx="8" cy="8" r="3.5" className="dag-tuned" aria-hidden />}
             </g>

@@ -64,7 +64,10 @@ describe("StepDetail pane routing on the approval step", () => {
     const el = renderStep(log, "slice.approve", 1);
     expect(tabLabels(el)).toEqual(["Ask", "Approval", "Activity", "Prompt & context", "Output"]);
     expect(selected(el)).toBe("Ask");
-    expect(el.querySelector(".ask-card h3")!.textContent).toBe("Needs you — slice.approve@1");
+// HOW-68: the card's heading is the park's one-sentence summary (core/park-summary.ts); the
+    // step it is about is the line under it, and the engine's reason is in "Full message"
+    expect(el.querySelector(".ask-card h3")!.textContent).toBe("slice.approve failed.");
+    expect(el.querySelector(".ask-card .ask-where")!.textContent).toContain("slice.approve@1");
     expect(el.querySelector(".ask-card")!.textContent).toContain("approval executor threw: base unreadable");
 
     await act(async () => tabs(el).find((t) => t.textContent === "Approval")!.click());
@@ -81,7 +84,10 @@ describe("StepDetail pane routing on the approval step", () => {
     const el = renderStep(log, "slice.approve", 1);
     expect(tabLabels(el)[0]).toBe("Ask");
     expect(selected(el)).toBe("Ask");
-    expect(el.querySelector(".ask-card h3")!.textContent).toBe("Needs you — slice.approve@2");
+// HOW-68: the card's heading is the park's one-sentence summary (core/park-summary.ts); the
+    // step it is about is the line under it, and the engine's reason is in "Full message"
+    expect(el.querySelector(".ask-card h3")!.textContent).toBe("slice.approve reached its visit limit.");
+    expect(el.querySelector(".ask-card .ask-where")!.textContent).toContain("slice.approve@2");
     expect(el.querySelector(".sd-head .step-glyph.needs-input")).not.toBeNull();
   });
 
@@ -105,7 +111,8 @@ describe("the panel's live timing", () => {
     const el = renderStep(log, "slice.approve", 1, 3 * 60_000);
     expect(el.querySelector(".sd-total")!.textContent).toBe("3m 0s");
     // nothing was waiting on the operator yet, so the whole of it is agent time
-    expect(el.querySelector(".sd-seg .m")!.textContent).toBe("3m 0s");
+    // HOW-68: a duration is READ, so it is sans with tabular-nums, not mono (DESIGN.md Type)
+    expect(el.querySelector(".sd-seg .tabular-nums")!.textContent).toBe("3m 0s");
     expect((el.querySelector(".sd-seg-fill") as HTMLElement).style.width).toBe("100%");
   });
 });
@@ -156,7 +163,10 @@ describe("an ask on a node with no step row", () => {
     const el = renderStep(jumpedPastApproval(), "slice.approve", 1);
     const fallback = el.querySelector('[data-testid="rowless-ask"]')!;
     expect(fallback.textContent).toContain("implementation.implement has no step yet");
-    expect(fallback.querySelector(".ask-card h3")!.textContent).toBe("Needs you — implementation.implement@1");
+// HOW-68: the card's heading is the park's one-sentence summary (core/park-summary.ts); the
+    // step it is about is the line under it, and the engine's reason is in "Full message"
+    expect(fallback.querySelector(".ask-card h3")!.textContent).toBe("implementation.implement cannot start until its proposal is approved.");
+    expect(fallback.querySelector(".ask-card .ask-where")!.textContent).toContain("implementation.implement@1");
     expect(fallback.querySelector(".ask-card")!.textContent).toContain("no current approval for slice.approve");
     // one Ask card for the one ask — the selected row does not also carry it
     expect(el.querySelectorAll(".ask-card").length).toBe(1);

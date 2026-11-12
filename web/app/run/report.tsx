@@ -14,11 +14,18 @@
  *
  * The frame reloads when the run moves to a new step rather than on every streamed chunk — a
  * report that flickers while the agent types is unreadable — and "Refresh" reloads it at will.
+ *
+ * HOW-68: the frame fills the pane (it had a 480px floor and a strip of 13px links above it),
+ * and the page inside wears the viewer's own theme. It is sandboxed without same-origin, so it
+ * cannot read this page's setting; the viewer's explicit choice travels as `?theme=`, which the
+ * page's own script reads. With no explicit choice nothing is passed and both follow the
+ * system, exactly as the standalone file does. Open and Download are real 28px controls.
  */
-import { useState } from "react";
-import { Download, ExternalLink, Loader2, Network, RefreshCw } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Download, ExternalLink, Network, RefreshCw } from "lucide-react";
 import type { RunDetail } from "../../derive";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
+import { Toolbar } from "@/components/ui/toolbar";
 import { useToast } from "@/components/ui/toast";
 
 /** the step that writes the change map the report is drawn around (prompts/implementation.report.md) */
@@ -26,6 +33,23 @@ export const REPORT_NODE = "implementation.report";
 export const CHANGE_MAP_KEY = "change_map";
 
 export const reportUrl = (runId: string, download = false) => `/api/runs/${encodeURIComponent(runId)}/report${download ? "?download=1" : ""}`;
+
+type Theme = "light" | "dark" | null;
+const explicitTheme = (): Theme => {
+  const t = typeof document === "undefined" ? undefined : document.documentElement.dataset.theme;
+  return t === "light" || t === "dark" ? t : null;
+};
+/** the viewer's EXPLICIT theme (null = follow the system), kept current as the toggle moves */
+function useExplicitTheme(): Theme {
+  const [theme, setTheme] = useState<Theme>(explicitTheme);
+  useEffect(() => {
+    if (typeof MutationObserver === "undefined") return;
+    const mo = new MutationObserver(() => setTheme(explicitTheme()));
+    mo.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+    return () => mo.disconnect();
+  }, []);
+  return theme;
+}
 
 /**
  * Whether "Map this change" applies: the run's graph declares `change_map` (so it has the step)
@@ -59,23 +83,27 @@ export function RunReport({ runId, detail, onChanged = () => {} }: { runId: stri
     }
   };
   const last = detail.timeline.at(-1);
+  const theme = useExplicitTheme();
   // a new step, a finished step or a new status is a new report; a chunk is not
-  const key = `${detail.timeline.length}:${last?.status ?? ""}:${detail.summary.status}:${bump}`;
+  const key = `${detail.timeline.length}:${last?.status ?? ""}:${detail.summary.status}:${bump}:${theme ?? ""}`;
+  const link = buttonVariants({ variant: "outline", size: "sm" });
   return (
     <div className="report-pane">
-      <div className="report-bar">
-        <span className="report-note">Derived from the run log each time it opens; nothing is stored. Works the same on every harness.</span>
-        {canMapChange(detail) && (
-          <Button variant="outline" size="sm" disabled={mapping} onClick={mapChange}>
-            {mapping ? <Loader2 className="animate-spin" /> : <Network size={12} aria-hidden />}Map this change
-          </Button>
-        )}
-        <Button variant="ghost" size="sm" onClick={() => setBump((b) => b + 1)}><RefreshCw size={12} aria-hidden />Refresh</Button>
-        <a className="pr-link report-link" href={reportUrl(runId)} target="_blank" rel="noreferrer"><ExternalLink size={12} aria-hidden />Open</a>
-        <a className="pr-link report-link" href={reportUrl(runId, true)} download><Download size={12} aria-hidden />Download HTML</a>
+      <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-border px-4 py-2">
+        <span className="min-w-0 flex-1 basis-60 text-xs text-muted-foreground">Derived from the run log each time it opens; nothing is stored. Works the same on every harness.</span>
+        <Toolbar label="Report actions">
+          {canMapChange(detail) && (
+            <Button variant="outline" size="sm" loading={mapping} onClick={mapChange}>
+              {!mapping && <Network aria-hidden />}Map this change
+            </Button>
+          )}
+          <Button variant="ghost" size="sm" onClick={() => setBump((b) => b + 1)}><RefreshCw aria-hidden />Refresh</Button>
+          <a className={link} href={reportUrl(runId)} target="_blank" rel="noreferrer"><ExternalLink aria-hidden />Open</a>
+          <a className={link} href={reportUrl(runId, true)} download><Download aria-hidden />Download HTML</a>
+        </Toolbar>
       </div>
-      {error && <div className="field-error report-error">{error}</div>}
-      <iframe key={key} className="report-frame" aria-label={`run report for ${runId}`} src={reportUrl(runId)} sandbox="allow-scripts" />
+      {error && <div className="field-error px-4 py-1">{error}</div>}
+      <iframe key={key} className="report-frame" aria-label={`Run report for ${runId}`} src={`${reportUrl(runId)}${theme ? `?theme=${theme}` : ""}`} sandbox="allow-scripts" />
     </div>
   );
 }

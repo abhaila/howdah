@@ -280,7 +280,7 @@ export function App() {
         <main id="main">
           {runMatch ? <RunView id={runMatch[1]!} />
             : draftMatch ? <DraftReview runId={decodeURIComponent(draftMatch[1]!)} />
-            : isAttention ? <div className="runs"><AttentionInbox /></div>
+            : isAttention ? <AttentionInbox />
             : isNew ? <StartRun />
             : isSettings ? <Settings />
             : isGraphs ? <GraphsList />
@@ -288,7 +288,7 @@ export function App() {
             : promptMatch ? <PromptsScreen selected={promptMatch[1] ? decodeURIComponent(promptMatch[1]) : null} />
             : proposalMatch ? <ProposalsScreen selected={proposalMatch[1] ? decodeURIComponent(proposalMatch[1]) : null} />
             : isGallery ? <Gallery />
-            : isRuns ? <div className="runs"><RunsList /></div>
+            : isRuns ? <RunsList />
             : <NotFound path={path} onOpenPalette={() => setPaletteOpen(true)} />}
         </main>
         <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />

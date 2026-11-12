@@ -35,6 +35,8 @@ export interface CatalogEntry {
    * editor and says why. The builder never guesses a spec back out of TypeScript.
    */
   builder: boolean;
+  /** HOW-68: how many steps the graph has — the Graphs list says it beside the name */
+  steps: number;
 }
 
 export interface Registry {
@@ -69,6 +71,7 @@ export function catalogOf(reg: Registry): CatalogEntry[] {
       kind: Object.values(g.def.nodes).some((n) => n.kind === "worktree") ? ("repo" as const) : ("plain" as const),
       source: reg.source[g.def.name] ?? ("builtin" as const),
       builder: reg.source[g.def.name] === "local" && specOf(g) !== null,
+      steps: Object.keys(g.def.nodes).length,
       // a BUILT-IN only: a local graph that happens to share the name never gets here (registry)
       ...(g.def.name === STACKED_GRAPH && reg.source[g.def.name] === "builtin" ? { launched_by: STACKED_GRAPH_LAUNCHED_BY } : {}),
     }))

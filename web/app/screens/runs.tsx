@@ -1,44 +1,67 @@
 /**
  * The runs list — the app's front door, out of main.tsx (HOW-16 P1).
  *
- * Rows come from `Row`, so the hover, selected and needs-input states are the same three
- * the Steps, Context and Logs rows use rather than a fourth copy (P1.6). Loading is a
- * `Skeleton` in the shape of the list instead of a card that reflows the screen when the
- * data lands, and the empty state is an `EmptyState` — the two are different facts and no
- * longer share a `.empty` div.
+ * HOW-50 made it a live BOARD: grouped — Needs you / Running / Finished / Older — with
+ * needs-you always first, because a run waiting on a human outranks everything (CLAUDE.md),
+ * each row carrying its vital signs (web/board.ts derives them from the log, incrementally)
+ * and the whole list fed by ONE board-level SSE stream, never a poll per row.
  *
- * HOW-50 made it a live BOARD. A single `running` dot beside fourteen `done` rows said nothing
- * about which step a run was on, how long it had been there, whether it had gone quiet, what
- * it had cost or whether it had committed anything. Each row now carries those vital signs
- * (web/board.ts derives them from the log, incrementally), and the list is grouped — Needs you
- * / Running / Recently finished / Older — with needs-you always first, because a run waiting
- * on a human outranks everything (CLAUDE.md). Every group still draws status through the ONE
- * `StatusBadge`. Updates arrive over one board-level SSE stream, never a poll per row.
+ * HOW-68 redrew the row (DESIGN.md; the audit's "tinted rows, three type styles per row, no
+ * reason shown"). A row is five columns and one voice:
  *
- * Column widths: the name is the column that gives (`minmax(0, 1fr)`, ellipsis); the vital
- * signs have fixed widths so a long name can never squeeze them. On a narrow screen the vitals
- * drop to a second line under the name rather than being cut.
+ *   status glyph · name · WHAT IT IS WAITING FOR OR DOING · age · cost
+ *
+ * The third column is the point. A waiting run used to say "waiting 12m" — the age of a
+ * question it never showed — so the operator had to open each run to learn what it wanted.
+ * It now says the question, in the sentence its own ask card uses (`parkSummary`, through
+ * lib/board.ts `runLine`); a running row names its step; a finished one says how it ended.
+ *
+ * THE ALARM IS SAID ONCE. A waiting row is marked by its amber triangle and a bold label and
+ * by nothing else: no tinted row, no side stripe, no amber timer, and a live run that has gone
+ * quiet says so in words ("no output for 6m") rather than turning amber — amber means "waiting
+ * on you" and nothing else.
+ *
+ * NOTHING IS CUT WITHOUT A WAY TO READ IT. The name and the third column are `Truncate`s, so a
+ * long name shows whole on hover and while its row has keyboard focus. The name column gives;
+ * age and cost are fixed and `tabular-nums`, so a long name can never squeeze them, and the
+ * row stays one 36px line down to 1024px wide.
+ *
+ * KEYBOARD (lib/list-nav.ts): J/K or the arrows move a visible selection, Enter opens it, `/`
+ * focuses the filter. The filter is client-side over name, goal, id, graph, status and step.
+ *
+ * The home / source / supervisor strip that sat above the list is one quiet line now, and
+ * only when it has something to say: a supervisor that is not running. Where the home and the
+ * source are lives behind "About this home" — true every day, needed once.
  */
-import { useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
+import { Info, Plus, Search } from "lucide-react";
 import type { RunBoardRow } from "../../board";
-import { boardGroup, type BoardGroup } from "@/lib/board";
+import { boardGroup, matchesFilter, prChip, runAge, runLine, type BoardGroup, type RunLine } from "@/lib/board";
 import type { AppInfo } from "@/lib/types";
 import { getJSON } from "@/lib/net";
-import { fmtWait, runLabel } from "@/lib/format";
-import { fmtAgo, liveness } from "@/lib/liveness";
+import { fmtWhen, runLabel } from "@/lib/format";
 import { useAttentionSurfaces, useNow } from "@/lib/hooks";
+import { useListNav } from "@/lib/list-nav";
+import { parkSummary } from "../../../core/park-summary";
 import { Badge } from "@/components/ui/badge";
-import { Row } from "@/components/ui/row";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
-import { LoadingBlock } from "@/components/ui/skeleton";
+import { Input } from "@/components/ui/input";
+import { Kbd } from "@/components/ui/kbd";
+import { KeyValue } from "@/components/ui/key-value";
+import { Popover } from "@/components/ui/popover";
+import { Row } from "@/components/ui/row";
+import { SectionLabel } from "@/components/ui/section-label";
 import { Tooltip } from "@/components/ui/tooltip";
-import { StatusBadge } from "../status";
+import { Truncate } from "@/components/ui/truncate";
+import { STATUS_LABEL, StatusGlyph } from "../status";
 import { Mark } from "../brand";
+import { KeyHints, LoadError, Screen, ScreenLoading } from "./frame";
 
 const GROUPS: Array<{ key: BoardGroup; label: string }> = [
   { key: "needs-you", label: "Needs you" },
   { key: "running", label: "Running" },
-  { key: "recent", label: "Recently finished" },
+  { key: "recent", label: "Finished" },
   { key: "older", label: "Older" },
 ];
 
@@ -52,57 +75,100 @@ export function groupRuns(runs: RunBoardRow[], now: number): Array<{ key: BoardG
 
 const money = (n: number) => (n >= 10 ? `$${n.toFixed(1)}` : `$${n.toFixed(2)}`);
 
-function Vitals({ r, now }: { r: RunBoardRow; now: number }) {
-  const live = r.status === "running";
-  const { ageMs, quiet } = liveness(r.last_activity_at, now);
+/**
+ * The row's columns, shared by every list that speaks this row language (the inbox uses the
+ * same shape with a step column). One line, 36px; the name and the line give, the numbers do not.
+ */
+export const RUN_ROW = "grid min-h-9 grid-cols-[16px_minmax(0,5fr)_minmax(0,7fr)_88px_60px] items-center gap-x-3 border-b border-border px-2 py-1.5 text-sm leading-[1.4] no-underline";
+
+/** a `RunLine`'s parts, drawn: bold label, mono step id, read text */
+export function Line({ line }: { line: RunLine }) {
+  const full = line.parts.map((p) => p.value).join(" ");
   return (
-    <span className="board-vitals">
-      <span className="bv-step">
-        {r.status === "needs-input" && r.waiting_since ? (
-          <span className="wait-timer">waiting {fmtWait(r.waiting_since, now)}</span>
-        ) : r.current ? (
-          <Tooltip content={`${r.current.node}@${r.current.visit}, started ${new Date(r.current.since).toLocaleString()}`}>
-            <span className="bv-step-text"><span className="bv-node">{r.current.node}@{r.current.visit}</span> · for {fmtAgo(now - new Date(r.current.since).getTime())}</span>
-          </Tooltip>
-        ) : (
-          <span className="bv-faint">{r.graph}</span>
-        )}
+    <Truncate text={full} className="text-muted-foreground">
+      {line.parts.map((p, i) => (
+        // the space between parts is its own text node: inside a mono span it would be a mono-width gap
+        <Fragment key={i}>
+          {i > 0 ? " " : ""}
+          <span className={p.kind === "strong" ? "font-semibold text-foreground" : p.kind === "mono" ? "font-mono text-code text-foreground" : undefined}>{p.value}</span>
+        </Fragment>
+      ))}
+    </Truncate>
+  );
+}
+
+function Cost({ r }: { r: RunBoardRow }) {
+  const cost = r.cost_usd ?? 0; // a row from an older read model carries no cost at all
+  if (cost === 0 && r.cost_partial) {
+    return <Tooltip side="left" content="No cost reported yet: a turn is still running, or this harness reports none."><span className="text-faint">unknown</span></Tooltip>;
+  }
+  if (cost <= 0) return <span className="text-faint">—</span>;
+  if (r.cost_partial) {
+    return <Tooltip side="left" content="A floor, not the bill: a turn is still running, or a harness reported no cost."><span>≥{money(cost)}</span></Tooltip>;
+  }
+  return <>{money(cost)}</>;
+}
+
+function RunRow({ r, now, selected }: { r: RunBoardRow; now: number; selected: boolean }) {
+  const line = runLine(r, now);
+  const age = runAge(r, now);
+  const pr = prChip(r);
+  return (
+    <Row className={RUN_ROW} href={`/run/${r.id}`} needsInput={r.status === "needs-input"} selected={selected} data-nav-row={r.id}>
+      <StatusGlyph status={r.status} label={STATUS_LABEL[r.status]} />
+      <span data-col="name" className="flex min-w-0"><Truncate className="text-body font-medium text-foreground">{runLabel(r)}</Truncate></span>
+      {/* the PR chip rides at the end of the line's cell: a column of its own would be `auto`, and
+          every row is its own grid, so an auto column would knock the rows out of alignment */}
+      <span data-col="line" data-quiet={line.quiet ? "true" : "false"} className="flex min-w-0 items-center gap-2">
+        <Line line={line} />
+        {pr !== null && <span data-col="pr" className="flex shrink-0"><Badge variant={r.pr?.state === "OPEN" || r.pr?.state === "MERGED" ? "outline" : "destructive"}>{pr}</Badge></span>}
       </span>
-      <span className="bv-activity" data-quiet={live && quiet ? "true" : "false"}>
-        {live && ageMs !== null ? <>active {fmtAgo(ageMs)} ago</> : r.last_event_at ? <span className="bv-faint">{fmtAgo(now - new Date(r.last_event_at).getTime())} ago</span> : "—"}
+      <span data-col="age" className="whitespace-nowrap text-right tabular-nums text-muted-foreground">
+        <Tooltip side="left" content={age.at ? `${age.what} ${fmtWhen(age.at)}` : null}><span>{age.text}</span></Tooltip>
       </span>
-      <span className="bv-cost">
-        {r.cost_usd === 0 && r.cost_partial ? (
-          <Tooltip content="no cost reported yet: a turn is still running, or the harness reports none (HOW-34)">
-            <span className="bv-faint">unknown</span>
-          </Tooltip>
-        ) : r.cost_usd > 0 ? (
-          r.cost_partial ? (
-            <Tooltip content="a floor, not the bill: a turn is still running, or a harness reported no cost (HOW-34)">
-              <span>≥{money(r.cost_usd)}</span>
-            </Tooltip>
-          ) : money(r.cost_usd)
-        ) : <span className="bv-faint">—</span>}
-      </span>
-      <span className="bv-commits">
-        {r.commits == null ? <span className="bv-faint">—</span> : (
-          <Tooltip content="commits between the first and latest HEAD the reconciler observed (as of the last step boundary)">
-            <span>{r.commits} commit{r.commits === 1 ? "" : "s"}</span>
-          </Tooltip>
-        )}
-      </span>
-      <span className="bv-pr">
-        {r.pr ? <Badge variant={r.pr.state === "MERGED" ? "success" : r.pr.state === "OPEN" ? "outline" : "destructive"}>PR {r.pr.state.toLowerCase()}</Badge> : null}
-      </span>
-    </span>
+      <span data-col="cost" className="text-right tabular-nums text-muted-foreground"><Cost r={r} /></span>
+    </Row>
+  );
+}
+
+/** what a notification about each waiting run says: its name, and the question (lib/notify.ts) */
+export function waitingNotes(runs: readonly RunBoardRow[]): Record<string, { name: string; body: string }> {
+  const out: Record<string, { name: string; body: string }> = {};
+  for (const r of runs) {
+    if (r.status === "needs-input") out[r.id] = { name: runLabel(r), body: parkSummary(r.park ?? { node: r.current?.node }).title };
+  }
+  return out;
+}
+
+function AboutHome({ app }: { app: AppInfo }) {
+  return (
+    <Popover
+      align="end"
+      title="This Howdah home"
+      className="w-[min(420px,calc(100vw-16px))]"
+      trigger={<Button variant="ghost" size="icon" aria-label="About this home: where runs are stored"><Info /></Button>}
+    >
+      <KeyValue
+        labelWidth={84}
+        items={[
+          { label: "Home", value: app.home, mono: true, copy: true },
+          { label: "Source", value: app.repoRoot, mono: true, copy: true },
+          { label: "Supervisor", value: app.supervisorHeartbeat ? "Running: a run whose runner dies is resumed automatically." : "Not running." },
+        ]}
+      />
+    </Popover>
   );
 }
 
 export function RunsList() {
   const [runs, setRuns] = useState<RunBoardRow[] | null>(null);
   const [app, setApp] = useState<AppInfo | null>(null);
+  const [query, setQuery] = useState("");
+  const filterRef = useRef<HTMLInputElement | null>(null);
   const now = useNow();
-  const load = useCallback(() => getJSON<RunBoardRow[]>("/api/runs").then(setRuns).catch(() => {}), []);
+  const [failed, setFailed] = useState(false);
+  // a failed refresh keeps the rows already on screen; only a failed FIRST load has nothing to show
+  const load = useCallback(() => getJSON<RunBoardRow[]>("/api/runs").then((r) => { setRuns(r); setFailed(false); }).catch(() => setFailed(true)), []);
   useEffect(() => {
     getJSON<AppInfo>("/api/app").then(setApp).catch(() => {});
     void load();
@@ -113,45 +179,72 @@ export function RunsList() {
     return () => { clearInterval(t); es?.close(); };
   }, [load]);
   const waitingIds = runs?.filter((r) => r.status === "needs-input").map((r) => r.id);
-  useAttentionSurfaces(!!waitingIds?.length, waitingIds ? { waiting: waitingIds, cleared: "others" } : null);
+  // ALL waiting runs, never the filtered ones: a filter must not make a standing ask look answered
+  useAttentionSurfaces(!!waitingIds?.length, runs && waitingIds ? { waiting: waitingIds, cleared: "others", info: waitingNotes(runs) } : null);
+  const nav = useListNav({ noun: "run", filterRef, enabled: !!runs?.length });
 
-  if (!runs) return <LoadingBlock label="Loading runs" rows={6} />;
-  if (runs.length === 0)
-    return (
-      <EmptyState mark={<Mark className="mark" />}>
-        no runs yet — <code>howdah run &lt;graph&gt;</code>
-      </EmptyState>
-    );
+  if (!runs) return failed ? <Screen name="runs" title="Runs"><LoadError what="the runs" onRetry={() => void load()} /></Screen> : <ScreenLoading name="runs" title="Runs" label="Loading runs" />;
+
+  const shown = runs.filter((r) => matchesFilter(r, query));
+  const groups = groupRuns(shown, now);
+  const newRun = <a className={buttonVariants()} href="/new"><Plus aria-hidden />New run <Kbd keys="c" decorative /></a>;
   return (
-    <div>
-      <h1>Runs</h1>
-      {app && (
-        <div className="home-strip">
-          <span>Home</span><Tooltip content={app.home}><code>{app.home}</code></Tooltip>
-          <span>Source</span><Tooltip content={app.repoRoot}><code>{app.source}</code></Tooltip>
-          <span>Supervisor</span>
-          <Tooltip
-            content={app.supervisorHeartbeat
-              ? "howdah up is running: a run whose runner dies is resumed automatically"
-              : "not seen: no supervisor heartbeat, so a run whose runner dies will NOT be resumed automatically — run `bun cli/main.ts up` (or resume it by hand)"}
-          >
-            <Badge variant={app.supervisorHeartbeat ? "success" : "outline"}>{app.supervisorHeartbeat ? "heartbeat" : "not seen"}</Badge>
-          </Tooltip>
-          {!app.supervisorHeartbeat && <span className="home-strip-note">dead runs will not be resumed automatically — run <code>howdah up</code></span>}
+    <Screen
+      name="runs"
+      title="Runs"
+      actions={
+        <>
+          {runs.length > 0 && (
+            <span className="relative block w-56 max-[1099px]:w-44">
+              <Search aria-hidden className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-faint" />
+              <Input
+                ref={filterRef}
+                type="search"
+                aria-label="Filter runs by name, graph or status"
+                placeholder="Filter runs"
+                className="pl-7 pr-8"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") { e.preventDefault(); if (query) setQuery(""); else e.currentTarget.blur(); }
+                  if (e.key === "ArrowDown" || e.key === "Enter") { e.preventDefault(); nav.move(1); }
+                }}
+              />
+              {query === "" && <Kbd keys="/" decorative className="pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2" />}
+            </span>
+          )}
+          {app && <AboutHome app={app} />}
+          {newRun}
+        </>
+      }
+      footer={runs.length > 0 ? (
+        <KeyHints hints={[{ keys: ["j", "k"], label: "move" }, { keys: ["enter"], label: "open" }, { keys: ["/"], label: "filter" }, { keys: ["g n"], label: "needs you" }, { keys: ["mod+k"], label: "commands" }, { keys: ["?"], label: "all shortcuts" }]} />
+      ) : undefined}
+    >
+      {app && !app.supervisorHeartbeat && runs.length > 0 && (
+        <p data-slot="supervisor-note" className="m-0 text-sm text-muted-foreground">
+          The supervisor is not running, so a run whose runner dies will not be resumed automatically. Start it with <code className="font-mono text-code text-foreground">bun cli/main.ts up</code>.
+        </p>
+      )}
+      {runs.length === 0 ? (
+        <EmptyState mark={<Mark className="mark" />} title="No runs yet" actions={newRun}>
+          A run is one graph of agent work against a workspace. Start one here, or from a terminal
+          with <code>bun cli/main.ts run &lt;graph&gt;</code>.
+        </EmptyState>
+      ) : groups.length === 0 ? (
+        <EmptyState actions={<Button variant="outline" onClick={() => { setQuery(""); filterRef.current?.focus(); }}>Clear the filter</Button>}>
+          No run matches “{query}”. The filter looks at name, goal, id, graph, status and step.
+        </EmptyState>
+      ) : (
+        <div ref={nav.ref} {...nav.containerProps} className="flex flex-col gap-5">
+          {groups.map((g) => (
+            <section key={g.key} data-group={g.key} aria-label={g.label} className="flex flex-col">
+              <SectionLabel as="h2" count={g.rows.length} className="border-b border-border px-2 pb-1.5">{g.label}</SectionLabel>
+              {g.rows.map((r) => <RunRow key={r.id} r={r} now={now} selected={nav.selected === r.id} />)}
+            </section>
+          ))}
         </div>
       )}
-      {groupRuns(runs, now).map((g) => (
-        <section key={g.key} className="board-group" aria-label={g.label}>
-          <h2 className="board-group-head" data-group={g.key}>{g.label} <span className="bv-faint">{g.rows.length}</span></h2>
-          {g.rows.map((r) => (
-            <Row key={r.id} className="run-row board-row" needsInput={r.status === "needs-input"} href={`/run/${r.id}`}>
-              <StatusBadge status={r.status} />
-              <span className="run-goal">{runLabel(r)}</span>
-              <Vitals r={r} now={now} />
-            </Row>
-          ))}
-        </section>
-      ))}
-    </div>
+    </Screen>
   );
 }

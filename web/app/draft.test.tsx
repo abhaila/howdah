@@ -419,7 +419,8 @@ describe("/runs/:id/draft", () => {
     const show = buttonNamed(el, "Show the draft")!;
     expect(show.getAttribute("aria-expanded")).toBe("false");
     await click(show);
-    expect(el.querySelector(".draft-page-main .dag-node.removed")).not.toBeNull();
+    // HOW-68: the reading column is `data-slot="draft-main"` (was `.draft-page-main`)
+    expect(el.querySelector('[data-slot="draft-main"] .dag-node.removed')).not.toBeNull();
     expect(buttonNamed(el, "Hide the draft")?.getAttribute("aria-expanded")).toBe("true");
   });
 

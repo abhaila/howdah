@@ -12,19 +12,41 @@
  * with draft-graph picked and, when the selected graph is one the builder can open, that graph
  * as the base — `builder === true` is the same rule New run's Base list applies, so the link
  * never names a base the form would not offer. "Build by hand" stays, secondary.
+ *
+ * HOW-68 put the screen on the shared split frame (screens/frame.tsx): the catalog on the
+ * left, the selected graph on the right, each its own scroller; below 1100px the graph replaces
+ * the catalog, with Back and Esc. What changed inside it:
+ *
+ *   A catalog row says what a graph IS — name, where it lives (built in, built here, local),
+ *   what it needs (repo or plain), its description and how many steps — instead of a name and
+ *   a chip. A local graph that will not load is listed under its own heading with the reason,
+ *   whole and wrapped, never quietly missing.
+ *   The graph's picture gets a container with a real height, so the DAG's own scroller has
+ *   something to scroll in (it used to size to the graph and run off the page).
+ *   The step table keeps its columns at any width and scrolls sideways INSIDE itself; it is
+ *   the first thing after the picture, because it is the answer to "what will each step run
+ *   on". The "override" marker was the amber attention badge on a row that needs nothing from
+ *   anybody — it is a neutral chip (DESIGN.md: amber means waiting on you, and nothing else).
+ *   The three tuning forms are sections, not cards in a column of cards.
+ *   The source editor is mono, in its own bounded scroller, behind an "Edit the source"
+ *   disclosure.
+ *
+ * ONE primary action on the screen: "Draft a graph", in the header. Saving tuning and saving
+ * source are outline buttons beside the thing they save, each saying when there is something
+ * unsaved.
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { GitBranch, FolderGit2, SlidersHorizontal, Pencil, Plus, Sparkles, RotateCcw as ResetIcon } from "lucide-react";
-import type { GraphCatalog } from "@/lib/types";
+import { GitBranch, FolderGit2, SlidersHorizontal, Pencil, Play, Plus, Sparkles, ChevronDown, ChevronRight, RotateCcw as ResetIcon } from "lucide-react";
+import type { GraphCatalog, GraphInfo } from "@/lib/types";
 import { navigate } from "@/lib/nav";
 import { useTypedText } from "@/lib/hooks";
+import { useListNav } from "@/lib/list-nav";
 import { getJSON } from "@/lib/net";
 import { GraphDag, useGraphShape, type GraphShapeDto, type AgentConfigDto } from "../graph-dag";
 import { modelFitsHarness } from "../../../core/graph";
 import { DRAFT_GRAPH } from "../../../core/catalog";
 import { defaultHarness, effortFor, harnessNames, harnessSpec, isHarness } from "../../../core/harnesses";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
@@ -33,9 +55,12 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Row } from "@/components/ui/row";
 import { EmptyState } from "@/components/ui/empty-state";
-import { LoadingBlock } from "@/components/ui/skeleton";
+import { SectionLabel } from "@/components/ui/section-label";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Truncate } from "@/components/ui/truncate";
 import { useToast } from "@/components/ui/toast";
+import { CODE, FieldError, Hint, KeyHints, LIST_HINTS, LoadError, Section, SplitScreen } from "./frame";
 
 /**
  * HOW-17: the offered harnesses come from the harness table, not a literal here — adding a
@@ -173,7 +198,7 @@ export function ConfigFields(
       </Label>
       <Label>
         Model
-        <Input list="model-suggestions" value={value.model ?? ""} placeholder={ph("model", "harness default")} onChange={(e) => onChange({ ...value, model: e.target.value || undefined })} />
+        <Input mono list="model-suggestions" value={value.model ?? ""} placeholder={ph("model", "harness default")} onChange={(e) => onChange({ ...value, model: e.target.value || undefined })} />
         <datalist id="model-suggestions">{MODEL_SUGGESTIONS.map((m) => <option key={m} value={m} />)}</datalist>
       </Label>
       <Label>
@@ -279,118 +304,113 @@ export function GraphTuner({ shape, onSaved }: { shape: GraphShapeDto; onSaved: 
     }
   };
 
+  const effective = (n: (typeof agentNodes)[number]) =>
+    [n.effective?.harness, n.effective?.model, n.effective?.effort, n.effective?.effortInert && `effort inert (${n.effective.effortInert})`, n.effective?.permissionMode].filter(Boolean).join(" · ");
   return (
-    <div className="tuner">
-      <GraphDag key={`${shape.name}:${JSON.stringify(tuning)}`} shape={preview} onSelect={setSelectedNode} selected={selectedNode ?? undefined} />
-      <div className="tuner-panels">
-        <Card>
-          <CardHeader>
-            <CardTitle>Graph defaults</CardTitle>
-            <CardDescription>Applies to every agent node unless the node sets its own. Cleared fields fall back to the graph file.</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <ConfigFields value={tuning.defaults ?? {}} baseline={shape.defaults} inheritedHarness={shape.default_harness} onChange={(v) => { setTuning({ ...tuning, defaults: v }); setDirty(true); }} />
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader>
-            <CardTitle>Bulk update</CardTitle>
-            <CardDescription>Apply a model level to a whole graph slice. Node overrides are saved to tuning.json.</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <Label>
-              Target
-              <Select value={bulkTarget} onChange={(e) => setBulkTarget(e.target.value)}>
-                <option value="all">all agent nodes</option>
-                <option value="role:planning">planning nodes</option>
-                {classes.map((c) => <option key={c} value={`class:${c}`}>{c} class</option>)}
-              </Select>
-            </Label>
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-              <Label>
-                Harness
-                <Select value={bulkConfig.harness ?? ""} onChange={(e) => setBulkConfig({ ...bulkConfig, harness: e.target.value || undefined })}>
-                  {HARNESSES.map((x) => <option key={x} value={x}>{x || "keep current"}</option>)}
-                </Select>
-              </Label>
-              <Label>
-                Model
-                <Input list="model-suggestions" value={bulkConfig.model ?? ""} placeholder="keep current" onChange={(e) => setBulkConfig({ ...bulkConfig, model: e.target.value || undefined })} />
-              </Label>
-              <Label>
-                Effort
-                <Select value={bulkConfig.effort ?? ""} onChange={(e) => setBulkConfig({ ...bulkConfig, effort: e.target.value || undefined })}>
-                  {EFFORTS.map((x) => <option key={x} value={x}>{x || "keep current"}</option>)}
-                </Select>
-              </Label>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <Button size="sm" onClick={() => applyBulk()}><SlidersHorizontal />Apply to {selectedIds.length}</Button>
-              {BULK_PRESETS.map((p) => (
-                <Button key={p.id} variant="outline" size="sm" onClick={() => { setBulkTarget(p.target); setBulkConfig(p.cfg); applyBulk(p.cfg, p.target); }}>{p.label}</Button>
-              ))}
-              <Button variant="ghost" size="sm" onClick={() => clearBulk()}><ResetIcon />Clear target overrides</Button>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          {node?.kind === "agent" ? (
-            <>
-              <CardHeader>
-                <CardTitle className="font-mono">{node.id}</CardTitle>
-                <CardDescription>prompt: {node.prompt} · effective now: {node.effective?.harness}{node.effective?.model ? ` · ${node.effective.model}` : ""}{node.effective?.effort ? ` · ${node.effective.effort}` : ""}{node.effective?.effortInert ? ` · ${node.effective.effortInert}` : ""}{node.effective?.permissionMode ? ` · ${node.effective.permissionMode}` : ""}</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <ConfigFields value={tuning.nodes?.[node.id] ?? {}} baseline={node.baseline} inheritedHarness={shape.default_harness} onChange={(v) => setNodeCfg(node.id, v)} />
-                <Button variant="ghost" size="sm" className="self-start" onClick={() => clearNodeCfg(node.id)}><ResetIcon />Clear node override</Button>
-              </CardContent>
-            </>
-          ) : (
-            <CardContent className="pt-5"><div className="field-hint">Click an agent node (◆) in the graph to tune it.</div></CardContent>
-          )}
-        </Card>
-      </div>
-      <Card>
-        <CardHeader>
-          <CardTitle>Agent nodes</CardTitle>
-          <CardDescription>Scan the effective routing model and jump straight to a node override.</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <Table>
+    <div data-slot="tuner" className="flex flex-col gap-6">
+      <Section title="Shape" description="Select an agent step, here or in the table below, to override what it runs on.">
+        {/* a real height: the DAG's own scroller needs something to scroll in */}
+        <div data-slot="graph-picture" className="flex h-[min(440px,58dvh)] min-h-[260px] flex-col">
+          <GraphDag key={`${shape.name}:${JSON.stringify(tuning)}`} shape={preview} onSelect={setSelectedNode} selected={selectedNode ?? undefined} />
+        </div>
+      </Section>
+
+      <Section title="Agent steps" count={agentNodes.length} description="What each step will run on once the settings below are saved.">
+        {agentNodes.length === 0 ? <Hint>This graph has no agent steps, so there is nothing to tune.</Hint> : (
+          <Table className="whitespace-nowrap">
             <TableHeader>
               <TableRow>
-                <TableHead>Node</TableHead>
+                <TableHead>Step</TableHead>
                 <TableHead>Class</TableHead>
                 <TableHead>Harness</TableHead>
                 <TableHead>Model</TableHead>
                 <TableHead>Effort</TableHead>
-                <TableHead>Override</TableHead>
+                <TableHead>Settings</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {agentNodes.map((n) => (
-                <TableRow key={n.id} className={selectedNode === n.id ? "bg-muted" : ""}>
-                  {/* the whole row selects a node, but a table cell cannot BE a button and stay
-                      a table — so the node name is the control and the row follows it */}
-                  <TableCell className="font-mono">
-                    <Button variant="link" size="inline" aria-pressed={selectedNode === n.id} onClick={() => setSelectedNode(n.id)}>{n.id}</Button>
+                <TableRow key={n.id} data-selected={selectedNode === n.id || undefined} className={selectedNode === n.id ? "bg-card" : ""}>
+                  {/* the whole row selects a step, but a table cell cannot BE a button and stay
+                      a table — so the step id is the control and the row follows it */}
+                  <TableCell className="font-mono text-code">
+                    <Button variant="link" size="inline" className="text-foreground" aria-pressed={selectedNode === n.id} onClick={() => setSelectedNode(n.id)}>{n.id}</Button>
                   </TableCell>
-                  <TableCell>{n.class ?? "—"}</TableCell>
-                  <TableCell className="font-mono">{n.effective?.harness ?? "claude"}</TableCell>
-                  <TableCell className="font-mono">{n.effective?.model ?? "default"}</TableCell>
-                  <TableCell className="font-mono">{n.effective?.effortInert ? `inert (${n.effective.effortInert})` : n.effective?.effort ?? "—"}</TableCell>
-                  <TableCell>{n.node_tuning ? <Badge variant="attention">node</Badge> : <Badge variant="outline">inherit</Badge>}</TableCell>
+                  <TableCell className="text-muted-foreground">{n.class ?? "—"}</TableCell>
+                  <TableCell>{n.effective?.harness ?? "claude"}</TableCell>
+                  <TableCell className="font-mono text-code">{n.effective?.model ?? <span className="font-sans text-base text-muted-foreground">harness default</span>}</TableCell>
+                  <TableCell>{n.effective?.effortInert ? `inert (${n.effective.effortInert})` : n.effective?.effort ?? "—"}</TableCell>
+                  <TableCell>{n.node_tuning ? <Badge>overridden</Badge> : <Badge variant="outline">inherited</Badge>}</TableCell>
                 </TableRow>
               ))}
             </TableBody>
           </Table>
-        </CardContent>
-      </Card>
-      <div className="tuner-save">
-        <Button onClick={save} disabled={!dirty || state === "saving"}>
-          {state === "saving" ? "Saving…" : state === "saved" ? "Saved — applies to new runs" : state === "failed" ? "Failed — retry" : "Save tuning"}
+        )}
+      </Section>
+
+      <div className="grid items-start gap-x-8 gap-y-6 min-[1360px]:grid-cols-2">
+        <Section
+          title={node?.kind === "agent" ? "This step" : "A step's own settings"}
+          description={node?.kind === "agent" ? undefined : "Select an agent step in the picture or the table to override its settings."}
+        >
+          {node?.kind === "agent" && (
+            <>
+              <div className="flex flex-col gap-0.5">
+                <span className="font-mono text-code font-medium text-foreground [overflow-wrap:anywhere]">{node.id}</span>
+                <Hint>Prompt <span className="font-mono text-code">{node.prompt}</span>. Runs now on: {effective(node) || "the harness default"}.</Hint>
+              </div>
+              <ConfigFields value={tuning.nodes?.[node.id] ?? {}} baseline={node.baseline} inheritedHarness={shape.default_harness} onChange={(v) => setNodeCfg(node.id, v)} />
+              <Button variant="ghost" size="sm" className="-ml-2 self-start" onClick={() => clearNodeCfg(node.id)}><ResetIcon />Clear this step's override</Button>
+            </>
+          )}
+        </Section>
+        <Section title="Graph defaults" description="Applies to every agent step unless the step sets its own. A cleared field falls back to the graph file.">
+          <ConfigFields value={tuning.defaults ?? {}} baseline={shape.defaults} inheritedHarness={shape.default_harness} onChange={(v) => { setTuning({ ...tuning, defaults: v }); setDirty(true); }} />
+        </Section>
+        <Section title="Bulk update" description="Set the harness, model and effort for a whole slice of the graph at once.">
+          <Label>
+            Target
+            <Select value={bulkTarget} onChange={(e) => setBulkTarget(e.target.value)}>
+              <option value="all">all agent steps</option>
+              <option value="role:planning">planning steps</option>
+              {classes.map((c) => <option key={c} value={`class:${c}`}>{c} class</option>)}
+            </Select>
+          </Label>
+          <div className="grid grid-cols-1 gap-3 min-[720px]:grid-cols-3">
+            <Label>
+              Harness
+              <Select value={bulkConfig.harness ?? ""} onChange={(e) => setBulkConfig({ ...bulkConfig, harness: e.target.value || undefined })}>
+                {HARNESSES.map((x) => <option key={x} value={x}>{x || "keep current"}</option>)}
+              </Select>
+            </Label>
+            <Label>
+              Model
+              <Input mono list="model-suggestions" value={bulkConfig.model ?? ""} placeholder="keep current" onChange={(e) => setBulkConfig({ ...bulkConfig, model: e.target.value || undefined })} />
+            </Label>
+            <Label>
+              Effort
+              <Select value={bulkConfig.effort ?? ""} onChange={(e) => setBulkConfig({ ...bulkConfig, effort: e.target.value || undefined })}>
+                {EFFORTS.map((x) => <option key={x} value={x}>{x || "keep current"}</option>)}
+              </Select>
+            </Label>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="outline" size="sm" onClick={() => applyBulk()}><SlidersHorizontal />Apply to {selectedIds.length}</Button>
+            {BULK_PRESETS.map((p) => (
+              <Button key={p.id} variant="outline" size="sm" onClick={() => { setBulkTarget(p.target); setBulkConfig(p.cfg); applyBulk(p.cfg, p.target); }}>{p.label}</Button>
+            ))}
+            <Button variant="ghost" size="sm" onClick={() => clearBulk()}><ResetIcon />Clear target overrides</Button>
+          </div>
+        </Section>
+      </div>
+
+      <div data-slot="tuner-save" className="flex flex-wrap items-center gap-3">
+        <Button variant="outline" onClick={save} disabled={!dirty} loading={state === "saving"}>
+          {state === "failed" ? "Save failed — retry" : "Save tuning"}
         </Button>
-        {dirty && <span className="field-hint">unsaved changes</span>}
+        <p role="status" className="m-0 text-sm text-muted-foreground">
+          {dirty ? "Unsaved changes. They apply to new runs once saved." : state === "saved" ? "Saved. It applies to new runs." : "Tuning applies to new runs; a run in flight keeps what it started with."}
+        </p>
       </div>
     </div>
   );
@@ -452,36 +472,61 @@ export function GraphSource({ name, onSaved }: { name: string; onSaved: () => vo
     }
   };
 
-  if (source === null) return <LoadingBlock label={`Reading ${name}.ts`} rows={6} />;
+  if (source === null) {
+    return <div role="status" aria-busy="true" className="flex flex-col gap-2"><span className="sr-only">Reading {name}.ts</span><Skeleton className="h-40 w-full" /></div>;
+  }
 
   return (
-    <div className="graph-source">
+    <div data-slot="graph-source" className="flex flex-col gap-3">
+      {/* mono, unwrapped, in its own bounded scroller: the file is the artifact, and a wrapped line of TypeScript is a different line */}
       <Textarea
-        className="graph-source-editor"
+        mono
+        wrap="off"
+        className="h-[min(480px,60dvh)] min-h-[200px] resize-y overflow-auto whitespace-pre text-code leading-[1.55] [tab-size:2]"
         aria-label={`${name}.ts source`}
         spellCheck={false}
         value={source}
         onChange={(e) => { setSource(e.target.value); setDirty(true); setState("idle"); }}
       />
-      <div className="actions">
-        <Button onClick={save} disabled={!dirty || state === "saving"}>{state === "saving" ? "Checking…" : "Save"}</Button>
-        <Button variant="outline" onClick={typecheck} disabled={state === "checking" || dirty}>
-          {state === "checking" ? "Typechecking…" : "Typecheck"}
+      <div className="flex flex-wrap items-center gap-2">
+        <Button variant="outline" onClick={save} disabled={!dirty} loading={state === "saving"}>{state === "saving" ? "Checking" : "Save"}</Button>
+        <Button variant="outline" onClick={typecheck} disabled={dirty} loading={state === "checking"}>
+          {state === "checking" ? "Typechecking" : "Typecheck"}
         </Button>
         {state === "saved" && !dirty && <Badge variant="outline">validated</Badge>}
         {checked?.ok && <Badge variant="outline">typechecked</Badge>}
       </div>
-      {dirty && <div className="field-hint">Unsaved. Typecheck runs against what is on disk, so save first.</div>}
-      {error && <div className="field-error wrap-pre">{error}</div>}
-      {checked?.unavailable && <div className="field-error">Could not run tsc, so nothing was checked: {checked.unavailable}</div>}
+      {dirty && <Hint>Unsaved. Typecheck runs against what is on disk, so save first.</Hint>}
+      {error && <FieldError pre>{error}</FieldError>}
+      {checked?.unavailable && <FieldError>Could not run tsc, so nothing was checked: {checked.unavailable}</FieldError>}
       {checked && !checked.ok && !checked.unavailable && (
-        <div className="field-error wrap-pre">{checked.diagnostics.join("\n")}</div>
+        <FieldError pre className="font-mono text-code">{checked.diagnostics.join("\n")}</FieldError>
       )}
-      <div className="field-hint">
-        Save gates on <code>validate()</code> plus every prompt file existing. Typecheck is the
-        compiler, and it is the only thing that catches a type error inside a node.
-      </div>
+      <Hint>
+        Save gates on <code className={CODE}>validate()</code> plus every prompt file existing. Typecheck is the
+        compiler, and it is the only thing that catches a type error inside a step.
+      </Hint>
     </div>
+  );
+}
+
+/** one catalog row: what the graph is, where it lives, what it needs, how big it is */
+function GraphRow({ g, selected, onSelect }: { g: GraphInfo; selected: boolean; onSelect: () => void }) {
+  return (
+    <Row
+      className="flex flex-col gap-0.5 border-b border-border px-2 py-2 text-sm leading-[1.4]"
+      selected={selected} onClick={onSelect} aria-label={`the ${g.name} graph`} data-nav-row={g.name}
+    >
+      <span className="flex min-w-0 items-center gap-2">
+        <Truncate className="flex-1 text-body font-medium text-foreground">{g.name}</Truncate>
+        {g.source === "local" && <Badge variant="outline">{g.builder ? "built here" : "local"}</Badge>}
+        <Badge variant="outline">{g.kind === "repo" ? <GitBranch aria-hidden /> : <FolderGit2 aria-hidden />}{g.kind}</Badge>
+      </span>
+      <span className="flex min-w-0 items-baseline gap-2 text-xs text-muted-foreground">
+        <Truncate className="flex-1">{g.description || "No description."}</Truncate>
+        {g.steps !== undefined && <span className="shrink-0 tabular-nums">{g.steps} step{g.steps === 1 ? "" : "s"}</span>}
+      </span>
+    </Row>
   );
 }
 
@@ -489,8 +534,11 @@ export function GraphsList() {
   const [catalog, setCatalog] = useState<GraphCatalog | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
-  const load = useCallback(() => getJSON<GraphCatalog>("/api/graphs").then(setCatalog).catch(() => {}), []);
+  const [showSource, setShowSource] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const load = useCallback(() => { setFailed(false); return getJSON<GraphCatalog>("/api/graphs").then(setCatalog).catch(() => setFailed(true)); }, []);
   useEffect(() => { load(); }, [load, reloadKey]);
+  useEffect(() => { setShowSource(false); }, [selected]);
   const shape = useGraphShape(selected ? `${selected}?v=${reloadKey}` as any : undefined);
   const graphs = catalog?.graphs ?? [];
   const current = graphs.find((g) => g.name === selected);
@@ -500,75 +548,101 @@ export function GraphsList() {
   // is false, and gets told so rather than opened half-understood.
   const isBuilder = current?.builder === true;
   const draftHref = `/new?${new URLSearchParams({ graph: DRAFT_GRAPH, ...(isBuilder && selected ? { base: selected } : {}) })}`;
+  const nav = useListNav({ noun: "graph", arrows: "list", enabled: graphs.length > 0 });
+  const problems = catalog?.problems ?? [];
+
+  const list = catalog === null && failed ? (
+    <LoadError what="the graphs" onRetry={() => void load()} />
+  ) : catalog === null ? (
+    <div role="status" aria-busy="true" className="flex flex-col gap-2 px-2"><span className="sr-only">Loading graphs</span>{Array.from({ length: 8 }, (_, i) => <Skeleton key={i} className="h-11 w-full" />)}</div>
+  ) : (
+    <div ref={nav.ref} {...nav.containerProps} className="flex flex-col gap-5">
+      {graphs.length === 0
+        ? <Hint className="px-2">No graph loaded. The built-in graphs ship with Howdah, so this means the registry failed to load — see the terminal running the viewer.</Hint>
+        : <div className="flex flex-col">{graphs.map((g) => <GraphRow key={g.name} g={g} selected={selected === g.name} onSelect={() => setSelected(g.name)} />)}</div>}
+      {/* a local graph that will not load is named here rather than quietly missing */}
+      {problems.length > 0 && (
+        <section aria-label="Will not load" className="flex flex-col gap-2 px-2">
+          <SectionLabel as="h2" count={problems.length}>Will not load</SectionLabel>
+          {problems.map((p) => (
+            <div key={p.name} data-problem={p.name} className="flex flex-col gap-0.5 border-b border-border pb-2">
+              <span className="text-body font-medium text-foreground [overflow-wrap:anywhere]">{p.name}</span>
+              <FieldError pre>{p.error}</FieldError>
+            </div>
+          ))}
+        </section>
+      )}
+      <Hint className="px-2">
+        Your own graphs are saved under <code className={CODE}>$HOWDAH_HOME/graphs</code>, not in the Howdah
+        repo, so updating Howdah never touches them.
+      </Hint>
+    </div>
+  );
+
+  const detail = !selected ? (
+    <EmptyState title="Select a graph">Its shape, its steps and what each one runs on appear here. To make a new one, draft it from a sentence or build it by hand.</EmptyState>
+  ) : !shape ? (
+    <div role="status" aria-busy="true" className="flex flex-col gap-3"><span className="sr-only">Loading {selected}</span><Skeleton className="h-6 w-56" /><Skeleton className="h-4 w-full" /><Skeleton className="h-64 w-full" /></div>
+  ) : (
+    <>
+      <div className="flex flex-col gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <h2 className="m-0 text-xl font-semibold leading-7 [overflow-wrap:anywhere]">{shape.name}</h2>
+          {current && <Badge variant="outline">{current.source === "local" ? (current.builder ? "built here" : "local") : "built in"}</Badge>}
+          {current && <Badge variant="outline">{current.kind === "repo" ? <GitBranch aria-hidden /> : <FolderGit2 aria-hidden />}{current.kind}</Badge>}
+        </div>
+        {shape.description && <p data-slot="graph-description" className="m-0 max-w-[72ch] text-body leading-normal text-muted-foreground">{shape.description}</p>}
+        {current?.launched_by && (
+          <Hint>
+            Started by <code className={CODE}>{current.launched_by}</code>, not from New run: it launches this graph for each approved
+            slice that has <code className={CODE}>depends_on</code>, and fills in its <code className={CODE}>deps</code> input itself.
+          </Hint>
+        )}
+        <div className="flex flex-wrap items-center gap-2">
+          {current && !current.launched_by && <a className={buttonVariants({ variant: "outline", size: "sm" })} href={`/new?graph=${encodeURIComponent(current.name)}`}><Play aria-hidden />Run this graph</a>}
+          {isBuilder && <Button variant="outline" size="sm" onClick={() => navigate(`/graphs/${selected}/build`)}><Pencil />Edit in builder</Button>}
+        </div>
+        {!isLocal && <Hint>A built-in graph: edit it in the Howdah repo, where <code className={CODE}>bun run check</code> covers it.</Hint>}
+        {isLocal && !isBuilder && (
+          <Hint>
+            This graph was not built in the builder, so the builder cannot open it — it
+            never guesses a spec back out of TypeScript. Edit its source below.
+          </Hint>
+        )}
+      </div>
+      <GraphTuner shape={shape} onSaved={() => setReloadKey((k) => k + 1)} />
+      {isLocal && (
+        // HOW-22: the source editor is still here and still the escape hatch for a graph the
+        // builder's vocabulary cannot say — but it is not the FIRST thing a local graph offers,
+        // because reading TypeScript is optional.
+        <div className="flex flex-col gap-3">
+          <Button variant="ghost" size="sm" className="-ml-2 self-start" aria-expanded={showSource} aria-controls="graph-source" onClick={() => setShowSource((v) => !v)}>
+            {showSource ? <ChevronDown /> : <ChevronRight />}Edit the source
+          </Button>
+          {showSource && <div id="graph-source"><GraphSource name={selected} onSaved={() => setReloadKey((k) => k + 1)} /></div>}
+        </div>
+      )}
+    </>
+  );
 
   return (
-    <div className="runs">
-      <h1>Graphs</h1>
-      <div className="graphs-layout">
-        <div>
-          {graphs.map((g) => (
-            <Row key={g.name} className="run-row" selected={selected === g.name} onClick={() => setSelected(g.name)} aria-label={`the ${g.name} graph`}>
-              <span className="run-goal">{g.name}</span>
-              {g.source === "local" && <Badge variant="outline">{g.builder ? "built here" : "local"}</Badge>}
-              <Badge variant="outline" className="ml-auto">{g.kind === "repo" ? <GitBranch /> : <FolderGit2 />}{g.kind}</Badge>
-            </Row>
-          ))}
-          {/* a local graph that will not load is named here rather than quietly missing */}
-          {catalog?.problems.map((p) => (
-            <Row as="div" key={p.name} className="run-row run-row-problem">
-              <span className="run-goal">{p.name}</span>
-              <Badge variant="outline" className="ml-auto">will not load</Badge>
-              <div className="field-error problem-why">{p.error}</div>
-            </Row>
-          ))}
-          <div className="actions">
-            <Button onClick={() => navigate(draftHref)}><Sparkles />Draft a graph</Button>
-            <Button variant="outline" onClick={() => navigate("/graphs/new")}><Plus />Build by hand</Button>
-          </div>
-          <div className="field-hint">
-            Built graphs are saved under <code>$HOWDAH_HOME/graphs</code>, not in the Howdah
-            repo, so updating Howdah never touches them.
-          </div>
-        </div>
-        <div>
-          {shape ? (
-            <>
-              <div className="field-hint graph-description">{shape.description}</div>
-              {current?.launched_by && (
-                <div className="field-hint">
-                  Started by <code>{current.launched_by}</code>, not from New run: it launches this graph for each approved
-                  slice that has <code>depends_on</code>, and fills in its <code>deps</code> input itself.
-                </div>
-              )}
-              {isBuilder && (
-                <div className="actions">
-                  <Button onClick={() => navigate(`/graphs/${selected}/build`)}><Pencil />Edit in builder</Button>
-                </div>
-              )}
-              {isLocal ? (
-                <>
-                  {/* HOW-22: the source editor is still here and still the escape hatch for a
-                      graph the builder's vocabulary cannot say — but it is no longer the FIRST
-                      thing a local graph offers, because reading TypeScript is now optional. */}
-                  {!isBuilder && (
-                    <div className="field-hint">
-                      This graph was not built in the builder, so the builder cannot open it — it
-                      never guesses a spec back out of TypeScript. Edit the source below.
-                    </div>
-                  )}
-                  <details className="graph-advanced">
-                    <summary>Advanced — source</summary>
-                    <GraphSource name={selected!} onSaved={() => setReloadKey((k) => k + 1)} />
-                  </details>
-                </>
-              ) : (
-                <div className="field-hint">Built-in graph: edit it in the Howdah repo, where <code>bun run check</code> covers it.</div>
-              )}
-              <GraphTuner shape={shape} onSaved={() => setReloadKey((k) => k + 1)} />
-            </>
-          ) : <EmptyState>select a graph</EmptyState>}
-        </div>
-      </div>
-    </div>
+    <SplitScreen
+      name="graphs"
+      title="Graphs"
+      actions={
+        <>
+          <Button onClick={() => navigate(draftHref)}><Sparkles />Draft a graph</Button>
+          <Button variant="outline" onClick={() => navigate("/graphs/new")}><Plus />Build by hand</Button>
+        </>
+      }
+      footer={<KeyHints hints={LIST_HINTS} />}
+      list={list}
+      listLabel="Graphs"
+      detail={detail}
+      detailLabel={selected ?? "Graph"}
+      hasDetail={selected !== null}
+      onBack={() => setSelected(null)}
+      backLabel="Graphs"
+    />
   );
 }
