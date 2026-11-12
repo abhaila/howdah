@@ -9,7 +9,8 @@ import { createRoot, type Root } from "react-dom/client";
 import { deriveDetail, type RunDetail } from "../derive";
 import { FakeLog } from "../slice.fixtures";
 import { RunPlan, planInstruction, planRoute } from "./run/plan";
-import { REPORT_SANDBOX, RunReport, canMapChange } from "./run/report";
+import { RELAYED_KEYS, REPORT_SANDBOX, RunReport, canMapChange } from "./run/report";
+import { REPORT_RELAY_KEYS, renderRunReport } from "../../core/run-report";
 import { ToastProvider } from "@/components/ui/toast";
 
 let root: Root | null = null;
@@ -104,6 +105,48 @@ test("the Report tab frames the derived page, sandboxed, with Open and Download"
   expect(links[0]!.getAttribute("target")).toBe("_blank");
   expect(links[0]!.getAttribute("rel")).toBe("noopener noreferrer");
   expect(links[1]!.hasAttribute("download")).toBe(true);
+});
+
+// The confirming review: keys did not reach the app while focus was inside the report's frame.
+describe("the framed report hands the viewer's own keys back", () => {
+  test("the page posts exactly the relayed keys, and only when it is framed", () => {
+    expect([...RELAYED_KEYS]).toEqual([...REPORT_RELAY_KEYS]);
+    const html = renderRunReport({ run_id: "r1", graph: "g", status: "done", generated_at: "2026-10-30T12:00:00.000Z", change: null, criteria: [], tests: null, screens: null, review: null, pull_requests: [], steps: [] });
+    expect(html).toContain("window.parent!==window");
+    expect(html).toContain(`postMessage({howdahKey:k},'*')`);
+    expect(html).toContain(JSON.stringify(REPORT_RELAY_KEYS));
+    // a modified key or one typed in a field is the page's own
+    expect(html).toContain("e.ctrlKey||e.metaKey||e.altKey");
+  });
+
+  test("the pane replays a relayed key from ITS frame as a keydown, and nothing else", () => {
+    const settings = (window as unknown as { happyDOM?: { settings: { disableIframePageLoading: boolean } } }).happyDOM?.settings;
+    if (settings) settings.disableIframePageLoading = true;
+    const el = render(<RunReport runId="r1" detail={planned()} />);
+    const frame = el.querySelector("iframe")!;
+    const heard: string[] = [];
+    const onKey = (e: KeyboardEvent) => heard.push(e.key);
+    document.addEventListener("keydown", onKey);
+    const say = (data: unknown, source: unknown) =>
+      act(() => { window.dispatchEvent(Object.assign(new MessageEvent("message", { data }), { source }) as MessageEvent); });
+    try {
+      const own = frame.contentWindow;
+      Object.defineProperty(frame, "contentWindow", { configurable: true, value: own ?? {} });
+      say({ howdahKey: "f" }, frame.contentWindow);
+      say({ howdahKey: "Escape" }, frame.contentWindow);
+      say({ howdahKey: "3" }, frame.contentWindow);
+      expect(heard).toEqual(["f", "Escape", "3"]);
+      say({ howdahKey: "k" }, frame.contentWindow); // not on the list: a report cannot type into the viewer
+      say({ howdahKey: "f" }, {}); // another window
+      say({ howdahKey: "f" }, window); // this window
+      say("f", frame.contentWindow);
+      expect(heard).toEqual(["f", "Escape", "3"]);
+    } finally {
+      document.removeEventListener("keydown", onKey);
+    }
+    // and the pane says what is not relayed
+    expect(el.textContent).toContain("for any other shortcut press");
+  });
 });
 
 describe("HOW-68 feedback: the plan uses the width its pane has", () => {

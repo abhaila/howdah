@@ -17,7 +17,8 @@
  * (a lighter segment and a "Waited" column); only the step that is waiting on you RIGHT NOW
  * carries the amber glyph and the amber segment.
  */
-import { useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { ChevronRight } from "lucide-react";
 import type { RunDetail } from "../../derive";
 import { StatusGlyph, askRowKey, stepInterrupted, stepKey } from "../status";
 import { slicePanes, SlicePane, MapProgressLine, type SlicePaneId } from "../slice";
@@ -30,6 +31,7 @@ import { SectionLabel } from "@/components/ui/section-label";
 import { ScrollPane } from "@/components/ui/scroll-pane";
 import { Truncate } from "@/components/ui/truncate";
 import { DetailPanel, SplitView, useListKeys, useSplit } from "@/components/ui/panel";
+import { foldTimeline } from "@/lib/timeline";
 import { readStored } from "@/lib/panel";
 import { StandingAsk } from "./ask";
 import { StepActivity } from "./activity";
@@ -71,7 +73,42 @@ export function RunSteps({ timeline, ask, selected, now, onSelect, mapping, inte
   interrupted?: { keys: ReadonlySet<string>; at: number };
 }) {
   const split = useSplit();
-  const keys = useListKeys({ ids: timeline.map(stepKey), selected, onSelect, name: "step" });
+  // A POLL IS ONE ROW (HOW-68 feedback: thirteen `probe_pr` / `wait` pairs were twenty-six rows).
+  // The same rule the Details timeline folds by (`foldTimeline`), applied between the parallel
+  // groups so a group is never folded into; the latest visit stays a row of its own.
+  const blocks = useMemo(() => foldedBlocks(timeline), [timeline]);
+  const [opened, setOpened] = useState<ReadonlySet<string>>(() => new Set());
+  // where J/K stand when that is a FOLD: a fold is a row to walk over, not a step to select
+  const [cursor, setCursor] = useState<string | null>(null);
+  const foldOf = useMemo(() => {
+    const of = new Map<string, string>();
+    for (const b of blocks) if (b.kind === "fold") for (const [t] of b.rows) of.set(stepKey(t), b.id);
+    return of;
+  }, [blocks]);
+  // a step chosen from elsewhere (Build, the Details timeline, a deep link) that sits inside a
+  // fold opens it: a selection nobody can see is not a selection
+  const selectedFold = selected === null ? undefined : foldOf.get(selected);
+  useEffect(() => {
+    if (selectedFold === undefined) return;
+    setOpened((was) => (was.has(selectedFold) ? was : new Set(was).add(selectedFold)));
+    setCursor(null);
+  }, [selectedFold, selected]);
+  // the rows on screen, in order: what J/K and the arrows walk
+  const visible = useMemo(() => blocks.flatMap((b) =>
+    b.kind === "fold" ? [b.id, ...(opened.has(b.id) ? b.rows.map(([t]) => stepKey(t)) : [])] : b.rows.map(([t]) => stepKey(t))), [blocks, opened]);
+  const pick = useCallback((id: string) => {
+    if (id.startsWith(FOLD)) { setCursor(id); return; }
+    setCursor(null);
+    onSelect(id);
+  }, [onSelect]);
+  const at = cursor !== null && visible.includes(cursor) ? cursor : selected;
+  const keys = useListKeys({ ids: visible, selected: at, onSelect: pick, name: "step" });
+  const toggle = (id: string, inside: boolean) => {
+    const open = opened.has(id);
+    setOpened((was) => { const next = new Set(was); if (!next.delete(id)) next.add(id); return next; });
+    // closing a fold over the selected step leaves the cursor on the fold, where the eye is
+    if (open && inside) setCursor(id);
+  };
   if (timeline.length === 0)
     return <EmptyState title="No steps yet">Each step the run starts appears here as a row, with how long it took and how long it waited on you.</EmptyState>;
   const askKey = askRowKey(timeline, ask);
@@ -96,7 +133,7 @@ export function RunSteps({ timeline, ask, selected, now, onSelect, mapping, inte
         key={key}
         className={`step-row ${status}${t.parallel ? " branch" : ""}`}
         data-status={status}
-        selected={selected === key}
+        selected={at === key}
         needsInput={status === "needs-input"}
         onClick={() => { onSelect(key); split.open(); }}
         aria-label={`${name} — ${STEP_WORD[status]}, ${fmtDur(total)}${t.waiting_ms > 0 ? `, waited ${fmtDur(t.waiting_ms)}` : ""}`}
@@ -132,21 +169,98 @@ export function RunSteps({ timeline, ask, selected, now, onSelect, mapping, inte
       </div>
       <ScrollPane label="Steps">
         <div className="steps" ref={keys.ref} onKeyDown={keys.onKeyDown}>
-          {parallelBlocks(timeline).map((block) =>
-            block.group ? (
+          {blocks.map((block) => {
+            if (block.kind === "group") return (
               // HOW-73: the branches of one parallel visit, side by side in time — one block, so
               // their bars read as concurrent rather than as steps that happened to overlap
               <div key={`group-${block.first}`} className="step-group" role="group" aria-label={`${block.group} — ${block.rows.length} steps at once`}>
                 {block.rows.map(([t, i]) => row(t, i))}
               </div>
-            ) : (
-              block.rows.map(([t, i]) => row(t, i))
-            ),
-          )}
+            );
+            if (block.kind === "rows") return block.rows.map(([t, i]) => row(t, i));
+            const open = opened.has(block.id);
+            const what = block.nodes.join(" ↔ ");
+            const first = block.rows[0]![0], last = block.rows.at(-1)![0];
+            const span = first.run_span_ms || 1;
+            const pct = (ms: number) => Math.min(100, (ms / span) * 100);
+            const waited = block.rows.reduce((sum, [t]) => sum + t.waiting_ms, 0);
+            const inside = selected !== null && foldOf.get(selected) === block.id;
+            return (
+              <Fragment key={block.id}>
+                <Row
+                  className="step-row" data-fold={open ? "open" : "closed"} aria-expanded={open}
+                  selected={at === block.id}
+                  onClick={() => toggle(block.id, inside)}
+                  aria-label={`${what}, ${block.times} times over ${fmtDur(block.duration_ms)} — ${open ? "hide" : "show"} the ${block.rows.length} visits`}
+                >
+                  <ChevronRight aria-hidden size={12} className={open ? "rotate-90 text-muted-foreground" : "text-muted-foreground"} />
+                  <span className="flex min-w-0 items-baseline gap-1.5">
+                    <Truncate mono middle={12} className="text-sm text-muted-foreground">{what}</Truncate>
+                    <span className="shrink-0 text-xs tabular-nums text-muted-foreground">×{block.times}</span>
+                  </span>
+                  <span className="step-track" aria-hidden>
+                    {/* from the first visit's start to the last one's end: computed from the run's own timings */}
+                    <span className="step-bar" style={{ left: `${pct(first.offset_ms)}%`, width: `${pct(last.offset_ms + (last.duration_ms ?? 0) - first.offset_ms)}%` }} />
+                  </span>
+                  <span className="text-right text-sm tabular-nums text-muted-foreground">{fmtDur(block.duration_ms)}</span>
+                  <span className="text-right text-sm tabular-nums text-faint">{waited > 0 ? fmtDur(waited) : ""}</span>
+                </Row>
+                {open && (
+                  <div className="step-group" role="group" aria-label={`${what} — ${block.rows.length} visits`}>
+                    {block.rows.map(([t, i]) => row(t, i))}
+                  </div>
+                )}
+              </Fragment>
+            );
+          })}
         </div>
       </ScrollPane>
     </>
   );
+}
+
+const FOLD = "fold:";
+type Indexed = [RunDetail["timeline"][number], number];
+export type StepBlock =
+  | { kind: "group"; group: string; first: number; rows: Indexed[] }
+  | { kind: "rows"; rows: Indexed[] }
+  | { kind: "fold"; id: string; nodes: string[]; times: number; duration_ms: number; rows: Indexed[] };
+
+/**
+ * What the Steps list draws: the parallel groups as they were, and BETWEEN them the timeline's
+ * own fold (`foldTimeline`: three visits of one step in a row, or two pairs of the same two
+ * alternating, are one row — all but the latest visit). A branch row is never folded: a group
+ * is a block of its own and the fold only ever sees the rows between two groups.
+ */
+export function foldedBlocks(timeline: RunDetail["timeline"]): StepBlock[] {
+  const out: StepBlock[] = [];
+  for (const block of parallelBlocks(timeline)) {
+    if (block.group) { out.push({ kind: "group", group: block.group, first: block.first, rows: block.rows }); continue; }
+    out.push({ kind: "rows", rows: block.rows });
+  }
+  // parallelBlocks makes every lone row its own block: join the runs, then fold each run
+  const joined: StepBlock[] = [];
+  for (const b of out) {
+    const last = joined.at(-1);
+    if (b.kind === "rows" && last?.kind === "rows") last.rows.push(...b.rows);
+    else joined.push(b.kind === "rows" ? { kind: "rows", rows: [...b.rows] } : b);
+  }
+  return joined.flatMap((b): StepBlock[] => {
+    if (b.kind !== "rows") return [b];
+    const index = new Map(b.rows.map(([t, i]) => [t, i]));
+    const parts: StepBlock[] = [];
+    for (const item of foldTimeline(b.rows.map(([t]) => t))) {
+      if (item.kind === "fold") {
+        parts.push({ kind: "fold", id: `${FOLD}${item.key}`, nodes: item.nodes, times: item.times, duration_ms: item.duration_ms, rows: item.rows.map((t) => [t, index.get(t) ?? 0]) });
+        continue;
+      }
+      const last = parts.at(-1);
+      const entry: Indexed = [item.row, index.get(item.row) ?? 0];
+      if (last?.kind === "rows") last.rows.push(entry);
+      else parts.push({ kind: "rows", rows: [entry] });
+    }
+    return parts;
+  });
 }
 
 /**
@@ -307,7 +421,7 @@ export function StepDetail({ runId, row, detail, ask, now, onResolved }: {
             : <Truncate>The whole run</Truncate>}
         </h2>
         <PanelTabs
-          className="sd-scope" look="segment" value={scope} onValueChange={setScope}
+          className="sd-scope" look="segment" label="Show this step or the whole run" value={scope} onValueChange={setScope}
           items={[{ value: "step", label: "Step" }, { value: "run", label: "Run" }]}
         />
       </div>
@@ -368,7 +482,8 @@ export function StepDetail({ runId, row, detail, ask, now, onResolved }: {
     <DetailPanel
       label={`Step ${key}`}
       head={head}
-      strip={<PanelTabs value={shown} onValueChange={setPane} items={panes} />}
+      strip={<PanelTabs label="Step panes" panel="step-pane" value={shown} onValueChange={setPane} items={panes} />}
+      tabs={{ panel: "step-pane", value: shown }}
     >
       {rowlessAskCard && <div className="mb-3">{rowlessAskCard}</div>}
       {(shown === "approval" || shown === "drift" || shown === "map") && detail.slice && (

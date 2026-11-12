@@ -68,7 +68,7 @@ import type { Draft, DraftAction, PaletteKind } from "@/lib/spec-draft";
 import { STEP_KINDS } from "@/lib/spec-draft";
 import { KIND_LABEL, StepNode, stepSummary, type StepNodeData } from "./node-card";
 import { ConditionEdge, type ConditionEdgeData } from "./edge";
-import { edgeSides, type Box, type Side } from "./routing";
+import { captionSize, placeCaptions, routeAround, sideMiddle, wireRoute, type Box, type Side } from "./routing";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Tooltip } from "@/components/ui/tooltip";
@@ -87,7 +87,7 @@ const edgeTypes = { condition: ConditionEdge };
 
 /** The card's width. Wider than the read-only picture's 180px box since HOW-68: the card
  *  prints a name, an id and a summary at 12-13px, and 180 cut all three. The PLACEMENT is
- *  still the shared one (lib/layout.ts), so it is the same shape, drawn roomier. The HEIGHT is
+ *  the builder's own (lib/layout.ts; the read-only picture has lib/dag-layout.ts). The HEIGHT is
  *  not declared: a titled step has an id line the untitled one does not — React Flow measures
  *  what it renders. */
 const NODE_WIDTH = 220;
@@ -152,6 +152,7 @@ export function specToFlow(
   // HOW-68: each route leaves and enters by the sides that face each other (routing.ts)
   const routes = routeSides(laid.edges, new Map(laid.nodes.map((n) => [n.id, n.position ?? { x: 0, y: 0 }])));
   for (const n of nodes) (n.data as StepNodeData).wired = [...(routes.wired.get(n.id) ?? [])];
+  const captions = routeCaptions(laid.edges.map((e) => (e.when ? predicateLabel(e.when) : "")), routes);
   const edges: Edge[] = laid.edges.map((e, i) => ({
     id: `e${i}`,
     source: e.from,
@@ -166,6 +167,9 @@ export function specToFlow(
       label: e.when ? predicateLabel(e.when) : "",
       nth: routes.nth[i]!,
       siblings: routes.siblings[i]!,
+      others: routes.others[i]!,
+      lane: routes.lane[i]!,
+      caption: captions[i],
       flagged: blocking.some((p) => p.where === "branching" && p.node === e.from),
       onOpen: () => open({ kind: "edge", index: i }),
     } satisfies ConditionEdgeData,
@@ -195,10 +199,21 @@ export function specToFlow(
 export function routeSides(
   edges: ReadonlyArray<{ from: string; to: string }>,
   positions: ReadonlyMap<string, Point>,
-): { sides: Array<{ source: Side; target: Side }>; nth: number[]; siblings: number[]; wired: Map<string, Set<Side>> } {
+): RouteSides {
   const box = (id: string): Box => ({ ...(positions.get(id) ?? { x: 0, y: 0 }), width: NODE_WIDTH, height: NODE_HEIGHT });
-  const sides = edges.map((e) =>
-    edgeSides(box(e.from), box(e.to), { self: e.from === e.to, reverse: edges.some((o) => o.from === e.to && o.to === e.from) }));
+  // every card that is not one of the route's own two: what its wire goes round (routing.ts)
+  const others = edges.map((e) => [...positions.keys()].filter((id) => id !== e.from && id !== e.to).map(box));
+  const sides = edges.map((e, i) =>
+    routeAround(box(e.from), box(e.to), others[i]!, { self: e.from === e.to, reverse: edges.some((o) => o.from === e.to && o.to === e.from) }));
+  // lanes down the same side of the canvas are set apart, in `spec.edges` order
+  const lanes = new Map<Side, number>();
+  const lane = edges.map((e, i) => {
+    const s = sides[i]!;
+    if (s.source !== s.target || e.from === e.to) return 0;
+    const at = lanes.get(s.source) ?? 0;
+    lanes.set(s.source, at + 1);
+    return at;
+  });
   const group = (i: number) => `${edges[i]!.from}\u0000${sides[i]!.source}`;
   const count = new Map<string, number>();
   const nth = edges.map((_, i) => { const at = count.get(group(i)) ?? 0; count.set(group(i), at + 1); return at; });
@@ -206,7 +221,38 @@ export function routeSides(
   const wired = new Map<string, Set<Side>>();
   const mark = (id: string, side: Side) => { let set = wired.get(id); if (!set) wired.set(id, (set = new Set())); set.add(side); };
   edges.forEach((e, i) => { mark(e.from, sides[i]!.source); mark(e.to, sides[i]!.target); });
-  return { sides, nth, siblings, wired };
+  return { sides, nth, siblings, others, lane, wired, boxes: edges.map((e) => [box(e.from), box(e.to)] as [Box, Box]), cards: [...positions.keys()].map(box) };
+}
+
+export interface RouteSides {
+  sides: Array<{ source: Side; target: Side }>;
+  nth: number[];
+  siblings: number[];
+  others: Box[][];
+  lane: number[];
+  wired: Map<string, Set<Side>>;
+  /** each route's own two cards, and every card on the canvas — for placing the captions */
+  boxes: Array<[Box, Box]>;
+  cards: Box[];
+}
+
+/** one caption's height plus a hairline of air: what two routes out of one side of a step are set apart by */
+const SIBLING_STEP = 30;
+
+/**
+ * Where every route's caption goes, decided for the whole canvas at once (`placeCaptions`): on
+ * its wire's middle, moved off every card and off the captions before it. From the cards'
+ * nominal boxes, so it is a few pixels off the drawn wire's own middle on a card taller or
+ * shorter than nominal — which a caption beside a wire can afford and a caption on another cannot.
+ */
+export function routeCaptions(labels: readonly string[], routes: RouteSides): Point[] {
+  return placeCaptions(labels.map((label, i) => {
+    const s = routes.sides[i]!, [from, to] = routes.boxes[i]!;
+    const wire = wireRoute(sideMiddle(from, s.source), s.source, sideMiddle(to, s.target), s.target, [from, to, ...routes.others[i]!], routes.lane[i]!);
+    // two routes leaving one side of one step share a gap: their captions are spread around its middle
+    const spread = s.source === s.target ? 0 : (routes.nth[i]! - (routes.siblings[i]! - 1) / 2) * SIBLING_STEP;
+    return { mid: { x: wire.mid.x, y: wire.mid.y + spread }, size: captionSize(label || "Otherwise"), sideways: wire.sideways };
+  }), routes.cards);
 }
 
 /**
@@ -405,13 +451,16 @@ export function GraphCanvas({ draft, dispatch, problems, selection, onSelect, on
   const live = useMemo(() => {
     if (!inFlight) return null;
     const at = new Map(nodes.map((n) => [n.id, inFlight.get(n.id) ?? n.position]));
-    return routeSides(draft.spec.edges, at);
+    const routes = routeSides(draft.spec.edges, at);
+    return { ...routes, captions: routeCaptions(draft.spec.edges.map((e) => (e.when ? predicateLabel(e.when) : "")), routes) };
   }, [inFlight, nodes, draft.spec.edges]);
   const selectedEdges = edges.map((e, i) => {
     const sides = live?.sides[i];
     return {
       ...e,
-      ...(sides && e.type === "condition" ? { sourceHandle: sides.source, targetHandle: sides.target } : {}),
+      ...(sides && live && e.type === "condition"
+        ? { sourceHandle: sides.source, targetHandle: sides.target, data: { ...e.data, others: live.others[i], lane: live.lane[i], caption: live.captions[i] } }
+        : {}),
       selected: selection?.kind === "edge" && selection.index === i,
     };
   });
@@ -517,7 +566,9 @@ export function GraphCanvas({ draft, dispatch, problems, selection, onSelect, on
             <Button variant="ghost" size="icon-sm" aria-label="Zoom in" disabled={zoom >= MAX_ZOOM} onClick={() => void zoomIn()}><Plus /></Button>
           </Tooltip>
           <Tooltip content="Show the whole graph" side="top">
-            <Button variant="ghost" size="icon-sm" aria-label="Show the whole graph" onClick={() => void fitView({ maxZoom: 1, minZoom: MIN_ZOOM, padding: 0.1 })}><Maximize /></Button>
+            <Button variant="ghost" size="icon-sm" aria-label="Show the whole graph" // in pixels, not a share of the pane: a route that goes round a card runs in a lane
+              // beside the cards, with its caption on it, and "the whole graph" includes those
+              onClick={() => void fitView({ maxZoom: 1, minZoom: MIN_ZOOM, padding: "96px" })}><Maximize /></Button>
           </Tooltip>
         </Panel>
       </ReactFlow>

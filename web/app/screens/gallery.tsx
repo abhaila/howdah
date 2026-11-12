@@ -164,6 +164,7 @@ export function Gallery() {
           <Section name="Tabs" note="the selected tab is an indigo rule under its label; one row; arrows move.">
             <Specimen label="Tabs (a screen's switcher, with shortcut hints)" className="block border-b border-border">
               <Tabs
+                label="Example panes"
                 value={tab}
                 onValueChange={setTab}
                 items={[
@@ -176,6 +177,7 @@ export function Gallery() {
             </Specimen>
             <Specimen label="PanelTabs, underline" className="block border-b border-border">
               <PanelTabs
+                label="Example detail panes"
                 className="flex gap-4"
                 value={pane}
                 onValueChange={setPane}
@@ -183,7 +185,7 @@ export function Gallery() {
               />
             </Specimen>
             <Specimen label="PanelTabs, chip">
-              <PanelTabs className="flex gap-1.5" look="chip" value={scope} onValueChange={setScope} items={[{ value: "step", label: "Step" }, { value: "run", label: "Run" }]} />
+              <PanelTabs label="Example scope" className="flex gap-1.5" look="chip" value={scope} onValueChange={setScope} items={[{ value: "step", label: "Step" }, { value: "run", label: "Run" }]} />
             </Specimen>
           </Section>
 

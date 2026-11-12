@@ -18,6 +18,18 @@ export interface TurnPart {
   content: string;
   tool_id?: string;
   tool_name?: string;
+  /**
+   * tool_result only: what the HARNESS said about the call (`chunk.is_error`, HOW-38). `true`
+   * it failed, `false` it did not, ABSENT it said nothing — an older log, or a harness that
+   * only reports failures. Carried, never inferred here: the viewer may only call a tool
+   * "failed" on the harness's word (web/app/run/activity.tsx toolOutcome).
+   */
+  is_error?: boolean;
+}
+
+/** a chunk as a part — the one place a stored chunk's fields are chosen for the read model */
+function partOf(c: { kind: ChunkKind; content: string; tool_id?: string; tool_name?: string; is_error?: boolean }): TurnPart {
+  return { kind: c.kind, content: c.content, tool_id: c.tool_id, tool_name: c.tool_name, ...(c.is_error !== undefined ? { is_error: c.is_error } : {}) };
 }
 
 export interface CoalescedTurn {
@@ -64,7 +76,7 @@ export function coalesce(events: LoggedEvent[]): CoalescedTurn[] {
       if (last && last.kind === c.kind && (c.kind === "text" || c.kind === "thinking")) {
         last.content += c.content;
       } else {
-        t.parts.push({ kind: c.kind, content: c.content, tool_id: c.tool_id, tool_name: c.tool_name });
+        t.parts.push(partOf(c));
       }
     }
   }
@@ -96,7 +108,7 @@ export function absorbTurnEvent(turns: CoalescedTurn[], e: LoggedEvent): void {
   }
   const last = t.parts.at(-1);
   if (last && last.kind === e.kind && (e.kind === "text" || e.kind === "thinking")) last.content += e.content;
-  else t.parts.push({ kind: e.kind, content: e.content, tool_id: e.tool_id, tool_name: e.tool_name });
+  else t.parts.push(partOf(e));
 }
 
 /**

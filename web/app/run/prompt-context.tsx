@@ -132,6 +132,7 @@ export function FeedbackForm({ promptId, runId, node, visit, renderedHash, onDon
         Feedback on <span className="font-mono text-foreground">{promptId}</span> at <span className="font-mono">{node}@{visit}</span> · hash <span className="font-mono [overflow-wrap:anywhere]">{renderedHash}</span>
       </p>
       <Tabs
+        label="Your verdict on this prompt"
         value={verdict}
         onValueChange={(v) => setVerdict(v as "reject" | "accept")}
         items={[{ value: "reject", label: "Needs work" }, { value: "accept", label: "Good" }]}

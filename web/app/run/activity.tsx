@@ -41,8 +41,34 @@ import { Truncate } from "@/components/ui/truncate";
 import { splitOutputs } from "../../../core/outputs";
 import { OutputDocs } from "./document";
 
-/** a tool result that reads as a failure — same test the thread used, kept in one place */
-const FAILED = /\berror\b|\bfailed\b|exit [1-9]|denied|not found|traceback/i;
+/**
+ * Whether a tool call failed — on the HARNESS's word, not on what its output happens to say.
+ *
+ * This used to be one regex over the output (`error`, `failed`, `denied`, `not found`…), so
+ * "14 tests completed, 0 failed — BUILD SUCCESSFUL" was badged failed in red and a group said
+ * "3 failed". The log has carried the harness's own verdict since HOW-38 (`chunk.is_error`);
+ * `coalesce()` now passes it through, and it decides:
+ *
+ *   failed  the harness said the call failed                → the red badge, opens itself
+ *   ok      the harness said it did not                     → nothing, whatever the text says
+ *   maybe   the harness said NOTHING (a log from before HOW-38, or codex/cursor, which only
+ *           report failures) and the output starts a line the way a failure does
+ *                                                           → a neutral "may have failed" hint
+ *
+ * `maybe` is a guess and is drawn as one: never red, never counted as a failure, never opened
+ * for you. The pattern is deliberately narrow — a line that BEGINS with an error marker, a
+ * non-zero exit status, a Python traceback header, the shell's own "command not found" /
+ * "Permission denied" — so a count ("0 failed", "no errors") or a word in prose cannot match.
+ */
+export type ToolOutcome = "failed" | "ok" | "maybe";
+const MAY_HAVE_FAILED =
+  /^\s*(error|fatal)\b[:[ ]|^Traceback \(most recent call last\)|\bexit(ed with)? (code|status) [1-9]\d*\b|: command not found\s*$|: Permission denied\s*$/im;
+export function toolOutcome(result: TurnPart | undefined): ToolOutcome {
+  if (result === undefined) return "ok"; // no result yet is not a failure
+  if (result.is_error === true) return "failed";
+  if (result.is_error === false) return "ok";
+  return MAY_HAVE_FAILED.test(result.content) ? "maybe" : "ok";
+}
 
 /**
  * The one line a tool call gets. Tool inputs are JSON whose INTERESTING field differs per
@@ -120,8 +146,9 @@ export function toolLabel(name: string): string {
 
 /** exported for the Chat transcript (HOW-25): one tool renderer, not two */
 export function ToolBeat({ call, result }: { call: TurnPart; result?: TurnPart }) {
-  const failed = result !== undefined && FAILED.test(result.content);
-  // a failure opens itself; everything else waits to be asked
+  const outcome = toolOutcome(result);
+  const failed = outcome === "failed";
+  // a failure opens itself; everything else — a guess included — waits to be asked
   const [open, setOpen] = useDisclosure(failed);
   return (
     <div className={`act-tool${failed ? " failed" : ""}`} data-open={open ? "open" : "closed"}>
@@ -131,6 +158,7 @@ export function ToolBeat({ call, result }: { call: TurnPart; result?: TurnPart }
         <span className="act-tool-name">{toolLabel(call.tool_name ?? "tool")}</span>
         <Truncate mono className="act-tool-sum">{toolSummary(call.content)}</Truncate>
         {failed && <Badge variant="destructive">failed</Badge>}
+        {outcome === "maybe" && <Badge variant="outline">may have failed</Badge>}
       </Row>
       {open && (
         <div className="act-tool-body">
@@ -184,7 +212,8 @@ export function groupBeats(beats: readonly Beat[]): BeatGroup[] {
  * open, so the failure is two levels deep and zero clicks away.
  */
 export function ToolGroup({ beats }: { beats: Beat[] }) {
-  const failedCount = beats.filter((b) => b.result !== undefined && FAILED.test(b.result.content)).length;
+  const failedCount = beats.filter((b) => toolOutcome(b.result) === "failed").length;
+  const maybeCount = beats.filter((b) => toolOutcome(b.result) === "maybe").length;
   const [open, setOpen] = useDisclosure(failedCount > 0);
   const names = [...new Set(beats.map((b) => toolLabel(b.part.tool_name ?? "tool")))];
   const shown = names.slice(0, 3).join(", ") + (names.length > 3 ? ` +${names.length - 3} more` : "");
@@ -196,6 +225,7 @@ export function ToolGroup({ beats }: { beats: Beat[] }) {
         <span className="act-tool-name">Used {beats.length} tools</span>
         <Truncate className="act-tool-sum">{shown}</Truncate>
         {failedCount > 0 && <Badge variant="destructive">{failedCount} failed</Badge>}
+        {maybeCount > 0 && <Badge variant="outline">{maybeCount} may have failed</Badge>}
       </Row>
       {open && (
         <div className="act-group-body">

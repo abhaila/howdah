@@ -149,7 +149,12 @@ export function freeSpotNear(nodes: NodeSpec[], at: Point | undefined, opts: { e
     return segmentHitsBox(a, b, { x: p.x - WIRE_MARGIN, y: p.y - WIRE_MARGIN, w: CARD.x + WIRE_MARGIN * 2, h: CARD.y + WIRE_MARGIN * 2 })
       || (mid.x > p.x - CAPTION.x && mid.x < p.x + CARD.x + CAPTION.x && mid.y > p.y - CAPTION.y && mid.y < p.y + CARD.y + CAPTION.y);
   });
-  const clear = (p: Point) => !placed.some((q) => Math.abs(q.x - p.x) < ROOM.x && Math.abs(q.y - p.y) < ROOM.y) && !onWire(p);
+  // NEVER UNDER A FINISH STEP. A graph reads downwards and a Finish ends it, so a step set down
+  // below one in its column has every route to it drawn past — and, before routing.ts learned
+  // to go round, through — the Finish card. Beside the column is where it goes instead.
+  const ends = nodes.flatMap((n) => (n.kind === "terminal" && n.position ? [n.position] : []));
+  const underAnEnd = (p: Point) => ends.some((q) => p.y > q.y && Math.abs(q.x - p.x) < ROOM.x);
+  const clear = (p: Point) => !placed.some((q) => Math.abs(q.x - p.x) < ROOM.x && Math.abs(q.y - p.y) < ROOM.y) && !onWire(p) && !underAnEnd(p);
   if (clear(at)) return at;
   // A grid of spots around `at`, nearest first; a tie goes below, then above (a graph reads
   // downwards), then to either side.
@@ -162,8 +167,10 @@ export function freeSpotNear(nodes: NodeSpec[], at: Point | undefined, opts: { e
   }
   const far = (p: Point) => Math.hypot(p.x - at.x, p.y - at.y);
   const free = around.sort((a, b) => far(a.p) - far(b.p) || a.order - b.order).map((c) => c.p).find(clear);
-  // below everything: no card and no wire reaches there
-  return free ?? { x: at.x, y: Math.max(at.y, ...placed.map((q) => q.y)) + ASIDE.y };
+  // below everything: no card and no wire reaches there — and to the right of everything too
+  // when that would be under a Finish step
+  const below = { x: at.x, y: Math.max(at.y, ...placed.map((q) => q.y)) + ASIDE.y };
+  return free ?? (underAnEnd(below) ? { x: Math.max(...placed.map((q) => q.x)) + ASIDE.x, y: at.y } : below);
 }
 
 /** how close to a wire's line a card may come before it reads as sitting on it */
@@ -187,5 +194,9 @@ export function segmentHitsBox(a: Point, b: Point, box: { x: number; y: number; 
 /** Where a step with no position of its own goes — below everything, so nothing is covered. */
 export function nextFreePosition(nodes: NodeSpec[]): Point {
   const placed = nodes.map((n) => n.position).filter((p): p is Point => !!p);
-  return placed.length ? { x: CANVAS_PITCH.origin, y: Math.max(...placed.map((p) => p.y)) + CANVAS_PITCH.y } : ORIGIN;
+  if (!placed.length) return ORIGIN;
+  const below = { x: CANVAS_PITCH.origin, y: Math.max(...placed.map((p) => p.y)) + CANVAS_PITCH.y };
+  // ...but never under a Finish step (see `freeSpotNear`): then it is the next free lane, beside everything
+  const underAnEnd = nodes.some((n) => n.kind === "terminal" && n.position && Math.abs(n.position.x - below.x) < ROOM.x);
+  return underAnEnd ? { x: Math.max(...placed.map((p) => p.x)) + CANVAS_PITCH.x, y: CANVAS_PITCH.origin } : below;
 }

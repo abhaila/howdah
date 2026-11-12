@@ -209,6 +209,21 @@ describe("the canvas pans and zooms, and says how", () => {
     expect(openingView({ width: 400, height: 300 }, { width: 0, height: 0 }, undefined).zoom).toBe(1);
   });
 
+  test("a FINISHED run opens on the whole graph when that fits at 70% or more — and never smaller", () => {
+    const pane = { width: 1000, height: 700 };
+    // 1200 wide in a 1000px pane: all of it at (1000 - 56) / 1200 = 78.7%, centred
+    const v = openingView({ width: 1200, height: 600 }, pane, undefined, { whole: true });
+    expect(v.zoom).toBeCloseTo(944 / 1200, 5);
+    expect(v.x).toBe(28);
+    expect(v.y).toBe(Math.round((700 - 600 * v.zoom) / 2));
+    // it would need 47%: opened on the step at 100% instead, exactly as without `whole`
+    const focus = { x: 80, y: 1200, width: 248, height: 52 };
+    expect(openingView({ width: 2000, height: 1400 }, pane, focus, { whole: true })).toEqual(openingView({ width: 2000, height: 1400 }, pane, focus));
+    // a graph that fits at 100% is not enlarged, and a live run (no `whole`) is never fitted
+    expect(openingView({ width: 400, height: 300 }, pane, undefined, { whole: true })).toEqual({ x: 300, y: 200, zoom: 1 });
+    expect(openingView({ width: 1200, height: 600 }, pane, undefined).zoom).toBe(1);
+  });
+
   test("a step walked to is panned into view by the least that shows it, at the zoom in use", () => {
     const pane = { width: 800, height: 600 };
     const box = { x: 100, y: 100, width: 248, height: 52 };
@@ -223,7 +238,7 @@ describe("the canvas pans and zooms, and says how", () => {
   test("the pan and zoom keys are rows in the one registry, so `?` lists them", () => {
     render();
     const rows = allShortcuts().filter((s) => s.scope === "A graph");
-    expect(rows.map((s) => s.id).sort()).toEqual(["graph.fit", "graph.pan", "graph.walk", "graph.zoom-in", "graph.zoom-out"]);
+    expect(rows.map((s) => s.id).sort()).toEqual(["graph.fit", "graph.pan", "graph.start", "graph.walk", "graph.zoom-in", "graph.zoom-out"]);
     // listed, and handled where focus is — the registry must not also fire them
     expect(rows.every((s) => s.passive === true)).toBe(true);
   });

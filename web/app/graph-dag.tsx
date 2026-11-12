@@ -281,8 +281,21 @@ export function dagFlow(shape: GraphShapeDto, opts: { removed?: ReadonlySet<stri
   return { cards, wires, layout };
 }
 
-/** Where the view opens: at 100%, centred on an axis the graph fits, else with `focus` in view. Pure. */
-export function openingView(layout: Pick<DagLayout, "width" | "height">, pane: { width: number; height: number }, focus: Box | undefined): { x: number; y: number; zoom: number } {
+/** the least zoom a WHOLE graph is opened at: under it the type is too small to be the default */
+export const WHOLE_MIN_ZOOM = 0.7;
+
+/**
+ * Where the view opens: at 100%, centred on an axis the graph fits, else with `focus` in view.
+ * `whole` (a FINISHED run: nothing is "where it is now", the question is "what did it do") asks
+ * for all of it instead, when all of it fits at `WHOLE_MIN_ZOOM` or more; a graph too big for
+ * that opens on `focus` at 100% as ever, and Home brings the start into view. Pure.
+ */
+export function openingView(layout: Pick<DagLayout, "width" | "height">, pane: { width: number; height: number }, focus: Box | undefined, opts: { whole?: boolean } = {}): { x: number; y: number; zoom: number } {
+  if (opts.whole && pane.width && pane.height && layout.width > 0 && layout.height > 0) {
+    const fit = Math.min(1, (pane.width - FRAME_PAD * 2) / layout.width, (pane.height - FRAME_PAD * 2) / layout.height);
+    if (fit >= WHOLE_MIN_ZOOM && fit < 1)
+      return { x: Math.round((pane.width - layout.width * fit) / 2), y: Math.round((pane.height - layout.height * fit) / 2), zoom: fit };
+  }
   const along = (size: number, room: number, at: number, extent: number) => {
     if (size <= room) return Math.round((room - size) / 2);
     // the focus box centred, but never past either end of the graph
@@ -422,6 +435,8 @@ export interface GraphDagProps {
   taken?: ReadonlySet<string>;
   /** who owns a bare wheel: the canvas ("zoom") or the page around it ("page") — see the header */
   wheel?: "zoom" | "page";
+  /** open on the WHOLE graph when it fits at 70% or more (a finished run) — see `openingView` */
+  whole?: boolean;
 }
 
 export const takenKey = edgeKey;
@@ -437,7 +452,7 @@ export function GraphDag(props: GraphDagProps) {
 /** the default: only an agent step has settings to select it for (the Graphs screen's tuner) */
 const AGENTS_ONLY = (node: ShapeNode) => node.kind === "agent";
 
-function DagCanvas({ shape, current, visits, onSelect, selected, canSelect = AGENTS_ONLY, removed, highlight, waiting = false, info, taken, wheel = "zoom" }: GraphDagProps) {
+function DagCanvas({ shape, current, visits, onSelect, selected, canSelect = AGENTS_ONLY, removed, highlight, waiting = false, info, taken, wheel = "zoom", whole = false }: GraphDagProps) {
   const { setViewport, getViewport, zoomIn, zoomOut, fitView } = useReactFlow();
   const store = useStoreApi();
   const paneWidth = useStore((s) => s.width);
@@ -531,13 +546,15 @@ function DagCanvas({ shape, current, visits, onSelect, selected, canSelect = AGE
   // Framed once per graph, as soon as the pane has a size — never again, so a tuning edit or a
   // run's next event does not move the view under the operator.
   const framed = useRef<string | null>(null);
-  const frame = useCallback(() => {
-    void setViewport(openingView(flow.layout, { width: paneWidth, height: paneHeight }, boxes.get(current ?? shape.entry)));
-  }, [setViewport, flow.layout, paneWidth, paneHeight, boxes, current, shape.entry]);
+  // `frame(true)` is the opening view (which may be the whole graph); the "100%" control is
+  // `frame()` — always 100%, as it says
+  const frame = useCallback((opening = false) => {
+    void setViewport(openingView(flow.layout, { width: paneWidth, height: paneHeight }, boxes.get(current ?? shape.entry), { whole: opening && whole }));
+  }, [setViewport, flow.layout, paneWidth, paneHeight, boxes, current, shape.entry, whole]);
   useEffect(() => {
     if (!(paneWidth > 0 && paneHeight > 0) || framed.current === shape.name) return;
     framed.current = shape.name;
-    frame();
+    frame(true);
   }, [paneWidth, paneHeight, shape.name, frame]);
 
   const showAll = useCallback(() => { void fitView({ padding: 0.06, minZoom: MIN_ZOOM, maxZoom: 1 }); }, [fitView]);
@@ -554,6 +571,8 @@ function DagCanvas({ shape, current, visits, onSelect, selected, canSelect = AGE
     if (e.key === "+" || e.key === "=") { void zoomIn(); done(); }
     else if (e.key === "-" || e.key === "_") { void zoomOut(); done(); }
     else if (e.key === "0") { showAll(); done(); }
+    // the start, in one key, wherever the view opened (on a step, Home walks to the first step)
+    else if (e.key === "Home") { reveal(shape.entry); done(); }
     else if (e.key === "ArrowLeft") { pan(step, 0); done(); }
     else if (e.key === "ArrowRight") { pan(-step, 0); done(); }
     else if (e.key === "ArrowUp") { pan(0, step); done(); }
@@ -566,6 +585,7 @@ function DagCanvas({ shape, current, visits, onSelect, selected, canSelect = AGE
     { id: "graph.zoom-in", scope: "A graph", label: "Zoom in", keys: "+", passive: true },
     { id: "graph.zoom-out", scope: "A graph", label: "Zoom out", keys: "-", passive: true },
     { id: "graph.fit", scope: "A graph", label: "Show the whole graph", keys: "0", passive: true },
+    { id: "graph.start", scope: "A graph", label: "Go to the start of the graph", keys: "home", passive: true },
   ]);
 
   // a map of what is off screen: no use — and in the way — once the whole graph is on screen
@@ -583,7 +603,7 @@ function DagCanvas({ shape, current, visits, onSelect, selected, canSelect = AGE
         className="gb-canvas dag-canvas"
         role="region"
         tabIndex={0}
-        aria-label={`${shape.name} graph — ${shape.nodes.length} steps. Arrow keys pan, plus and minus zoom, 0 shows all of it.`}
+        aria-label={`${shape.name} graph — ${shape.nodes.length} steps. Arrow keys pan, plus and minus zoom, 0 shows all of it, Home goes to the start.`}
         onKeyDown={onKeyDown}
       >
         <ReactFlow
@@ -661,7 +681,7 @@ function DagCanvas({ shape, current, visits, onSelect, selected, canSelect = AGE
               <Button variant="ghost" size="icon-sm" aria-label="Zoom out" disabled={zoom <= MIN_ZOOM} onClick={() => void zoomOut()}><Minus /></Button>
             </Tooltip>
             <Tooltip content="Back to 100%" side="top">
-              <Button variant="ghost" size="sm" className="h-6 min-w-12 px-1.5 text-xs tabular-nums" aria-label={`Zoom ${Math.round(zoom * 100)}% — back to 100%`} onClick={frame}>
+              <Button variant="ghost" size="sm" className="h-6 min-w-12 px-1.5 text-xs tabular-nums" aria-label={`Zoom ${Math.round(zoom * 100)}% — back to 100%`} onClick={() => frame()}>
                 {Math.round(zoom * 100)}%
               </Button>
             </Tooltip>

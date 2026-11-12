@@ -13,7 +13,7 @@ browser on macOS. Not a phone app and not hosted. Supported window: 1024×640 an
 ## Stack
 
 Bun, TypeScript, React 19, Tailwind 4, `@base-ui/react` primitives, `@xyflow/react` for the
-graph builder canvas. Tokens in `web/public/tokens.css`; components in
+graph canvas (the builder, and the read-only picture laid out by `@dagrejs/dagre`). Tokens in `web/public/tokens.css`; components in
 `web/app/components/ui/`.
 
 ## Users

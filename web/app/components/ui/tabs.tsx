@@ -39,18 +39,36 @@
  *   the Step/Run scope chips 23px tall.
  *   NO MOTION. Tab switches are keyboard-driven and constant; selection is instant.
  *   `hint` prints a tab's shortcut beside it (the run view's `1`–`7`).
+ *
+ *   A STRIP HAS A NAME, AND SAYS WHAT IT SWITCHES (the confirming review). `label` is required:
+ *   a `tablist` with no accessible name is "tab list" five times on one screen. `panel` is the
+ *   id of the element the tabs switch; with it each tab carries an id and `aria-controls`, and
+ *   the caller spreads `tabPanelProps(panel, value)` on that element, which makes it the
+ *   `tabpanel` labelled by the selected tab. Base UI wires this only for ITS `Tabs.Panel`, and
+ *   the panes here are the app's own (one container whose contents change), so it is done by id.
  */
 import { Tabs as TabsPrimitive } from "@base-ui/react/tabs";
 import { cva } from "class-variance-authority";
 import { cn } from "@/lib/utils";
 
+const tabId = (panel: string, value: string) => `${panel}-tab-${value}`;
+/** what the element a strip switches must carry: spread it on the pane's container */
+export function tabPanelProps(panel: string, value: string): { role: "tabpanel"; id: string; "aria-labelledby": string } {
+  return { role: "tabpanel", id: panel, "aria-labelledby": tabId(panel, value) };
+}
+const wiring = (panel: string | undefined, value: string) => (panel === undefined ? {} : { id: tabId(panel, value), "aria-controls": panel });
+
 const STRIP = "flex min-w-0 flex-nowrap overflow-x-auto [scrollbar-width:none]";
 const TAB_FOCUS = "focus-visible:outline-2 focus-visible:outline-[var(--ring)] focus-visible:-outline-offset-2";
 
 /** the top-level switcher: one row of labels, the selected one over an indigo rule */
-export function Tabs({ value, onValueChange, items, className }: {
+export function Tabs({ value, onValueChange, items, className, label, panel }: {
   value: string;
   onValueChange: (v: string) => void;
+  /** the strip's accessible name: what it switches ("Run panes") */
+  label: string;
+  /** the id of the element it switches (see `tabPanelProps`) */
+  panel?: string;
   items: Array<{ value: string; label: string; icon?: React.ReactNode; hint?: string }>;
   className?: string;
 }) {
@@ -60,11 +78,12 @@ export function Tabs({ value, onValueChange, items, className }: {
       value={value}
       onValueChange={(v) => onValueChange(String(v))}
     >
-      <TabsPrimitive.List className={cn(STRIP, "gap-1", className)}>
+      <TabsPrimitive.List aria-label={label} className={cn(STRIP, "gap-1", className)}>
         {items.map((it) => (
           <TabsPrimitive.Tab
             key={it.value}
             value={it.value}
+            {...wiring(panel, it.value)}
             className={cn(
               "inline-flex h-9 min-w-6 shrink-0 cursor-pointer select-none items-center gap-1.5 whitespace-nowrap border-0 border-b-2 border-solid bg-transparent px-2 text-base [&_svg]:size-3.5",
               TAB_FOCUS,
@@ -119,9 +138,13 @@ const panelTabVariants = cva(
  * component) is for the toggles that are not pane switchers — the Logs filters, the chat
  * suggestions — so the two never share a call site.
  */
-export function PanelTabs<T extends string>({ value, onValueChange, items, className = "sd-tabs", look }: {
+export function PanelTabs<T extends string>({ value, onValueChange, items, className = "sd-tabs", look, label, panel }: {
   value: T;
   onValueChange: (v: T) => void;
+  /** the strip's accessible name: what it switches ("Step panes") */
+  label: string;
+  /** the id of the element it switches (see `tabPanelProps`) */
+  panel?: string;
   items: ReadonlyArray<{ value: T; label: string }>;
   className?: string;
   look?: "underline" | "chip" | "segment";
@@ -132,11 +155,12 @@ export function PanelTabs<T extends string>({ value, onValueChange, items, class
       value={value}
       onValueChange={(v) => onValueChange(v as T)}
     >
-      <TabsPrimitive.List className={className}>
+      <TabsPrimitive.List aria-label={label} className={className}>
         {items.map((it) => (
           <TabsPrimitive.Tab
             key={it.value}
             value={it.value}
+            {...wiring(panel, it.value)}
             className={cn(panelTabVariants({ look, on: value === it.value }))}
           >
             {it.label}

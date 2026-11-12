@@ -257,6 +257,30 @@ describe("the list's keyboard (HOW-68: J/K move, Enter opens, / filters)", () =>
     expect(selected(el)).toEqual(["/run/asking"]); // clamped, never wraps off the top
   });
 
+  // The confirming review: Runs was 44 links, each its own tab stop, in no list element.
+  test("the rows are a real list and ONE tab stop: the selected row, the first before any selection", async () => {
+    serve(RUNS);
+    const el = await mount();
+    const rows = () => [...el.querySelectorAll<HTMLAnchorElement>("a[data-nav-row]")];
+    const stops = () => rows().filter((a) => a.tabIndex === 0).map((a) => a.getAttribute("href"));
+    expect(rows().length).toBeGreaterThan(2);
+    expect(stops()).toEqual(["/run/asking"]);
+    // every row is a listitem of a named list inside its group
+    for (const a of rows()) {
+      expect(a.parentElement!.getAttribute("role")).toBe("listitem");
+      expect(a.parentElement!.parentElement!.getAttribute("role")).toBe("list");
+      expect(a.parentElement!.parentElement!.getAttribute("aria-label")).toBeTruthy();
+    }
+    press("j");
+    press("j", document.activeElement!);
+    expect(stops()).toEqual(["/run/live"]); // the stop follows the selection
+    press("End", document.activeElement!);
+    expect((document.activeElement as HTMLElement).getAttribute("href")).toBe(rows().at(-1)!.getAttribute("href"));
+    expect(stops()).toEqual([rows().at(-1)!.getAttribute("href")]);
+    press("Home", document.activeElement!);
+    expect(stops()).toEqual(["/run/asking"]);
+  });
+
   test("/ focuses the filter; typing narrows the list; Escape clears it; an empty result says so", async () => {
     serve(RUNS);
     const el = await mount();

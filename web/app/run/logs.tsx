@@ -125,6 +125,41 @@ export function RunLogs({ runId }: { runId: string }) {
   );
 }
 
+/** a row's height: `.log-row` is `height: 28px` with its hairline inside (howdah.css) */
+export const LOG_ROW_HEIGHT = 28;
+/** under this many rows the whole list is simply rendered */
+export const WINDOW_FROM = 80;
+/** rows kept rendered above and below what is on screen, so a wheel tick never shows a gap */
+const OVERSCAN = 20;
+
+/**
+ * Which rows of a long list to render (HOW-68 final pass). Switching to Logs on a long run was
+ * one 600–760ms task: 200 rows, each with three `Truncate`s that measure themselves. The rows
+ * are a FIXED 28px, so the list is windowed exactly — what is on screen plus `OVERSCAN` either
+ * side, with a spacer above and below standing in for the rest, so the scroller's height, the
+ * bottom pin and "Latest" are unchanged.
+ *
+ * `keep` is the selected row and its neighbours, rendered wherever they are: J/K select the
+ * next row and then FOCUS it (`useListKeys`), and a row that is not in the DOM cannot take
+ * focus; once focused the browser scrolls it into view and the window follows.
+ *
+ * What it costs: the browser's own find-in-page only sees rendered rows. The pane's search
+ * field filters all loaded events, which is what `/` focuses. Pure.
+ */
+export function windowRows(count: number, scrollTop: number, viewHeight: number, keep: number | null): Array<[start: number, end: number]> {
+  if (count <= WINDOW_FROM) return count > 0 ? [[0, count]] : [];
+  const first = Math.max(0, Math.floor(scrollTop / LOG_ROW_HEIGHT) - OVERSCAN);
+  const last = Math.min(count, Math.ceil((scrollTop + viewHeight) / LOG_ROW_HEIGHT) + OVERSCAN);
+  const spans: Array<[number, number]> = [[first, Math.max(first, last)]];
+  if (keep !== null && keep >= 0 && keep < count) {
+    const a = Math.max(0, keep - 1), b = Math.min(count, keep + 2);
+    if (b < first) spans.unshift([a, b]);
+    else if (a > last) spans.push([a, b]);
+    else spans[0] = [Math.min(first, a), Math.max(last, b)];
+  }
+  return spans.filter(([s, e]) => e > s);
+}
+
 function LogList({ rows, shown, total, load, selected, kind, onKind, q, onQ, onPick, onEarlier }: {
   rows: ListedRow[]; shown: ListedRow[]; total: number; load: "loading" | "ready" | "error"; selected: number | null;
   kind: "all" | LogRow["kind"]; onKind: (k: "all" | LogRow["kind"]) => void;
@@ -134,6 +169,22 @@ function LogList({ rows, shown, total, load, selected, kind, onKind, q, onQ, onP
   const follow = useBottomPinnedScroll(`${shown.length}:${shown.at(-1)?.seq ?? "empty"}:${kind}:${q}`);
   const keys = useListKeys({ ids: shown.map((r) => r.seq), selected, onSelect: onPick, name: "event" });
   const clear = useCallback(() => { onQ(""); onKind("all"); }, [onQ, onKind]);
+  // where the scroller is, in whole rows: a re-render per row scrolled past, not per pixel
+  const [view, setView] = useState({ top: 0, height: 900 });
+  const onScroll = useCallback(() => {
+    follow.measure();
+    const el = follow.ref.current;
+    if (!el) return;
+    const top = Math.floor(el.scrollTop / LOG_ROW_HEIGHT) * LOG_ROW_HEIGHT;
+    const height = el.clientHeight || 900;
+    setView((was) => (was.top === top && was.height === height ? was : { top, height }));
+  }, [follow]);
+  // pinned to the bottom (the opening state): the window is the END of the list from the first
+  // render, before the pin has scrolled there
+  const scrollTop = follow.atBottom ? Math.max(0, shown.length * LOG_ROW_HEIGHT - view.height) : view.top;
+  const selectedAt = selected === null ? -1 : shown.findIndex((r) => r.seq === selected);
+  const spans = windowRows(shown.length, scrollTop, view.height, selectedAt >= 0 ? selectedAt : null);
+  const spacer = (rowsHidden: number, key: string) => (rowsHidden > 0 ? <div key={key} aria-hidden style={{ height: rowsHidden * LOG_ROW_HEIGHT }} /> : null);
   // DESIGN.md Keyboard: "/" is the filter of whatever list is on screen. The Build tab's own
   // "/" (its composer) is unmounted while this pane is up, so the key did nothing here.
   const search = useRef<HTMLInputElement | null>(null);
@@ -163,7 +214,7 @@ function LogList({ rows, shown, total, load, selected, kind, onKind, q, onQ, onP
           <span className="text-xs tabular-nums text-muted-foreground">{shown.length} of {total}</span>
         </span>
       </div>
-      <ScrollPane label="Events" ref={follow.ref} onScroll={follow.measure}>
+      <ScrollPane label="Events" ref={follow.ref} onScroll={onScroll}>
         {load === "loading" && <LoadingBlock label="Loading events" rows={8} className="p-3" />}
         {load === "error" && <EmptyState title="The log could not be read">The viewer server did not answer. It retries every five seconds.</EmptyState>}
         {load === "ready" && shown.length === 0 && (
@@ -172,7 +223,10 @@ function LogList({ rows, shown, total, load, selected, kind, onKind, q, onQ, onP
             : <EmptyState title="No events match" actions={<Button variant="outline" size="sm" onClick={clear}>Clear the filter</Button>}>Nothing in the loaded events matches this search and kind.</EmptyState>
         )}
         <div ref={keys.ref} onKeyDown={keys.onKeyDown}>
-          {shown.map((r) => (
+          {spans.flatMap(([start, end], n) => [
+            // the rows not rendered above this span (the heights are data: a count of fixed rows)
+            spacer(start - (n === 0 ? 0 : spans[n - 1]![1]), `gap-${n}`),
+            ...shown.slice(start, end).map((r) => (
             <Row
               key={r.seq}
               className="log-row"
@@ -189,7 +243,9 @@ function LogList({ rows, shown, total, load, selected, kind, onKind, q, onQ, onP
               <span className="flex min-w-0"><Badge variant="id" className="min-w-0 max-w-full"><Truncate>{r.type}</Truncate></Badge></span>
               <Truncate className="text-sm text-muted-foreground">{r.summary.replace(/\s+/g, " ")}</Truncate>
             </Row>
-          ))}
+            )),
+          ])}
+          {spacer(shown.length - (spans.at(-1)?.[1] ?? shown.length), "gap-end")}
         </div>
       </ScrollPane>
     </>
@@ -227,7 +283,8 @@ export function EventDetail({ row, runId }: { row: ListedRow | null; runId?: str
           <span className="shrink-0 text-xs text-muted-foreground">{KIND_LABEL[row.kind]} event</span>
         </div>
       }
-      strip={<PanelTabs value={pane} onValueChange={setPane} items={[{ value: "details", label: "Details" }, { value: "raw", label: "Raw event" }]} />}
+      strip={<PanelTabs label="Event panes" panel="event-pane" value={pane} onValueChange={setPane} items={[{ value: "details", label: "Details" }, { value: "raw", label: "Raw event" }]} />}
+      tabs={{ panel: "event-pane", value: pane }}
     >
       {pane === "details" ? (
         <KeyValue labelWidth={72} items={[

@@ -23,6 +23,7 @@ import { deriveDetail } from "../derive";
 import { FakeLog } from "../slice.fixtures";
 import { GRAPHS } from "../../graphs/index";
 import { RunView, OPEN_GRACE_MS, foldTimeline, runPullRequests } from "./run/view";
+import { RunSteps, foldedBlocks } from "./run/steps";
 import { Drawer, DRAWER_MIN } from "./components/ui/drawer";
 import { ToastProvider } from "./components/ui/toast";
 import { allShortcuts, installShortcuts, isMac, resetShortcutsForTest } from "./lib/shortcuts";
@@ -234,6 +235,78 @@ describe("a poll is one row, not a wall", () => {
   });
 });
 
+// The feedback pass folded the drawer's timeline and left the STEPS list a wall of the same rows.
+describe("the Steps list folds a poll by the same rule", () => {
+  function Harness({ detail, initial = null }: { detail: ReturnType<typeof polling>; initial?: string | null }) {
+    const [picked, setPicked] = useState<string | null>(initial);
+    return (
+      <>
+        <RunSteps timeline={detail.timeline} ask={detail.ask} selected={picked} now={Date.now()} onSelect={setPicked} />
+        <output data-testid="picked">{picked ?? ""}</output>
+      </>
+    );
+  }
+  const rows = (el: HTMLElement) => [...el.querySelectorAll<HTMLElement>(".steps .step-row")];
+  const picked = (el: HTMLElement) => el.querySelector('[data-testid="picked"]')!.textContent;
+  const key = (k: string) => press(k, {}, document.activeElement ?? document.body);
+
+  test("thirteen polls are publish, ONE fold and the visit the run is on; the fold opens to every visit", async () => {
+    const el = mount(<Harness detail={polling(13)} />);
+    await settle();
+    expect(rows(el)).toHaveLength(3); // it was 27
+    const fold = el.querySelector<HTMLElement>(".steps [data-fold]")!;
+    expect(fold.tagName).toBe("BUTTON");
+    expect(fold.getAttribute("aria-expanded")).toBe("false");
+    expect(fold.textContent).toContain("×13");
+    expect(fold.getAttribute("aria-label")).toMatch(/^delivery\.probe_pr ↔ delivery\.wait, 13 times over .+ — show the 25 visits$/);
+    act(() => fold.click());
+    expect(fold.getAttribute("aria-expanded")).toBe("true");
+    expect(rows(el)).toHaveLength(28);
+    expect(picked(el)).toBe(""); // opening a fold selects nothing
+    // a folded visit is still a step you can select
+    act(() => rows(el)[2]!.click());
+    expect(picked(el)).toBe("delivery.probe_pr@1");
+  });
+
+  test("the list is one tab stop, and J/K walk the VISIBLE rows — the fold is one of them", async () => {
+    const el = mount(<Harness detail={polling(13)} initial="delivery.publish@1" />);
+    await settle();
+    expect(rows(el).filter((r) => r.tabIndex === 0)).toHaveLength(1);
+    act(() => rows(el)[0]!.focus());
+    key("j");
+    await settle();
+    // on the fold: nothing new is selected, and the fold carries the cursor
+    expect(picked(el)).toBe("delivery.publish@1");
+    expect(document.activeElement).toBe(el.querySelector(".steps [data-fold]"));
+    expect(el.querySelector(".steps [data-selected]")).toBe(document.activeElement);
+    key("j");
+    await settle();
+    expect(picked(el)).toBe("delivery.wait@13"); // past the closed fold, to the latest visit
+    key("k");
+    await settle();
+    act(() => (document.activeElement as HTMLElement).click()); // Enter on a button is a click: open it
+    key("j");
+    await settle();
+    expect(picked(el)).toBe("delivery.probe_pr@1"); // now the visits inside are rows to walk
+    expect(rows(el).filter((r) => r.tabIndex === 0)).toHaveLength(1);
+  });
+
+  test("a step chosen from elsewhere that sits inside a fold opens it", async () => {
+    const el = mount(<Harness detail={polling(13)} initial="delivery.wait@4" />);
+    await settle();
+    expect(el.querySelector(".steps [data-fold]")!.getAttribute("aria-expanded")).toBe("true");
+    expect(el.querySelector(".steps [data-selected]")!.getAttribute("aria-label")).toStartWith("delivery.wait@4");
+  });
+
+  test("parallel branches are a group of their own and are never folded into", () => {
+    const t = (node: string, visit: number, parallel?: { node: string; visit: number }) =>
+      ({ node, visit, status: "succeeded", duration_ms: 1000, started_at: "2026-01-01T00:00:00.000Z", finished_at: "2026-01-01T00:00:01.000Z", offset_ms: 0, run_span_ms: 1000, waiting_ms: 0, usage: null, profile: null, ...(parallel ? { parallel } : {}) }) as unknown as ReturnType<typeof polling>["timeline"][number];
+    const fan = { node: "fan", visit: 1 };
+    const blocks = foldedBlocks([t("a", 1), t("a", 2), t("a", 3), t("a", 4), t("x", 1, fan), t("y", 1, fan), t("x", 1, fan), t("y", 1, fan), t("b", 1)]);
+    expect(blocks.map((b) => (b.kind === "fold" ? `fold×${b.times}` : `${b.kind}:${b.rows.length}`))).toEqual(["fold×3", "rows:1", "group:4", "rows:1"]);
+  });
+});
+
 describe("focus: the open pane has the window", () => {
   const focused = () => document.documentElement.dataset.runFocus === "1";
 
@@ -390,6 +463,49 @@ describe("the Details drawer can be resized", () => {
     host!.remove();
     localStorage.setItem("howdah.test.drawer.width", "12"); // under the floor: not a width
     expect(width(mount(<Harness />))).toBe("320px");
+  });
+
+  // The feedback pass's open item: a width remembered on a wide window is clamped at render on a
+  // narrow one, and the drag and the arrows were still measured from the REMEMBERED number — the
+  // edge ignored the first few hundred pixels and then jumped; the first key presses did nothing.
+  describe("render-clamped on a narrow window", () => {
+    const proto = window.HTMLElement.prototype;
+    const original = Object.getOwnPropertyDescriptor(proto, "clientWidth");
+    const originalRect = proto.getBoundingClientRect;
+    beforeEach(() => {
+      // the room is 1000px wide: the drawer may take half of it
+      Object.defineProperty(proto, "clientWidth", { configurable: true, get(this: HTMLElement) { return this.dataset.testid === "room" ? 1000 : 0; } });
+      proto.getBoundingClientRect = function (this: HTMLElement) {
+        return (this.dataset.testid === "room" ? { left: 0, right: 1000, top: 0, bottom: 600, width: 1000, height: 600, x: 0, y: 0, toJSON() {} } : originalRect.call(this)) as DOMRect;
+      };
+      localStorage.setItem("howdah.test.drawer.width", "900");
+    });
+    afterEach(() => {
+      if (original) Object.defineProperty(proto, "clientWidth", original); else delete (proto as unknown as Record<string, unknown>).clientWidth;
+      proto.getBoundingClientRect = originalRect;
+    });
+
+    test("the first arrow press moves it from where it IS", () => {
+      const el = mount(<Harness />);
+      expect(width(el)).toBe("500px"); // 900 remembered, half the room shown
+      press("ArrowRight", {}, sep(el));
+      expect(width(el)).toBe("476px");
+    });
+
+    test("a drag follows the pointer from the first pixel", () => {
+      const el = mount(<Harness />);
+      const s = sep(el);
+      s.setPointerCapture = () => {};
+      s.releasePointerCapture = () => {};
+      const pointer = (type: string, clientX: number) => act(() => { s.dispatchEvent(new window.MouseEvent(type, { bubbles: true, cancelable: true, button: 0, clientX }) as unknown as Event); });
+      pointer("pointerdown", 500); // on the edge: the drawer is 500 of 1000
+      pointer("pointermove", 540);
+      expect(width(el)).toBe("460px"); // it was still 500 here, until the pointer had gone 400px
+      pointer("pointermove", 620);
+      expect(width(el)).toBe("380px");
+      pointer("pointerup", 620);
+      expect(localStorage.getItem("howdah.test.drawer.width")).toBe("380");
+    });
   });
 
   test("a drawer that was not asked to resize has no separator and stays the width it was given", () => {

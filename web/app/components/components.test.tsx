@@ -24,7 +24,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { act, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { PanelTabs, Tabs } from "./ui/tabs";
+import { PanelTabs, Tabs, tabPanelProps } from "./ui/tabs";
 import { Chip } from "./ui/chip";
 import { Row } from "./ui/row";
 import { Checkbox } from "./ui/checkbox";
@@ -67,7 +67,7 @@ describe("PanelTabs — the selected tab carries its own selected styling (P0.1)
   function tabs(look?: "underline" | "chip") {
     function Harness() {
       const [v, setV] = useState("ask");
-      return <PanelTabs look={look} value={v} onValueChange={setV} items={[{ value: "ask", label: "Ask" }, { value: "drift", label: "Drift" }]} />;
+      return <PanelTabs label="Step panes" look={look} value={v} onValueChange={setV} items={[{ value: "ask", label: "Ask" }, { value: "drift", label: "Drift" }]} />;
     }
     return renderPrimitive(<Harness />);
   }
@@ -141,9 +141,25 @@ describe("PanelTabs — the selected tab carries its own selected styling (P0.1)
   test("the top-level Tabs switcher is a tablist with the same selected contract", () => {
     function Harness() {
       const [v, setV] = useState("steps");
-      return <Tabs value={v} onValueChange={setV} items={[{ value: "steps", label: "Steps" }, { value: "logs", label: "Logs" }]} />;
+      return (
+        <>
+          <Tabs label="Run panes" panel="run-pane" value={v} onValueChange={setV} items={[{ value: "steps", label: "Steps" }, { value: "logs", label: "Logs" }]} />
+          <div data-testid="pane" {...tabPanelProps("run-pane", v)} />
+        </>
+      );
     }
     const el = renderPrimitive(<Harness />);
+    // the confirming review: a strip has a name, and each tab says which element it switches —
+    // that element is the `tabpanel`, labelled by whichever tab is selected
+    expect(el.querySelector('[role="tablist"]')!.getAttribute("aria-label")).toBe("Run panes");
+    const pane = el.querySelector('[data-testid="pane"]')!;
+    expect(pane.getAttribute("role")).toBe("tabpanel");
+    for (const t of $$(el, '[role="tab"]')) expect(t.getAttribute("aria-controls")).toBe(pane.id);
+    const labelledBy = () => document.getElementById(pane.getAttribute("aria-labelledby")!)!.textContent;
+    expect(labelledBy()).toContain("Steps");
+    act(() => ($$(el, '[role="tab"]')[1] as HTMLElement).click());
+    expect(labelledBy()).toContain("Logs");
+    act(() => ($$(el, '[role="tab"]')[0] as HTMLElement).click());
     const [steps, logs] = $$(el, '[role="tab"]');
     expect(steps!.getAttribute("aria-selected")).toBe("true");
     expect(steps!.className).not.toBe(logs!.className);

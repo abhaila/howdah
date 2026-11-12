@@ -145,7 +145,10 @@ export function usePanel(opts: PanelOpts): Panel {
       const el = e.currentTarget;
       el.setPointerCapture(e.pointerId);
       // how far inside (or outside) the edge the press landed; carried through the whole drag
-      const grip = keepGrip ? widthAt(e.clientX) - width : 0;
+      // against the width ON SCREEN, not the one remembered: a width kept from a wider window is
+      // clamped at render (the drawer on a narrow one), and a grip measured from the remembered
+      // number made the edge ignore the first few hundred pixels of a drag and then jump
+      const grip = keepGrip ? widthAt(e.clientX) - clamp(width) : 0;
       const move = (ev: PointerEvent) => setWidth(clamp(widthAt(ev.clientX) - grip));
       const up = (ev: PointerEvent) => {
         el.releasePointerCapture(ev.pointerId);
@@ -170,7 +173,8 @@ export function usePanel(opts: PanelOpts): Panel {
       const by = e.key === grow ? step : e.key === shrink ? -step : 0;
       if (by !== 0) {
         e.preventDefault();
-        commit(width + by);
+        // from the width on screen (see onPointerDown): else the first presses are swallowed
+        commit(clamp(width) + by);
       } else if (e.key === "Home") {
         e.preventDefault();
         commit(Number.POSITIVE_INFINITY);

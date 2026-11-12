@@ -308,6 +308,12 @@ export function ApprovalCard({ runId, slice, onChanged }: { runId: string; slice
   // a decision on a round is irreversible — the run moves on it — so it asks first
   const [confirm, setConfirm] = useState<"approve" | "feedback" | null>(null);
   const { toast } = useToast();
+  // A REFUSED decision leaves the confirm dialog closed and the button it was opened from
+  // disabled or gone (the round moved on), so focus fell to <body> — on the one outcome the
+  // operator has to read. The refusal itself takes it: it is the answer to what they pressed.
+  const refusal = useRef<HTMLDivElement | null>(null);
+  const refusedNow = act.state === "refused" || act.state === "error";
+  useEffect(() => { if (refusedNow) refusal.current?.focus(); }, [refusedNow]);
 
   if (!p || !slice.approval) return <p className={NOTE}>Nothing has been proposed yet.</p>;
   const decision = slice.decision;
@@ -456,7 +462,7 @@ export function ApprovalCard({ runId, slice, onChanged }: { runId: string; slice
 
       {decidedHere && act.state === "done" && <div className={`mt-2 ${STATE}`} role="status">{act.text}</div>}
       {(act.state === "refused" || act.state === "error") && (
-        <div className="mt-2 text-sm text-foreground [overflow-wrap:anywhere]" role="alert">
+        <div ref={refusal} tabIndex={-1} className="mt-2 rounded-[var(--radius-sm)] text-sm text-foreground [overflow-wrap:anywhere] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--ring)]" role="alert">
           {/* kept across the reload a refusal triggers (it explains why the round moved), but
               named by its round once a newer one is on screen */}
           {act.round !== p.proposal_id && <span>proposal #{act.round}: </span>}

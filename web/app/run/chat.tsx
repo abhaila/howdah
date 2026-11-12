@@ -473,6 +473,20 @@ export function RunChat({ runId, detail, ask, onPickStep, onResolved, liveGit = 
               {/* ArrowDown on purpose: the primitive rotates a start pin's icon 180° itself */}
               <ArrowDown aria-hidden />Top
             </MessageScrollerButton>
+            {/* ...and so is the live-edge pin (the confirming review). As a pill floated above the
+                composer it covered the last visible line of the transcript — the line being read
+                when you have scrolled away from the bottom, which is the only time it shows. In
+                the toolbar it covers nothing, and like Top it is inert until there is somewhere
+                to go. */}
+            <MessageScrollerButton
+              direction="end"
+              variant="ghost"
+              size="sm"
+              aria-label="Scroll to end"
+              className="chat-end-pin static translate-x-0 start-auto"
+            >
+              <ArrowDown aria-hidden />Latest
+            </MessageScrollerButton>
             {/* one control for every tool call in the transcript — a long run is mostly tool work,
                 and opening or closing it one beat at a time is not skimming. Absent when the run
                 has no tool calls to act on, rather than present and inert. */}
@@ -581,12 +595,6 @@ export function RunChat({ runId, detail, ask, onPickStep, onResolved, liveGit = 
               )}
             </MessageScrollerContent>
           </MessageScrollerViewport>
-          {/* HOW-30: the live-edge pin is a labelled pill sitting just above the composer, not a
-              bare arrow over the middle of a sentence. It is the one float left in the pane, and
-              it only appears once you have scrolled away from the bottom. */}
-          <MessageScrollerButton direction="end" variant="outline" size="sm" aria-label="Scroll to end" className="chat-end-pin">
-            <ArrowDown aria-hidden />Latest
-          </MessageScrollerButton>
         </MessageScroller>
       </MessageScrollerProvider>
       </ToolDisclosureContext.Provider>

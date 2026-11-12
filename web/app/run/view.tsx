@@ -51,7 +51,8 @@ import { useEscapeLayer, useShortcuts } from "@/lib/shortcuts";
 import { RUN_STATUS_ID, focusRunStatus, useDocumentTitle } from "@/lib/page";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Tabs } from "@/components/ui/tabs";
+import { Tabs, tabPanelProps } from "@/components/ui/tabs";
+import { foldTimeline } from "@/lib/timeline";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip } from "@/components/ui/tooltip";
 import { AlertDialog } from "@/components/ui/dialog";
@@ -351,51 +352,8 @@ function PrState({ state }: { state: RunPullRequest["state"] }) {
   return state === null ? <Badge variant="outline">not probed yet</Badge> : <Badge variant={PR_CHIP[state]}>{state}</Badge>;
 }
 
-/**
- * The timeline, with a POLL folded into one row (HOW-68 feedback: the drawer was "dozens of
- * repeated `delivery.probe_pr@N` / `delivery.wait@N` rows").
- *
- * The rule is generic — it knows nothing of delivery: three or more consecutive visits of ONE
- * step, or four or more of the SAME TWO steps alternating, are the same thing happening again. All
- * of it but the LATEST visit folds into one row that says what repeated, how many times and for
- * how long; the latest stays a row of its own (it is where the run is), and the fold opens to
- * show every visit. A visit that did not succeed ends a run: a failure is never folded away.
- */
-export type TimelineItem<T> = { kind: "row"; row: T } | { kind: "fold"; key: string; rows: T[]; nodes: string[]; times: number; duration_ms: number };
-export function foldTimeline<T extends { node: string; visit: number; status: string; duration_ms: number | null }>(rows: readonly T[]): TimelineItem<T>[] {
-  const out: TimelineItem<T>[] = [];
-  let i = 0;
-  while (i < rows.length) {
-    const first = rows[i]!;
-    // how far the pattern of `period` steps starting here repeats, stopping after a visit that did not succeed
-    const extent = (period: 1 | 2) => {
-      const second = rows[i + 1];
-      if (period === 2 && (!second || second.node === first.node)) return 0;
-      let j = i;
-      while (j < rows.length && rows[j]!.node === rows[i + ((j - i) % period)]!.node) {
-        j++;
-        if (rows[j - 1]!.status !== "succeeded") break;
-      }
-      return j - i;
-    };
-    const one = extent(1), two = extent(2);
-    // three of one step; or four of a pair — "probe, wait, probe" is one poll and a half, and a
-    // fold that says ×1 hides two rows to tell the operator nothing repeated
-    const period = one >= 3 && one >= two ? 1 : 2;
-    const length = period === 1 ? one : two;
-    if (length < (period === 1 ? 3 : 4)) { out.push({ kind: "row", row: first }); i++; continue; }
-    const folded = rows.slice(i, i + length - 1);
-    out.push({
-      kind: "fold", key: `${first.node}@${first.visit}`, rows: folded,
-      nodes: period === 1 ? [first.node] : [first.node, rows[i + 1]!.node],
-      times: Math.ceil(folded.length / period),
-      duration_ms: folded.reduce((sum, r) => sum + (r.duration_ms ?? 0), 0),
-    });
-    out.push({ kind: "row", row: rows[i + length - 1]! });
-    i += length;
-  }
-  return out;
-}
+// `foldTimeline` lives in lib/timeline.ts: the Steps list folds by the same rule (run/steps.tsx)
+export { foldTimeline, type TimelineItem } from "@/lib/timeline";
 
 export function RunGraph({ runId, graph, timeline, status, onJumped }: { runId: string; graph: string; timeline: RunDetail["timeline"]; status: string; onJumped: () => void }) {
   const shape = useGraphShape(graph);
@@ -479,6 +437,8 @@ export function RunGraph({ runId, graph, timeline, status, onJumped }: { runId: 
         shape={shape}
         current={current}
         waiting={status === "needs-input"}
+        // a finished run is read as a whole: open on all of it when that is still readable
+        whole={status === "done" || status === "failed-terminal"}
         visits={visits}
         info={info}
         taken={taken}
@@ -1063,7 +1023,7 @@ function RunFrame({ id, detail, tab, setTab, picked, setPicked, liveGit, now, re
         </header>
         )}
         <div className="run-tabs flex items-center gap-3">
-          <Tabs value={tab} onValueChange={(v) => setTab(v as RunTab)} items={TABS.map((t, i) => ({ ...t, hint: String(i + 1) }))} />
+          <Tabs label="Run panes" panel="run-pane" value={tab} onValueChange={(v) => setTab(v as RunTab)} items={TABS.map((t, i) => ({ ...t, hint: String(i + 1) }))} />
           {/* focused: the header is gone, so the strip carries what it said — which run, how it
               stands, its PR — and the way back out */}
           {focus && (
@@ -1098,7 +1058,7 @@ function RunFrame({ id, detail, tab, setTab, picked, setPicked, liveGit, now, re
         )}
         {/* every pane gets the same container: a flex column that fills the body and can shrink,
             so the pane's own scroller is the only thing that scrolls */}
-        <div className="run-body" data-tab={tab}>
+        <div className="run-body" data-tab={tab} {...tabPanelProps("run-pane", tab)}>
           {tab === "plan" ? (
             <PlanPane runId={id} detail={detail} onChanged={reload} />
           ) : tab === "report" ? (
@@ -1174,16 +1134,21 @@ function RunDetails({ id, detail, liveGit, now, tab, reload, resumeCommand, onCo
     ...(summary.parent ? [{ label: "Planned by", value: <a href={`/run/${summary.parent}`} className="run-link m">{summary.parent}</a> }] : []),
   ];
   const folded = useMemo(() => foldTimeline(detail.timeline), [detail.timeline]);
+  const askKey = askRowKey(detail.timeline, detail.ask);
   const [opened, setOpened] = useState<ReadonlySet<string>>(() => new Set());
   const stepRow = (t: RunDetail["timeline"][number]) => {
     // D26: a dead run's last step is not running — the cross and the word, clock stopped
     const cut = stepInterrupted(detail, t);
-    const word = cut ? "interrupted" : t.status;
+    // a step parked mid-turn on a question is still "running" in the timeline — its attempt has
+    // not ended — while the header says "Waiting on you". The row says what the header says:
+    // the triangle and the words, as the Steps list already does (`askRowKey`, one rule for both)
+    const waiting = !cut && askKey === stepKey(t);
+    const word = cut ? "interrupted" : waiting ? "waiting on you" : t.status;
     const took = fmtDur(liveDuration(t, cut && summary.last_event_at ? new Date(summary.last_event_at).getTime() : now));
     return (
       // a row is the way to its step: it opens Steps on that step's detail
       <Row className="run-details-row" data-step-status={word} onClick={() => onPickStep(stepKey(t))} aria-label={`open ${t.node}@${t.visit} in Steps — ${word}, ${took}`}>
-        <StatusGlyph status={cut ? "harness-dead" : STEP_STATUS[t.status]} size={12} label={word} />
+        <StatusGlyph status={cut ? "harness-dead" : waiting ? "needs-input" : STEP_STATUS[t.status]} size={12} label={word} />
         <span className="m run-details-step">{t.node}@{t.visit}</span>
         <span className="run-details-dur">{took}</span>
       </Row>

@@ -26,6 +26,7 @@ import { Button } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/kbd";
 import { ScrollPane } from "@/components/ui/scroll-pane";
 import { Tooltip } from "@/components/ui/tooltip";
+import { tabPanelProps } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import { usePanel, type Panel } from "@/lib/panel";
 import { useEscapeLayer, useShortcuts } from "@/lib/shortcuts";
@@ -294,7 +295,9 @@ export function SplitView({
  * body. Steps, Logs and Context all put their detail in this, so the three read as one panel
  * showing three kinds of thing.
  */
-export function DetailPanel({ label, head, strip, children, className, bodyClassName }: {
+export function DetailPanel({ label, head, strip, children, className, bodyClassName, tabs }: {
+  /** when `strip` is a tab strip: its `panel` id and the selected tab, so the body is its `tabpanel` */
+  tabs?: { panel: string; value: string };
   /** what the scrolling body holds, for assistive tech: "Step detail" */
   label: string;
   head?: ReactNode;
@@ -307,7 +310,9 @@ export function DetailPanel({ label, head, strip, children, className, bodyClass
     <section data-slot="detail-panel" aria-label={label} className={cn("flex min-h-0 min-w-0 flex-1 flex-col", className)}>
       {head !== undefined && <div className={cn("shrink-0 px-4 pt-3", strip === undefined && "border-b border-border")}>{head}</div>}
       {strip !== undefined && <div className="shrink-0 border-b border-border px-4">{strip}</div>}
-      <ScrollPane label={label} className={cn("px-4 py-3", bodyClassName)}>{children}</ScrollPane>
+      <ScrollPane label={label} className={cn("px-4 py-3", bodyClassName)}>
+        {tabs ? <div {...tabPanelProps(tabs.panel, tabs.value)}>{children}</div> : children}
+      </ScrollPane>
     </section>
   );
 }

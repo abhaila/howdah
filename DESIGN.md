@@ -77,9 +77,13 @@ Colour is the second channel. Never emoji or dingbats.
 - **Focus** (`F`) gives the open pane the window: the rail, the run's header and the drawer
   stand down, and the tab strip carries the run's name, status and the way out. `F` or `Esc`
   leaves. It is remembered for the session, not as a preference.
-- **A graph is drawn one way**, in the builder and read-only: the same canvas and the same
-  card. Read-only, it is laid out for you (layered, crossings minimised), opens at 100%, pans
-  by drag, and every card's tooltip carries what the card cannot print.
+- **A graph is drawn one way**, in the builder and read-only: the same canvas (React Flow) and
+  the same card. Read-only, it is laid out for you (`@dagrejs/dagre`: layered, crossings
+  minimised, every sideways run in a lane of its own), opens at 100%, pans by drag, and every
+  card's tooltip carries what the card cannot print. A FINISHED run opens on the whole graph
+  when that fits at 70% or more; otherwise on its last step, with `Home` back to the start.
+  **A wire never crosses a card and a caption never sits on a card or another caption** — in
+  the builder too, where the cards are wherever the operator put them.
 - Secondary actions go behind one **More** menu. A header is one row at every supported width.
 - Supported: 1024×640 and up. Below 1100px the rail collapses to icons by itself.
 
@@ -109,7 +113,10 @@ A park is one card, and the card is the ask.
 - **Whatever the run is waiting on renders as itself:** a question shows its options, an
   ambiguous effect shows its two verdicts with their consequences, an approval shows what is
   being approved, a prose park shows a reply box.
-- **A refusal is shown verbatim.**
+- **A refusal is shown verbatim**, and takes focus when what was pressed is gone.
+- **A tool call "failed" only if the harness said so.** Its output's words are never read as a
+  verdict; where the harness said nothing, a failure-shaped output is a neutral "may have
+  failed", not the red badge.
 - It keeps `id="needs-input"`, and the sending → delivered → collapsing moment.
 
 ## Components
@@ -137,9 +144,9 @@ One layer, on `@base-ui/react`, in `web/app/components/ui/`. Appearance lives in
 | Scope | Keys |
 |---|---|
 | Anywhere | `⌘K` command palette · `?` shortcuts · `G` then `R` `N` `G` `P` `O` `S` go to a screen (`O` is Proposals) · `C` new run · `[` rail |
-| Lists | `J` `K` or arrows move · `Enter` open · `/` filter |
+| Lists | `J` `K` or arrows move · `Home` `End` the ends · `Enter` open · `/` filter · a list is one tab stop |
 | A run | `1`–`7` tabs · `⌘I` details · `F` focus the pane · `R` reply · `A` jump to the ask (into a question's options, so its numbers pick one) · `/` ask about the run, or search on Logs · `E` expand tool calls · `O` open in IDE · `.` more actions |
-| A graph | on a step: arrows, `Home`, `End` move between steps · `Enter` selects · on the canvas: arrows pan (`Shift` for more) · `+` `−` zoom · `0` show all of it |
+| A graph | on a step: arrows, `Home`, `End` move between steps · `Enter` selects · on the canvas: arrows pan (`Shift` for more) · `+` `−` zoom · `0` show all of it · `Home` the start |
 | Forms | `⌘S` save (Settings, the graph builder) · `⌘↵` launch a run |
 | Layers | `Esc` closes the topmost: menu, dialog, detail panel, drawer, then focus |
 
@@ -170,9 +177,11 @@ From the animations.dev course. Motion states a change; it never decorates.
 - The viewer posts a real browser notification for a run that newly starts waiting: its name,
   what it is asking, and a click that opens it. Permission is asked from Settings, never on
   load.
-- One ask, one notification. An open viewer that may notify tells the server so
-  (`viewer.json`), and the OS path (`engine/attention.ts`) stands down while it does; the OS
-  path exists for when no viewer is open. Nothing is posted over a viewer you are looking at.
+- One ask, one notification — once the operator has SEEN one. A browser can say "allowed"
+  while the OS shows nothing, so Settings sends a test and asks "Did it appear?". Only a yes
+  makes the viewer tell the server it delivers (`viewer.json`, `notify: true`), and only then
+  does the OS path (`engine/attention.ts`) stand down; until then both ring. The OS path also
+  covers when no viewer is open. Nothing is posted over a viewer you are looking at.
 - Sound is off by default, one setting governs every sound, and it plays only for news. When
   on it is one short soft tone (`tools/chime.ts`), never a jingle.
 

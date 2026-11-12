@@ -583,7 +583,23 @@ ${m.plan ? `<details class="block"><summary><span class="eyebrow">The plan</span
  * the component it arrives at; Trace one step advances one hop; Reset returns to the first step.
  * The two tabs switch every panel at once, so the reader stays on "how it's built" while stepping.
  */
+/**
+ * The keys the framed report hands back to the viewer (HOW-68). A sandboxed frame keeps every
+ * keystroke typed while focus is inside it, so `Esc`, `F` and the tab numbers did nothing in
+ * the one pane you most often click into. The page posts THESE keys, unmodified and not from a
+ * field, to its parent; web/app/run/report.tsx accepts them only from its own frame and only if
+ * they are in this list. A standalone file has no parent and posts nothing.
+ */
+export const REPORT_RELAY_KEYS: readonly string[] = ["Escape", "f", "?", "1", "2", "3", "4", "5", "6", "7"];
+
 const REPORT_JS = `(function(){
+  // hand the viewer's own keys back to it when this page is framed (see REPORT_RELAY_KEYS)
+  if(window.parent!==window) document.addEventListener('keydown',function(e){
+    if(e.defaultPrevented||e.ctrlKey||e.metaKey||e.altKey) return;
+    var t=e.target; if(t&&(/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName||'')||t.isContentEditable)) return;
+    var k=e.key.length===1?e.key.toLowerCase():e.key;
+    if(${JSON.stringify(["Escape", "f", "?", "1", "2", "3", "4", "5", "6", "7"])}.indexOf(k)>=0) window.parent.postMessage({howdahKey:k},'*');
+  });
   var data={flow:[]}; try{ data=JSON.parse(document.getElementById('report-data').textContent); }catch(e){}
   var flow=data.flow||[], svg=document.querySelector('svg.map'), token=document.querySelector('svg.map .token');
   var stateEl=document.querySelector('[data-state]'), step=-1, timer=null, tab='does', zoom=1, anim=null;

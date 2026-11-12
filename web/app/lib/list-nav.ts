@@ -23,11 +23,18 @@
  *                    page, or the scroller) opens the row last selected.
  *   /                focuses the filter, when the screen has one.
  *
+ * THE LIST IS ONE TAB STOP (the confirming review: Runs was 44 links, each its own stop). A
+ * roving tabindex: the selected row — the first, before any selection — is the stop, and J/K,
+ * the arrows, Home and End move between rows. It is the same rule `useListKeys`
+ * (components/ui/panel.tsx) gives the split-view lists; this hook finds its rows in the DOM
+ * and that one is handed ids, which is the only reason they are two. Tab therefore goes
+ * filter → list → the next control, and a pointer still focuses whichever row it presses.
+ *
  * Rows are found in the DOM (`[data-nav-row]` inside the container, in document order), not
  * passed in as an array: the lists are grouped and filtered, and the order the operator SEES
  * is the only order J/K may follow.
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { isTextEntry, useShortcuts, type Shortcut } from "./shortcuts";
 
 export interface ListNav {
@@ -75,6 +82,24 @@ export function useListNav(opts: {
     if (typeof el.scrollIntoView === "function") el.scrollIntoView({ block: "nearest" });
   }, [rows]);
 
+  /** to the first or the last row (Home / End, from a row) */
+  const edge = useCallback((to: "first" | "last") => {
+    const all = rows();
+    const el = to === "first" ? all[0] : all.at(-1);
+    if (!el) return;
+    setSelected(el.dataset.navRow ?? null);
+    el.focus();
+    if (typeof el.scrollIntoView === "function") el.scrollIntoView({ block: "nearest" });
+  }, [rows]);
+
+  // ONE tab stop: the selected row, else the first. Every render, because the rows are the
+  // DOM's (grouped, filtered, streamed in) and a stop that has left the list is no stop.
+  useLayoutEffect(() => {
+    const all = rows();
+    const stop = all.find((r) => r.dataset.navRow === selectedRef.current) ?? all[0];
+    for (const r of all) r.tabIndex = r === stop ? 0 : -1;
+  });
+
   const list: Shortcut[] = [
     { id: "list.next", scope: "Lists", label: `Next ${noun}`, keys: arrows === "global" ? ["j", "arrowdown"] : "j", palette: false, disabled: !enabled, run: () => move(1) },
     { id: "list.prev", scope: "Lists", label: `Previous ${noun}`, keys: arrows === "global" ? ["k", "arrowup"] : "k", palette: false, disabled: !enabled, run: () => move(-1) },
@@ -112,8 +137,14 @@ export function useListNav(opts: {
       if (row?.dataset.navRow !== undefined) setSelected(row.dataset.navRow);
     },
     onKeyDown: (e: React.KeyboardEvent) => {
-      if (arrows !== "list" || (e.key !== "ArrowDown" && e.key !== "ArrowUp")) return;
       if (e.metaKey || e.ctrlKey || e.altKey || isTextEntry(e.target)) return;
+      // Home and End, from a row: the ends of a list that is one tab stop
+      if ((e.key === "Home" || e.key === "End") && (e.target as HTMLElement).closest?.(ROW)) {
+        e.preventDefault();
+        edge(e.key === "Home" ? "first" : "last");
+        return;
+      }
+      if (arrows !== "list" || (e.key !== "ArrowDown" && e.key !== "ArrowUp")) return;
       e.preventDefault();
       move(e.key === "ArrowDown" ? 1 : -1);
     },

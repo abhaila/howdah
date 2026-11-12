@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EventLog, LogTail, readLog } from "./write";
 import { processStart } from "./lockfile";
-import { coalesce, outcomesByHash } from "./coalesce";
+import { applyLiveEvent, coalesce, outcomesByHash, type CoalescedTurn } from "./coalesce";
+import { mapClaudeEvent } from "../adapter/claude";
 import type { LoggedEvent } from "./events";
 
 const dir = () => mkdtempSync(join(tmpdir(), "howdah-log-"));
@@ -392,6 +393,48 @@ describe("coalesce", () => {
     log.append({ type: "chunk", node: "impl", visit: 1, turn: 1, index: 3, kind: "text", content: "Done." });
     log.append({ type: "turn-finalized", node: "impl", visit: 1, turn: 1, usage: { output_tokens: 42 } });
     expect(coalesce(log.read())).toEqual(coalesce(turnEvents()));
+  });
+
+  // HOW-68: the harness's own verdict on a tool call reaches the read model. It was dropped
+  // here, so the viewer guessed "failed" from the output's words ("0 failed" read as a failure).
+  describe("a tool result keeps what the harness said about it", () => {
+    /** a captured claude turn, mapped by the real adapter, written as the executor writes it */
+    function fromFixture(name: string): LoggedEvent[] {
+      const log = new EventLog(join(dir(), "run.jsonl"), fixedClock());
+      const text = readFileSync(join(import.meta.dir, "..", "adapter", "fixtures", name), "utf8");
+      let index = 0;
+      for (const line of text.split("\n")) {
+        if (!line.trim()) continue;
+        for (const ev of mapClaudeEvent(JSON.parse(line))) {
+          if (ev.type !== "tool_result") continue;
+          log.append({ type: "chunk", node: "n", visit: 1, turn: 1, index: index++, kind: "tool_result", content: ev.content.slice(0, 400), tool_id: ev.id, ...(ev.is_error !== undefined ? { is_error: ev.is_error } : {}) });
+        }
+      }
+      return log.read();
+    }
+
+    test("true and false both survive coalesce(), from a captured turn", () => {
+      const events = fromFixture("claude-plan-mode-review.jsonl");
+      const [t] = coalesce(events);
+      const verdicts = t!.parts.map((p) => p.is_error);
+      expect(verdicts).toContain(true);
+      expect(verdicts).toContain(false);
+      expect(verdicts).toEqual(events.flatMap((e) => (e.type === "chunk" ? [e.is_error] : [])));
+    });
+
+    test("the live path (applyLiveEvent) carries it identically", () => {
+      const events = fromFixture("claude-plan-mode-review.jsonl");
+      let live: CoalescedTurn[] = [];
+      for (const e of events) live = applyLiveEvent(live, e);
+      expect(live).toEqual(coalesce(events));
+    });
+
+    test("a chunk with no verdict (an older log) has NO field — absent is not false", () => {
+      const log = new EventLog(join(dir(), "run.jsonl"), fixedClock());
+      log.append({ type: "chunk", node: "n", visit: 1, turn: 1, index: 0, kind: "tool_result", content: "ok", tool_id: "t1" });
+      const [t] = coalesce(log.read());
+      expect("is_error" in t!.parts[0]!).toBe(false);
+    });
   });
 
   test("out-of-order arrival coalesces by index, not log position", () => {

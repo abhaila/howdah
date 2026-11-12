@@ -71,7 +71,9 @@ export function streamTurn(a: ExecArgs, s: NodeScript, turn = 1): void {
       // claude.ts clips every tool input to 400 chars except TodoWrite (HOW-49)
       const content = st.name === "TodoWrite" || raw.length <= 400 ? raw : raw.slice(0, 400) + "…";
       log.append({ type: "chunk", node, visit, turn, index: index++, kind: "tool_call", content, tool_id: id, tool_name: st.name, input_hash: Bun.hash(raw).toString(16) });
-      log.append({ type: "chunk", node, visit, turn, index: index++, kind: "tool_result", content: st.result, tool_id: id, tool_name: st.name, ...(st.error ? { is_error: true } : {}) });
+      // claude reports a verdict on EVERY result (`is_error` true or false); a step scripted with no
+      // `error` at all is a log from before HOW-38, or a harness that only reports failures
+      log.append({ type: "chunk", node, visit, turn, index: index++, kind: "tool_result", content: st.result, tool_id: id, tool_name: st.name, ...(st.error !== undefined ? { is_error: st.error } : {}) });
     }
   }
   if (s.fail === undefined && s.then === undefined) {

@@ -19,9 +19,9 @@
  * WHERE the wire attaches and where the caption sits are `routing.ts`'s: sides chosen from the
  * two cards' positions, and a caption that is moved off any card it would cover.
  */
-import { BaseEdge, EdgeLabelRenderer, getBezierPath, Position, type EdgeProps } from "@xyflow/react";
+import { BaseEdge, EdgeLabelRenderer, Position, type EdgeProps } from "@xyflow/react";
 import { Button } from "@/components/ui/button";
-import { captionPoint, captionSize, cardFromHandle, type Side } from "./routing";
+import { captionPoint, captionSize, cardFromHandle, wireRoute, type Box, type Side } from "./routing";
 
 /** one caption's height plus a hairline of air, so two routes out of one side of a step stack
  *  instead of printing on each other */
@@ -38,6 +38,13 @@ export interface ConditionEdgeData extends Record<string, unknown> {
    *  many there are — two captions at one point is one unreadable smudge, so they are stacked */
   nth: number;
   siblings: number;
+  /** every OTHER card on the canvas: what the wire goes round and its caption stays off */
+  others?: readonly Box[];
+  /** which lane this is among the routes that run down the same side (see routing.ts) */
+  lane?: number;
+  /** where the caption goes, decided for the whole canvas so no two captions share a spot
+   *  (canvas.tsx `routeCaptions`); absent, it is worked out from this wire alone */
+  caption?: { x: number; y: number };
   /** whether the step this leaves has a branching problem, so the wire can say so */
   flagged: boolean;
   onOpen: () => void;
@@ -45,7 +52,6 @@ export interface ConditionEdgeData extends Record<string, unknown> {
 
 export function ConditionEdge(props: EdgeProps & { data?: ConditionEdgeData }) {
   const { sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, markerEnd, selected, data } = props;
-  const [path, midX, midY] = getBezierPath({ sourceX, sourceY, sourcePosition, targetX, targetY, targetPosition });
   // Two routes leaving one side of one step share a gap, so their captions are spread around
   // the midpoint rather than stacked on it...
   const spread = data ? (data.nth - (data.siblings - 1) / 2) * SIBLING_STEP : 0;
@@ -54,12 +60,17 @@ export function ConditionEdge(props: EdgeProps & { data?: ConditionEdgeData }) {
   // the caption is wider than that gap it moves across the wire until it is clear of both. The
   // cards are rebuilt from the handles React Flow gives this edge, so it holds mid-drag too.
   const from = SIDE_OF[sourcePosition], to = SIDE_OF[targetPosition];
-  const sideways = from === "right" || from === "left" ? to === "left" || to === "right" : false;
-  const at = captionPoint(
-    { x: midX, y: midY + spread },
+  const own = [cardFromHandle({ x: sourceX, y: sourceY }, from, CARD.width, CARD.height), cardFromHandle({ x: targetX, y: targetY }, to, CARD.width, CARD.height)];
+  const others = data?.others ?? [];
+  // the wire itself: a curve between facing sides, a lane round whatever stands between when
+  // routing.ts chose the same side for both ends — and never through a third card
+  const wire = wireRoute({ x: sourceX, y: sourceY }, from, { x: targetX, y: targetY }, to, [...own, ...others], data?.lane ?? 0);
+  const path = wire.path;
+  const at = data?.caption ?? captionPoint(
+    { x: wire.mid.x, y: wire.mid.y + (from === to ? 0 : spread) },
     captionSize(data?.label || "Otherwise"),
-    [cardFromHandle({ x: sourceX, y: sourceY }, from, CARD.width, CARD.height), cardFromHandle({ x: targetX, y: targetY }, to, CARD.width, CARD.height)],
-    sideways,
+    [...own, ...others],
+    wire.sideways,
   );
   const conditional = !!data?.label;
   return (

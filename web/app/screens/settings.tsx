@@ -188,7 +188,8 @@ export function AddWorkspace({ onAdded, hint }: { onAdded: () => void; hint?: st
           <div className="flex flex-wrap items-end gap-2">
             <Label className="min-w-[140px] flex-1">
               Name
-              <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="notes" />
+              {/* the form opens from a link that then leaves the page: focus goes to its first field, not to <body> */}
+              <Input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="notes" />
             </Label>
             <Label className="min-w-[220px] flex-[2]">
               Path

@@ -239,9 +239,8 @@ main { position: relative; flex: 1; min-width: 0; min-height: 0; overflow: hidde
 .chat-head { flex: none; border-bottom: 1px solid var(--border); }
 .chat-head-row { display: flex; align-items: center; gap: 8px; min-height: 36px; }
 .chat-disclosure { margin-left: auto; }
-/* the Top pin is a toolbar control, in flow; Latest is the one float, just above the composer */
-.chat-top-pin { position: static; }
-.chat-end-pin { background: var(--bg-raised); border-color: var(--border-strong); color: var(--fg); box-shadow: var(--float-shadow); }
+/* both pins are toolbar controls, in flow: floated, Latest covered the line being read */
+.chat-top-pin, .chat-end-pin { position: static; }
 /* the quiet line of facts beside a heading: a count, a step's place and what it read */
 .chat-eyebrow { min-width: 0; font-size: var(--type-xs); color: var(--fg-muted); overflow-wrap: anywhere; }
 .chat-head .chat-eyebrow { flex: none; }

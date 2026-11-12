@@ -163,12 +163,14 @@ export function AttentionInbox() {
           ) : (
             <section aria-label="Waiting on you" className="flex flex-col">
               <SectionLabel as="h2" count={items.length} className="border-b border-border px-2 pb-1.5">Waiting on you</SectionLabel>
+              <div role="list" aria-label="Waiting on you">
               {rows.map(({ item, name, named, line, stepAfter: after }) => (
+                <div role="listitem" key={item.id}>
                 // href ?? undefined, never a guessed path: the harness record's "run" is the literal
                 // string "howdah", and /run/howdah is a page that says the run failed to start. The
                 // server decides what each row can link at (engine/attention-inbox.ts `href`); a row
                 // with nothing to link at reads as plain text, its reason already naming `howdah up`.
-                <Row key={item.id} className={INBOX_ROW} needsInput href={item.href ?? undefined} selected={nav.selected === item.id} data-nav-row={item.href ? item.id : undefined}>
+                <Row className={INBOX_ROW} needsInput href={item.href ?? undefined} selected={nav.selected === item.id} data-nav-row={item.href ? item.id : undefined}>
                   <StatusGlyph status="needs-input" label="waiting on you" />
                   <span data-col="name" className="flex min-w-0">
                     {named
@@ -188,14 +190,18 @@ export function AttentionInbox() {
                     <Tooltip side="left" content={`Waiting on you since ${fmtWhen(item.raised_at)}`}><span>{waitedColumn(item.waited)}</span></Tooltip>
                   </span>
                 </Row>
+                </div>
               ))}
+              </div>
             </section>
           )}
           {ready.length > 0 && (
             <section aria-label="Ready for you" className="flex flex-col">
               <SectionLabel as="h2" count={ready.length} className="border-b border-border px-2 pb-1.5">Ready for you</SectionLabel>
+              <div role="list" aria-label="Ready for you">
               {ready.map((item) => (
-                <Row key={item.run} className={INBOX_ROW} href={item.href} selected={nav.selected === `ready:${item.run}`} data-nav-row={`ready:${item.run}`}>
+                <div role="listitem" key={item.run}>
+                <Row className={INBOX_ROW} href={item.href} selected={nav.selected === `ready:${item.run}`} data-nav-row={`ready:${item.run}`}>
                   <StatusGlyph status="done" label="finished" />
                   <span data-col="name" className="flex min-w-0"><Truncate className="text-body font-medium text-foreground">{item.name || item.intent || item.run}</Truncate></span>
                   <span data-col="line" className="flex min-w-0 items-center gap-2 text-muted-foreground">
@@ -205,7 +211,9 @@ export function AttentionInbox() {
                   </span>
                   <span data-col="finished" className="whitespace-nowrap text-right tabular-nums text-muted-foreground">finished {fmtAgo(Date.now() - new Date(item.finished_at).getTime())} ago</span>
                 </Row>
+                </div>
               ))}
+              </div>
             </section>
           )}
         </div>

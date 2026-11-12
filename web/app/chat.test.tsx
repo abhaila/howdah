@@ -482,7 +482,8 @@ describe("reading a transcript that is mostly tool work (HOW-30)", () => {
     chunk({ kind: "text", content: "Checking the PR." });
     results.forEach((r, n) => {
       chunk({ kind: "tool_call", tool_id: `t${n}`, tool_name: n === 1 ? "mcp__claude_ai_Linear__get_issue" : "Bash", content: JSON.stringify({ command: `cmd ${n}` }) });
-      chunk({ kind: "tool_result", tool_id: `t${n}`, content: r });
+      // the harness's own verdict (HOW-68): "failed" is its word, not a guess from the text
+      chunk({ kind: "tool_result", tool_id: `t${n}`, content: r, is_error: /^error/.test(r) });
     });
     chunk({ kind: "text", content: "All merged." });
     return log;

@@ -38,6 +38,15 @@
  *   typed: an edge naming a step that does not exist is SKIPPED (its slot in `edges` is `null`),
  *   never dereferenced, and an empty shape is an empty layout.
  *
+ *   EVERY SIDEWAYS RUN HAS A LANE OF ITS OWN (the final pass). All sideways travel happens in
+ *   the gaps between ranks, and a busy gap — the one above a row of Finish steps, or under a
+ *   probe with six routes — carried a dozen wires at three shared heights, so two wires that
+ *   merely passed each other read as one wire that forked. Each bend in a gap now runs at its
+ *   own height, ordered so two wires heading the same way do not cross (the one that starts
+ *   furthest back runs nearest the rank it is going to), and a gap with more lanes than it has
+ *   room for is OPENED: every rank below moves down by what is missing. The wire is drawn square
+ *   with rounded corners, so a lane reads as a lane.
+ *
  * Pure, synchronous, node-free and DOM-free.
  */
 import dagre from "@dagrejs/dagre";
@@ -58,6 +67,11 @@ export interface LaidEdge {
   points: Point[];
   /** the caption's CENTRE */
   label?: Point;
+  /**
+   * the height of each sideways run, one per bend (a pair of consecutive points whose x
+   * differs), in order: its LANE in the gap between two ranks. Absent: the middle of the gap.
+   */
+  lanes?: number[];
   /** it returns to a step at or above the one it leaves: a loop */
   back: boolean;
   /** a step routed to itself */
@@ -80,6 +94,10 @@ const SPACING = { nodesep: 36, edgesep: 20, ranksep: 64, margin: 24 } as const;
 const STUB = 10;
 /** half a caption's height: the band a wire crosses straight where a rank holds only captions */
 const LABEL_HALF = 14;
+/** the air between two lanes in a gap, and between a lane and the rank on either side of it */
+const LANE = 10;
+/** two points this close in x are one straight run: a 2px jog is a kink, not a route */
+const STRAIGHT = 3;
 
 /** the order a walk from the entry reaches the steps in; anything unreached keeps its place after */
 function reachOrder(entry: string, ids: readonly string[], edges: ReadonlyArray<{ from: string; to: string }>): string[] {
@@ -204,6 +222,7 @@ export function dagLayout(entry: string, nodes: readonly LayoutNode[], edges: re
   const graph = g.graph() as { width?: number; height?: number };
   out.width = Number.isFinite(graph.width) ? graph.width! : 0;
   out.height = Number.isFinite(graph.height) ? graph.height! : 0;
+  assignLanes(out);
   // the loose steps: left to right under the graph, wrapping at its width
   let x = SPACING.margin, y = out.height - SPACING.margin + SPACING.ranksep, row = 0;
   for (const n of apart) {
@@ -218,14 +237,79 @@ export function dagLayout(entry: string, nodes: readonly LayoutNode[], edges: re
 }
 
 /**
+ * Give every sideways run its own lane, and open a gap that has more lanes than room (see the
+ * header). Mutates `out`: the lanes are written on the edges, and where a gap is opened every
+ * card, wire point and caption below it moves down.
+ */
+function assignLanes(out: DagLayout): void {
+  interface Bend { edge: number; top: number; bottom: number; xTop: number; xBottom: number }
+  const bends: Bend[] = [];
+  out.edges.forEach((e, i) => {
+    if (!e || e.self) return;
+    for (let k = 1; k < e.points.length; k++) {
+      const a = e.points[k - 1]!, b = e.points[k]!;
+      if (Math.abs(a.x - b.x) < STRAIGHT || Math.abs(a.y - b.y) < 0.5) continue;
+      const [hi, lo] = a.y < b.y ? [a, b] : [b, a];
+      bends.push({ edge: i, top: hi.y, bottom: lo.y, xTop: hi.x, xBottom: lo.x });
+    }
+  });
+  if (bends.length === 0) return;
+  // a gap is the stretch between one rank's band and the next: the bends that start at one height
+  const gaps = new Map<number, Bend[]>();
+  for (const b of bends) { const key = Math.round(b.top); const list = gaps.get(key); if (list) list.push(b); else gaps.set(key, [b]); }
+  // top to bottom, lane by lane: wires heading LEFT first, the one starting furthest left on top;
+  // then wires heading RIGHT, the one starting furthest right on top. Two wires heading the same
+  // way whose spans overlap then never cross: the later starter turns before it reaches the other.
+  const order = (list: Bend[]) => [...list].sort((p, q) => {
+    const pl = p.xBottom < p.xTop, ql = q.xBottom < q.xTop;
+    if (pl !== ql) return pl ? -1 : 1;
+    return pl ? p.xTop - q.xTop || p.xBottom - q.xBottom : q.xTop - p.xTop || q.xBottom - p.xBottom;
+  });
+  // how much each gap has to open, top to bottom
+  const opened: Array<{ at: number; by: number }> = [];
+  const ordered = new Map<number, Bend[]>();
+  for (const [key, list] of [...gaps].sort((p, q) => p[0] - q[0])) {
+    const sorted = order(list);
+    ordered.set(key, sorted);
+    const room = Math.min(...list.map((b) => b.bottom)) - key;
+    const need = (sorted.length + 1) * LANE;
+    if (need > room) opened.push({ at: key, by: Math.ceil(need - room) });
+  }
+  // everything strictly below a gap's top moves down by what that gap (and those above it) opened
+  const shift = (y: number) => y + opened.reduce((sum, o) => (y > o.at + 0.5 ? sum + o.by : sum), 0);
+  const laneOf = new Map<Bend, number>();
+  for (const [key, sorted] of ordered) {
+    const top = shift(key), bottom = shift(Math.min(...sorted.map((b) => b.bottom)));
+    sorted.forEach((b, n) => laneOf.set(b, top + ((bottom - top) * (n + 1)) / (sorted.length + 1)));
+  }
+  const byEdge = new Map<number, number[]>();
+  for (const b of bends) { const list = byEdge.get(b.edge); const y = laneOf.get(b)!; if (list) list.push(y); else byEdge.set(b.edge, [y]); }
+  if (opened.length > 0) {
+    for (const box of out.nodes.values()) box.y = Math.round(shift(box.y + box.height / 2) - box.height / 2);
+    for (const e of out.edges) {
+      if (!e) continue;
+      // a card's own two points move with the card; a point in a gap moves with the rank below it
+      e.points = e.points.map((p) => ({ x: p.x, y: shift(p.y) }));
+      if (e.label) e.label = { x: e.label.x, y: shift(e.label.y) };
+    }
+    out.height += opened.reduce((sum, o) => sum + o.by, 0);
+  }
+  out.edges.forEach((e, i) => { const lanes = byEdge.get(i); if (e && lanes) e.lanes = lanes; });
+}
+
+/** how round a wire's corners are */
+const CORNER = 8;
+
+/**
  * The wire, as an SVG path. Where two consecutive points share an x it is a straight run (a rank
- * being crossed, or the stub off a card); where they do not it is one S-bend with VERTICAL ends,
- * so a wire always meets a card, a caption and the lane beside a card head-on.
+ * being crossed, or the stub off a card); where they do not it is one sideways run at the lane
+ * `assignLanes` gave it — down, across, down, with rounded corners — so a wire always meets a
+ * card, a caption and the lane beside a card head-on, and two wires in one gap are two lines.
  *
  * A step routed to itself is the exception: dagre draws that as a small loop beside the card,
  * and it is passed through as the smooth curve (a uniform B-spline) dagre's own renderers use.
  */
-export function wirePath(edge: Pick<LaidEdge, "points" | "self" | "back">): string {
+export function wirePath(edge: Pick<LaidEdge, "points" | "self" | "back" | "lanes">): string {
   const r = (n: number) => Math.round(n * 10) / 10;
   const pts = edge.points;
   const first = pts[0];
@@ -245,15 +329,16 @@ export function wirePath(edge: Pick<LaidEdge, "points" | "self" | "back">): stri
     seg(x1, y1);
     return `${d}L${r(x1)},${r(y1)}`;
   }
+  let bend = 0;
   for (let i = 1; i < pts.length; i++) {
     const a = pts[i - 1]!, b = pts[i]!;
-    if (Math.abs(a.x - b.x) < 0.5) { d += `L${r(b.x)},${r(b.y)}`; continue; }
-    // the sideways run sits at a different height in the gap for a loop back, a wire heading
-    // left and one heading right — so two wires that merely CROSS in a gap do not share a line
-    // and read as joined. (Wires fanning out of one card, or into one, still share a trunk.)
-    const at = edge.back ? 0.28 : b.x < a.x ? 0.5 : 0.72;
-    const mid = a.y + (b.y - a.y) * (edge.back ? 1 - at : at);
-    d += `C${r(a.x)},${r(mid)} ${r(b.x)},${r(mid)} ${r(b.x)},${r(b.y)}`;
+    if (Math.abs(a.x - b.x) < STRAIGHT || Math.abs(a.y - b.y) < 0.5) { d += `L${r(b.x)},${r(b.y)}`; continue; }
+    // the lane this bend was given; the middle of the gap for a layout that assigned none
+    const lane = edge.lanes?.[bend++] ?? (a.y + b.y) / 2;
+    const dy = Math.sign(b.y - a.y), dx = Math.sign(b.x - a.x);
+    const k = Math.max(0, Math.min(CORNER, Math.abs(b.x - a.x) / 2, Math.abs(lane - a.y), Math.abs(b.y - lane)));
+    d += `L${r(a.x)},${r(lane - dy * k)}Q${r(a.x)},${r(lane)} ${r(a.x + dx * k)},${r(lane)}`
+      + `L${r(b.x - dx * k)},${r(lane)}Q${r(b.x)},${r(lane)} ${r(b.x)},${r(lane + dy * k)}L${r(b.x)},${r(b.y)}`;
   }
   return d;
 }

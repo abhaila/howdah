@@ -243,6 +243,8 @@ describe("ApprovalCard", () => {
     await decide(el, "Approve");
     const alert = $(el, '[role="alert"]')!;
     expect(alert.textContent).toBe(refusal);
+    // the confirming review: focus fell to <body> after a refused approval — the refusal takes it
+    expect(document.activeElement).toBe(alert);
     expect(el.textContent).not.toMatch(/\bfailed\b/i);
     expect(changed).toHaveBeenCalledTimes(1); // the log moved on: reload to show where
   });

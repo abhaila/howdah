@@ -42,7 +42,7 @@ import { StepFields, choiceSentence, sayChoices } from "./builder/step-form";
 import { StepRoutes } from "./builder/branching";
 import { ProblemText, plainProblem } from "./builder/problem";
 import { FieldsPane } from "./builder/fields";
-import { freeSpotNear, segmentHitsBox } from "./lib/layout";
+import { freeSpotNear, nextFreePosition, segmentHitsBox } from "./lib/layout";
 import { ToastProvider } from "./components/ui/toast";
 import { Input } from "./components/ui/input";
 import { useTypedText } from "./lib/hooks";
@@ -2875,6 +2875,34 @@ describe("HOW-68 sign-off: what the builder says and where a clicked step lands"
     }
     // a self-loop and an edge to a step with no position are not wires to avoid
     expect(freeSpotNear(nodes, { x: 900, y: 900 }, { edges: [{ from: "a", to: "a" }, { from: "a", to: "ghost" }] })).toEqual({ x: 900, y: 900 });
+  });
+
+  test("a clicked step never lands under a Finish step: it goes beside the column", () => {
+    // the confirming review's capture: work, the Finish below it, and a click aimed below both
+    const nodes = [
+      { id: "work", kind: "agent", position: { x: 40, y: 40 } },
+      { id: "done", kind: "terminal", position: { x: 100, y: 208 } },
+    ] as unknown as NodeSpec[];
+    const edges = [{ from: "work", to: "done" }];
+    const under = (p: { x: number; y: number }) => p.y > 208 && Math.abs(p.x - 100) < 244;
+    for (const at of [{ x: 100, y: 120 }, { x: 100, y: 400 }, { x: 130, y: 300 }, { x: 60, y: 900 }]) {
+      const spot = freeSpotNear(nodes, at, { edges })!;
+      expect(under(spot), JSON.stringify({ at, spot })).toBe(false);
+    }
+    // four more, each seeing the last: none under the Finish, none on each other
+    const all = [...nodes];
+    for (let i = 0; i < 4; i++) {
+      const next = freeSpotNear(all, { x: 100, y: 300 }, { edges })!;
+      expect(under(next), JSON.stringify(next)).toBe(false);
+      for (const n of all) expect(Math.abs(n.position!.x - next.x) >= 244 || Math.abs(n.position!.y - next.y) >= 136).toBe(true);
+      all.push({ id: `n${i}`, kind: "agent", position: next } as unknown as NodeSpec);
+    }
+    // under an ORDINARY step is still fine: a graph reads downwards
+    const plain = [{ id: "a", kind: "agent", position: { x: 40, y: 40 } }] as unknown as NodeSpec[];
+    expect(freeSpotNear(plain, { x: 40, y: 400 })).toEqual({ x: 40, y: 400 });
+    // and the reducer's own fallback (no measured centre) takes the next lane instead of the foot of a Finish column
+    expect(nextFreePosition([{ id: "done", kind: "terminal", position: { x: 40, y: 208 } }] as unknown as NodeSpec[])).toEqual({ x: 304, y: 40 });
+    expect(nextFreePosition(plain)).toEqual({ x: 40, y: 208 });
   });
 
   test("D21: the canvas pans — never zooms — by the least that shows the added step", () => {

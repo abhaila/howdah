@@ -510,6 +510,30 @@ describe("D26: a dead run's interrupted step is not drawn running, and it says i
     expect(stepInterrupted({ summary: { status: "harness-dead" }, turn_states: {} }, { ...row, status: "succeeded" })).toBe(false);
   });
 
+  // The confirming review: a step parked MID-TURN on a question is still "running" in the
+  // timeline (its attempt has not ended), and the drawer drew the running half-disc under a
+  // header that said "Waiting on you".
+  test("Details timeline: a step parked mid-turn on a question is the triangle and 'waiting on you', not 'running'", async () => {
+    const log = new FakeLog();
+    log.add({ type: "run-started", graph: "implement-ticket", inputs: { goal: "ship the headers" }, pinned_prompts: {} });
+    log.add({ type: "node-started", node: "implementation.plan", visit: 1, attempt_id: "implementation.plan#1" });
+    log.add({
+      type: "attention-raised", node: "implementation.plan", visit: 1, reason: "Cursor or offset?",
+      ask: { kind: "user-question", request_id: "r1", tool_name: "AskUserQuestion", tool_use_id: "t2", questions: [{ question: "Cursor or offset?", header: "Paging", options: [{ label: "Cursor" }, { label: "Offset" }] }] },
+    } as never);
+    const detail = deriveDetail("r1", log.events, {}, { graphs: GRAPHS });
+    expect(detail.timeline[0]!.status).toBe("running"); // the timeline's own word is unchanged
+    serve(detail);
+    const el = mount(<RunView id="r1" graceMs={OPEN_GRACE_MS} />);
+    await settle();
+    press("i", MOD); // open Details
+    await settle();
+    const row = el.querySelector(".run-details-row") as HTMLElement;
+    expect(row.getAttribute("data-step-status")).toBe("waiting on you");
+    expect(row.getAttribute("aria-label")).toContain("waiting on you");
+    expect(row.querySelector("svg")!.getAttribute("data-shape")).toBe("triangle");
+  });
+
   test("Details timeline: the cross and the word 'interrupted'; the page says it died in the header and ONE notice", async () => {
     serve(deadDetail());
     const el = mount(<RunView id="r1" graceMs={OPEN_GRACE_MS} />);

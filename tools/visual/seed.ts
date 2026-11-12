@@ -701,6 +701,69 @@ try {
   }, [8 * 60, 7 * 60], "finished quick-task with a 600+ item transcript (long line, big JSON, unbroken token)", "finished success");
 }
 
+// Q. HOW-68 final pass: states the feedback work and the `is_error` fix need to be SEEN on ---------------
+// Q1. a run that polled its PR fourteen times before it merged: probe ↔ wait, the fold in Details AND in Steps
+await run("implement-ticket-mhv8poll", {
+  name: "HOW-447 Paginate the invoices export", inputs: { goal: "Paginate the invoices export so a tenant with 200k rows does not time out", work: "HOW-447: GET /api/invoices/export times out past ~60k rows. Cursor-paginate it and stream the CSV." },
+  prUrl: "https://github.com/acme/acme-api/pull/4171", evidence: false,
+  pr: (v) => (v <= 14 ? "OPEN" : "MERGED"),
+}, [30 * 60, 27 * 60], "finished implement-ticket after 14 polls of an open PR (the fold)", "finished success");
+
+// Q2. a PR known ONLY from publication_summary: the probe never reached the forge, so no `reconciled` carries
+// one. SEAM: probe:pr is a stub; it parks the way the real one does once its unreachable-forge retries are spent.
+await run("implement-ticket-mhv8nofg", {
+  name: "HOW-448 Trim trailing whitespace in tenant names", inputs: { goal: "Trim trailing whitespace in tenant names on write", work: "HOW-448: two tenants differ only by a trailing space." },
+  evidence: false,
+  script: (node) => (node === "delivery.publish" ? { say: "Opened the pull request.", writes: { publication_summary: "PR https://github.com/acme/acme-api/pull/4174 — \"Trim tenant names on write (HOW-448)\". Nothing is left unproven." } } : undefined),
+  command: (a) => (a.nodeId === "delivery.probe_pr" ? { status: "failed", writes: {}, reason: "executor threw: the forge was unreachable after 3 retries (30s, 2m, 5m): gh: Post \"https://api.github.com/graphql\": dial tcp: lookup api.github.com: no such host", code: "executor-threw" } as AttemptResult : undefined),
+}, [95, 80], "parked at probe_pr with the forge unreachable — the PR is known from publication_summary alone", "parked");
+
+// Q3. a stacked run with TWO pull requests of its own (an api one and a web one), probed with different states.
+// SEAMS: runs:await and git:restack are stubs (as in L); the probe appends the `reconciled` a real probe:pr
+// appends once per PR it reads.
+{
+  const id = "plan-feature-mhu7d3k2--two-prs";
+  const prs = ["https://github.com/acme/acme-api/pull/4181", "https://github.com/acme/acme-web/pull/977"];
+  const deps = [{ slice: "api-route", until: "merged", run_id: "plan-feature-mhu7d3k2--api-route", workspace: "acme-api" }];
+  try {
+    await run(id, {
+      graph: implementStacked, parent: "plan-feature-mhu7d3k2", name: "HOW-445 Show the deletion date in the admin console", evidence: false,
+      inputs: { goal: "Show an account's deletion date in the admin console", work: "HOW-445: the API returns `deleted_at`; the console shows it beside the account.", deps: JSON.stringify(deps) },
+      script: (node) => (node === "delivery.publish" ? { say: "Opened both pull requests.", writes: { publication_summary: { prs, note: "The API change and the console change are separate PRs; the console one depends on the API one." } } } : undefined),
+      command: (a) => {
+        const d: any = a.def;
+        const keys = Object.keys(d.writes ?? {});
+        if (d.run === "runs:await") return ok(Object.fromEntries(keys.map((k) => [k, k === "deps.ready" ? true : k === "deps.base_merged" ? true : k === "deps.restack" ? false : k === "deps.prs" ? ["https://github.com/acme/acme-api/pull/4160"] : ""])));
+        if (d.run === "git:restack") return ok(Object.fromEntries(keys.map((k) => [k, ""])));
+        if (a.nodeId !== "delivery.probe_pr") return undefined;
+        const merged = a.visit >= 3;
+        reconciled(a, { branch: `howdah/${id}`, head: "5a0e77c1d2b3", forge: { kind: "pr", state: merged ? "MERGED" : "OPEN", url: prs[0]! } });
+        reconciled(a, { branch: `howdah/${id}`, head: "5a0e77c1d2b3", forge: { kind: "pr", state: merged ? "MERGED" : a.visit === 1 ? "OPEN" : "CHANGES_REQUESTED", url: prs[1]! } });
+        return ok(Object.fromEntries(keys.map((k) => [k, k === "pr.state" ? (merged ? "MERGED" : "OPEN") : k === "pr.approved" ? merged : k === "pr.review_activity" ? [] : ""])));
+      },
+    }, [14 * 60, 12 * 60], "finished implement-stacked with two PRs of its own", "finished success");
+  } catch (e) { console.error("two-PR stacked run failed:", e); }
+}
+
+// Q4. what the harness SAID about a tool call, against what its output happens to say (HOW-38's `is_error`):
+// one call the harness failed whose output looks fine, one it passed whose output says "0 failed", and one
+// written the way a log from before HOW-38 is — no verdict at all, and an output that starts like a failure.
+await run("quick-task-mhv8tool", {
+  graph: quickTask, cwd: API, name: "Run the gateway suite and report", inputs: { goal: "Run the gateway test suite and report what fails" },
+  script: () => ({
+    steps: [
+      text("Running the suite first."),
+      { t: "tool", name: "Bash", input: { command: "./gradlew :gateway:test 2>&1 | tail -3" }, result: "14 tests completed, 0 failed\nBUILD SUCCESSFUL in 6s", error: false },
+      text("Green. Now the limits check, which needs the tenant table."),
+      { t: "tool", name: "Bash", input: { command: "bun scripts/check-limits.ts --tenant-table" }, result: "limits table: 220 tenants read\n(the process was killed after 120s)", error: true },
+      text("That one timed out. An older check, the way a run from before the harness reported a verdict recorded it:"),
+      { t: "tool", name: "Bash", input: { command: "git -C ../acme-web status --short" }, result: "fatal: cannot change to '../acme-web': No such file or directory" },
+      { t: "tool", name: "Read", input: { file_path: "gateway/README.md" }, result: "# Gateway\n\nHandles errors from upstream; a failed upstream is retried twice." },
+    ],
+    say: "The suite passes (14 tests, 0 failed). The limits check timed out after 120s and needs a faster tenant-table read.",
+  }),
+}, [3 * 60, 3 * 60 - 4], "finished quick-task: is_error true / false / absent on its tool results", "finished success");
+
 // ---- 3. things that go through the viewer's own routes ------------------------------------------
 const server = createHowdahServer({ runsDir: RUNS, attentionDir: ATTENTION, port: 0, repoRoot: ROOT, resumeRun: () => {}, spawnReviser: () => {}, openTerminal: () => {} } as any);
 const base = `http://localhost:${server.port}`;
@@ -727,7 +790,8 @@ const triage = {
   nodes: [
     { id: "triage-bug.reproduce", kind: "agent", prompt: "triage-bug.reproduce", reads: ["goal"], writes: ["reproduced", "repro_notes"], readOnly: true, position: { x: 40, y: 160 } },
     { id: "triage-bug.fix", kind: "agent", prompt: "triage-bug.fix", reads: ["goal", "repro_notes"], writes: ["fix_summary"], maxVisits: 3, position: { x: 400, y: 60 } },
-    { id: "triage-bug.review", kind: "agent", prompt: "triage-bug.review", reads: ["goal", "fix_summary"], writes: ["review_verdict"], readOnly: true, position: { x: 760, y: 60 } },
+    // HOW-68 final pass: a title long enough to wrap past three lines on the read-only card
+    { id: "triage-bug.review", kind: "agent", title: "Review the fix against the original report, the reproduction notes and the failing test that proved it", prompt: "triage-bug.review", reads: ["goal", "fix_summary"], writes: ["review_verdict"], readOnly: true, position: { x: 760, y: 60 } },
     { id: "fixed", kind: "terminal", outcome: "success", position: { x: 1120, y: 60 } },
     { id: "cannot-reproduce", kind: "terminal", outcome: "failed", label: "Could not reproduce", position: { x: 400, y: 320 } },
   ],

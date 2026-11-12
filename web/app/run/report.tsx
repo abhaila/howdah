@@ -20,13 +20,22 @@
  * cannot read this page's setting; the viewer's explicit choice travels as `?theme=`, which the
  * page's own script reads. With no explicit choice nothing is passed and both follow the
  * system, exactly as the standalone file does. Open and Download are real 28px controls.
+ *
+ * KEYS INSIDE THE FRAME (the confirming review). A sandboxed frame keeps every keystroke typed
+ * while focus is in it, so `Esc`, `F` and `1`–`7` did nothing once you had clicked the report.
+ * The page hands exactly those keys back (`REPORT_RELAY_KEYS`, core/run-report.ts) with
+ * `postMessage`, and this pane replays one as a keydown on the document — accepted only from
+ * ITS frame's window and only from that list, so a report cannot type anything else into the
+ * viewer. What is NOT relayed, and stays the limitation the strip states: every other shortcut
+ * (`⌘K`, `G` then a letter, `⌘I`, `.`). Tab leaves the frame for the controls around it.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Download, ExternalLink, Network, RefreshCw } from "lucide-react";
 import type { RunDetail } from "../../derive";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Toolbar } from "@/components/ui/toolbar";
 import { useToast } from "@/components/ui/toast";
+import { Kbd } from "@/components/ui/kbd";
 
 /** the step that writes the change map the report is drawn around (prompts/implementation.report.md) */
 export const REPORT_NODE = "implementation.report";
@@ -42,6 +51,10 @@ export const CHANGE_MAP_KEY = "change_map";
  * downloads: the page cannot read this origin or move this window.
  */
 export const REPORT_SANDBOX = "allow-scripts allow-popups allow-popups-to-escape-sandbox";
+
+/** the keys the framed page hands back — core/run-report.ts REPORT_RELAY_KEYS, repeated so the
+ *  browser bundle does not carry the whole report renderer for one list (plan.test.tsx pins them equal) */
+export const RELAYED_KEYS: readonly string[] = ["Escape", "f", "?", "1", "2", "3", "4", "5", "6", "7"];
 
 export const reportUrl = (runId: string, download = false) => `/api/runs/${encodeURIComponent(runId)}/report${download ? "?download=1" : ""}`;
 
@@ -93,6 +106,20 @@ export function RunReport({ runId, detail, onChanged = () => {} }: { runId: stri
       setMapping(false);
     }
   };
+  const frame = useRef<HTMLIFrameElement | null>(null);
+  useEffect(() => {
+    const onMessage = (e: MessageEvent) => {
+      // only OUR frame, and only a key on the list: the page inside is derived from agent data
+      if (!frame.current || e.source !== frame.current.contentWindow) return;
+      const key = (e.data as { howdahKey?: unknown } | null)?.howdahKey;
+      if (typeof key !== "string" || !RELAYED_KEYS.includes(key)) return;
+      // the app must not think a field has focus: the frame gives focus back first
+      frame.current.blur();
+      document.body.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
+    };
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, []);
   const last = detail.timeline.at(-1);
   const theme = useExplicitTheme();
   // a new step, a finished step or a new status is a new report; a chunk is not
@@ -101,7 +128,9 @@ export function RunReport({ runId, detail, onChanged = () => {} }: { runId: stri
   return (
     <div className="report-pane">
       <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-border px-4 py-2">
-        <span className="min-w-0 flex-1 basis-60 text-xs text-muted-foreground">Derived from the run log each time it opens; nothing is stored. Works the same on every harness.</span>
+        <span className="min-w-0 flex-1 basis-60 text-xs text-muted-foreground">
+          Derived from the run log each time it opens; nothing is stored. Inside the report, <Kbd keys="esc" />, <Kbd keys="f" /> and the tab numbers still work; for any other shortcut press <Kbd keys="tab" /> to leave it first.
+        </span>
         <Toolbar label="Report actions">
           {canMapChange(detail) && (
             <Button variant="outline" size="sm" loading={mapping} onClick={mapChange}>
@@ -114,7 +143,7 @@ export function RunReport({ runId, detail, onChanged = () => {} }: { runId: stri
         </Toolbar>
       </div>
       {error && <div className="field-error px-4 py-1">{error}</div>}
-      <iframe key={key} className="report-frame" aria-label={`Run report for ${runId}`} src={`${reportUrl(runId)}${theme ? `?theme=${theme}` : ""}`} sandbox={REPORT_SANDBOX} />
+      <iframe ref={frame} key={key} className="report-frame" aria-label={`Run report for ${runId}`} src={`${reportUrl(runId)}${theme ? `?theme=${theme}` : ""}`} sandbox={REPORT_SANDBOX} />
     </div>
   );
 }

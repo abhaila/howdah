@@ -255,7 +255,10 @@ export function RunsList() {
           {groups.map((g) => (
             <section key={g.key} data-group={g.key} aria-label={g.label} className="flex flex-col">
               <SectionLabel as="h2" count={groupCount(g.key, g.rows)} className="border-b border-border px-2 pb-1.5">{g.label}</SectionLabel>
-              {g.rows.map((r) => <RunRow key={r.id} r={r} now={now} selected={nav.selected === r.id} />)}
+              {/* a real list: "list, 21 items", and one tab stop for all of it (lib/list-nav.ts) */}
+              <div role="list" aria-label={g.label}>
+                {g.rows.map((r) => <div role="listitem" key={r.id}><RunRow r={r} now={now} selected={nav.selected === r.id} /></div>)}
+              </div>
             </section>
           ))}
         </div>

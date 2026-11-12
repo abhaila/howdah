@@ -66,6 +66,11 @@ const R = {
   contextExhausted: "quick-task-mhu1x0d7",
   // the confirming review's stress run (seed.ts section P): 600+ transcript items, a 6,000-character line, a large JSON result, a 300-character unbroken token
   longTranscript: "quick-task-mhv7long",
+  // the final pass (seed.ts section Q): a 14-poll run, a PR known only from its summary, two PRs, and what the harness said about each tool call
+  polled: "implement-ticket-mhv8poll",
+  prFromSummary: "implement-ticket-mhv8nofg",
+  twoPrs: "plan-feature-mhu7d3k2--two-prs",
+  toolVerdicts: "quick-task-mhv8tool",
 };
 /** the second viewer serve.sh starts over the EMPTY home: no runs, workspaces, local graphs or proposals */
 const EMPTY = process.env.HOWDAH_EMPTY_BASE ?? `http://localhost:${Number(process.env.HOWDAH_VISUAL_PORT ?? 4799) + 1}`;
@@ -535,6 +540,14 @@ async function narrowPass() {
     const aud = { audit: true };
     await step("runs-list", async () => { await go("/"); await snap("runs-list", aud); });
     await step("attention", async () => { await go("/attention"); await snap("attention-inbox", aud); });
+    // ---- HOW-68 final pass: the fold in Steps and in Details, PRs from a summary and in pairs, the harness's verdict on a tool call, a title that wraps
+    await step("polled-steps", async () => { await go(`/run/${R.polled}`); await tab("Steps"); await snap("run-polled-steps-folded", { audit: true }); await page.locator(".steps [data-fold]").first().click(); await snap("run-polled-steps-fold-open", { audit: true }); });
+    await step("polled-details", async () => { await go(`/run/${R.polled}`); if (!(await page.locator("[data-slot='drawer']").count())) await page.getByRole("button", { name: "Show details" }).click(); await snap("run-polled-details-folded", { audit: true }); });
+    await step("polled-graph", async () => { await go(`/run/${R.polled}`); await tab("Graph"); await page.waitForSelector(".dag-card"); await snap("run-polled-graph-finished", { ...{ audit: true }, wait: 700 }); });
+    await step("pr-from-summary", async () => { await go(`/run/${R.prFromSummary}`); if (!(await page.locator("[data-slot='drawer']").count())) await page.getByRole("button", { name: "Show details" }).click(); await snap("run-pr-known-from-summary", { audit: true }); });
+    await step("two-prs", async () => { await go(`/run/${R.twoPrs}`); if (!(await page.locator("[data-slot='drawer']").count())) await page.getByRole("button", { name: "Show details" }).click(); await snap("run-stacked-two-prs", { audit: true }); });
+    await step("tool-verdicts", async () => { await go(`/run/${R.toolVerdicts}`); await page.locator(".act-group-head, .act-tool-head").first().waitFor(); await snap("run-tool-verdicts", { audit: true }); await page.locator("main h1").click(); await page.keyboard.press("e"); await snap("run-tool-verdicts-expanded", { ...{ audit: true }, wait: 600 }); });
+    await step("graph-long-title", async () => { await go("/graphs"); await page.getByRole("button", { name: "the triage-bug graph" }).click(); await page.waitForSelector(".dag-card"); await snap("graphs-step-title-wraps", { ...{ audit: true }, wait: 700 }); });
     await step("components-gallery", async () => { await go("/dev/components"); await snap("components-gallery", aud); });
     for (const [key, id] of [["run-done", R.done], ["run-needs-input-prose", R.prose], ["run-needs-input-long-id-name", R.long], ["run-needs-input-question", R.question]]) {
       await step(key, async () => { await go(`/run/${id}`); await snap(`${key}-build-chat`, { ...aud, wait: 900 }); });
@@ -546,6 +559,15 @@ async function narrowPass() {
     for (const [key, id] of [["run-parallel-done", R.parallelDone], ["run-needs-input-gated-acceptance", R.gated], ["run-needs-input-stale-base", R.staleBase], ["run-needs-input-permission", R.permission], ["run-needs-input-mcp-elicitation", R.elicitation], ["run-needs-input-repair-stalled", R.repairStalled], ["run-queued", R.queued], ["run-stacked-waiting", R.stackedWaiting]])
       await step(key, async () => { await go(`/run/${id}`); await snap(`${key}-build-chat`, { ...aud, wait: 900 }); if (await page.locator("#needs-input").count()) { await page.locator("#needs-input").scrollIntoViewIfNeeded(); await snap(`${key}-ask-in-view`, aud); } });
     await step("parallel-steps", async () => { await go(`/run/${R.parallelDone}`); await tab("Steps"); await snap("run-parallel-done-steps", aud); });
+    // ---- HOW-68 final pass: the fold in Steps and in Details, PRs from a summary and in pairs, the harness's verdict on a tool call, a title that wraps
+    await step("floor-polled-steps", async () => { await go(`/run/${R.polled}`); await tab("Steps"); await snap("run-polled-steps-folded", aud); await page.locator(".steps [data-fold]").first().click(); await snap("run-polled-steps-fold-open", aud); });
+    await step("floor-polled-details", async () => { await go(`/run/${R.polled}`); if (!(await page.locator("[data-slot='drawer']").count())) await page.getByRole("button", { name: "Show details" }).click(); await snap("run-polled-details-folded", aud); });
+    await step("floor-polled-graph", async () => { await go(`/run/${R.polled}`); await tab("Graph"); await page.waitForSelector(".dag-card"); await snap("run-polled-graph-finished", { ...aud, wait: 700 }); });
+    await step("floor-pr-from-summary", async () => { await go(`/run/${R.prFromSummary}`); if (!(await page.locator("[data-slot='drawer']").count())) await page.getByRole("button", { name: "Show details" }).click(); await snap("run-pr-known-from-summary", aud); });
+    await step("floor-two-prs", async () => { await go(`/run/${R.twoPrs}`); if (!(await page.locator("[data-slot='drawer']").count())) await page.getByRole("button", { name: "Show details" }).click(); await snap("run-stacked-two-prs", aud); });
+    await step("floor-tool-verdicts", async () => { await go(`/run/${R.toolVerdicts}`); await page.locator(".act-group-head, .act-tool-head").first().waitFor(); await snap("run-tool-verdicts", aud); await page.locator("main h1").click(); await page.keyboard.press("e"); await snap("run-tool-verdicts-expanded", { ...aud, wait: 600 }); });
+    await step("floor-graph-long-title", async () => { await go("/graphs"); await page.getByRole("button", { name: "the triage-bug graph" }).click(); await page.waitForSelector(".dag-card"); await snap("graphs-step-title-wraps", { ...aud, wait: 700 }); });
+
     await step("drift-pane", async () => { await go(`/run/${R.drift}`); await tab("Steps"); await page.getByRole("button", { name: /^map\.drift@1/ }).click(); await page.getByRole("tab", { name: "Drift", exact: true }).click(); await snap("run-implement-slice-drift-pane", { ...aud, wait: 700 }); });
     await step("build-to-step-detail", async () => { await go(`/run/${R.done}`); await page.getByRole("button", { name: /^open implementation\.plan@1 in Steps/ }).first().click(); await page.getByRole("button", { name: /Back to Steps/ }).waitFor({ timeout: 2500 }); await snap("run-done-step-picked-from-build-lands-on-detail", aud); });
     await step("details-to-step-detail", async () => { await go(`/run/${R.done}`); await page.getByRole("button", { name: "Show details" }).click(); await page.getByRole("button", { name: /^open verify\.run@1 in Steps/ }).first().click(); await page.getByRole("button", { name: /Back to Steps/ }).waitFor({ timeout: 2500 }); await snap("run-done-step-picked-from-details-lands-on-detail", aud); });

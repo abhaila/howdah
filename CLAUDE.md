@@ -12,18 +12,26 @@ shape parts (A*), decisions (D*/OV-*), and the task list (T1–T22). Source comm
 reference those IDs — when a comment says "OV-1" or "T18", `shaping.md` explains why.
 
 Runtime: **Bun** (TypeScript, ESM, no build step for server/CLI code). No framework beyond
-React + Tailwind for the viewer, with THREE deliberate exceptions. The first two are admitted
-on the same test — each buys a part that is expensive to own and cheap to borrow, its whole
+React + Tailwind for the viewer, with FOUR deliberate exceptions. Three are admitted on the
+same test — each buys a part that is expensive to own and cheap to borrow, its whole
 dependency tree is small enough to name in a sentence, and it is confined to the files that
-need it. The third, `@base-ui/react`, is the primitive layer's foundation and is a larger
+need it. The fourth, `@base-ui/react`, is the primitive layer's foundation and is a larger
 commitment made on purpose; see the components section below for what moved onto it, what
 deliberately did not, and why.
 
 `@xyflow/react` (HOW-24) draws the graph builder's canvas. It is the library the ticket named
 by reference, and it buys drag-to-connect with a live preview wire, edge hit-testing, pan/zoom
 and marquee select. Its whole dependency tree is zustand, classcat and four d3 modules. It is
-used ONLY under `web/app/builder/`, and its stylesheet is imported from `main.tsx` and never
-pasted into the three hand-written sheets (see the CSS contract below).
+used under `web/app/builder/` and, read-only, in `web/app/graph-dag.tsx` (the run's Graph tab,
+the Graphs screen, the draft review: the viewport — pan, zoom, minimap — and nothing that
+edits). Its stylesheet is imported from `main.tsx` and never pasted into the three hand-written
+sheets (see the CSS contract below).
+
+`@dagrejs/dagre` (HOW-68) lays out that read-only picture: layers, crossing minimisation and
+wires routed through the gaps, three algorithms each a paper long. Its whole dependency tree is
+`@dagrejs/graphlib`, and it is imported ONLY by `web/app/lib/dag-layout.ts`, which hands the
+picture plain boxes and points. `elkjs` was measured and refused: 1.5 MB minified against
+49 KB, and asynchronous, so the picture would paint empty and then jump.
 
 `@shadcn/react` (HOW-27) is the headless half of `components/ui/message-scroller.tsx` and
 `components/ui/questionnaire.tsx`, which make the run's Chat pane read like an agentic chat —
@@ -225,9 +233,10 @@ Break one of these and the design stops working, so check them before changing t
   THE PICTURE NEVER ASSERTS: it draws a half-built shape, so an edge whose endpoint does not
   exist is SKIPPED rather than dereferenced — a run's shape is server-derived and consistent, a
   draft's is being typed ("go to [pick a step]"), and `web/app` has no error boundary, so one
-  `!` took the wizard and the unsaved draft down with it. (`GraphDag` still reads that way for
-  the run view and the tuner; React Flow simply does not draw an edge whose endpoint it cannot
-  find.) What is missing is reported in words by the verdict, on the step that owns it. AND A BOX IS CONTROLLED BY
+  `!` took the wizard and the unsaved draft down with it. (The read-only picture keeps the same
+  rule: `dagLayout` answers `null` for an edge whose endpoint does not exist and `GraphDag`'s
+  wire loop skips it; in the builder React Flow simply does not draw an edge whose endpoint it
+  cannot find.) What is missing is reported in words by the verdict, on the step that owns it. AND A BOX IS CONTROLLED BY
   MEANING, NOT BY SPELLING: the spec stores typed data on purpose (`3`, not `"3"`;
   `["pass","warn"]`, not `"pass, warn"`), so a control fed straight back from it destroys every
   intermediate keystroke the coercion trims. `useTypedText` (`web/app/lib/hooks.ts`) keeps what
@@ -272,9 +281,15 @@ Break one of these and the design stops working, so check them before changing t
   and break the round trip. `parseNode` accepts only two finite numbers (NaN serialises to
   `null`, and a spec that cannot round-trip through JSON is not a spec) and `compileNode` drops
   it, so the engine sees the identical `Graph` — pinned in `core/graph-spec.test.ts`.
-  `web/app/lib/layout.ts` holds the ONE layered-BFS placement, shared with `graph-dag.tsx` so
-  the builder and the run view do not draw one graph two ways; only the PITCH differs, because
-  the canvas prints a condition IN the gap between two cards rather than beside the wire.
+  `web/app/lib/layout.ts` is the BUILDER's placement: a layered BFS that only fills the gaps,
+  because a step's place there is the operator's. The read-only picture is laid out by
+  `web/app/lib/dag-layout.ts` (dagre), which also gives every sideways run in a gap a lane of
+  its own and opens a gap that has more lanes than room. The two share the card (`.gb-node`)
+  and the canvas theme (`.gb-canvas`), not the placement. A WIRE GOES ROUND A CARD in both: in
+  the builder `builder/routing.ts` picks each route's sides with every other card in view and
+  falls back to a lane beside whatever stands between, captions are placed for the whole canvas
+  at once so none sits on a card or on another, and a palette-added step never lands under a
+  Finish step.
   NOTHING BECAME MOUSE-ONLY (HOW-16 P2 is not given back): every palette item is a `Button` that
   is also `draggable`, every step's routes can be set from its panel without drawing a wire, the
   way into a step is a real control on its card rather than the card itself, a wire's
@@ -410,9 +425,12 @@ Break one of these and the design stops working, so check them before changing t
 - **Attention is durable before it is delivered.** `engine/attention.ts` writes the record,
   then notifies; `watchdog/check.ts` runs outside the process (launchd, 60s) so `kill -9`
   with an ask pending still rings, and a stale heartbeat is itself an attention event.
-  HOW-68: an open viewer that may post browser notifications beats `viewer.json`
-  (`engine/viewer-presence.ts`; liveness, like `heartbeat.json`, not run state), and the OS
-  banner is skipped while that beat is fresh — the browser's notification is the native one.
+  HOW-68: an open viewer whose notifications the operator has CONFIRMED beats `viewer.json`
+  with `notify: true` (`engine/viewer-presence.ts`; liveness, like `heartbeat.json`, not run
+  state), and the OS banner is skipped while that beat is fresh — the browser's notification is
+  the native one. A browser can report `granted` while the OS shows nothing, so permission alone
+  is not the claim: until the operator answers yes to a test in Settings (`lib/notify.ts`
+  `notifyDelivers`) the beat says `notify: false` and BOTH paths ring, which is the safe failure.
   A skipped banner records `notified_via: "viewer"`; the watchdog rings through the OS once
   the viewer is gone, so `kill -9` on the browser cannot swallow an ask.
 - **Human gates read decision events, never `attention-resolved`.** `resume()` auto-resolves
@@ -657,7 +675,7 @@ Break one of these and the design stops working, so check them before changing t
 | `engine/` | `run.ts` (loop, routing, pinning, effects, attribution), `replay.ts`, `reconcile.ts` (git probes + worktree fingerprint), `attention.ts`, `control.ts` (replies, decisions, runner lock), `slice-decision.ts`, `slice-map.ts`, `executors/` (HOW-57 adds `await.ts` `runs:await`, `restack.ts` `git:restack` and the leaf `git.ts`) |
 | `cli/` | `main.ts` verbs, `new-graph.ts` scaffolder (writes into `$HOWDAH_HOME`) |
 | `config/` | `config.json` workspaces + settings, `tuning.json` overlay, GitHub repo registration |
-| `web/` | Bun server (read model + reply/launch/control writes, SSE), `derive.ts` read model, `draft.ts` (HOW-65: a draft-graph run's draft, its Save, and the builder's provenance rule), React app in `app/`: `main.tsx` is the shell/nav/router only, screens in `app/screens/` (HOW-65 adds `draft-review.tsx`, `/runs/:id/draft`), run-detail panes in `app/run/` (`draft.tsx` is the draft card and the list the review page shares; Chat is the default: `run/chat.tsx` folds the run into one conversation and carries the standing ask inline, HOW-25; HOW-27 made it ONE scrolling transcript with the composer permanently at its foot — the Transcript/Ask tab split is gone, not moved, and the composer asks the read-only route and never replies to the agent, because one box that silently changes target on whether the run is parked is a box that sends the wrong one), builder in `app/builder/` (HOW-24: `canvas.tsx` + `node-card.tsx` + `edge.tsx` + `palette.tsx` + `properties.tsx`, with `step-form.tsx`/`branching.tsx`/`fields.tsx` as the panel bodies), primitives in `app/components/ui/`, helpers in `app/lib/` |
+| `web/` | Bun server (read model + reply/launch/control writes, SSE), `derive.ts` read model, `draft.ts` (HOW-65: a draft-graph run's draft, its Save, and the builder's provenance rule), React app in `app/`: `main.tsx` is the shell/nav/router only, screens in `app/screens/` (HOW-65 adds `draft-review.tsx`, `/runs/:id/draft`), run-detail panes in `app/run/` (`draft.tsx` is the draft card and the list the review page shares; Chat is the default: `run/chat.tsx` folds the run into one conversation and carries the standing ask inline, HOW-25; HOW-27 made it ONE scrolling transcript with the composer permanently at its foot — the Transcript/Ask tab split is gone, not moved, and the composer asks the read-only route and never replies to the agent, because one box that silently changes target on whether the run is parked is a box that sends the wrong one), builder in `app/builder/` (HOW-24: `canvas.tsx` + `node-card.tsx` + `edge.tsx` + `palette.tsx` + `properties.tsx`, with `step-form.tsx`/`branching.tsx`/`fields.tsx` as the panel bodies and `routing.ts` choosing each wire's sides, lanes and caption), the read-only graph in `app/graph-dag.tsx` (HOW-68: a React Flow viewport over cards and wires it draws itself — the run's Graph tab, the Graphs screen, the draft review) laid out by `app/lib/dag-layout.ts` (dagre, the only file that imports it), primitives in `app/components/ui/`, helpers in `app/lib/` (`layout.ts` is the builder's placement, `timeline.ts` the poll fold) |
 | `reviser/` | GEPA-method revision script, eval case, generated proposals |
 | `watchdog/` | out-of-process heartbeat/attention checker + launchd plist |
 | `tools/` | `tools/visual/` — the viewer's capture harness (HOW-68): `seed.ts`/`lib.ts`/`content.ts` build a demo home by driving the real engine with scripted executors, `live.ts` holds genuinely live runs, `serve.sh` serves it (and an empty home on the next port), `shoot.mjs` captures and measures every screen, `analyze.py` is the standards gate. Outside `tsconfig.json`'s `include` on purpose |
@@ -753,7 +771,15 @@ Design section. Its five rules are each held by something that fails:
   split (`components/ui/panel.tsx` `SplitView`, with `DetailPanel` and `useListKeys`): each side
   its own scroller, Esc closes the detail, and under 1100px of pane the detail REPLACES the
   list — a selection made outside the list (a step picked in Build) asks for the detail through
-  `openRequest`. Details is a `Drawer`: non-modal, in the layout, `⌘I`, remembered.
+  `openRequest`. Details is a `Drawer`: non-modal, in the layout, `⌘I`, remembered, and
+  resizable from its edge (a real `separator`: pointer or arrows, 280px to half the room,
+  remembered; a width kept from a wider window is clamped at render, and a drag or an arrow
+  starts from the width on screen). It leads with the run's pull request, which is also a chip
+  in the header. FOCUS (`F`, or Esc to leave) gives the open pane the window: the rail, the
+  run's header and the drawer stand down and the tab strip carries the run's name, status, PR
+  and the way out; it is kept for the session (`sessionStorage`), not as a preference. The
+  Plan pane is one scroller around an 880px column, with the acceptance contract and the
+  answer box beside it, sticky, once the PANE is 1160px wide.
 - **One voice.** DM Sans for everything read, DM Mono only for what you would paste; six sizes
   (12/13/14/16/20/28), nothing under 12px, no uppercase labels. `web/public/tokens.css` is the
   single token source — every colour one `light-dark()` pair, the ONLY place a hex or a
@@ -768,7 +794,17 @@ Design section. Its five rules are each held by something that fails:
   `useEscapeLayer` gives Esc to the topmost of menu, dialog, detail panel, drawer, and focus
   goes back to what opened a layer (`lib/layer.ts` `useReturnFocus` — Dialog and the palette
   unmount on close, so the platform cannot do it); `Kbd` prints a key from the same string it
-  was registered with. Lists move with J/K (`lib/list-nav.ts`).
+  was registered with. Lists move with J/K (`lib/list-nav.ts`), and a list is ONE tab stop — a
+  roving tabindex there and in `useListKeys` — inside real `list`/`listitem` markup on Runs and
+  Needs you. A tab strip has a name (`label`) and, where it switches a pane, the pane is its
+  `tabpanel` (`tabPanelProps`). A poll folds to one row in the Details timeline AND in Steps
+  (`lib/timeline.ts` `foldTimeline`); the fold is a row J/K walk over, not a step they select.
+  The Logs list is windowed (fixed 28px rows; the selected row is always in the DOM because
+  J/K focus it), so the browser's find-in-page sees only rendered rows there — its own search
+  filters them all. The Report is a sandboxed frame, which keeps its keystrokes: the page hands
+  back exactly `Esc`, `F`, `?` and `1`–`7` by `postMessage` and the pane replays them, accepted
+  only from its own frame and only from that list; every other shortcut needs Tab out first,
+  and the pane says so.
 - **Nothing is cut without a way to read it.** `Truncate` is the only way to ellipsize — it
   knows when it is cut and shows the full value on hover AND focus; raw `text-overflow` in a
   stylesheet is a test failure. Values wrap where there is room (`KeyValue` breaks a path at
@@ -781,7 +817,23 @@ and the one authored moment is the ask card arriving — played by `data-arrivin
 `ask.tsx` sets only for an ask that is seconds old and not yet drawn, never on a tab switch.
 A run that newly starts waiting posts a real browser `Notification` (`lib/notify.ts`;
 permission is asked from Settings, never on load); sound is off unless `config.chime` is true,
-and both fire only for NEWS (`lib/attention-sound.ts` `decideNews`), never on navigation.
+and both fire only for NEWS (`lib/attention-sound.ts` `decideNews`), never on navigation. The
+viewer CLAIMS delivery — and so silences the OS banner — only after the operator has confirmed
+a test notification in Settings (`notifyDelivers`; "Did it appear?" → Yes; No shows what to
+check and un-confirms).
+
+A link that leaves the viewer opens in a new tab with `rel="noopener noreferrer"` (a pull
+request, the report's Open), and the shell's router leaves any link with `target` or
+`download` to the browser. The report frame's sandbox is `allow-scripts allow-popups
+allow-popups-to-escape-sandbox` and nothing more: its links open as ordinary tabs, and it can
+neither read this origin nor move this window.
+
+**"Failed" on a tool call is the harness's word, never a reading of its output.** The log's
+`chunk.is_error` (HOW-38) is carried through `log/coalesce.ts` to the transcript, and
+`run/activity.tsx` `toolOutcome` decides: `true` is the red badge and opens itself; `false` is
+nothing, whatever the text says ("0 failed — BUILD SUCCESSFUL" was badged failed by a regex);
+ABSENT (a log from before HOW-38, or codex and cursor, which only report failures) falls back
+to a narrow line-start pattern shown as a neutral "may have failed" — never red, never counted.
 
 **ONE primitives library, and three controls that stay on the platform** (HOW-27). The layer —
 one file each under `app/components/ui/`, wired to `shadcn add` by the root `components.json`
