@@ -368,9 +368,11 @@ export function ApprovalCard({ runId, slice, onChanged }: { runId: string; slice
     >
       <div className="ap-head">
         <h3>
-          {decision?.kind === "awaiting" ? "Needs you — approve this design"
-            : decision?.kind === "parked-other" ? "Needs you — see the Ask tab"
-            : "Proposed design"}
+          {/* HOW-68: the card says what it asks, like every other ask ("Needs you —" was the
+              prefix the ask cards dropped); and a slice plan is a plan, not a design */}
+          {decision?.kind === "awaiting" ? (p.ghosts ? "Approve this design?" : "Approve this plan?")
+            : decision?.kind === "parked-other" ? "This step is waiting on a reply — see the Ask tab"
+            : p.ghosts ? "Proposed design" : "Proposed plan"}
         </h3>
         {/* "current": an older visit's panel shows today's round, never that visit's state */}
         <span className="ap-round">current round {p.round} · proposal #{p.proposal_id}</span>

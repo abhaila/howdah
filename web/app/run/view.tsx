@@ -43,7 +43,7 @@ import { GraphDag, useGraphShape } from "../graph-dag";
 import { StatusBadge, StatusGlyph, askRowKey, resolveStepKey, stepKey } from "../status";
 import { Row } from "@/components/ui/row";
 import { getJSON } from "@/lib/net";
-import { fmtDur, fmtWait, liveDuration, runLabel } from "@/lib/format";
+import { fmtClock, fmtDur, fmtWait, liveDuration, runLabel } from "@/lib/format";
 import { useAttentionSurfaces, useNow } from "@/lib/hooks";
 import { submitOnEnter } from "@/lib/keys";
 import { useShortcuts } from "@/lib/shortcuts";
@@ -990,7 +990,7 @@ function RunDetails({ id, detail, liveGit, now, tab, reload, resumeCommand, onCo
               value: (
                 <span className={a.state === "exhausted" ? "font-semibold text-destructive" : ""}>
                   {a.state === "ok" && a.remaining !== undefined ? `${Math.round(a.remaining * 100)}% left` : a.state}
-                  {a.resets_at ? ` · resets ${new Date(a.resets_at).toLocaleTimeString()}` : ""}
+                  {a.resets_at ? ` · resets ${fmtClock(a.resets_at)}` : ""}
                 </span>
               ),
             }))),

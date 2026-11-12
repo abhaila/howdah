@@ -39,7 +39,7 @@ import { usageItems } from "./usage";
 import { describeProfile } from "../../../log/trajectory";
 
 type StepStatus = "running" | "succeeded" | "failed" | "needs-input";
-const STEP_WORD: Record<StepStatus, string> = { running: "running", succeeded: "succeeded", failed: "failed", "needs-input": "needs you" };
+const STEP_WORD: Record<StepStatus, string> = { running: "running", succeeded: "succeeded", failed: "failed", "needs-input": "waiting on you" };
 /** a quiet line of explanation inside a pane */
 const NOTE = "m-0 text-sm leading-[1.5] text-muted-foreground";
 

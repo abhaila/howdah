@@ -132,7 +132,7 @@ describe("ApprovalCard", () => {
     const { slice, log, id } = awaitingSlice();
     const el = render(<ApprovalCard runId="r1" slice={slice} onChanged={noop} />);
     expect($(el, ".approval-card")!.classList.contains("needs-you")).toBe(true);
-    expect($(el, "h3")!.textContent).toBe("Needs you — approve this design");
+    expect($(el, "h3")!.textContent).toBe("Approve this design?"); // HOW-68: the card says what it asks; "Needs you —" was the prefix every ask card dropped
     act(() => root!.unmount());
 
     log.add({ type: "slice-approved", proposal_id: id, proposal_hash: `h${id}`, manifest_hash: "m1" });
@@ -267,7 +267,7 @@ describe("ApprovalCard", () => {
     failApproval(log, 1, "approval executor threw: base unreadable");
     const el = render(<ApprovalCard runId="r1" slice={deriveSlice(log.events)!} onChanged={noop} />);
     expect($(el, ".approval-card")!.classList.contains("needs-you")).toBe(true);
-    expect($(el, "h3")!.textContent).toBe("Needs you — see the Ask tab");
+    expect($(el, "h3")!.textContent).toBe("This step is waiting on a reply — see the Ask tab"); // HOW-68: as above
     expect($(el, '[data-testid="ap-explain"]')!.textContent).toBe(
       "The run parked on slice.approve (attempt-failed): approval executor threw: base unreadable. Answer it in the Ask tab — a reply, not a design decision, moves it on.",
     );

@@ -27,6 +27,7 @@ import { KeyValue } from "@/components/ui/key-value";
 import { CodeBlock } from "@/components/ui/markdown";
 import { SectionLabel } from "@/components/ui/section-label";
 import { Truncate } from "@/components/ui/truncate";
+import { fmtWhen } from "@/lib/format";
 
 export const evidenceUrl = (runId: string, file: string) => `/api/runs/${encodeURIComponent(runId)}/file/${file.split("/").map(encodeURIComponent).join("/")}`;
 
@@ -67,7 +68,7 @@ export function EvidenceStrip({ runId, entry }: { runId: string; entry: RunDetai
             <img className="w-full rounded-[var(--radius-xs)] border border-border" src={evidenceUrl(runId, open.file)} alt={`screenshot of ${open.path}`} />
             <KeyValue labelWidth={112} items={[
               { label: "URL", value: open.url, mono: true, copy: true },
-              { label: "Captured", value: new Date(open.captured_at).toLocaleString() },
+              { label: "Captured", value: fmtWhen(open.captured_at) },
               { label: "Console errors", value: String(open.console_errors) },
             ]} />
             {open.console_sample.length > 0 && (

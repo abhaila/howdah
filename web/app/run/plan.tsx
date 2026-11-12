@@ -32,6 +32,7 @@ import { SectionLabel } from "@/components/ui/section-label";
 import { useToast } from "@/components/ui/toast";
 import { AcceptanceCard } from "./acceptance";
 import { steerableTurn } from "./progress";
+import { fmtWhen } from "@/lib/format";
 
 export const PLAN_KEY = "implementation_plan";
 export const PLAN_NODE = "implementation.plan";
@@ -116,7 +117,7 @@ export function RunPlan({ runId, detail, onChanged }: { runId: string; detail: R
           <h2 className="m-0 text-xl font-semibold text-foreground">The plan</h2>
           {writer && (
             <span className="text-xs text-muted-foreground">
-              written by <span className="font-mono">{writer.node}@{writer.visit}</span> · {new Date(writer.at).toLocaleString()}
+              written by <span className="font-mono">{writer.node}@{writer.visit}</span> · {fmtWhen(writer.at)}
             </span>
           )}
         </header>

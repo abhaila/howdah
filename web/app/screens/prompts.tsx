@@ -23,7 +23,7 @@
 import { useCallback, useEffect, useState } from "react";
 import type { PromptDetail, PromptSummary } from "../../../prompts/library";
 import { getJSON } from "@/lib/net";
-import { fmtWhen } from "@/lib/format";
+import { fmtDay, fmtWhen } from "@/lib/format";
 import { useListNav } from "@/lib/list-nav";
 import { Badge } from "@/components/ui/badge";
 import { Row } from "@/components/ui/row";
@@ -193,7 +193,7 @@ export function PromptsScreen({ selected }: { selected: string | null }) {
               {detail.history.map((h) => (
                 <div key={h.sha} className={DETAIL_ROW}>
                   <span className="font-mono text-code text-muted-foreground">{h.sha}</span>
-                  <span className="tabular-nums text-muted-foreground">{new Date(h.at).toLocaleDateString()}</span>
+                  <span className="tabular-nums text-muted-foreground">{fmtDay(h.at)}</span>
                   <span className="min-w-0 flex-1 basis-[200px] [overflow-wrap:anywhere]">{h.subject}</span>
                 </div>
               ))}
