@@ -560,7 +560,8 @@ function DagCanvas({ shape, current, visits, onSelect, selected, canSelect = AGE
     frame(true);
   }, [paneWidth, paneHeight, shape.name, frame]);
 
-  const showAll = useCallback(() => { void fitView({ padding: 0.06, minZoom: MIN_ZOOM, maxZoom: 1 }); }, [fitView]);
+  // room at the foot for the zoom controls: fitted edge to edge, they sat on the lowest card
+  const showAll = useCallback(() => { void fitView({ padding: { top: "20px", right: "20px", bottom: "64px", left: "20px" }, minZoom: MIN_ZOOM, maxZoom: 1 }); }, [fitView]);
   const pan = useCallback((dx: number, dy: number) => {
     const v = getViewport();
     void setViewport({ x: v.x + dx, y: v.y + dy, zoom: v.zoom });

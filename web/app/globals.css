@@ -127,4 +127,11 @@
   [role="tab"][aria-selected="true"] { border-bottom-color: Highlight; }
   .sidebar a.nav.active[aria-current="page"] { forced-color-adjust: none; background: Highlight; color: HighlightText; border-color: Highlight; }
   .sidebar a.nav.active[aria-current="page"] * { color: HighlightText; background: transparent; border-color: HighlightText; }
+  /* an SVG stroke is not restated by the browser, so a graph's wires kept the theme's own
+     colours on the system's canvas: the routes a run TOOK were near-white on white. A wire is
+     text-coloured; one the run did not take is the system's grey; the builder's the same. */
+  .dag-wire { stroke: GrayText; }
+  .dag-wire.taken, .gb-edge { stroke: CanvasText; }
+  .dag-arrow { fill: GrayText; }
+  .dag-arrow-on { fill: CanvasText; }
 }

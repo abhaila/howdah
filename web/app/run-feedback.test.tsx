@@ -161,6 +161,10 @@ describe("the pull request is easy to find", () => {
     expect(chip.getAttribute("rel")).toBe("noopener noreferrer");
     expect(chip.getAttribute("aria-label")).toBe("Pull request acme-api #4133, changes requested — opens in your browser");
     expect(chip.textContent).toContain("#4133");
+    // neither the chip nor the wrapper its tooltip adds may shrink: at 1024 with the drawer open
+    // a wrapper that gave way let the number run under the "More" button (seen in the final capture)
+    expect(chip.className).toContain("shrink-0");
+    expect(chip.parentElement!.className).toContain("shrink-0");
     // it follows the status line, so the header still reads name · status · PR · actions
     expect(el.querySelector("#run-status")!.compareDocumentPosition(chip) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });

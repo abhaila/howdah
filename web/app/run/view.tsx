@@ -996,7 +996,9 @@ function RunFrame({ id, detail, tab, setTab, picked, setPicked, liveGit, now, re
   // (all of them lead the Details drawer). It opens in the operator's browser.
   const pr = prs.at(-1);
   const prLink = pr && (
-    <Tooltip side="bottom" content={<span className="flex flex-col gap-0.5"><span>{prs.length > 1 ? `${prs.length} pull requests — the newest opens; all are in Details` : "Open the pull request in your browser"}</span><span className="font-mono text-code">{pr.url.replace(/^https:\/\//, "")}</span></span>}>
+    // shrink-0 on the WRAPPER: the link inside already refuses to shrink, and a wrapper that
+    // gave way let the chip's number run under the "More" button at 1024 with the drawer open
+    <Tooltip side="bottom" className="shrink-0" content={<span className="flex flex-col gap-0.5"><span>{prs.length > 1 ? `${prs.length} pull requests — the newest opens; all are in Details` : "Open the pull request in your browser"}</span><span className="font-mono text-code">{pr.url.replace(/^https:\/\//, "")}</span></span>}>
       <a className={PR_LINK} href={pr.url} {...EXTERNAL} data-slot="run-pr" aria-label={`Pull request ${pr.label}${pr.state ? `, ${pr.state}` : ""} — opens in your browser`}>
         <GitPullRequest aria-hidden />
         <span className="tabular-nums">#{pr.url.match(/\/pull\/(\d+)/)?.[1] ?? "PR"}</span>
