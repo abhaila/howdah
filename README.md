@@ -225,9 +225,9 @@ bun run check
 
 ## Troubleshooting
 
-`unknown run`: make sure the CLI command, supervisor, and web server are using the same `HOWDAH_HOME`. The run page shows its home and run folder in the right rail.
+`unknown run`: make sure the CLI command, supervisor, and web server are using the same `HOWDAH_HOME`. The run page shows its home and run folder in the Details drawer (`Ctrl+I` / `⌘I`), under Persistence.
 
-Run is stuck with no movement: check whether the run is parked, paused, or has no live runner. The UI persistence panel shows `runner alive`; the event log is at `runs/<run-id>/run.jsonl`.
+Run is stuck with no movement: check whether the run is parked, paused, or has no live runner. The run's Details drawer shows `Runner: alive` or `not running` under Persistence; the event log is at `runs/<run-id>/run.jsonl`.
 
 PR probe does not see checks: verify `gh auth status` and confirm the PR was published. Probe nodes rely on GitHub state, including required checks.
 

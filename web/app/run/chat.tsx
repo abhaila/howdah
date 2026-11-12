@@ -49,13 +49,32 @@
  * Tool work is drawn by activity.tsx's `beatsOf` + `ToolBeat` — the same renderer the Steps
  * pane uses, not a second one, so a failed tool still opens itself here.
  *
+ * HOW-68 is the fourth pass, and the first that measured: the transcript had 240px of a 900px
+ * window when a long ask was standing, and at 1024×700 nothing in the pane scrolled at all.
+ * What changed, each from DESIGN.md:
+ *   THE TRANSCRIPT IS THE BODY. Everything fixed around it is one line — a 36px toolbar above,
+ *   a single-line composer below — and the scroller (the vendored viewport, still the only
+ *   overflow context in the pane) gets every other pixel. The standing ask is INSIDE it, at
+ *   the foot, so however long the ask is it is reached by scrolling.
+ *   THE ASK IS SAID ONCE. The engine's `attention-raised` for the park that is still standing
+ *   is no longer also printed as a transcript row directly above the card that carries it.
+ *   THE SUGGESTIONS ARE CHIPS IN THE COMPOSER, not three cards 90px tall above it.
+ *   ONE VOICE: the step heading is the step's id in mono (you paste it) with its place and
+ *   duration in the reading face; no uppercase eyebrow anywhere.
+ *   KEYS: `E` expands or collapses every tool call, `/` puts the caret in the composer; both
+ *   are rows in `lib/shortcuts.ts`, so `?` lists them.
+ *   Steering is not the alarm, so steer mode is no longer drawn in amber.
+ *
  * Model output stays UNTRUSTED INPUT: an answer's citations are matched against a whitelist of
  * this run's own node@visit keys and rendered as TEXT, never markup. That rule predates both
  * rewrites and is unchanged.
  */
-import { useMemo, useState } from "react";
-import { FileOutput, UserRound, HelpCircle, ChevronsDownUp, ChevronsUpDown, ArrowUp, ArrowDown, ArrowUpRight, Hourglass, CircleX, GitBranch, GitCompare, Navigation } from "lucide-react";
+import { useMemo, useRef, useState } from "react";
+import { FileOutput, UserRound, HelpCircle, ChevronsDownUp, ChevronsUpDown, ArrowUp, ArrowDown, Hourglass, GitBranch, Navigation } from "lucide-react";
 import { submitOnEnter } from "@/lib/keys";
+import { fmtDur } from "@/lib/format";
+import { useShortcuts } from "@/lib/shortcuts";
+import { Kbd } from "@/components/ui/kbd";
 import type { RunDetail, TurnState } from "../../derive";
 import { citeParts } from "../../cite";
 import { AgentProse, beatsOf, groupBeats, ToolBeat, ToolGroup, ToolDisclosureContext, TurnNote } from "./activity";
@@ -80,9 +99,10 @@ import {
 } from "@/components/ui/message-scroller";
 
 /**
- * A starting question, drawn as a card (HOW-30): a short title that says what kind of
- * question it is, the specific thing it is about, and the exact question that is sent. The
- * card says less than the question so three of them can sit side by side and still be read.
+ * A starting question (HOW-30): a short title that says what kind of question it is, the
+ * specific thing it is about, and the exact question that is sent. HOW-68 draws each as a
+ * small chip inside the composer rather than a card above it — three cards cost the
+ * transcript 90px of a 640px window to offer three shortcuts.
  */
 export interface Suggestion {
   kind: "waiting" | "failed" | "changed";
@@ -90,8 +110,6 @@ export interface Suggestion {
   detail: string;
   question: string;
 }
-
-const SUGGESTION_ICON = { waiting: Hourglass, failed: CircleX, changed: GitCompare } as const;
 
 export function suggestionsFor(detail: RunDetail, ask: RunDetail["ask"]): Suggestion[] {
   const out: Suggestion[] = [];
@@ -114,6 +132,8 @@ export function suggestionsFor(detail: RunDetail, ask: RunDetail["ask"]): Sugges
 export type ChatMessage =
   | {
       kind: "step"; key: string; node: string; visit: number; index: number; prompt: { id: string; version: number; read: string[] } | null;
+      /** how the step ended, and how long it took — null while it is still running */
+      status: RunDetail["timeline"][number]["status"]; duration_ms: number | null;
       /** HOW-73: this turn is a branch, running at once with its siblings in this parallel step */
       parallel?: string;
     }
@@ -142,8 +162,14 @@ type AskTurn = { q: string; a: string | null; error?: string; cost?: number };
  */
 export function conversation(detail: RunDetail): ChatMessage[] {
   const out: ChatMessage[] = [];
+  // An approval step parks without consuming a visit, so the timeline can carry the SAME
+  // node@visit twice (parked, then decided). It is one step: drawn once, as its latest row.
+  // Drawn twice, every message under it repeated and React was handed duplicate keys.
+  const latest = new Map<string, number>();
+  for (const [i, row] of detail.timeline.entries()) latest.set(`${row.node}@${row.visit}`, i);
   for (const [i, row] of detail.timeline.entries()) {
     const key = `${row.node}@${row.visit}`;
+    if (latest.get(key) !== i) continue;
     const render = detail.renders.find((r) => r.node === row.node && r.visit === row.visit);
     out.push({
       kind: "step",
@@ -151,6 +177,8 @@ export function conversation(detail: RunDetail): ChatMessage[] {
       node: row.node,
       visit: row.visit,
       index: i + 1,
+      status: row.status,
+      duration_ms: row.duration_ms ?? null,
       prompt: render ? { id: render.prompt, version: render.prompt_version, read: Object.keys(render.context_read) } : null,
       ...(row.parallel ? { parallel: row.parallel.node } : {}),
     });
@@ -199,20 +227,42 @@ export function conversation(detail: RunDetail): ChatMessage[] {
   return out;
 }
 
+/**
+ * Tabbing INTO the transcript is reading it (HOW-68, the audit's "focus goes off-screen; the
+ * scroller does not always follow"). The browser scrolls a focused control into view, but the
+ * scroller only counts wheel, touch and the scroll keys as the reader taking over — so while it
+ * was following the live edge, the next content resize pinned it back to the bottom and the
+ * focused control was thousands of pixels off screen. A keyboard focus landing inside the
+ * viewport is told to the primitive in the one vocabulary it has: a wheel event with no travel.
+ * Pointer focus is left alone, so clicking a tool row at the live edge does not stop following.
+ */
+function holdForKeyboardFocus(e: React.FocusEvent<HTMLDivElement>) {
+  if (e.target === e.currentTarget || typeof WheelEvent === "undefined") return;
+  let keyboard = false;
+  try { keyboard = e.target.matches(":focus-visible"); } catch { /* an engine without the selector: leave the scroller be */ }
+  if (!keyboard) return;
+  e.currentTarget.dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: 0 }));
+  // rows off screen are `content-visibility: auto` at an ESTIMATED height: the browser scrolls
+  // to where the control was guessed to be, the rows above it then render at their real size,
+  // and it is off screen again. Once they have, bring it back — `nearest` moves nothing if it
+  // is already in view.
+  // Twice, because which rows are "near the viewport" is decided at the END of a frame and
+  // applied in the next: two frames on is the earliest the real heights can be read, and a
+  // tall row (a finished run's acceptance card) can take one more.
+  const target = e.target;
+  const settle = () => { if (target.isConnected && target === document.activeElement) target.scrollIntoView({ block: "nearest" }); };
+  requestAnimationFrame(() => requestAnimationFrame(settle));
+  setTimeout(settle, 160);
+}
+
 /** one transcript row. Split out so the scroller's item wrapper stays one line per message. */
-function Row({ m, onPickStep, lastActivityAt, runId }: { m: ChatMessage; onPickStep: (key: string) => void; lastActivityAt: string | null; runId: string }) {
+function Row({ m, onPickStep, lastActivityAt, runId, parked, died, runDead, standing }: { m: ChatMessage; onPickStep: (key: string) => void; lastActivityAt: string | null; runId: string; parked: boolean; died: boolean; /** the run's runner is dead: the header and its notice say so, once (D26) */ runDead: boolean; /** these are the words of the step whose park is still standing: its failure is the card's to say */ standing: boolean }) {
   switch (m.kind) {
     case "step":
       return (
-        // HOW-30: a small uppercase label over a name that reads as a heading — where the
-        // step sits in the run and what it was given, then the step itself, which is also the
-        // way into it on the Steps pane
-        <div className="cv-step">
-          <div className="chat-eyebrow">
-            Step {m.index} · visit {m.visit}
-            {m.parallel && <> · at once, in {m.parallel}</>}
-            {m.prompt && <> · {m.prompt.id} v{m.prompt.version} · read {m.prompt.read.join(", ") || "nothing"}</>}
-          </div>
+        // HOW-68: a step is a section break — a hairline, then its id (mono: you paste it, and
+        // it is the way into the step on the Steps pane), how it went, and what it was given
+        <div className="cv-step" data-status={m.status}>
           <Button
             variant="ghost"
             size="inline"
@@ -222,6 +272,14 @@ function Row({ m, onPickStep, lastActivityAt, runId }: { m: ChatMessage; onPickS
           >
             {m.node}
           </Button>
+          <span className="cv-step-state">
+            {parked ? "parked" : m.status === "running" ? (died ? "interrupted" : "running") : m.status === "failed" ? `failed${m.duration_ms !== null ? ` · ${fmtDur(m.duration_ms)}` : ""}` : fmtDur(m.duration_ms)}
+          </span>
+          <span className="chat-eyebrow">
+            Step {m.index} · visit {m.visit}
+            {m.parallel && <> · at once, in {m.parallel}</>}
+            {m.prompt && <> · <span className="m">{m.prompt.id}</span> v{m.prompt.version} · read {m.prompt.read.join(", ") || "nothing"}</>}
+          </span>
         </div>
       );
     case "beats":
@@ -234,9 +292,10 @@ function Row({ m, onPickStep, lastActivityAt, runId }: { m: ChatMessage; onPickS
                 ? <ToolBeat key={i} call={b.part} result={b.result} />
                 : b.kind === "thinking"
                   ? <p key={i} className="act-thinking">{b.part.content.trim()}</p>
-                  : <AgentProse key={i} text={b.part.content} />,
+                  : <AgentProse key={i} text={b.part.content} hideFailure={standing} />,
           )}
-          <TurnNote state={m.state} lastActivityAt={lastActivityAt} className="cv-unfinished" />
+          {/* in a dead run the header's status and the one notice already say it died */}
+          <TurnNote state={runDead && m.state === "died" ? undefined : m.state} lastActivityAt={lastActivityAt} className="cv-unfinished" />
         </div>
       );
     case "steer":
@@ -246,28 +305,28 @@ function Row({ m, onPickStep, lastActivityAt, runId }: { m: ChatMessage; onPickS
     case "asked":
       return (
         <div className="cv-asked">
-          <HelpCircle size={12} aria-hidden />
+          <HelpCircle size={14} aria-hidden />
           <span>{m.reason}</span>
         </div>
       );
     case "answered":
       return (
         <div className="cv-answered">
-          <UserRound size={12} aria-hidden />
+          <UserRound size={14} aria-hidden />
           <span>{m.text}</span>
         </div>
       );
     case "restacked":
       return (
         <div className="cv-restacked">
-          <GitBranch size={12} aria-hidden />
+          <GitBranch size={14} aria-hidden />
           <span>{m.text}</span>
         </div>
       );
     case "wrote":
       return (
         <div className="cv-wrote">
-          <FileOutput size={12} aria-hidden />
+          <FileOutput size={14} aria-hidden />
           <span>wrote {m.keys.map((k) => <Badge key={k} variant="id">{k}</Badge>)}</span>
         </div>
       );
@@ -283,7 +342,7 @@ export function SteerBubble({ steer }: { steer: RunDetail["steers"][number] }) {
   const state = steer.delivered ? "delivered" : steer.carried ? "carried" : "pending";
   return (
     <div className="cv-steer" data-state={state}>
-      <Navigation size={12} aria-hidden />
+      <Navigation size={14} aria-hidden />
       <div className="cv-steer-body">
         <span className="cv-steer-label">You steered the agent</span>
         <span className="cv-steer-text">{steer.text}</span>
@@ -324,8 +383,15 @@ export function RunChat({ runId, detail, ask, onPickStep, onResolved, liveGit = 
   // HOW-27: the bulk tool disclosure. `epoch: 0` is "nobody has asked yet", which is what
   // leaves each beat on its own default — closed, or open if its result reads as a failure.
   const [disclosure, setDisclosure] = useState<{ epoch: number; open: boolean }>({ epoch: 0, open: false });
+  const composer = useRef<HTMLTextAreaElement>(null);
   const known = new Set(detail.timeline.map((t) => `${t.node}@${t.visit}`));
-  const messages = conversation(detail);
+  // HOW-68: the park that is STILL standing is drawn once, as its card at the foot. Its
+  // `attention-raised` row would print the same reason directly above that card.
+  const standingKey = ask ? `ask:${ask.seq}` : null;
+  const messages = conversation(detail).filter((m) => m.key !== standingKey);
+  // ...and so is the engine's failure line at the end of that step's turn (activity.tsx
+  // splitEngineNotes): the card's "Full message" has the reason verbatim
+  const standingBeats = ask ? `beats:${ask.node}@${ask.visit}` : null;
   const suggestions = suggestionsFor(detail, ask);
   const toolCount = useMemo(
     () => messages.reduce((n, m) => n + (m.kind === "beats" ? m.beats.filter((b) => b.kind === "tool").length : 0), 0),
@@ -334,6 +400,11 @@ export function RunChat({ runId, detail, ask, onPickStep, onResolved, liveGit = 
   // the context object is memoised on its VALUES, not rebuilt per render: a new object every
   // render would re-run every ToolBeat's epoch check for nothing
   const disclosureValue = useMemo(() => disclosure, [disclosure]);
+  const toggleTools = () => setDisclosure((d) => ({ epoch: d.epoch + 1, open: !d.open }));
+  useShortcuts([
+    { id: "run.expand-tools", scope: "A run", label: disclosure.open ? "Collapse every tool call" : "Expand every tool call", keys: "e", run: toggleTools, disabled: toolCount === 0 },
+    { id: "run.ask-about", scope: "A run", label: "Ask about this run", keys: "/", run: () => composer.current?.focus() },
+  ]);
 
   const sendSteer = async (text: string) => {
     if (!text.trim() || busy) return;
@@ -371,10 +442,8 @@ export function RunChat({ runId, detail, ask, onPickStep, onResolved, liveGit = 
   };
 
   // HOW-30: everything the reader reads sits in ONE centred column (`.chat-col`) — the
-  // transcript, the suggestions and the composer — while the scroller itself still spans the
-  // pane, so the scrollbar is at the pane's edge and a wheel anywhere over it scrolls. HOW-27
-  // removed an 820px cap on the PANE because it left a dead strip nothing could reclaim; this
-  // caps the LINE instead, which is what made a 1500px sentence unreadable.
+  // transcript and the composer — while the scroller itself still spans the pane, so the
+  // scrollbar is at the pane's edge and a wheel anywhere over it scrolls.
   return (
     <div className="chat-panel">
       <ToolDisclosureContext.Provider value={disclosureValue}>
@@ -404,6 +473,20 @@ export function RunChat({ runId, detail, ask, onPickStep, onResolved, liveGit = 
               {/* ArrowDown on purpose: the primitive rotates a start pin's icon 180° itself */}
               <ArrowDown aria-hidden />Top
             </MessageScrollerButton>
+            {/* ...and so is the live-edge pin (the confirming review). As a pill floated above the
+                composer it covered the last visible line of the transcript — the line being read
+                when you have scrolled away from the bottom, which is the only time it shows. In
+                the toolbar it covers nothing, and like Top it is inert until there is somewhere
+                to go. */}
+            <MessageScrollerButton
+              direction="end"
+              variant="ghost"
+              size="sm"
+              aria-label="Scroll to end"
+              className="chat-end-pin static translate-x-0 start-auto"
+            >
+              <ArrowDown aria-hidden />Latest
+            </MessageScrollerButton>
             {/* one control for every tool call in the transcript — a long run is mostly tool work,
                 and opening or closing it one beat at a time is not skimming. Absent when the run
                 has no tool calls to act on, rather than present and inert. */}
@@ -413,10 +496,11 @@ export function RunChat({ runId, detail, ask, onPickStep, onResolved, liveGit = 
                 variant="ghost"
                 size="sm"
                 aria-pressed={disclosure.epoch > 0 && disclosure.open}
-                onClick={() => setDisclosure((d) => ({ epoch: d.epoch + 1, open: !d.open }))}
+                onClick={toggleTools}
               >
                 {disclosure.open ? <ChevronsDownUp /> : <ChevronsUpDown />}
                 {disclosure.open ? "Collapse" : "Expand"} {toolCount} tool {toolCount === 1 ? "call" : "calls"}
+                <Kbd keys="e" decorative />
               </Button>
             )}
           </div>
@@ -428,7 +512,7 @@ export function RunChat({ runId, detail, ask, onPickStep, onResolved, liveGit = 
             {/* HOW-57: a stacked run says what it is waiting on, in the await step's own words */}
             {detail.waiting && (
               <div className="cv-waiting" role="status">
-                <Hourglass size={12} aria-hidden />
+                <Hourglass size={14} aria-hidden />
                 <span>{detail.waiting}</span>
               </div>
             )}
@@ -436,7 +520,13 @@ export function RunChat({ runId, detail, ask, onPickStep, onResolved, liveGit = 
         </div>
 
         <MessageScroller className="flex-1">
-          <MessageScrollerViewport preserveScrollOnPrepend aria-label="the run, as a conversation" tabIndex={0}>
+          <MessageScrollerViewport
+            preserveScrollOnPrepend
+            aria-label="the run, as a conversation"
+            tabIndex={0}
+            className="focus-visible:-outline-offset-2"
+            onFocusCapture={holdForKeyboardFocus}
+          >
             {/* gap-0: the rows carry their own vertical rhythm in howdah.css, and the
                 component's default `gap-8` would double it */}
             <MessageScrollerContent className="chat-log chat-col gap-0">
@@ -451,17 +541,21 @@ export function RunChat({ runId, detail, ask, onPickStep, onResolved, liveGit = 
               )}
               {messages.length === 0 && turns.length === 0 && (
                 <div className="chat-empty">
-                  <div className="chat-eyebrow">Nothing has run yet</div>
                   <h2 className="chat-empty-title">Waiting for the first step</h2>
                   <p className="chat-empty-sub">
-                    nothing has happened in this run yet — each step, what the agent said and did,
+                    Nothing has happened in this run yet. Each step, what the agent said and did,
                     and anything it asks you will appear here as it happens.
                   </p>
                 </div>
               )}
               {messages.map((m) => (
                 <MessageScrollerItem key={m.key} messageId={m.key} scrollAnchor={m.kind === "step"}>
-                  <Row m={m} onPickStep={onPickStep} lastActivityAt={detail.last_agent_event_at} runId={runId} />
+                  <Row m={m} onPickStep={onPickStep} lastActivityAt={detail.last_agent_event_at} runId={runId} parked={m.kind === "step" && ask !== null && ask !== undefined && ask.node === m.node && ask.visit === m.visit}
+                    // a step still "running" in the timeline whose turn the read model derived as died is not running
+                    died={m.kind === "step" && detail.turn_states[`${m.node}@${m.visit}`] === "died"}
+                    runDead={detail.summary.status === "harness-dead"}
+                    standing={standingBeats !== null && (m.key === standingBeats || m.key.startsWith(`${standingBeats}:`))}
+                  />
                 </MessageScrollerItem>
               ))}
               {turns.map((t, i) => (
@@ -475,7 +569,7 @@ export function RunChat({ runId, detail, ask, onPickStep, onResolved, liveGit = 
                         part.cite
                           ? <Chip key={j} className="chat-cite" onClick={() => onPickStep(part.text)}>{part.text}</Chip>
                           : <span key={j}>{part.text}</span>)}
-                      {t.cost !== undefined && <span className="m chat-cost">${t.cost.toFixed(4)}</span>}
+                      {t.cost !== undefined && <span className="chat-cost">${t.cost.toFixed(4)}</span>}
                     </div>
                   )}
                 </MessageScrollerItem>
@@ -491,57 +585,49 @@ export function RunChat({ runId, detail, ask, onPickStep, onResolved, liveGit = 
               {ask && (
                 <MessageScrollerItem messageId="needs-input" scrollAnchor>
                   <div className="cv-standing">
-                    {/* a run held at the delivery gate: the contract IS what is being asked about */}
-                    {ask.code === "acceptance-unmet" && <AcceptanceCard runId={runId} detail={detail} onChanged={onResolved} />}
+                    {/* a run held at an opted-in acceptance gate: the contract card carries the
+                        Waive controls, so it stays beside the ask. Everywhere else the ask card
+                        lists the unproven rows itself and the full contract is in Plan/Details */}
+                    {ask.code === "acceptance-unmet" && detail.acceptance?.waivable && <AcceptanceCard runId={runId} detail={detail} onChanged={onResolved} />}
                     <StandingAsk runId={runId} detail={detail} ask={ask} onResolved={onResolved} />
                   </div>
                 </MessageScrollerItem>
               )}
             </MessageScrollerContent>
           </MessageScrollerViewport>
-          {/* HOW-30: the live-edge pin is a labelled pill sitting just above the composer, not a
-              bare arrow over the middle of a sentence. It is the one float left in the pane, and
-              it only appears once you have scrolled away from the bottom. */}
-          <MessageScrollerButton direction="end" variant="outline" size="sm" aria-label="Scroll to end" className="chat-end-pin">
-            <ArrowDown aria-hidden />Latest
-          </MessageScrollerButton>
         </MessageScroller>
       </MessageScrollerProvider>
       </ToolDisclosureContext.Provider>
 
       <div className="chat-foot">
         <div className="chat-col">
-          {turns.length === 0 && suggestions.length > 0 && (
-            <div className="chat-suggestions">
-              {suggestions.map((sug) => {
-                const Icon = SUGGESTION_ICON[sug.kind];
-                return (
-                  <Button key={sug.question} variant="outline" className="chat-suggestion" aria-label={sug.question} onClick={() => send(sug.question)}>
-                    <Icon className="chat-suggestion-icon" aria-hidden />
-                    <ArrowUpRight className="chat-suggestion-go" aria-hidden />
+          {/* HOW-68: the composer is ONE line until it is typed into. The starting questions
+              are chips on its top edge, its mode (when a turn can be steered) and its send
+              control are on the field's own row, and what the box cannot do is one quiet line. */}
+          <div className="chat-input" data-busy={busy ? "true" : "false"} data-mode={mode}>
+            {turns.length === 0 && suggestions.length > 0 && (
+              <div className="chat-suggestions" role="group" aria-label="suggested questions">
+                {suggestions.map((sug) => (
+                  <Button key={sug.question} variant="ghost" size="sm" className="chat-suggestion" aria-label={sug.question} onClick={() => send(sug.question)}>
                     <span className="chat-suggestion-title">{sug.title}</span>
                     <span className="chat-suggestion-detail">{sug.detail}</span>
                   </Button>
-                );
-              })}
-            </div>
-          )}
-          {/* HOW-30: the composer is a held object — a roomy box with the field on top and its
-              controls along the bottom edge inside it, send last. What the box CANNOT do is said
-              once, quietly, underneath, beside how to use it. */}
-          <div className="chat-input" data-busy={busy ? "true" : "false"} data-mode={mode}>
-            <Textarea
-              className="chat-input-field"
-              rows={2}
-              aria-label={mode === "steer" ? "steer the agent" : "ask about this run"}
-              placeholder={mode === "steer" ? "Tell the agent something — it reads it at its next tool call…" : "Ask about this run…"}
-              value={q}
-              disabled={busy}
-              onChange={(e) => { setQ(e.target.value); setSteerError(null); }}
-              onKeyDown={submitOnEnter(() => send(q), { enabled: !busy })}
-            />
+                ))}
+              </div>
+            )}
             <div className="chat-input-bar">
-              {steerable ? (
+              <Textarea
+                ref={composer}
+                className="chat-input-field"
+                rows={1}
+                aria-label={mode === "steer" ? "steer the agent" : "ask about this run"}
+                placeholder={mode === "steer" ? "Tell the agent something — it reads it at its next tool call…" : "Ask about this run…"}
+                value={q}
+                disabled={busy}
+                onChange={(e) => { setQ(e.target.value); setSteerError(null); }}
+                onKeyDown={submitOnEnter(() => send(q), { enabled: !busy })}
+              />
+              {steerable && (
                 <div className="chat-mode" role="group" aria-label="what this box does">
                   <Button variant="ghost" size="sm" className="chat-mode-option" aria-pressed={mode === "ask"} onClick={() => setModeChoice("ask")}>
                     Ask (read-only)
@@ -550,27 +636,19 @@ export function RunChat({ runId, detail, ask, onPickStep, onResolved, liveGit = 
                     <Navigation aria-hidden />Steer the agent
                   </Button>
                 </div>
-              ) : (
-                <Badge>read-only</Badge>
               )}
-              <Button size="icon" className="chat-send" data-mode={mode} aria-label={mode === "steer" ? "Steer" : "Ask"} disabled={busy || !q.trim()} onClick={() => send(q)}>
+              {!q && <Kbd keys="/" decorative className="chat-key" />}
+              <Button size="icon" variant={mode === "steer" ? "default" : "outline"} className="chat-send" data-mode={mode} aria-label={mode === "steer" ? "Steer" : "Ask"} disabled={busy || !q.trim()} onClick={() => send(q)}>
                 {mode === "steer" ? <Navigation aria-hidden /> : <ArrowUp aria-hidden />}
               </Button>
             </div>
           </div>
-          {steerError && <div className="field-error chat-steer-error">{steerError}</div>}
+          {steerError && <div className="field-error chat-steer-error" role="alert">{steerError}</div>}
           <div className="chat-hint">
-            {mode === "steer" ? (
-              <>
-                <span>Enter to steer · Shift + Enter for a new line</span>
-                <span>Delivered to the agent at its next tool call. It does not pause or restart the step.</span>
-              </>
-            ) : (
-              <>
-                <span>Enter to ask · Shift + Enter for a new line</span>
-                <span>Reads this run only. It can't reply to the agent — answer the run on the card above.</span>
-              </>
-            )}
+            {mode === "steer"
+              ? <span>Delivered to the agent at its next tool call. It does not pause or restart the step.</span>
+              : <span>A read-only question about this run. It can't reply to the agent{ask ? " — answer on the card above" : ""}.</span>}
+            <span className="chat-hint-keys"><Kbd keys="enter" decorative /> {mode === "steer" ? "steer" : "ask"} · <Kbd keys="shift+enter" decorative /> new line</span>
           </div>
         </div>
       </div>

@@ -33,7 +33,7 @@ import { join } from "node:path";
 import { Engine, pinnedHarness } from "../engine/run";
 import { liveExecutors, stubExecutors } from "../engine/executors";
 import { EventLog, readLog } from "../log/write";
-import { AttentionCenter, osNotifier, writeHeartbeat } from "../engine/attention";
+import { AttentionCenter, notifierStatus, osNotifier, writeHeartbeat, type NotifierStatus } from "../engine/attention";
 import { replayState } from "../engine/replay";
 import { Reconciler, readsForgeFacts } from "../engine/reconcile";
 import { effectiveCwd, readWorktreeRecord } from "../engine/executors/worktree";
@@ -227,6 +227,8 @@ function raiseParkAttention(runId: string) {
     if (result.state !== "parked") return;
     const ask = readLog(join(runsDir, runId, "run.jsonl")).findLast((e) => e.type === "attention-raised");
     const visit = ask?.type === "attention-raised" && ask.node === result.node ? ask.visit : 1;
+    // the deep link's base is resolved by AttentionCenter (HOWDAH_PORT, else where a viewer
+    // last said it was) — it used to be :4711 whatever port the viewer was on (HOW-68 D18)
     const center = new AttentionCenter(join(base, "attention"), [osNotifier]);
     await center.raise({ run: runId, node: result.node, visit, reason: result.reason }).catch(() => {});
   };
@@ -409,6 +411,16 @@ export async function upCommand(opts: { intervalMs?: number; once?: boolean } = 
   }
 }
 
+/**
+ * HOW-68 D18: doctor's row for the OS banner. Optional — Howdah still rings without
+ * `terminal-notifier`, but through `osascript`, which arrives as "Script Editor" and cannot be
+ * clicked. The row says which the operator has and the one line that fixes it; Settings shows
+ * the same sentence (GET /api/settings `notifier`).
+ */
+export function notifierCheck(status: NotifierStatus = notifierStatus()): [string, boolean, string, boolean] {
+  return ["clickable notifications", status.clickable, status.fix ? `${status.detail} — run \`${status.fix}\`` : status.detail, true];
+}
+
 export async function doctorCommand(): Promise<boolean> {
   // [name, pass, detail, optional?] — an optional check that fails is reported, in its own
   // glyph, without making `doctor` say the install is broken
@@ -479,6 +491,7 @@ export async function doctorCommand(): Promise<boolean> {
     ...Object.entries(config.repos).map(([name, w]) => ({ name, inherits: w.inheritUserSettings === true })),
     ...Object.entries(config.folders).map(([name, w]) => ({ name, inherits: w.inheritUserSettings === true })),
   ])) checks.push([r.name, true, r.detail]);
+  checks.push(notifierCheck());
   const hb = existsSync(join(base, "heartbeat.json"));
   checks.push(["howdah up heartbeat", hb, hb ? join(base, "heartbeat.json") : "not running — start `howdah up`"]);
 

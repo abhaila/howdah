@@ -27,7 +27,7 @@
  * the content check is what decides, not the kind.
  */
 import { createContext, useContext, useMemo, useState } from "react";
-import { ChevronRight, Wrench, TriangleAlert, FileOutput, Sparkles, Activity } from "lucide-react";
+import { ChevronRight, Wrench, TriangleAlert, FileOutput, Sparkles, Activity, Info } from "lucide-react";
 import type { CoalescedTurn, TurnPart } from "../../../log/coalesce";
 import type { RunDetail, TurnState } from "../../derive";
 import { useNow } from "@/lib/hooks";
@@ -35,12 +35,40 @@ import { fmtAgo, liveness } from "@/lib/liveness";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Badge } from "@/components/ui/badge";
 import { Row } from "@/components/ui/row";
-import { Markdown } from "@/components/ui/markdown";
+import { CodeBlock, Markdown } from "@/components/ui/markdown";
+import { SectionLabel } from "@/components/ui/section-label";
+import { Truncate } from "@/components/ui/truncate";
 import { splitOutputs } from "../../../core/outputs";
 import { OutputDocs } from "./document";
 
-/** a tool result that reads as a failure — same test the thread used, kept in one place */
-const FAILED = /\berror\b|\bfailed\b|exit [1-9]|denied|not found|traceback/i;
+/**
+ * Whether a tool call failed — on the HARNESS's word, not on what its output happens to say.
+ *
+ * This used to be one regex over the output (`error`, `failed`, `denied`, `not found`…), so
+ * "14 tests completed, 0 failed — BUILD SUCCESSFUL" was badged failed in red and a group said
+ * "3 failed". The log has carried the harness's own verdict since HOW-38 (`chunk.is_error`);
+ * `coalesce()` now passes it through, and it decides:
+ *
+ *   failed  the harness said the call failed                → the red badge, opens itself
+ *   ok      the harness said it did not                     → nothing, whatever the text says
+ *   maybe   the harness said NOTHING (a log from before HOW-38, or codex/cursor, which only
+ *           report failures) and the output starts a line the way a failure does
+ *                                                           → a neutral "may have failed" hint
+ *
+ * `maybe` is a guess and is drawn as one: never red, never counted as a failure, never opened
+ * for you. The pattern is deliberately narrow — a line that BEGINS with an error marker, a
+ * non-zero exit status, a Python traceback header, the shell's own "command not found" /
+ * "Permission denied" — so a count ("0 failed", "no errors") or a word in prose cannot match.
+ */
+export type ToolOutcome = "failed" | "ok" | "maybe";
+const MAY_HAVE_FAILED =
+  /^\s*(error|fatal)\b[:[ ]|^Traceback \(most recent call last\)|\bexit(ed with)? (code|status) [1-9]\d*\b|: command not found\s*$|: Permission denied\s*$/im;
+export function toolOutcome(result: TurnPart | undefined): ToolOutcome {
+  if (result === undefined) return "ok"; // no result yet is not a failure
+  if (result.is_error === true) return "failed";
+  if (result.is_error === false) return "ok";
+  return MAY_HAVE_FAILED.test(result.content) ? "maybe" : "ok";
+}
 
 /**
  * The one line a tool call gets. Tool inputs are JSON whose INTERESTING field differs per
@@ -118,8 +146,9 @@ export function toolLabel(name: string): string {
 
 /** exported for the Chat transcript (HOW-25): one tool renderer, not two */
 export function ToolBeat({ call, result }: { call: TurnPart; result?: TurnPart }) {
-  const failed = result !== undefined && FAILED.test(result.content);
-  // a failure opens itself; everything else waits to be asked
+  const outcome = toolOutcome(result);
+  const failed = outcome === "failed";
+  // a failure opens itself; everything else — a guess included — waits to be asked
   const [open, setOpen] = useDisclosure(failed);
   return (
     <div className={`act-tool${failed ? " failed" : ""}`} data-open={open ? "open" : "closed"}>
@@ -127,17 +156,18 @@ export function ToolBeat({ call, result }: { call: TurnPart; result?: TurnPart }
         <ChevronRight className="act-caret" size={12} aria-hidden />
         {failed ? <TriangleAlert size={12} aria-hidden /> : <Wrench size={12} aria-hidden />}
         <span className="act-tool-name">{toolLabel(call.tool_name ?? "tool")}</span>
-        <span className="m act-tool-sum">{toolSummary(call.content)}</span>
+        <Truncate mono className="act-tool-sum">{toolSummary(call.content)}</Truncate>
         {failed && <Badge variant="destructive">failed</Badge>}
+        {outcome === "maybe" && <Badge variant="outline">may have failed</Badge>}
       </Row>
       {open && (
         <div className="act-tool-body">
-          <div className="act-label">input</div>
-          <pre className="act-pre">{call.content}</pre>
+          <SectionLabel>Input</SectionLabel>
+          <CodeBlock wrap clamp label="Tool input">{call.content}</CodeBlock>
           {result && (
             <>
-              <div className="act-label">output</div>
-              <pre className="act-pre">{result.content}</pre>
+              <SectionLabel>Output</SectionLabel>
+              <CodeBlock wrap clamp label="Tool output">{result.content}</CodeBlock>
             </>
           )}
         </div>
@@ -182,7 +212,8 @@ export function groupBeats(beats: readonly Beat[]): BeatGroup[] {
  * open, so the failure is two levels deep and zero clicks away.
  */
 export function ToolGroup({ beats }: { beats: Beat[] }) {
-  const failedCount = beats.filter((b) => b.result !== undefined && FAILED.test(b.result.content)).length;
+  const failedCount = beats.filter((b) => toolOutcome(b.result) === "failed").length;
+  const maybeCount = beats.filter((b) => toolOutcome(b.result) === "maybe").length;
   const [open, setOpen] = useDisclosure(failedCount > 0);
   const names = [...new Set(beats.map((b) => toolLabel(b.part.tool_name ?? "tool")))];
   const shown = names.slice(0, 3).join(", ") + (names.length > 3 ? ` +${names.length - 3} more` : "");
@@ -192,8 +223,9 @@ export function ToolGroup({ beats }: { beats: Beat[] }) {
         <ChevronRight className="act-caret" size={12} aria-hidden />
         {failedCount ? <TriangleAlert size={12} aria-hidden /> : <Wrench size={12} aria-hidden />}
         <span className="act-tool-name">Used {beats.length} tools</span>
-        <span className="act-tool-sum">{shown}</span>
+        <Truncate className="act-tool-sum">{shown}</Truncate>
         {failedCount > 0 && <Badge variant="destructive">{failedCount} failed</Badge>}
+        {maybeCount > 0 && <Badge variant="outline">{maybeCount} may have failed</Badge>}
       </Row>
       {open && (
         <div className="act-group-body">
@@ -229,20 +261,85 @@ export function beatsOf(parts: readonly TurnPart[]): Beat[] {
 }
 
 /**
+ * The engine's own closing lines, lifted out of the agent's words (HOW-68).
+ *
+ * When an attempt fails the engine appends ONE more text chunk to the step's turn —
+ * `\n[failed: <reason>]`, `\n[attempt failed: <message>]`, an executor's
+ * `\n[output contract violation: <problem>]`, the allowance hop and the context continuation
+ * (engine/run.ts ENGINE_NOTE_INDEX / ENGINE_FAILURE_INDEX) — so the reason survives in the
+ * thread after the ask that carried it is resolved. `coalesce()` merges it into the agent's
+ * last paragraph, where it was drawn as agent prose: five lines of bracketed engine text
+ * directly above the ask card saying the same thing. The log is unchanged; this only tells the
+ * two voices apart again. Peeled from the END, one bracketed line at a time, and only for the
+ * prefixes the engine really writes, so an agent's own "[note]" stays prose.
+ */
+export interface EngineNote { kind: "failure" | "note"; text: string }
+const ENGINE_LINE = /\n\[(failed|attempt failed|output contract violation|succeeded|[a-z]+ allowance exhausted|context window filled)(: | — )/g;
+export function splitEngineNotes(text: string): { prose: string; notes: EngineNote[] } {
+  const notes: EngineNote[] = [];
+  let prose = text;
+  for (;;) {
+    const trimmed = prose.trimEnd();
+    if (!trimmed.endsWith("]")) break;
+    let last: RegExpExecArray | null = null;
+    ENGINE_LINE.lastIndex = 0;
+    for (let m = ENGINE_LINE.exec("\n" + trimmed); m; m = ENGINE_LINE.exec("\n" + trimmed)) last = m;
+    if (!last || last[1] === undefined) break;
+    // indices are into "\n" + trimmed: the match starts at the newline before the bracket
+    const body = trimmed.slice(last.index + 1, -1); // inside the brackets
+    const head = last[1];
+    const failure = head === "failed" || head === "attempt failed" || head === "output contract violation";
+    notes.unshift({ kind: failure ? "failure" : "note", text: head === "failed" || head === "attempt failed" || head === "succeeded" ? body.slice(head.length + 2) : body });
+    prose = trimmed.slice(0, Math.max(0, last.index - 1));
+  }
+  return { prose, notes };
+}
+
+/** a notice this short is simply shown; a longer one is one line that opens */
+const NOTICE_LINE = 110;
+
+/**
+ * One engine line, drawn as what it is: a quiet one-line notice, never agent prose. A long
+ * reason shows its opening and expands to the whole text, verbatim.
+ */
+export function EngineNotice({ note }: { note: EngineNote }) {
+  const flat = note.text.replace(/\s+/g, " ").trim();
+  const label = note.kind === "failure" ? "Failed: " : "";
+  const icon = note.kind === "failure" ? <TriangleAlert size={12} aria-hidden /> : <Info size={12} aria-hidden />;
+  if (flat.length <= NOTICE_LINE)
+    return <div className="act-notice" data-kind={note.kind}>{icon}<span>{label}{flat}</span></div>;
+  const cut = flat.slice(0, NOTICE_LINE).replace(/\s+\S*$/, "");
+  return (
+    <details className="act-notice" data-kind={note.kind}>
+      <summary>{icon}<span>{label}{cut}…</span></summary>
+      <div className="act-notice-full">{note.text.trim()}</div>
+    </details>
+  );
+}
+
+/**
  * One run of the agent's own words (HOW-29). Prose is markdown, so it is drawn as markdown; and
  * the `{"outputs": ...}` object the step closes with is lifted out of it and drawn as what it
  * published — a plan as a document, a verdict as a value — instead of one JSON line of `\n`
  * escapes. A contract still being streamed is named rather than printed half-written.
  * Exported for the Chat transcript: one prose renderer, not two.
+ *
+ * HOW-68: the engine's closing lines are notices, not prose (`splitEngineNotes`).
+ * `hideFailure` is set for the step whose park is STILL standing: the ask card at the foot of
+ * the conversation says why it failed, and its "Full message" holds the reason verbatim — the
+ * ask is said once (DESIGN.md).
  */
-export function AgentProse({ text }: { text: string }) {
-  const split = useMemo(() => splitOutputs(text.trim()), [text]);
+export function AgentProse({ text, hideFailure = false }: { text: string; hideFailure?: boolean }) {
+  const { prose, notes } = useMemo(() => splitEngineNotes(text), [text]);
+  const split = useMemo(() => splitOutputs(prose.trim()), [prose]);
+  const shown = hideFailure ? notes.filter((n) => n.kind !== "failure") : notes;
   return (
     <>
       {split.before.trim() && <Markdown className="act-text" text={split.before} />}
       {split.outputs && <OutputDocs outputs={split.outputs} />}
       {split.pending && <div className="act-note-quiet">writing outputs…</div>}
       {split.after.trim() && <Markdown className="act-text" text={split.after} />}
+      {shown.map((n, i) => <EngineNotice key={i} note={n} />)}
     </>
   );
 }
@@ -262,7 +359,7 @@ export function TurnNote({ state, lastActivityAt, className }: { state: TurnStat
     return (
       <div className={`act-note ${className ?? ""}`.trim()}>
         <TriangleAlert size={12} aria-hidden />
-        the process died inside this turn — what you see is what it had said
+        The process died inside this turn. What you see is what it had said.
       </div>
     );
   if (state === "live") return <LiveNote lastActivityAt={lastActivityAt} className={className} />;
@@ -298,7 +395,7 @@ export function StepActivity({ turns, render, row, context, state, lastActivityA
   const wrote = context.filter((c) => c.writes.some((w) => w.node === row.node && w.visit === row.visit)).map((c) => c.key);
 
   if (!render && beats.length === 0)
-    return <EmptyState>nothing ran in this step yet</EmptyState>;
+    return <EmptyState title="Nothing ran here yet">What the agent says and each tool it calls appear here as the step runs.</EmptyState>;
 
   return (
     <div className="activity">
@@ -306,9 +403,9 @@ export function StepActivity({ turns, render, row, context, state, lastActivityA
         <div className="act-beat act-prompt">
           <Sparkles size={12} aria-hidden />
           <div className="act-beat-body">
-            <span className="m act-prompt-id">{render.prompt} v{render.prompt_version}</span>
+            <span className="act-prompt-id"><span className="font-mono">{render.prompt}</span> v{render.prompt_version}</span>
             <span className="act-prompt-read">
-              read {Object.keys(render.context_read).join(", ") || "nothing"}
+              read <span className="font-mono">{Object.keys(render.context_read).join(", ") || "nothing"}</span>
             </span>
           </div>
         </div>
@@ -330,7 +427,7 @@ export function StepActivity({ turns, render, row, context, state, lastActivityA
         <div className="act-beat act-wrote">
           <FileOutput size={12} aria-hidden />
           <div className="act-beat-body">
-            wrote {wrote.map((k) => <Badge key={k} variant="id">{k}</Badge>)}
+            Wrote {wrote.map((k) => <Badge key={k} variant="id">{k}</Badge>)}
           </div>
         </div>
       )}

@@ -12,7 +12,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import type { CoalescedTurn, TurnPart } from "../../log/coalesce";
 import type { RunDetail, TurnState } from "../derive";
-import { StepActivity, beatsOf, groupBeats, toolLabel, toolSummary } from "./run/activity";
+import { StepActivity, ToolGroup, beatsOf, groupBeats, toolLabel, toolOutcome, toolSummary } from "./run/activity";
 
 let root: Root | null = null;
 let host: HTMLElement | null = null;
@@ -98,7 +98,8 @@ describe("StepActivity", () => {
     ])]);
     const head = el.querySelector(".act-tool-head") as HTMLButtonElement;
     expect(head.getAttribute("aria-expanded")).toBe("false");
-    expect(el.querySelector(".act-pre")).toBeNull();
+    // HOW-68: a tool's input and output are the shared CodeBlock now (was a local `.act-pre`)
+    expect(el.querySelector(".code-block")).toBeNull();
     expect(el.textContent).toContain("bun test"); // the summary line names the work
 
     act(() => head.click());
@@ -106,14 +107,75 @@ describe("StepActivity", () => {
     expect(el.textContent).toContain("1162 pass");
   });
 
-  test("a FAILED tool opens itself, because that is the one you came to read", () => {
+  // HOW-68: "failed" is the HARNESS's word (`is_error`), carried through coalesce(). It used to
+  // be a regex over the output, which badged "0 failed — BUILD SUCCESSFUL" red; these pin both
+  // halves and the old-log fallback, which is a neutral hint and never the red badge.
+  test("a tool the harness says FAILED opens itself, because that is the one you came to read", () => {
+    const el = render([turn([
+      { kind: "tool_call", content: '{"command":"bun test"}', tool_id: "t1", tool_name: "Bash" },
+      { kind: "tool_result", content: "3 tests did not pass", tool_id: "t1", is_error: true },
+    ])]);
+    expect(el.querySelector(".act-tool-head")!.getAttribute("aria-expanded")).toBe("true");
+    expect(el.querySelector(".act-tool")!.className).toContain("failed");
+    expect(el.textContent).toContain("3 tests did not pass");
+    expect(el.textContent).toContain("failed");
+    expect(el.textContent).not.toContain("may have failed");
+  });
+
+  test("a tool the harness says did NOT fail is not failed, whatever its output says", () => {
+    const el = render([turn([
+      { kind: "tool_call", content: '{"command":"./gradlew test"}', tool_id: "t1", tool_name: "Bash" },
+      { kind: "tool_result", content: "error: none\n14 tests completed, 0 failed — BUILD SUCCESSFUL\nexit code 1 was not returned", tool_id: "t1", is_error: false },
+    ])]);
+    expect(el.querySelector(".act-tool")!.className).not.toContain("failed");
+    expect(el.querySelector(".act-tool-head")!.getAttribute("aria-expanded")).toBe("false");
+    expect(el.querySelector(".act-tool-head")!.textContent).not.toMatch(/failed/);
+  });
+
+  test("with no word from the harness, a failure-shaped output is a NEUTRAL hint: closed, not red", () => {
     const el = render([turn([
       { kind: "tool_call", content: '{"command":"bun test"}', tool_id: "t1", tool_name: "Bash" },
       { kind: "tool_result", content: "error: 3 tests failed", tool_id: "t1" },
     ])]);
-    expect(el.querySelector(".act-tool-head")!.getAttribute("aria-expanded")).toBe("true");
-    expect(el.querySelector(".act-tool")!.className).toContain("failed");
-    expect(el.textContent).toContain("error: 3 tests failed");
+    expect(el.querySelector(".act-tool")!.className).not.toContain("failed");
+    expect(el.querySelector(".act-tool-head")!.getAttribute("aria-expanded")).toBe("false");
+    expect(el.querySelector(".act-tool-head")!.textContent).toContain("may have failed");
+  });
+
+  test("toolOutcome: the harness decides; the fallback is narrow", () => {
+    const r = (content: string, is_error?: boolean): TurnPart => ({ kind: "tool_result", content, ...(is_error !== undefined ? { is_error } : {}) });
+    expect(toolOutcome(undefined)).toBe("ok");
+    expect(toolOutcome(r("fine", true))).toBe("failed");
+    expect(toolOutcome(r("Traceback (most recent call last)", false))).toBe("ok");
+    // nothing said: counts, prose and "not found" in a sentence are not failures
+    for (const ok of ["14 tests completed, 0 failed — BUILD SUCCESSFUL", "no errors found", "the file was not found in the cache, fetched it", "access was denied last week; fixed", "1162 pass", "handles the error path"])
+      expect(toolOutcome(r(ok))).toBe("ok");
+    for (const maybe of ["error: expected 2, got 3", "  Error: ENOENT", "fatal: not a git repository", "Traceback (most recent call last):\n  File", "Process exited with code 2", "exit status 1", "bash: foo: command not found", "cat: /etc/shadow: Permission denied"])
+      expect(toolOutcome(r(maybe))).toBe("maybe");
+  });
+
+  test("a group counts only what the harness called failed; guesses are a separate neutral count", () => {
+    const call = (id: string): TurnPart => ({ kind: "tool_call", content: '{"command":"x"}', tool_id: id, tool_name: "Bash" });
+    const el = render([turn([
+      call("a"), { kind: "tool_result", content: "0 failed", tool_id: "a", is_error: false },
+      call("b"), { kind: "tool_result", content: "boom", tool_id: "b", is_error: true },
+      call("c"), { kind: "tool_result", content: "fatal: no", tool_id: "c" },
+    ])]);
+    // StepActivity draws beats one by one; the group is the Chat transcript's — render it directly
+    act(() => root!.render(<ToolGroup beats={beatsOf(turn([
+      call("a"), { kind: "tool_result", content: "0 failed", tool_id: "a", is_error: false },
+      call("b"), { kind: "tool_result", content: "boom", tool_id: "b", is_error: true },
+      call("c"), { kind: "tool_result", content: "fatal: no", tool_id: "c" },
+    ]).parts)} />));
+    const head = el.querySelector(".act-group-head")!;
+    expect(head.textContent).toContain("1 failed");
+    expect(head.textContent).toContain("1 may have failed");
+    expect(head.getAttribute("aria-expanded")).toBe("true");
+    // a group of guesses only stays shut
+    act(() => root!.render(<ToolGroup key="g2" beats={beatsOf([call("c"), { kind: "tool_result", content: "fatal: no", tool_id: "c" }, call("d"), { kind: "tool_result", content: "ok", tool_id: "d" }])} />));
+    const g2 = el.querySelector(".act-group-head")!;
+    expect(g2.getAttribute("aria-expanded")).toBe("false");
+    expect(g2.textContent).not.toMatch(/\d failed/);
   });
 
   test("a turn the process died inside says so, rather than reading as complete", () => {
@@ -168,7 +230,10 @@ describe("StepActivity", () => {
     // the plan is a document card with real structure
     const doc = el.querySelector(".out-doc")!;
     expect(doc.querySelector(".out-doc-name")!.textContent).toBe("implementation_plan");
-    expect(doc.querySelector("h2")!.textContent).toBe("Steps");
+    // HOW-68: a document's headings sit one level down, so "# Plan" is not a second h1 on the run
+    expect(doc.querySelector("h1")).toBeNull();
+    expect(doc.querySelector("h2")!.textContent).toBe("Plan");
+    expect(doc.querySelector("h3")!.textContent).toBe("Steps");
     expect(doc.querySelectorAll("ol > li")).toHaveLength(2);
     expect(doc.querySelector("ol li ul li")!.textContent).toBe("in-memory double");
     // a short value stays a value
@@ -186,7 +251,8 @@ describe("StepActivity", () => {
     expect(document.querySelector("dialog")).toBeNull();
     act(() => (doc.querySelector('[aria-label="read implementation_plan"]') as HTMLButtonElement).click());
     const dialog = document.querySelector("dialog")!;
-    expect(dialog.querySelector(".doc-reader h2")!.textContent).toBe("Plan");
+    // "## Plan" is an h3: a document's headings are drawn one level down (HOW-68, markdown.tsx)
+    expect(dialog.querySelector(".doc-reader h3")!.textContent).toBe("Plan");
   });
 
   test("HOW-29: an outputs object still streaming is named, not printed half-written", () => {
@@ -197,7 +263,8 @@ describe("StepActivity", () => {
 
   test("a step with nothing in it says so instead of rendering an empty frame", () => {
     const el = render([]);
-    expect(el.textContent).toContain("nothing ran in this step yet");
+    // HOW-68: an empty state names the place and says what will appear (DESIGN.md Components)
+    expect(el.textContent).toContain("Nothing ran here yet");
   });
 });
 
@@ -229,5 +296,27 @@ describe("groupBeats (HOW-30)", () => {
   });
   test("nothing in, nothing out", () => {
     expect(groupBeats([])).toEqual([]);
+  });
+});
+
+describe("splitEngineNotes (HOW-68)", () => {
+  test("peels the engine's bracketed closing lines off the end, in order", async () => {
+    const { splitEngineNotes } = await import("./run/activity");
+    const r = splitEngineNotes("Done what I could.\n[output contract violation: no outputs line]\n[failed: output contract violation: no outputs line]");
+    expect(r.prose).toBe("Done what I could.");
+    expect(r.notes).toEqual([
+      { kind: "failure", text: "output contract violation: no outputs line" },
+      { kind: "failure", text: "output contract violation: no outputs line" },
+    ]);
+  });
+  test("a reason with brackets and newlines in it stays one note", async () => {
+    const { splitEngineNotes } = await import("./run/activity");
+    const r = splitEngineNotes("x\n[attempt failed: gh exited 1 [stderr]\nsecond line]");
+    expect(r).toEqual({ prose: "x", notes: [{ kind: "failure", text: "gh exited 1 [stderr]\nsecond line" }] });
+  });
+  test("the allowance hop is a note, not a failure, and an agent's own brackets are prose", async () => {
+    const { splitEngineNotes } = await import("./run/activity");
+    expect(splitEngineNotes("\n[claude allowance exhausted: retrying this node with codex]").notes).toEqual([{ kind: "note", text: "claude allowance exhausted: retrying this node with codex" }]);
+    expect(splitEngineNotes("See the list [1] and [note: mine]")).toEqual({ prose: "See the list [1] and [note: mine]", notes: [] });
   });
 });

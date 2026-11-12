@@ -55,6 +55,12 @@ export interface PanelOpts {
   side?: "left" | "right";
   /** collapsed before the operator has ever toggled */
   defaultCollapsed?: boolean;
+  /**
+   * Keep the panel's edge under the point it was GRABBED at, rather than under the pointer.
+   * Without it a press anywhere but dead on the edge jumps the width by that offset on the
+   * first move — unnoticeable on a 9px lane, a 12px lurch on the drawer's 24px handle.
+   */
+  keepGrip?: boolean;
 }
 
 export interface Panel {
@@ -81,7 +87,7 @@ export interface Panel {
  * it straight into a custom property without re-checking it.
  */
 export function usePanel(opts: PanelOpts): Panel {
-  const { key, min, def, minOther, side = "right", defaultCollapsed = false } = opts;
+  const { key, min, def, minOther, side = "right", defaultCollapsed = false, keepGrip = false } = opts;
   const widthKey = `${key}.width`;
   const collapsedKey = `${key}.collapsed`;
 
@@ -138,19 +144,24 @@ export function usePanel(opts: PanelOpts): Panel {
       e.preventDefault(); // or the drag selects the neighbouring list's text instead
       const el = e.currentTarget;
       el.setPointerCapture(e.pointerId);
-      const move = (ev: PointerEvent) => setWidth(clamp(widthAt(ev.clientX)));
+      // how far inside (or outside) the edge the press landed; carried through the whole drag
+      // against the width ON SCREEN, not the one remembered: a width kept from a wider window is
+      // clamped at render (the drawer on a narrow one), and a grip measured from the remembered
+      // number made the edge ignore the first few hundred pixels of a drag and then jump
+      const grip = keepGrip ? widthAt(e.clientX) - clamp(width) : 0;
+      const move = (ev: PointerEvent) => setWidth(clamp(widthAt(ev.clientX) - grip));
       const up = (ev: PointerEvent) => {
         el.releasePointerCapture(ev.pointerId);
         el.removeEventListener("pointermove", move);
         el.removeEventListener("pointerup", up);
         el.removeEventListener("pointercancel", up); // a cancelled drag still commits what it drew
-        commit(widthAt(ev.clientX));
+        commit(widthAt(ev.clientX) - grip);
       };
       el.addEventListener("pointermove", move);
       el.addEventListener("pointerup", up);
       el.addEventListener("pointercancel", up);
     },
-    [clamp, collapsed, commit, widthAt],
+    [clamp, collapsed, commit, widthAt, keepGrip, width],
   );
 
   // a separator only a mouse can move is not a usable separator
@@ -162,7 +173,8 @@ export function usePanel(opts: PanelOpts): Panel {
       const by = e.key === grow ? step : e.key === shrink ? -step : 0;
       if (by !== 0) {
         e.preventDefault();
-        commit(width + by);
+        // from the width on screen (see onPointerDown): else the first presses are swallowed
+        commit(clamp(width) + by);
       } else if (e.key === "Home") {
         e.preventDefault();
         commit(Number.POSITIVE_INFINITY);

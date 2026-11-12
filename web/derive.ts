@@ -95,6 +95,14 @@ export interface TimelineRow {
   profile: TrajectoryProfile | null;
   /** HOW-73: this row is a BRANCH of a parallel step's visit — its siblings run beside it */
   parallel?: { node: string; visit: number };
+  /**
+   * HOW-68: which ATTEMPT of this node@visit the row is, when it is not the first. The log can
+   * start one visit twice — an approval parks without consuming a visit and is re-attempted on
+   * the same one; so is a visit a killed runner left open — and the two rows then share
+   * `node@visit`. Nothing about the log changes: this only lets a view tell the rows apart
+   * (web/app/status.tsx `stepKey`). Absent = 1.
+   */
+  attempt?: number;
 }
 
 export interface RunDetail {
@@ -451,9 +459,11 @@ export function deriveTimeline(events: LoggedEvent[]): TimelineRow[] {
         open.delete(key);
       }
       const key = `${e.node}@${e.visit}`;
+      const attempt = rows.reduce((n, r) => (r.node === e.node && r.visit === e.visit ? n + 1 : n), 1);
       const row: TimelineRow = {
         node: e.node, visit: e.visit, started_at: e.ts, finished_at: null, status: "running", duration_ms: null, offset_ms: 0, run_span_ms: 0, waiting_ms: 0, usage: null, profile: null,
         ...(e.parallel ? { parallel: { ...e.parallel } } : {}),
+        ...(attempt > 1 ? { attempt } : {}),
       };
       rows.push(row);
       open.set(key, row);
@@ -883,6 +893,12 @@ export interface ContextEntry {
   read_by: string[];
   /** a cleared key whose writer is mid-attempt is veiled: the old value must not be shown */
   veiled: boolean;
+  /**
+   * HOW-68: the key was GIVEN AT LAUNCH (`run-started.inputs`) — the engine seeds the context
+   * with it, so it has a value and no step wrote it. Without this the table said "Not written
+   * yet" beside `goal` on a run that had been reading its goal for an hour.
+   */
+  input?: true;
 }
 
 export type Declarations = Record<string, { scope: Scope; writer: string[] }>;
@@ -902,7 +918,15 @@ export function deriveContextTable(events: LoggedEvent[], declarations: Declarat
 
   const openAttempts = new Set<string>();
   for (const e of events) {
-    if (e.type === "node-started") openAttempts.add(e.node);
+    if (e.type === "run-started") {
+      // what the operator typed at launch is in the context from the first step on
+      for (const [key, value] of Object.entries((e.inputs ?? {}) as Record<string, unknown>)) {
+        const c = entry(key);
+        c.value = value;
+        c.written = true;
+        c.input = true;
+      }
+    } else if (e.type === "node-started") openAttempts.add(e.node);
     else if (e.type === "node-finished") {
       openAttempts.delete(e.node);
       for (const [key, value] of Object.entries(e.writes)) {

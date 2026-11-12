@@ -64,7 +64,10 @@ describe("StepDetail pane routing on the approval step", () => {
     const el = renderStep(log, "slice.approve", 1);
     expect(tabLabels(el)).toEqual(["Ask", "Approval", "Activity", "Prompt & context", "Output"]);
     expect(selected(el)).toBe("Ask");
-    expect(el.querySelector(".ask-card h3")!.textContent).toBe("Needs you — slice.approve@1");
+// HOW-68: the card's heading is the park's one-sentence summary (core/park-summary.ts); the
+    // step it is about is the line under it, and the engine's reason is in "Full message"
+    expect(el.querySelector(".ask-card h3")!.textContent).toBe("slice.approve failed.");
+    expect(el.querySelector(".ask-card .ask-where")!.textContent).toContain("slice.approve@1");
     expect(el.querySelector(".ask-card")!.textContent).toContain("approval executor threw: base unreadable");
 
     await act(async () => tabs(el).find((t) => t.textContent === "Approval")!.click());
@@ -81,7 +84,10 @@ describe("StepDetail pane routing on the approval step", () => {
     const el = renderStep(log, "slice.approve", 1);
     expect(tabLabels(el)[0]).toBe("Ask");
     expect(selected(el)).toBe("Ask");
-    expect(el.querySelector(".ask-card h3")!.textContent).toBe("Needs you — slice.approve@2");
+// HOW-68: the card's heading is the park's one-sentence summary (core/park-summary.ts); the
+    // step it is about is the line under it, and the engine's reason is in "Full message"
+    expect(el.querySelector(".ask-card h3")!.textContent).toBe("slice.approve reached its visit limit.");
+    expect(el.querySelector(".ask-card .ask-where")!.textContent).toContain("slice.approve@2");
     expect(el.querySelector(".sd-head .step-glyph.needs-input")).not.toBeNull();
   });
 
@@ -105,7 +111,8 @@ describe("the panel's live timing", () => {
     const el = renderStep(log, "slice.approve", 1, 3 * 60_000);
     expect(el.querySelector(".sd-total")!.textContent).toBe("3m 0s");
     // nothing was waiting on the operator yet, so the whole of it is agent time
-    expect(el.querySelector(".sd-seg .m")!.textContent).toBe("3m 0s");
+    // HOW-68: a duration is READ, so it is sans with tabular-nums, not mono (DESIGN.md Type)
+    expect(el.querySelector(".sd-seg .tabular-nums")!.textContent).toBe("3m 0s");
     expect((el.querySelector(".sd-seg-fill") as HTMLElement).style.width).toBe("100%");
   });
 });
@@ -156,7 +163,10 @@ describe("an ask on a node with no step row", () => {
     const el = renderStep(jumpedPastApproval(), "slice.approve", 1);
     const fallback = el.querySelector('[data-testid="rowless-ask"]')!;
     expect(fallback.textContent).toContain("implementation.implement has no step yet");
-    expect(fallback.querySelector(".ask-card h3")!.textContent).toBe("Needs you — implementation.implement@1");
+// HOW-68: the card's heading is the park's one-sentence summary (core/park-summary.ts); the
+    // step it is about is the line under it, and the engine's reason is in "Full message"
+    expect(fallback.querySelector(".ask-card h3")!.textContent).toBe("implementation.implement cannot start until its proposal is approved.");
+    expect(fallback.querySelector(".ask-card .ask-where")!.textContent).toContain("implementation.implement@1");
     expect(fallback.querySelector(".ask-card")!.textContent).toContain("no current approval for slice.approve");
     // one Ask card for the one ask — the selected row does not also carry it
     expect(el.querySelectorAll(".ask-card").length).toBe(1);
@@ -298,5 +308,45 @@ describe("HOW-46: the Steps pane reads the derived turn state", () => {
     activity(el);
     expect(el.textContent).toContain("gh pr view 7");
     expect(el.textContent).not.toContain("died inside this turn");
+  });
+});
+
+
+// HOW-68: an approval step parks without consuming a visit, so the same node@visit can be on
+// the timeline twice — a failed attempt, then the one that was decided. Keyed by `node@visit`
+// the two rows shared a React key and highlighted together.
+describe("two attempts of one visit are two rows (HOW-68)", () => {
+  test("derive marks the second attempt; each row has its own identity and selection", async () => {
+    const { RunSteps } = await import("./run/steps");
+    const { stepKey, resolveStepKey } = await import("./status");
+    const log = new FakeLog();
+    log.add({ type: "run-started", graph: "implement-slice", inputs: {}, pinned_prompts: {} });
+    log.add({ type: "node-started", node: "approve", visit: 1, attempt_id: "approve#1" });
+    log.add({ type: "node-finished", node: "approve", visit: 1, status: "failed", writes: {} });
+    log.add({ type: "node-started", node: "approve", visit: 1, attempt_id: "approve#1" });
+    log.add({ type: "node-finished", node: "approve", visit: 1, status: "succeeded", writes: {} });
+    const detail = deriveDetail("r1", log.events);
+    expect(detail.timeline.map((t) => t.attempt)).toEqual([undefined, 2]);
+    expect(detail.timeline.map(stepKey)).toEqual(["approve@1", "approve@1#2"]);
+    // a bare node@visit (what the Build transcript hands over) means the latest attempt
+    expect(resolveStepKey(detail.timeline, "approve@1")).toBe("approve@1#2");
+    expect(resolveStepKey(detail.timeline, "approve@1#2")).toBe("approve@1#2");
+
+    const errors: unknown[][] = [];
+    const realError = console.error;
+    console.error = (...a: unknown[]) => { errors.push(a); };
+    try {
+      host = document.createElement("div");
+      document.body.appendChild(host);
+      root = createRoot(host);
+      act(() => root!.render(<RunSteps timeline={detail.timeline} ask={null} selected="approve@1#2" now={Date.now()} onSelect={() => {}} />));
+      const el = host;
+      const rows = [...el.querySelectorAll("button.step-row")];
+      expect(rows).toHaveLength(2);
+      expect(rows.map((r) => r.hasAttribute("data-selected"))).toEqual([false, true]);
+      // both are still NAMED approve@1 — the log's own identity — and told apart by how they ended
+      expect(rows.map((r) => r.getAttribute("aria-label")!.split(",")[0])).toEqual(["approve@1 — failed", "approve@1 — succeeded"]);
+    } finally { console.error = realError; }
+    expect(errors.filter((e) => String(e[0]).includes("same key"))).toEqual([]);
   });
 });

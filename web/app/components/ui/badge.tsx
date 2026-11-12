@@ -10,6 +10,12 @@
  *
  * Colour stays out of it. `scope-cleared`'s dulled gold and `scope-per-visit`'s slate were
  * the two hues the old modifiers carried, and they are carried here by name.
+ *
+ * HOW-68: 4px radius (DESIGN.md Chrome: "4 chips"), and SANS. Every badge was mono, which made
+ * a status word ("needs you", "read-only") machine text; DESIGN.md's test is "would you paste
+ * it", so only the `id` variant — a node@visit, a prompt id — keeps the mono face. And
+ * `attention` is AMBER: it used to be `bg-primary`, which was the ink then and is the indigo
+ * accent now, and a badge named attention in the colour of a button is the wrong signal twice.
  */
 
 import { mergeProps } from "@base-ui/react/merge-props";
@@ -18,17 +24,18 @@ import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "@/lib/utils";
 
 export const badgeVariants = cva(
-  "inline-flex items-center gap-1 rounded-[var(--radius-sm)] px-1.5 py-px text-xs font-mono [&_svg]:size-3",
+  "inline-flex items-center gap-1 whitespace-nowrap rounded-[var(--radius-xs)] px-1.5 py-px text-xs leading-[1.4] [&_svg]:size-3",
   {
     variants: {
       variant: {
         default: "bg-muted text-muted-foreground",
-        attention: "bg-primary text-primary-foreground",
+        /** a run is waiting on you — the only thing amber may mean */
+        attention: "bg-[var(--attention)] font-semibold text-[var(--on-attention)]",
         outline: "border border-border text-muted-foreground",
         success: "bg-muted text-[var(--status-done)]",
         destructive: "bg-muted text-destructive",
         /** an identity: a node@visit, a prompt id — mono, quiet, never an alarm */
-        id: "bg-muted text-foreground",
+        id: "bg-muted font-mono text-foreground",
         /** context scope `cleared`: veiled while its writer re-runs */
         "scope-cleared": "bg-muted text-[var(--scope-cleared)]",
         /** context scope `per-visit`: freshness is part of its meaning */
@@ -61,9 +68,4 @@ export function Badge({
     render,
     state: { slot: "badge", variant },
   });
-}
-
-/** the scope a context key declares → its Badge variant (one mapping, not one per call site) */
-export function scopeVariant(scope: string): BadgeVariant {
-  return scope === "cleared" ? "scope-cleared" : scope === "per-visit" ? "scope-per-visit" : "scope-sticky";
 }

@@ -163,8 +163,19 @@ export function claudeExecutor(opts: ClaudeExecutorOpts): Executor {
         stdin: "pipe", stdout: "pipe", stderr: "pipe", detached: true,
       },
     );
-    proc.stdin.write(buildClaudeUserTurn(prompt));
-    proc.stdin.flush();
+    // A CLI that dies at once (logged out, a bad flag) may be gone before the prompt is written:
+    // the write is EPIPE then. That must not become the attempt's reason — "executor threw:
+    // EPIPE: broken pipe" says nothing, while the exit code and stderr read below say exactly
+    // why it never started (classifyHarnessExit). It was a race the logged-out end-to-end test
+    // lost on a slow CI runner. Both shapes are caught: the throw, and the rejected flush.
+    // (a write larger than the pipe's buffer is finished asynchronously, so `write` can hand back
+    // a promise that rejects later; an unhandled one fails the process, not just the attempt.)
+    try {
+      const wrote: unknown = proc.stdin.write(buildClaudeUserTurn(prompt));
+      if (wrote instanceof Promise) wrote.catch(() => {});
+      const flushed: unknown = proc.stdin.flush();
+      if (flushed instanceof Promise) flushed.catch(() => {});
+    } catch { /* the harness is already gone; the exit is classified after the read loop */ }
 
     const stderrChunks: string[] = [];
     const stderrDone = (async () => {

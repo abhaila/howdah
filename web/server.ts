@@ -66,7 +66,8 @@ import { currentProposal } from "../engine/slice-decision";
 import { loadSnapshot } from "../engine/slice-map";
 import { MapStore, defaultStoreDir } from "../map/store";
 import type { AssembledMap } from "../map/types";
-import { AttentionCenter } from "../engine/attention";
+import { AttentionCenter, notifierStatus } from "../engine/attention";
+import { writePresence } from "../engine/viewer-presence";
 import { inboxItems } from "../engine/attention-inbox";
 import { graphCatalog, GRAPHS } from "../graphs/index";
 import { catalogOf, loadRegistry, type Registry } from "../graphs/registry";
@@ -146,6 +147,8 @@ export interface ServerOpts {
    * unref'd). Tests inject a recorder: the real one starts an engine that may spend tokens.
    */
   spawnRun?: (argv: string[]) => void;
+  /** HOW-68 D18: resolves a binary on PATH (default Bun.which) — tests decide what is installed */
+  which?: (bin: string) => string | null;
   /** HOW-49: how often a watched live step's worktree is probed; small in tests */
   liveGitIntervalMs?: number;
 }
@@ -360,6 +363,18 @@ export function createHowdahServer(opts: ServerOpts) {
           source: root === repoRoot() ? "repo checkout" : "custom repo root",
           supervisorHeartbeat: existsSync(join(home, "heartbeat.json")) ? join(home, "heartbeat.json") : null,
         });
+      }
+
+      /**
+       * HOW-68 D18: an open viewer says it is here and whether its browser may notify
+       * (engine/viewer-presence.ts). Liveness beside heartbeat.json, not run state — the
+       * engine's OS notifier reads it and leaves the banner to the browser while it is fresh.
+       * `notify` must be the literal `true`: anything else is "this viewer cannot announce".
+       */
+      if (url.pathname === "/api/viewer/presence" && req.method === "POST") {
+        const body = (await req.json().catch(() => ({}))) as { notify?: unknown } | null;
+        const p = writePresence(home, { notify: body?.notify === true, base: `http://localhost:${server.port ?? opts.port ?? 4711}` });
+        return json({ ok: true, ...p });
       }
 
       if (url.pathname === "/api/graphs" && req.method === "GET") {
@@ -682,7 +697,9 @@ export function createHowdahServer(opts: ServerOpts) {
         // and where it came from. 127.0.0.1 with the Host/Origin guards makes echoing it
         // low-stakes, not harmless, and the screen has no use for the value.
         const { repos, folders, typesafeApiKey, ...settings } = loadConfig();
-        return json({ ...settings, typesafeApiKeyState: typesafeKeyState({ ...settings, typesafeApiKey, repos, folders }) });
+        // `notifier` is a fact about this machine, not a setting: whether the OS banner (the
+        // one that rings with no viewer open) is clickable, and the line that makes it so
+        return json({ ...settings, typesafeApiKeyState: typesafeKeyState({ ...settings, typesafeApiKey, repos, folders }), notifier: notifierStatus(opts.which) });
       }
       if (url.pathname === "/api/github/repos") {
         try {

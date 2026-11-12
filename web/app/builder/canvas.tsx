@@ -35,18 +35,43 @@
  *   so one stray keystroke used to destroy a step AND its instructions with no undo (review
  *   finding 2). Removing a step is a named control in the panel that says what it is about to
  *   destroy.
+ *
+ * HOW-68 (DESIGN.md), all of it presentation:
+ *
+ *   THE CANVAS OPENS AT 100%, NOT "FITTED". It used to `fitView` whatever arrived, so a
+ *   five-step graph in a short pane was drawn at 40% and its 13px labels at 5px (audit
+ *   3.1.11). A canvas pans; text that cannot be read does not. So a draft is FRAMED instead:
+ *   at zoom 1, centred where it fits and pinned to its top-left corner — where the run starts —
+ *   where it does not. Zooming out is the operator's own act (the controls, the wheel), never
+ *   the default.
+ *
+ *   A CARD IS A FOCUS STOP YOU CAN SEE. React Flow makes every node's wrapper focusable and
+ *   its own sheet removes the outline (audit 3.6). howdah.css puts the 2px ring back on that
+ *   wrapper (`:focus-visible:has(> .gb-node)`), and pressing Enter or Space there SELECTS the
+ *   step — React Flow reports that as a `select` change, which used to be dropped with every
+ *   other one.
+ *
+ *   THE CONTROLS ARE OURS. React Flow's own are bare 26px buttons with no ring and no names a
+ *   tooltip could show; these are `Button`s, so they get the focus ring, the press and the
+ *   tooltip every other control has. Edges are not focus stops at all: the caption `Button`
+ *   on each wire is the control, and a second ringless stop on the hairline was noise.
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  Background, Controls, ReactFlow, useReactFlow, useStore,
+  Background, ConnectionMode, Panel, ReactFlow, useReactFlow, useStore, useStoreApi,
   MarkerType, type Edge, type Node, type NodeChange, type OnConnect, type OnNodesChange,
 } from "@xyflow/react";
+import { Maximize, Minus, Plus } from "lucide-react";
 import { isBlocking, point, predicateLabel, specFlowEdges, type GraphSpec, type Point, type SpecProblem } from "../../../core/graph-spec";
 import { autoLayout } from "@/lib/layout";
 import type { Draft, DraftAction, PaletteKind } from "@/lib/spec-draft";
 import { STEP_KINDS } from "@/lib/spec-draft";
-import { StepNode, stepSummary, type StepNodeData } from "./node-card";
+import { KIND_LABEL, StepNode, stepSummary, type StepNodeData } from "./node-card";
 import { ConditionEdge, type ConditionEdgeData } from "./edge";
+import { captionSize, placeCaptions, routeAround, sideMiddle, wireRoute, type Box, type Side } from "./routing";
+import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/empty-state";
+import { Tooltip } from "@/components/ui/tooltip";
 
 /** What the right-hand panel is showing. `null` is the graph itself. */
 export type Selection = { kind: "step"; id: string } | { kind: "edge"; index: number } | null;
@@ -60,12 +85,22 @@ export const STEP_KIND_MIME = "application/howdah-step-kind";
 const nodeTypes = { step: StepNode };
 const edgeTypes = { condition: ConditionEdge };
 
-/** The card's width is the SVG picture's box width, so one graph is one shape wherever it is
- *  drawn. The HEIGHT is not declared: an entry marker and a problem count are extra lines, and
- *  a fixed 52 would clip them — React Flow measures what it renders. */
-const NODE_WIDTH = 180;
-/** ...and its rough height, for the one thing that has to guess: centring a card on a point. */
-const NODE_HEIGHT = 64;
+/** The card's width. Wider than the read-only picture's 180px box since HOW-68: the card
+ *  prints a name, an id and a summary at 12-13px, and 180 cut all three. The PLACEMENT is
+ *  the builder's own (lib/layout.ts; the read-only picture has lib/dag-layout.ts). The HEIGHT is
+ *  not declared: a titled step has an id line the untitled one does not — React Flow measures
+ *  what it renders. */
+const NODE_WIDTH = 220;
+/** ...and its rough height, for the things that have to guess: centring a card on a point,
+ *  and framing a draft before anything has been measured. */
+const NODE_HEIGHT = 72;
+/** how much air the framed draft keeps from the pane's edge */
+const FRAME_PAD = 32;
+/** how long after a step is added the canvas keeps it in view while the pane settles (the panel opening) */
+const REVEAL_SETTLE_MS = 600;
+/** what the operator may zoom to. The DEFAULT is always 1 — see `frameOf`. */
+const MIN_ZOOM = 0.4;
+const MAX_ZOOM = 1.5;
 
 const isStepKind = (v: string): v is PaletteKind => STEP_KINDS.some((k) => k.kind === v);
 
@@ -88,36 +123,53 @@ export function specToFlow(
   // make the builder's own opinion read as a refusal on every box it has one about.
   const blocking = problems.filter(isBlocking);
   const countOf = (id: string) => blocking.filter((p) => p.node === id).length;
-  const nodes: Node[] = laid.nodes.map((n) => ({
-    id: n.id,
-    type: "step",
-    position: n.position ?? { x: 0, y: 0 },
-    width: NODE_WIDTH,
-    data: {
-      // the canvas speaks in TITLES; the id stays what the run DAG, the log and `node@visit` say
-      title: n.title?.trim() || n.id,
-      kind: n.kind,
-      summary: stepSummary(spec, n),
-      isEntry: spec.entry === n.id,
-      problems: countOf(n.id),
-      onOpen: () => open({ kind: "step", id: n.id }),
-    } satisfies StepNodeData,
-  }));
-  const leaving = new Map<string, number>();
-  for (const e of laid.edges) leaving.set(e.from, (leaving.get(e.from) ?? 0) + 1);
-  const nth = new Map<string, number>();
+  // advice IS counted on the card since HOW-68, as a neutral glyph and a number: that is not a
+  // tint and not the alarm, and it is what lets "2 worth a second look" in the bar be found on
+  // the picture. The card's `needs-input` class and the wire's flag stay about what BLOCKS.
+  const adviceOf = (id: string) => problems.filter((p) => !isBlocking(p) && p.node === id).length;
+  const nodes: Node[] = laid.nodes.map((n) => {
+    const title = n.title?.trim() || n.id;
+    return {
+      id: n.id,
+      type: "step",
+      position: n.position ?? { x: 0, y: 0 },
+      width: NODE_WIDTH,
+      ariaLabel: `Step ${title} — ${KIND_LABEL[n.kind]}. Enter selects it; the arrow keys then move it.`,
+      data: {
+        id: n.id,
+        // the canvas speaks in TITLES; the id stays what the run DAG, the log and `node@visit` say
+        title,
+        kind: n.kind,
+        summary: stepSummary(spec, n),
+        isEntry: spec.entry === n.id,
+        problems: countOf(n.id),
+        advice: adviceOf(n.id),
+        wired: [],
+        onOpen: () => open({ kind: "step", id: n.id }),
+      } satisfies StepNodeData,
+    };
+  });
+  // HOW-68: each route leaves and enters by the sides that face each other (routing.ts)
+  const routes = routeSides(laid.edges, new Map(laid.nodes.map((n) => [n.id, n.position ?? { x: 0, y: 0 }])));
+  for (const n of nodes) (n.data as StepNodeData).wired = [...(routes.wired.get(n.id) ?? [])];
+  const captions = routeCaptions(laid.edges.map((e) => (e.when ? predicateLabel(e.when) : "")), routes);
   const edges: Edge[] = laid.edges.map((e, i) => ({
     id: `e${i}`,
     source: e.from,
     target: e.to,
+    sourceHandle: routes.sides[i]!.source,
+    targetHandle: routes.sides[i]!.target,
     type: "condition",
     markerEnd: { type: MarkerType.ArrowClosed },
     data: {
       index: i,
       // the SAME label the compiled graph's Condition carries, so picture and log agree
       label: e.when ? predicateLabel(e.when) : "",
-      nth: (() => { const at = nth.get(e.from) ?? 0; nth.set(e.from, at + 1); return at; })(),
-      siblings: leaving.get(e.from) ?? 1,
+      nth: routes.nth[i]!,
+      siblings: routes.siblings[i]!,
+      others: routes.others[i]!,
+      lane: routes.lane[i]!,
+      caption: captions[i],
       flagged: blocking.some((p) => p.where === "branching" && p.node === e.from),
       onOpen: () => open({ kind: "edge", index: i }),
     } satisfies ConditionEdgeData,
@@ -136,6 +188,96 @@ export function specToFlow(
     style: { strokeDasharray: "4 3" },
   }));
   return { nodes, edges: [...edges, ...implied] };
+}
+
+/**
+ * The sides every route uses, in `spec.edges` order, for a set of card positions. One function
+ * for the draft's own positions (`specToFlow`) and for the frames of a drag (`GraphCanvas`), so
+ * a wire re-attaches as the card it belongs to is carried past its neighbour. `nth`/`siblings`
+ * count the routes leaving the SAME SIDE of the same step — the ones whose captions share a gap.
+ */
+export function routeSides(
+  edges: ReadonlyArray<{ from: string; to: string }>,
+  positions: ReadonlyMap<string, Point>,
+): RouteSides {
+  const box = (id: string): Box => ({ ...(positions.get(id) ?? { x: 0, y: 0 }), width: NODE_WIDTH, height: NODE_HEIGHT });
+  // every card that is not one of the route's own two: what its wire goes round (routing.ts)
+  const others = edges.map((e) => [...positions.keys()].filter((id) => id !== e.from && id !== e.to).map(box));
+  const sides = edges.map((e, i) =>
+    routeAround(box(e.from), box(e.to), others[i]!, { self: e.from === e.to, reverse: edges.some((o) => o.from === e.to && o.to === e.from) }));
+  // lanes down the same side of the canvas are set apart, in `spec.edges` order
+  const lanes = new Map<Side, number>();
+  const lane = edges.map((e, i) => {
+    const s = sides[i]!;
+    if (s.source !== s.target || e.from === e.to) return 0;
+    const at = lanes.get(s.source) ?? 0;
+    lanes.set(s.source, at + 1);
+    return at;
+  });
+  const group = (i: number) => `${edges[i]!.from}\u0000${sides[i]!.source}`;
+  const count = new Map<string, number>();
+  const nth = edges.map((_, i) => { const at = count.get(group(i)) ?? 0; count.set(group(i), at + 1); return at; });
+  const siblings = edges.map((_, i) => count.get(group(i)) ?? 1);
+  const wired = new Map<string, Set<Side>>();
+  const mark = (id: string, side: Side) => { let set = wired.get(id); if (!set) wired.set(id, (set = new Set())); set.add(side); };
+  edges.forEach((e, i) => { mark(e.from, sides[i]!.source); mark(e.to, sides[i]!.target); });
+  return { sides, nth, siblings, others, lane, wired, boxes: edges.map((e) => [box(e.from), box(e.to)] as [Box, Box]), cards: [...positions.keys()].map(box) };
+}
+
+export interface RouteSides {
+  sides: Array<{ source: Side; target: Side }>;
+  nth: number[];
+  siblings: number[];
+  others: Box[][];
+  lane: number[];
+  wired: Map<string, Set<Side>>;
+  /** each route's own two cards, and every card on the canvas — for placing the captions */
+  boxes: Array<[Box, Box]>;
+  cards: Box[];
+}
+
+/** one caption's height plus a hairline of air: what two routes out of one side of a step are set apart by */
+const SIBLING_STEP = 30;
+
+/**
+ * Where every route's caption goes, decided for the whole canvas at once (`placeCaptions`): on
+ * its wire's middle, moved off every card and off the captions before it. From the cards'
+ * nominal boxes, so it is a few pixels off the drawn wire's own middle on a card taller or
+ * shorter than nominal — which a caption beside a wire can afford and a caption on another cannot.
+ */
+export function routeCaptions(labels: readonly string[], routes: RouteSides): Point[] {
+  return placeCaptions(labels.map((label, i) => {
+    const s = routes.sides[i]!, [from, to] = routes.boxes[i]!;
+    const wire = wireRoute(sideMiddle(from, s.source), s.source, sideMiddle(to, s.target), s.target, [from, to, ...routes.others[i]!], routes.lane[i]!);
+    // two routes leaving one side of one step share a gap: their captions are spread around its middle
+    const spread = s.source === s.target ? 0 : (routes.nth[i]! - (routes.siblings[i]! - 1) / 2) * SIBLING_STEP;
+    return { mid: { x: wire.mid.x, y: wire.mid.y + spread }, size: captionSize(label || "Otherwise"), sideways: wire.sideways };
+  }), routes.cards);
+}
+
+/**
+ * Where the view starts for a draft that has just arrived: ALWAYS at zoom 1 (HOW-68).
+ *
+ * `fitView` answered "show all of it", and for anything taller than the pane that meant
+ * shrinking the type until it was not type (audit 3.1.11). The question worth answering is
+ * "show the start of it, readable": centred on an axis where the draft fits, and pinned to its
+ * top-left — the entry step, in every layout `autoLayout` produces — on an axis where it does
+ * not. The rest is a pan away, which is what a canvas is for.
+ *
+ * Pure, and it reasons from the SPEC's positions with the card's nominal size rather than from
+ * measured nodes: the positions are the artifact, and waiting for React Flow to measure would
+ * frame one tick late.
+ */
+export function frameOf(spec: GraphSpec, pane: { width: number; height: number }): { x: number; y: number; zoom: number } {
+  const placed = autoLayout(spec).nodes.map((n) => n.position).filter((p): p is Point => !!p);
+  if (!placed.length || !pane.width || !pane.height) return { x: FRAME_PAD, y: FRAME_PAD, zoom: 1 };
+  const left = Math.min(...placed.map((p) => p.x));
+  const top = Math.min(...placed.map((p) => p.y));
+  const width = Math.max(...placed.map((p) => p.x)) + NODE_WIDTH - left;
+  const height = Math.max(...placed.map((p) => p.y)) + NODE_HEIGHT - top;
+  const along = (start: number, size: number, room: number) =>
+    Math.round(size + FRAME_PAD * 2 <= room ? (room - size) / 2 - start : FRAME_PAD - start);
+  return { x: along(left, width, pane.width), y: along(top, height, pane.height), zoom: 1 };
 }
 
 /**
@@ -158,6 +300,31 @@ export function useCanvasCentre(): () => Point | undefined {
     // the CARD is centred, not its top-left corner
     return point({ x: at.x - NODE_WIDTH / 2, y: at.y - NODE_HEIGHT / 2 });
   }, [domNode, screenToFlowPosition]);
+}
+
+/**
+ * The viewport that brings a card wholly into view, or `null` when it already is (D21). Pure.
+ *
+ * A PAN, never a zoom and never a re-fit: the zoom the operator chose is kept and the view
+ * moves by the least that shows the card with `FRAME_PAD` around it. On an axis where the pane
+ * is too small to hold the card with its padding, the card's top-left is what is kept in view.
+ */
+export function revealShift(
+  view: { x: number; y: number; zoom: number },
+  pane: { width: number; height: number },
+  at: Point,
+): { x: number; y: number; zoom: number } | null {
+  if (!pane.width || !pane.height || !view.zoom) return null;
+  const along = (t: number, pos: number, size: number, room: number) => {
+    const start = pos * view.zoom + t;
+    const end = start + size * view.zoom;
+    if (start < FRAME_PAD || size * view.zoom + FRAME_PAD * 2 > room) return FRAME_PAD - pos * view.zoom;
+    if (end > room - FRAME_PAD) return t - (end - (room - FRAME_PAD));
+    return t;
+  };
+  const x = Math.round(along(view.x, at.x, NODE_WIDTH, pane.width));
+  const y = Math.round(along(view.y, at.y, NODE_HEIGHT, pane.height));
+  return x === Math.round(view.x) && y === Math.round(view.y) ? null : { x, y, zoom: view.zoom };
 }
 
 /**
@@ -198,16 +365,63 @@ export function GraphCanvas({ draft, dispatch, problems, selection, onSelect, on
   /** bumped when the WHOLE draft is replaced (a preset, a graph read back) — see below */
   generation: number;
 }) {
-  const { screenToFlowPosition, fitView } = useReactFlow();
-  // `fitView` as a prop only fits at mount. A preset or a load replaces every step at once, and
-  // leaving the viewport where it was shows an arrangement that is mostly off-screen. Adding
-  // ONE step deliberately does not refit: moving the view under someone mid-edit is worse than
-  // a box just outside it, and a clicked step is already placed inside the view.
-  useEffect(() => { void fitView({ maxZoom: 1, padding: 0.25 }); }, [generation, fitView]);
+  const { screenToFlowPosition, fitView, setViewport, zoomIn, zoomOut } = useReactFlow();
+  const paneWidth = useStore((s) => s.width);
+  const paneHeight = useStore((s) => s.height);
+  const zoom = useStore((s) => s.transform[2]);
+  const measured = paneWidth > 0 && paneHeight > 0;
+  // A preset or a load replaces every step at once, and leaving the viewport where it was shows
+  // an arrangement that is mostly off-screen — so each `generation` is framed once, as soon as
+  // the pane has a size. The pane changing width when the panel opens does not reframe: moving
+  // the view under someone mid-edit is worse than a box just outside it.
+  //
+  // Adding ONE step used to move nothing either, on the theory that a clicked step is placed
+  // inside the view. That theory is what put a third step on a wire in a small pane: with the
+  // view fixed, "visible" and "clear" could not both be had, and visible won. D21 overturns it,
+  // narrowly — a step that was just ADDED is placed where it is clear (lib/layout.ts
+  // `freeSpotNear`) and the canvas PANS by the least that shows it (`revealShift`). It is a
+  // pan at the zoom the operator chose, never a re-fit or a zoom, and it is instant: a step
+  // can be added from the keyboard, and nothing keyboard-triggered animates (DESIGN.md Motion).
+  const spec = useRef(draft.spec);
+  spec.current = draft.spec;
+  const frame = useCallback(
+    () => { void setViewport(frameOf(spec.current, { width: paneWidth, height: paneHeight })); },
+    [setViewport, paneWidth, paneHeight],
+  );
+  const framed = useRef(-1);
+  useEffect(() => {
+    if (!measured || framed.current === generation) return;
+    framed.current = generation;
+    frame();
+  }, [generation, measured, frame]);
   const { nodes, edges } = useMemo(
     () => specToFlow(draft.spec, problems, onSelect),
     [draft.spec, problems, onSelect],
   );
+
+  // D21: which step was just added, if exactly one was and the draft was not replaced wholesale.
+  // It stays "the one to reveal" for a moment, because adding a step also opens the panel, and
+  // below 1100px that narrows this pane a frame or two AFTER the step exists.
+  const known = useRef<{ generation: number; ids: Set<string> } | null>(null);
+  const reveal = useRef<{ id: string; until: number } | null>(null);
+  const getViewport = useStoreApi().getState;
+  useEffect(() => {
+    const ids = new Set(draft.spec.nodes.map((n) => n.id));
+    const was = known.current;
+    known.current = { generation, ids };
+    if (was && was.generation === generation && ids.size === was.ids.size + 1) {
+      const added = [...ids].filter((id) => !was.ids.has(id));
+      if (added.length === 1) reveal.current = { id: added[0]!, until: Date.now() + REVEAL_SETTLE_MS };
+    }
+    const r = reveal.current;
+    if (!r || !measured) return;
+    if (Date.now() > r.until) { reveal.current = null; return; }
+    const at = draft.spec.nodes.find((n) => n.id === r.id)?.position;
+    if (!at) return;
+    const [x, y, z] = getViewport().transform;
+    const to = revealShift({ x, y, zoom: z }, { width: paneWidth, height: paneHeight }, at);
+    if (to) void setViewport(to); // no duration: instant
+  }, [draft.spec.nodes, generation, measured, paneWidth, paneHeight, setViewport, getViewport]);
 
   // The frames of a drag, and nothing else. Keyed on `draft.spec` for the clear rather than
   // cleared inline: the overlay only drops once the draft already holds the same position, so
@@ -218,8 +432,12 @@ export function GraphCanvas({ draft, dispatch, problems, selection, onSelect, on
     (changes) => {
       const flying = applyNodeChangesToDraft(changes, dispatch);
       if (flying) setInFlight(flying);
+      // Enter or Space on a focused card is React Flow's own "select this node", and it says so
+      // with a `select` change rather than a click. Selection is the SHELL's, so it is handed
+      // over — a deselect is not: the shell decides what Escape and an empty-canvas click mean.
+      for (const c of changes) if (c.type === "select" && c.selected) onSelect({ kind: "step", id: c.id });
     },
-    [dispatch],
+    [dispatch, onSelect],
   );
 
   // selection is the SHELL's, so it survives a step being renamed or an edge being re-indexed
@@ -228,7 +446,24 @@ export function GraphCanvas({ draft, dispatch, problems, selection, onSelect, on
     selected: selection?.kind === "step" && selection.id === n.id,
     position: inFlight?.get(n.id) ?? n.position,
   }));
-  const selectedEdges = edges.map((e, i) => ({ ...e, selected: selection?.kind === "edge" && selection.index === i }));
+  // mid-drag the wires follow the card being carried: the sides are worked out again from the
+  // positions on screen, for the routes only (the implied fork/join wires have no handles)
+  const live = useMemo(() => {
+    if (!inFlight) return null;
+    const at = new Map(nodes.map((n) => [n.id, inFlight.get(n.id) ?? n.position]));
+    const routes = routeSides(draft.spec.edges, at);
+    return { ...routes, captions: routeCaptions(draft.spec.edges.map((e) => (e.when ? predicateLabel(e.when) : "")), routes) };
+  }, [inFlight, nodes, draft.spec.edges]);
+  const selectedEdges = edges.map((e, i) => {
+    const sides = live?.sides[i];
+    return {
+      ...e,
+      ...(sides && live && e.type === "condition"
+        ? { sourceHandle: sides.source, targetHandle: sides.target, data: { ...e.data, others: live.others[i], lane: live.lane[i], caption: live.captions[i] } }
+        : {}),
+      selected: selection?.kind === "edge" && selection.index === i,
+    };
+  });
 
   const onConnect = useCallback<OnConnect>(
     (c) => {
@@ -240,9 +475,13 @@ export function GraphCanvas({ draft, dispatch, problems, selection, onSelect, on
     [dispatch, onSelect, draft.spec.edges.length],
   );
 
+  // while a wire is being drawn every card shows where it can land (howdah.css `.gb-handle`)
+  const [connecting, setConnecting] = useState(false);
+
   return (
     <div
       className="gb-canvas"
+      data-connecting={connecting || undefined}
       onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; }}
       onDrop={(e) => {
         const kind = e.dataTransfer.getData(STEP_KIND_MIME);
@@ -263,6 +502,12 @@ export function GraphCanvas({ draft, dispatch, problems, selection, onSelect, on
         onEdgeClick={(_, e) => onSelect({ kind: "edge", index: (e.data as ConditionEdgeData).index })}
         onPaneClick={() => onSelect(null)}
         onConnect={onConnect}
+        // every dot on a card is a `source` handle (node-card.tsx), so a wire may start at any
+        // side and end on any side of another card; `onConnect` still reads source → target as
+        // "the card the drag started on → the card it was dropped on"
+        connectionMode={ConnectionMode.Loose}
+        onConnectStart={() => setConnecting(true)}
+        onConnectEnd={() => setConnecting(false)}
         onNodesChange={onNodesChange}
         // the panel follows what you just took hold of, which is what a click already does —
         // and `moveSelectedNodes` only moves a SELECTED node, so without this "drag a card,
@@ -277,16 +522,55 @@ export function GraphCanvas({ draft, dispatch, problems, selection, onSelect, on
         // DESCENDING index, because an edge is addressed by its index in `spec.edges` and
         // removing one renumbers the rest.
         deleteKeyCode={null}
-        fitView
-        // a two-step graph fitted to a wide pane would otherwise zoom to 2x, which is the
-        // default ceiling and reads as a mistake rather than as a fit
-        fitViewOptions={{ maxZoom: 1, padding: 0.25 }}
+        // zoom 1 until `frame()` has a pane to measure: never a fitted, shrunken first paint
+        defaultViewport={{ x: FRAME_PAD, y: FRAME_PAD, zoom: 1 }}
+        minZoom={MIN_ZOOM}
+        maxZoom={MAX_ZOOM}
+        // the caption Button on each wire is the control; the hairline is not a second stop
+        edgesFocusable={false}
+        // what a screen reader is told about a card. React Flow's default promises "press
+        // delete to remove it", which this canvas deliberately does not do.
+        ariaLabelConfig={{
+          // React Flow's two keys are named the wrong way round: `keyboardDisabled` is the one
+          // it reads while the keyboard IS enabled, which it always is here
+          "node.a11yDescription.keyboardDisabled": "Press Enter or Space to select this step, then the arrow keys to move it. Its Edit button opens it in the panel.",
+          "node.a11yDescription.default": "Press Enter or Space to select this step. Its Edit button opens it in the panel.",
+          "edge.a11yDescription.default": "Each route has a button on its wire that opens it in the panel.",
+        }}
+        // its 10px "React Flow" link is under the type floor and one more focus stop on every
+        // pass through the canvas; the library is credited in CLAUDE.md and package.json
+        proOptions={{ hideAttribution: true }}
         aria-label={`${draft.spec.name || "untitled"} — ${nodes.length} steps`}
       >
         <Background />
+        {nodes.length === 0 && (
+          <Panel position="top-center" className="gb-canvas-empty">
+            <EmptyState title="No steps yet">
+              Drag a kind of step from the palette onto the canvas, or press one to drop it in
+              the middle. A run needs a step to start at and a Finish step to end on.
+            </EmptyState>
+          </Panel>
+        )}
         {/* no minimap: the graphs this builds are five to ten steps, so one would cover a
             corner of the thing it is a map of, and pan/zoom already reaches everything */}
-        <Controls showInteractive={false} />
+        <Panel position="bottom-left" className="nodrag nopan flex items-center gap-1 rounded-[var(--radius)] border border-border bg-card p-1">
+          <Tooltip content="Zoom out" side="top">
+            <Button variant="ghost" size="icon-sm" aria-label="Zoom out" disabled={zoom <= MIN_ZOOM} onClick={() => void zoomOut()}><Minus /></Button>
+          </Tooltip>
+          <Tooltip content="Back to 100%, at the start of the graph" side="top">
+            <Button variant="ghost" size="sm" className="h-6 min-w-12 px-1.5 text-xs tabular-nums" aria-label={`Zoom ${Math.round(zoom * 100)}% — back to 100%`} onClick={frame}>
+              {Math.round(zoom * 100)}%
+            </Button>
+          </Tooltip>
+          <Tooltip content="Zoom in" side="top">
+            <Button variant="ghost" size="icon-sm" aria-label="Zoom in" disabled={zoom >= MAX_ZOOM} onClick={() => void zoomIn()}><Plus /></Button>
+          </Tooltip>
+          <Tooltip content="Show the whole graph" side="top">
+            <Button variant="ghost" size="icon-sm" aria-label="Show the whole graph" // in pixels, not a share of the pane: a route that goes round a card runs in a lane
+              // beside the cards, with its caption on it, and "the whole graph" includes those
+              onClick={() => void fitView({ maxZoom: 1, minZoom: MIN_ZOOM, padding: "96px" })}><Maximize /></Button>
+          </Tooltip>
+        </Panel>
       </ReactFlow>
     </div>
   );

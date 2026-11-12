@@ -22,6 +22,19 @@
  * contract `web/app/lib/utils.ts` exists to keep. The two merge helpers are the same idea
  * (`cn` is a zero-dependency clsx+tailwind-merge); consolidating the twenty older primitives
  * onto it belongs with the rest of the base-vega migration, not with this file.
+ *
+ * HOW-68 deviations, all three because DESIGN.md says so and each on the line it changes:
+ *   - the root no longer sets `overflow-hidden`. It existed only to clip the inactive scroll
+ *     pin, which the registry parks one button-height below the box; "overflow: hidden is for
+ *     clipping corners, never for layout", and the viewport is this pane's ONE scroller.
+ *   - so the inactive pin no longer travels out of the box, and it does not animate at all:
+ *     it is there or it is not. It first faded and scaled in place over 150ms, and that
+ *     entrance played every time the Build tab was switched to with a number key and every
+ *     time `⌘I` resized the pane — "nothing keyboard-triggered animates", and a control that
+ *     comes and goes with every scroll is the high-frequency case DESIGN.md names besides.
+ *     (The registry's own exit was 400ms on an ease-IN curve.)
+ *   - the viewport does not set `scrollbar-width` / `scrollbar-color`; tokens.css themes every
+ *     scrollbar once.
  */
 "use client"
 
@@ -51,7 +64,7 @@ function MessageScroller({
     <MessageScrollerPrimitive.Root
       data-slot="message-scroller"
       className={cn(
-        "group/message-scroller relative flex size-full min-h-0 flex-col overflow-hidden",
+        "group/message-scroller relative flex size-full min-h-0 flex-col",
         className
       )}
       {...props}
@@ -72,14 +85,17 @@ function MessageScrollerViewport({
         // button below is not core Tailwind either. Verified against the real bundle rather
         // than assumed: `scroll-fade-b` and the `data-*` variants DO generate, those do not —
         // and an ungenerated utility is a class with no rule, which is the exact defect
-        // css-contract.test.ts exists to catch. So they are spelled as the arbitrary
-        // properties they stand for, which Tailwind generates from any source.
-        // `scroll-fade-y`, not the registry's `scroll-fade-b`: howdah renders BOTH pins (HOW-27),
-        // and a pin floats over the transcript. With a fade on one edge only, the Top pin sat on
-        // top of a row of live text with nothing softening it. The fade is edge-aware — it only
-        // appears on a side there is more content to reach — so a short transcript still shows
-        // neither pin and neither fade.
-        "size-full min-h-0 min-w-0 scroll-fade-y [scrollbar-width:thin] [scrollbar-gutter:stable] overflow-y-auto overscroll-contain contain-content data-autoscrolling:[scrollbar-color:transparent_transparent] data-pending-scroll:invisible",
+        // css-contract.test.ts exists to catch. `scrollbar-gutter` is spelled as the arbitrary
+        // property it stands for; the thumb's width and colour are tokens.css's (HOW-68).
+        // NO EDGE FADE (HOW-68 D26; a third documented deviation from the registry file). The
+        // registry's `scroll-fade-b` — `scroll-fade-y` here, since howdah renders both pins — is
+        // a mask whose stops are ANIMATED on a scroll timeline (`animation-timeline: scroll()`,
+        // vendor/shadcn-tailwind.css). DESIGN.md Motion: "only transform and opacity animate",
+        // and a mask-image re-rasterised on every scroll frame of the app's longest list is
+        // exactly what that rule is for. A STATIC mask is not an option either: it cannot know
+        // which edge has more to reach, so it would fade the first line of a transcript that is
+        // at its top. The pins are opaque buttons with a border; they do not need softening.
+        "size-full min-h-0 min-w-0 [scrollbar-gutter:stable] overflow-y-auto overscroll-contain contain-content data-pending-scroll:invisible",
         className
       )}
       {...props}
@@ -142,7 +158,7 @@ function MessageScrollerButton({
       data-size={size}
       direction={direction}
       className={cn(
-        "absolute start-1/2 -translate-x-1/2 border-border bg-background text-foreground transition-[translate,scale,opacity] duration-200 hover:bg-muted hover:text-foreground data-[active=false]:pointer-events-none data-[active=false]:scale-95 data-[active=false]:opacity-0 data-[active=false]:duration-400 data-[active=false]:ease-[cubic-bezier(0.7,0,0.84,0)] data-[active=true]:translate-y-0 data-[active=true]:scale-100 data-[active=true]:opacity-100 data-[active=true]:ease-[cubic-bezier(0.23,1,0.32,1)] data-[direction=end]:bottom-4 data-[direction=end]:data-[active=false]:translate-y-full data-[direction=start]:top-4 data-[direction=start]:data-[active=false]:-translate-y-full rtl:translate-x-1/2 data-[direction=start]:[&_svg]:rotate-180",
+        "absolute start-1/2 -translate-x-1/2 border-border bg-background text-foreground hover:bg-muted hover:text-foreground data-[active=false]:pointer-events-none data-[active=false]:opacity-0 data-[active=true]:opacity-100 data-[direction=end]:bottom-3 data-[direction=start]:top-3 rtl:translate-x-1/2 data-[direction=start]:[&_svg]:rotate-180",
         className
       )}
       render={render ?? <Button variant={variant} size={size} />}

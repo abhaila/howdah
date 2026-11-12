@@ -23,6 +23,8 @@
  */
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { howdahHome, loadConfig } from "../config/config";
+import { readPresence, viewerDelivers, viewerMissedIt, type ViewerPresence } from "./viewer-presence";
 
 export interface AttentionRecord {
   id: string; // `${run}:${node}:${visit}`
@@ -34,6 +36,13 @@ export interface AttentionRecord {
   deep_link: string;
   /** stamped after a notifier successfully fired; absent = never delivered */
   notified_at?: string;
+  /**
+   * `viewer` when the OS banner was skipped because an open viewer announces the ask itself
+   * (HOW-68 D18, engine/viewer-presence.ts). It still counts as notified — the browser's
+   * notification is the delivery — but `reRaise` re-opens it the moment the viewer is shown
+   * not to have been there, so the watchdog rings through the OS path after all.
+   */
+  notified_via?: "viewer";
 }
 
 export interface Notification {
@@ -42,7 +51,14 @@ export interface Notification {
   link: string;
 }
 
-export type Notifier = (n: Notification) => Promise<void>;
+/**
+ * A notifier delivers, or says it LEFT the delivery to the open viewer (`"viewer"`). Anything
+ * else it cannot do is a throw, which leaves the record undelivered for the watchdog.
+ */
+/** where the viewer lives when nothing at all says otherwise — the base of every deep link */
+export const DEFAULT_VIEWER_BASE = "http://localhost:4711";
+
+export type Notifier = (n: Notification) => Promise<void | "viewer">;
 
 /**
  * The macOS ring. A notification whose whole point is its deep link must be CLICKABLE
@@ -55,20 +71,92 @@ export type Notifier = (n: Notification) => Promise<void>;
  * the reader can get there by hand. Either way the escaping guard stays — a reason with a
  * quote in it must not break the AppleScript (or the argv).
  */
-export function notifierArgv(n: Notification, deliverer: string | null): string[] {
+export function notifierArgv(n: Notification, deliverer: string | null, sound = false): string[] {
   const esc = (s: string) => s.replace(/["\\]/g, "");
   if (deliverer)
-    return [deliverer, "-title", esc(n.title), "-message", esc(n.body), "-open", n.link, "-sound", "Glass"];
+    return [deliverer, "-title", esc(n.title), "-message", esc(n.body), "-open", n.link, ...(sound ? ["-sound", OS_SOUND] : [])];
   return [
     "osascript",
     "-e",
-    `display notification "${esc(`${n.body} — ${n.link}`)}" with title "${esc(n.title)}" sound name "Glass"`,
+    `display notification "${esc(`${n.body} — ${n.link}`)}" with title "${esc(n.title)}"${sound ? ` sound name "${OS_SOUND}"` : ""}`,
   ];
 }
 
-export const osNotifier: Notifier = async (n) => {
-  Bun.spawnSync(notifierArgv(n, Bun.which("terminal-notifier")));
-};
+/**
+ * The one system sound the OS path may play, and only when the operator turned sound on
+ * (D19). "Tink" is macOS's shortest and softest; "Glass" was a second, louder jingle beside
+ * the viewer's own.
+ */
+export const OS_SOUND = "Tink";
+
+/** what makes the OS banner clickable, and the one line that installs it — doctor and Settings say the same */
+export const CLICKABLE_NOTIFIER = "terminal-notifier";
+export const CLICKABLE_NOTIFIER_FIX = "brew install terminal-notifier";
+
+export interface NotifierStatus {
+  /** `terminal-notifier` is on PATH: the banner is Howdah's and opens the ask when clicked */
+  clickable: boolean;
+  /** the deliverer's path, or null when the banner falls back to `osascript` */
+  path: string | null;
+  /** one sentence saying which banner the operator gets */
+  detail: string;
+  /** the command that fixes it; absent when there is nothing to fix */
+  fix?: string;
+}
+
+/** Pure over `which`, so doctor, the settings route and their tests share one sentence. */
+export function notifierStatus(which: (bin: string) => string | null = (b) => Bun.which(b)): NotifierStatus {
+  const path = which(CLICKABLE_NOTIFIER);
+  return path
+    ? { clickable: true, path, detail: `${CLICKABLE_NOTIFIER} — with no viewer open, the banner opens the ask when clicked` }
+    : {
+        clickable: false,
+        path: null,
+        detail: `${CLICKABLE_NOTIFIER} is not installed — with no viewer open, the banner arrives as “Script Editor” and cannot be clicked`,
+        fix: CLICKABLE_NOTIFIER_FIX,
+      };
+}
+
+/**
+ * Where the viewer lives, for a process that was not told (the CLI, the watchdog, an
+ * executor): `HOWDAH_PORT` if this process has it, else where a viewer last said it was
+ * (viewer.json — launchd's watchdog has no HOWDAH_PORT), else the default. Deep links used to
+ * say :4711 whatever port the viewer was actually on.
+ */
+export function resolveViewerBase(home: string, env: Record<string, string | undefined> = process.env, presence: ViewerPresence | null = readPresence(home)): string {
+  const port = Number(env.HOWDAH_PORT);
+  if (env.HOWDAH_PORT && Number.isInteger(port) && port > 0) return `http://localhost:${port}`;
+  if (presence?.base && /^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(presence.base)) return presence.base;
+  return DEFAULT_VIEWER_BASE;
+}
+
+
+/**
+ * Silent unless the operator asked for sound (HOW-68): the banner is the notification, and
+ * the same `chime` setting that governs the viewer's sound governs this one, so "off" means
+ * off everywhere. An unreadable config is silence, never a reason not to deliver the banner.
+ *
+ * D18: and it does not ring at all while an open viewer will announce the ask itself — see
+ * engine/viewer-presence.ts. It returns `"viewer"` then, so the record can say who was trusted
+ * with the delivery. `spawn` is injectable so the decision is testable without a banner.
+ */
+export function makeOsNotifier(opts: {
+  home?: string;
+  clock?: () => Date;
+  spawn?: (argv: string[]) => void;
+  which?: (bin: string) => string | null;
+} = {}): Notifier {
+  return async (n) => {
+    const home = opts.home ?? howdahHome();
+    if (viewerDelivers(readPresence(home), opts.clock?.() ?? new Date())) return "viewer";
+    let sound = false;
+    try { sound = loadConfig(home).chime === true; } catch { /* deliver silently */ }
+    const argv = notifierArgv(n, (opts.which ?? ((b: string) => Bun.which(b)))(CLICKABLE_NOTIFIER), sound);
+    (opts.spawn ?? ((a: string[]) => void Bun.spawnSync(a)))(argv);
+  };
+}
+
+export const osNotifier: Notifier = makeOsNotifier();
 
 export const slackNotifier = (webhookUrl: string): Notifier => async (n) => {
   await fetch(webhookUrl, {
@@ -94,8 +182,6 @@ export function formatWait(sinceIso: string, now: Date): string {
  */
 export const NOTIFY_COOLDOWN_MS = 10 * 60_000;
 
-/** where the viewer lives when nobody says otherwise — the base of every deep link */
-export const DEFAULT_VIEWER_BASE = "http://localhost:4711";
 
 /**
  * Nodes that name the HARNESS itself rather than a node of some run — `howdah:__harness__:1`,
@@ -114,7 +200,13 @@ export class AttentionCenter {
   constructor(
     readonly dir: string,
     private readonly notifiers: Notifier[],
-    private readonly opts: { viewerBase?: string; clock?: () => Date; notifyCooldownMs?: number } = {},
+    private readonly opts: {
+      viewerBase?: string;
+      clock?: () => Date;
+      notifyCooldownMs?: number;
+      /** the viewer's presence, for `reRaise`; default: viewer.json beside the attention dir */
+      presence?: () => ViewerPresence | null;
+    } = {},
   ) {
     mkdirSync(dir, { recursive: true });
   }
@@ -124,7 +216,12 @@ export class AttentionCenter {
   }
 
   private viewerBase(): string {
-    return this.opts.viewerBase ?? DEFAULT_VIEWER_BASE;
+    // the attention dir is `$HOWDAH_HOME/attention`, so its parent is the home viewer.json is in
+    return this.opts.viewerBase ?? resolveViewerBase(dirname(this.dir));
+  }
+
+  private presence(): ViewerPresence | null {
+    return this.opts.presence ? this.opts.presence() : readPresence(dirname(this.dir));
   }
 
   private path(id: string): string {
@@ -150,6 +247,7 @@ export class AttentionCenter {
         ? `${this.viewerBase()}/attention` // no /run/howdah exists to land on; see RUNLESS_NODES
         : `${this.viewerBase()}/run/${input.run}#needs-input`,
       ...(prior?.notified_at ? { notified_at: prior.notified_at } : {}),
+      ...(prior?.notified_via ? { notified_via: prior.notified_via } : {}),
     };
     writeFileSync(this.path(id), JSON.stringify(record, null, 2));
     const cooldown = this.opts.notifyCooldownMs ?? NOTIFY_COOLDOWN_MS;
@@ -186,12 +284,17 @@ export class AttentionCenter {
           body: list.map((r) => `${one(r)} · ${formatWait(r.raised_at, this.now())}`).join(", "),
           link: `${this.viewerBase()}/attention`,
         };
-    for (const fire of this.notifiers) await fire(n);
+    let deferred = false;
+    for (const fire of this.notifiers) if ((await fire(n)) === "viewer") deferred = true;
     // stamped only after every notifier returned: a throw above leaves the records
-    // undelivered on disk, which is what makes the watchdog deliver them later
+    // undelivered on disk, which is what makes the watchdog deliver them later.
+    // A banner LEFT TO THE VIEWER counts as notified (D18) — the browser's notification is the
+    // delivery — and says so, which is what lets reRaise take it back if nobody was there.
     const at = this.now().toISOString();
     for (const r of list) {
       r.notified_at = at;
+      if (deferred) r.notified_via = "viewer";
+      else delete r.notified_via;
       writeFileSync(this.path(r.id), JSON.stringify(r, null, 2));
     }
   }
@@ -240,7 +343,10 @@ export class AttentionCenter {
         this.resolve(r.id);
         continue;
       }
-      if (!r.notified_at || now - new Date(r.notified_at).getTime() >= reNotifyAfterMs) due.push(r);
+      // D18: a ring left to a viewer that then never beat again was delivered by nobody. It is
+      // due NOW, and by then the presence is stale, so the notifier rings through the OS path.
+      const missed = r.notified_via === "viewer" && !!r.notified_at && viewerMissedIt(this.presence(), r.notified_at, this.now());
+      if (!r.notified_at || missed || now - new Date(r.notified_at).getTime() >= reNotifyAfterMs) due.push(r);
     }
     return due;
   }

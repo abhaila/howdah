@@ -9,23 +9,42 @@
  * The caption is a `Button`, not a `<text>`: a wire is a hairline and a hairline is not a
  * click target, and a route has to be reachable without a mouse at all (D7). Pressing it
  * selects the route, which is what opens its condition in the panel.
+ *
+ * HOW-68: the caption is a 28px control with 13px text (it was 10px on a 24px box), and the
+ * two kinds of route no longer look alike. A CONDITION is machine text — the expression the
+ * log prints — so it is mono in a solid box. "Otherwise" is a word, so it is sans in a dashed
+ * box: told apart by face and by outline, not by colour. The selected route is ringed in the
+ * accent, as the selected card is, rather than painted as a second primary button.
+ *
+ * WHERE the wire attaches and where the caption sits are `routing.ts`'s: sides chosen from the
+ * two cards' positions, and a caption that is moved off any card it would cover.
  */
-import { BaseEdge, EdgeLabelRenderer, getBezierPath, type EdgeProps } from "@xyflow/react";
+import { BaseEdge, EdgeLabelRenderer, Position, type EdgeProps } from "@xyflow/react";
 import { Button } from "@/components/ui/button";
+import { captionPoint, captionSize, cardFromHandle, wireRoute, type Box, type Side } from "./routing";
 
-/** half a card's width plus a gap: far enough left of the column to clear every box in it */
-const BACK_EDGE_OFFSET = 140;
-/** one caption's height, so two routes out of one step stack instead of printing on each other */
-const SIBLING_STEP = 24;
+/** one caption's height plus a hairline of air, so two routes out of one side of a step stack
+ *  instead of printing on each other */
+const SIBLING_STEP = 30;
+/** the card, for keeping a caption off it: its width, and a height no card exceeds */
+const CARD = { width: 220, height: 76 };
+const SIDE_OF: Record<Position, Side> = { [Position.Top]: "top", [Position.Right]: "right", [Position.Bottom]: "bottom", [Position.Left]: "left" };
 
 export interface ConditionEdgeData extends Record<string, unknown> {
   /** the index in `spec.edges` — an edge's only identity (D5) */
   index: number;
   label: string;
-  /** where this route sits among the routes leaving the SAME step, and how many there are —
-   *  two captions at one point is one unreadable smudge, so they are stacked */
+  /** where this route sits among the routes leaving the SAME SIDE of the same step, and how
+   *  many there are — two captions at one point is one unreadable smudge, so they are stacked */
   nth: number;
   siblings: number;
+  /** every OTHER card on the canvas: what the wire goes round and its caption stays off */
+  others?: readonly Box[];
+  /** which lane this is among the routes that run down the same side (see routing.ts) */
+  lane?: number;
+  /** where the caption goes, decided for the whole canvas so no two captions share a spot
+   *  (canvas.tsx `routeCaptions`); absent, it is worked out from this wire alone */
+  caption?: { x: number; y: number };
   /** whether the step this leaves has a branching problem, so the wire can say so */
   flagged: boolean;
   onOpen: () => void;
@@ -33,14 +52,27 @@ export interface ConditionEdgeData extends Record<string, unknown> {
 
 export function ConditionEdge(props: EdgeProps & { data?: ConditionEdgeData }) {
   const { sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, markerEnd, selected, data } = props;
-  const [path, midX, labelY] = getBezierPath({ sourceX, sourceY, sourcePosition, targetX, targetY, targetPosition });
-  // A LOOP BACK UP SHARES ITS GAP WITH THE ROUTE THAT CAME DOWN, and two captions at the same
-  // point are one unreadable smudge. The read-only picture curves a back edge around the LEFT
-  // of the column (graph-dag.tsx); this says the same thing with the caption alone.
-  const labelX = targetY < sourceY ? Math.min(sourceX, targetX) - BACK_EDGE_OFFSET : midX;
-  // ...and two routes leaving one step share the same gap, so their captions are spread around
-  // the midpoint rather than stacked on it
+  // Two routes leaving one side of one step share a gap, so their captions are spread around
+  // the midpoint rather than stacked on it...
   const spread = data ? (data.nth - (data.siblings - 1) / 2) * SIBLING_STEP : 0;
+  // ...and THE CAPTION NEVER SITS ON A CARD (HOW-68). The wire's sides are chosen from where
+  // the two cards are (routing.ts), so its midpoint is normally in the gap between them; when
+  // the caption is wider than that gap it moves across the wire until it is clear of both. The
+  // cards are rebuilt from the handles React Flow gives this edge, so it holds mid-drag too.
+  const from = SIDE_OF[sourcePosition], to = SIDE_OF[targetPosition];
+  const own = [cardFromHandle({ x: sourceX, y: sourceY }, from, CARD.width, CARD.height), cardFromHandle({ x: targetX, y: targetY }, to, CARD.width, CARD.height)];
+  const others = data?.others ?? [];
+  // the wire itself: a curve between facing sides, a lane round whatever stands between when
+  // routing.ts chose the same side for both ends — and never through a third card
+  const wire = wireRoute({ x: sourceX, y: sourceY }, from, { x: targetX, y: targetY }, to, [...own, ...others], data?.lane ?? 0);
+  const path = wire.path;
+  const at = data?.caption ?? captionPoint(
+    { x: wire.mid.x, y: wire.mid.y + (from === to ? 0 : spread) },
+    captionSize(data?.label || "Otherwise"),
+    [...own, ...others],
+    wire.sideways,
+  );
+  const conditional = !!data?.label;
   return (
     <>
       <BaseEdge id={props.id} path={path} markerEnd={markerEnd} className={`gb-edge ${data?.flagged ? "needs-input" : ""}`} />
@@ -49,14 +81,20 @@ export function ConditionEdge(props: EdgeProps & { data?: ConditionEdgeData }) {
           className="gb-edge-label nodrag nopan"
           // the only way to put a DOM label at a point on an SVG path: the renderer is one
           // absolutely-positioned layer, and each label says where in it it goes
-          style={{ transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY + spread}px)` }}
+          // ...and how high: above the cards, because on a hand-arranged graph a card can sit on a
+          // wire's midpoint and a control under a card cannot be pressed — but under the SELECTED
+          // card (React Flow lifts that to 1000), which is the thing being worked on, unless this
+          // route is itself what is selected
+          style={{ transform: `translate(-50%, -50%) translate(${at.x}px, ${at.y}px)`, zIndex: selected ? 1001 : 1 }}
         >
           <Button
-            variant={selected ? "default" : "outline"} size="sm"
+            variant="outline" size="sm"
+            className={`${conditional ? "font-mono font-normal" : "border-dashed font-normal text-muted-foreground"} ${selected ? "gb-edge-on" : ""}`}
             aria-label={`Route ${data?.label || "otherwise"} — edit it`}
+            aria-pressed={selected ?? false}
             onClick={data?.onOpen}
           >
-            {data?.label || "otherwise"}
+            {data?.label || "Otherwise"}
           </Button>
         </div>
       </EdgeLabelRenderer>

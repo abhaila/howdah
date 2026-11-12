@@ -1,212 +1,157 @@
 /*
- * Howdah tokens — the single token source (T25, direction A+B).
+ * Howdah tokens — the single token source. DESIGN.md decides; this file holds the values.
  *
- * DARK IS THE DESIGN TARGET. Light still exists and still follows the system, but every
- * value here was chosen against the near-black ground: this is an instrument you keep open
- * beside an IDE, not a document.
+ * HOW-68 replaced the palette, the faces and the scale (docs/designs/design-overhaul.md):
  *
- * The one rule the whole palette exists to serve:
+ *   INDIGO. Blue-tinted neutrals with one accent, indigo, for the things you press and the
+ *   place you are: primary buttons, the selected tab, focus, a running step. LIGHT AND DARK
+ *   ARE EQUALS — every colour is one `light-dark()` pair, so a token cannot exist in one
+ *   theme and be forgotten in the other, which is how the old light theme drifted.
  *
- *   COLOUR IS THE ALARM, NOT A TAXONOMY.
+ *   AMBER IS STILL THE ALARM, and it is said once. `--attention` means exactly one thing: a
+ *   run is waiting on you. The accent is deliberately a cool hue so it can never be mistaken
+ *   for it. `--status-done` stays neutral: done is the boring case.
  *
- * `--attention` is the only saturated colour in the system and it means exactly one thing:
- * an agent is waiting for you (R3.3). Everything else is greyscale, which is what makes the
- * amber unmissable. `--status-done` is DELIBERATELY neutral — done is the boring case, and
- * a list lit up with green "success" is a list where the one waiting row stops winning.
- * Status is carried by glyph SHAPE first (check / cross / triangle / half-circle) so it
- * survives colour-blindness and greyscale; hue is the second channel, never the only one.
+ *   Every text token clears 4.5:1 on every ground it is used on, in both themes. That is not
+ *   a comment, it is `web/app/tokens.test.ts` — the old faint text was 3.06:1 on 93 screens.
  *
- * Token names are load-bearing: howdah.css and the React app consume them by name. Change a
+ * Token NAMES are load-bearing: howdah.css and the React app consume them by name. Change a
  * value here, never a name, unless you are prepared to update every consumer.
  *
- * Type: Instrument Sans (UI + prose, real weights so hierarchy can come from weight) +
- * JetBrains Mono (ids, durations, costs, diffs — anything machine-shaped).
- * The previous display face shipped a single weight, which is why nothing on screen could
- * lead; see DESIGN.md.
+ * Type: DM Sans for everything read, DM Mono for what you would paste (ids, paths, commands,
+ * code). Both are bundled under /fonts — no network request, so it reads the same offline.
  */
 
+@font-face { font-family: "DM Sans"; font-style: normal; font-weight: 100 1000; font-display: swap; src: url("/fonts/dm-sans.woff2") format("woff2"); }
+@font-face { font-family: "DM Sans"; font-style: italic; font-weight: 100 1000; font-display: swap; src: url("/fonts/dm-sans-italic.woff2") format("woff2"); }
+@font-face { font-family: "DM Mono"; font-style: normal; font-weight: 400; font-display: swap; src: url("/fonts/dm-mono-400.woff2") format("woff2"); }
+@font-face { font-family: "DM Mono"; font-style: normal; font-weight: 500; font-display: swap; src: url("/fonts/dm-mono-500.woff2") format("woff2"); }
+
 :root {
+  /* follows the system until the toggle says otherwise (the two rules below) */
+  color-scheme: light dark;
+
   /* type */
-  --font-display: "Instrument Sans", "Helvetica Neue", Arial, sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --font-display: "DM Sans", "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "DM Mono", ui-monospace, "SF Mono", Menlo, monospace;
 
   /*
-   * The type scale — the one place a font size is decided (HOW-16 P3.12). Before this the
-   * app carried 88 hardcoded `font-size: Npx` across eight sizes, plus `text-[13px]` in the
-   * component layer, so "make the ids one step smaller" meant 88 edits and a judgement call
-   * at each one. The ladder is deliberately the sizes the app already used, to a pixel:
-   * this is a token pass, not a redesign (tokens.css and DESIGN.md decide the visual
-   * language). `--type-code` and `--type-body` are the two half-pixel readings the UI was
-   * already tuned to; they keep the ladder honest instead of rounding the app under itself.
+   * The type scale: SIX sizes, and nothing below 12px. The token names are the ten the app
+   * grew up with (HOW-16 P3.12), kept so no consumer has to change; several now share a
+   * value on purpose. Ten sizes between 9 and 17px, three of them half a pixel from a
+   * neighbour, read as noise rather than hierarchy, and 87% of the text sat at 12px or less.
+   * Hierarchy comes from weight and from these few steps.
    *
    * globals.css re-exports these into Tailwind's `--text-*` namespace, so `text-base` in a
-   * component and `var(--type-base)` in howdah.css are the SAME number — the two systems
-   * this sweep collapsed cannot drift apart again.
+   * component and `var(--type-base)` in howdah.css are the SAME number.
    */
-  --type-3xs: 9px;    /* dag edge labels — the smallest thing that is still a word */
-  --type-2xs: 10px;   /* timestamps, visit suffixes, counts */
-  --type-xs: 11px;    /* labels, badges, section headings */
-  --type-code: 11.5px;/* dense machine text: log summaries, tool output */
-  --type-sm: 12px;    /* secondary prose and metadata */
+  --type-3xs: 12px;   /* the floor */
+  --type-2xs: 12px;
+  --type-xs: 12px;    /* timestamps, counts, labels */
+  --type-code: 12px;  /* dense machine text: ids, paths, tool output */
+  --type-sm: 13px;    /* rows, secondary prose */
   --type-base: 13px;  /* controls: buttons, inputs, tabs */
-  --type-body: 13.5px;/* body copy */
-  --type-md: 14px;    /* card titles, prose in the thread */
-  --type-lg: 16px;    /* screen headings */
-  --type-xl: 17px;    /* the prompt/proposal detail heading */
+  --type-body: 14px;  /* body copy */
+  --type-md: 14px;    /* card titles, prose in the transcript */
+  --type-lg: 16px;    /* run name, screen heading */
+  --type-xl: 20px;    /* section heading */
+  --type-2xl: 28px;   /* page title (rare) */
 
-  /* ---- dark: the design target ---------------------------------------------------- */
-  --bg: #0B0C0D;
-  --bg-raised: #141517;
-  --bg-inset: #1B1D1F;
-  --fg: #E8E6E1;          /* warm off-white; a cold white reads as "web app" */
-  --fg-muted: #9A9892;
-  --fg-faint: #605F5B;
-  --border: #232527;      /* hairline — rows are separated, never boxed */
-  --border-strong: #303336;
+  /* ground and ink */
+  --bg: light-dark(#F5F6FA, #0D0E14);
+  --bg-raised: light-dark(#FFFFFF, #15161F);
+  --bg-inset: light-dark(#E8EAF3, #1D1F2B);
+  --fg: light-dark(#171927, #E7E8F2);
+  --fg-muted: light-dark(#4C5069, #A2A6C0);
+  --fg-faint: light-dark(#5E6285, #8589A6);
+  /* a DISABLED control's label: exempt from 4.5:1, but it still has to be READABLE — the old
+     50% opacity measured 2.3–2.8:1. At least 3:1 on every ground and under 4.5:1 on purpose,
+     so it cannot be taken for live text (tokens.test.ts pins both ends). */
+  --fg-disabled: light-dark(#7C8098, #6E728E);
+  --border: light-dark(#D9DCEA, #262838);
+  --border-strong: light-dark(#BBC0D8, #393C52);
 
-  /* primary is INK, not a hue: buttons are foreground-on-ground, so the amber stays free */
-  --primary: #E8E6E1;
-  --primary-hover: #FFFFFF;
-  --primary-fg: #0B0C0D;
-  --ring: #7FA0A8;        /* focus is visible without borrowing the alarm */
+  /* the accent: what you press, and where you are */
+  --primary: light-dark(#4347C9, #A5A8FF);
+  --primary-hover: light-dark(#3438B0, #BCBEFF);
+  --primary-fg: light-dark(#FFFFFF, #0D0E14);
+  --ring: light-dark(#4347C9, #A5A8FF);
 
-  /* attention — the only saturated colour in the system */
-  --attention: #F2A93B;
-  --attention-fg: #FFD79A;
-  --attention-bg: rgba(242, 169, 59, 0.10);
-  --attention-border: #F2A93B;
+  /* attention — a run is waiting on you. Nothing else may use it. */
+  --attention: light-dark(#8A5A00, #F2A93B);       /* glyphs, text and fills */
+  --attention-fg: light-dark(#7A4E00, #F6C570);    /* text on --attention-bg */
+  --attention-bg: light-dark(#FBF1DC, #2A2112);
+  --attention-border: light-dark(#D9A441, #8F6A24);
 
   /* status (one renderer; shape carries meaning first) */
-  --status-queued: #605F5B;
-  --status-running: #7FA0A8;          /* quiet slate-cyan: activity, not alarm */
+  --status-queued: light-dark(#5E6285, #8589A6);
+  --status-running: light-dark(#4347C9, #A5A8FF);
   --status-needs-input: var(--attention);
-  --status-waiting: #6B7A80;
-  --status-failed-recoverable: #D9553F;
-  --status-failed-terminal: #A33322;
-  --status-done: #9A9892;             /* no hue on purpose — done is the boring case */
-  --status-harness-dead: #D9553F;
+  --status-waiting: light-dark(#5E6285, #8589A6);
+  --status-failed-recoverable: light-dark(#B3261E, #F2796B);
+  --status-failed-terminal: light-dark(#8C1D17, #E0675A);
+  --status-done: light-dark(#4C5069, #A2A6C0);     /* no hue on purpose */
+  --status-harness-dead: light-dark(#B3261E, #F2796B);
 
   /* accents (quiet) */
-  --operator: #7FA0A8;
-  --diff-add: #5E7F63;
-  --diff-del: #D9553F;
+  --operator: light-dark(#4347C9, #A5A8FF);
+  --diff-add: light-dark(#2A6340, #7CC495);
+  --diff-del: light-dark(#A8231B, #F2796B);
 
-  /* motion — unchanged from the approved brief */
-  --ease-out-strong: cubic-bezier(0.19, 1, 0.22, 1);
-  --dur-fast: 120ms;
-  --dur-base: 200ms;
-  --dur-slow: 350ms;
-
-  /*
-   * Ink that sits ON a saturated fill. Amber and the failure red are the only two fills the
-   * system has, and what reads on them does NOT flip with the theme the way --fg does — the
-   * light theme's amber is a deep gold, so its ink goes light while its dark counterpart's
-   * stays near-black. These were four hardcoded hexes (#fff ×3, #1a1408) before HOW-16.
-   */
-  --on-attention: #1A1408;
-  --on-alarm: #FFFFFF;
+  /* ink that sits ON a saturated fill */
+  --on-attention: light-dark(#FFFFFF, #1A1408);
+  --on-alarm: light-dark(#FFFFFF, #1A0B09);
 
   /* the dulled gold a `cleared` context key reads in — veiled, not gone */
-  --scope-cleared: #8C7A4A;
+  --scope-cleared: light-dark(#6E5E33, #B7A36A);
 
-  /* shape: soft, not round (HOW-30). Near-square (3px/2px) read as severe beside the chat
-     surfaces operators compare it to, and a rounded CONTROL is not the dashboard card we
-     left behind — DESIGN.md still forbids a box per row; what changed is the corner on the
-     boxes that are allowed to exist. `--radius-card` is for the two surfaces that are meant
-     to read as a held object: the composer and a suggestion card. */
+  /* the scrim behind a dialog */
+  --scrim: light-dark(rgba(23, 25, 39, 0.38), rgba(0, 0, 0, 0.6));
+
+  /*
+   * The one shadow, for things that FLOAT: menu, popover, tooltip, toast, dialog, palette
+   * (DESIGN.md Chrome — a panel is separated by a border and a change of ground, never by
+   * this). An offset and a soft blur, two layers; `light-dark()` only takes colours, so the
+   * pair is the shadow's colour and the geometry is shared. globals.css exports it to
+   * Tailwind as `shadow-float`.
+   */
+  --float-shadow-color: light-dark(rgba(23, 25, 39, 0.16), rgba(0, 0, 0, 0.6));
+  --float-shadow: 0 10px 28px -6px var(--float-shadow-color), 0 2px 6px -2px var(--float-shadow-color);
+
+  /*
+   * Motion (animations.dev lessons). Nothing keyboard-triggered or seen dozens of times a day
+   * animates at all. What does animate enters on a strong ease-out and stays under 300ms;
+   * hover, colour and opacity use plain `ease`.
+   */
+  --ease-out-strong: cubic-bezier(0.19, 1, 0.22, 1);
+  --ease-in-out: cubic-bezier(0.645, 0.045, 0.355, 1);
+  --dur-fast: 120ms;   /* press, hover colour, exits */
+  --dur-pop: 150ms;    /* menus, popovers and tooltips entering from their trigger */
+  --dur-base: 180ms;   /* dialogs and toasts */
+  --dur-slow: 320ms;
+
+  /* shape */
   --radius-card: 12px;
   --radius: 8px;
   --radius-sm: 6px;
   --radius-xs: 4px;
-}
 
-/* ---- light: supported, not the target ---------------------------------------------
- * Derived by deepening each hue until it clears 4.5:1 on the light ground. The alarm rule
- * holds here too: amber is the only saturated colour, done stays neutral.
- */
-@media (prefers-color-scheme: light) {
-  :root:not([data-theme="dark"]) {
-    --bg: #F7F6F3;
-    --bg-raised: #FFFFFF;
-    --bg-inset: #EEEDE9;
-    --fg: #17171A;
-    --fg-muted: #5F5E5A;
-    --fg-faint: #8C8A85;
-    --border: #E2E0DA;
-    --border-strong: #C9C7C0;
-
-    --primary: #17171A;
-    --primary-hover: #000000;
-    --primary-fg: #F7F6F3;
-    --ring: #3F6670;
-
-    --attention: #8A6412;
-    --attention-fg: #5C4410;
-    --attention-bg: rgba(242, 169, 59, 0.16);
-    --attention-border: #C9A94A;
-
-    --on-attention: #F7F6F3;
-    --on-alarm: #FFFFFF;
-    --scope-cleared: #6E5E33;
-
-    --status-queued: #8C8A85;
-    --status-running: #3F6670;
-    --status-waiting: #5A6A70;
-    --status-failed-recoverable: #A33322;
-    --status-failed-terminal: #7C2417;
-    --status-done: #5F5E5A;
-    --status-harness-dead: #A33322;
-
-    --operator: #3F6670;
-    --diff-add: #3F6647;
-    --diff-del: #A33322;
-  }
+  /* the smallest thing you can press, and the size of a primary control (WCAG 2.5.8) */
+  --target-min: 24px;
+  --target: 32px;
 }
 
 /* the explicit toggle wins in both directions */
-:root[data-theme="light"] {
-  --bg: #F7F6F3;
-  --bg-raised: #FFFFFF;
-  --bg-inset: #EEEDE9;
-  --fg: #17171A;
-  --fg-muted: #5F5E5A;
-  --fg-faint: #8C8A85;
-  --border: #E2E0DA;
-  --border-strong: #C9C7C0;
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"] { color-scheme: dark; }
 
-  --primary: #17171A;
-  --primary-hover: #000000;
-  --primary-fg: #F7F6F3;
-  --ring: #3F6670;
-
-  --attention: #8A6412;
-  --attention-fg: #5C4410;
-  --attention-bg: rgba(242, 169, 59, 0.16);
-  --attention-border: #C9A94A;
-
-  --status-queued: #8C8A85;
-  --status-running: #3F6670;
-  --status-waiting: #5A6A70;
-  --status-failed-recoverable: #A33322;
-  --status-failed-terminal: #7C2417;
-  --status-done: #5F5E5A;
-  --status-harness-dead: #A33322;
-
-  --operator: #3F6670;
-  --diff-add: #3F6647;
-  --diff-del: #A33322;
-
-  /* light's amber is a deep gold, so what reads on it is light, not near-black */
-  --on-attention: #F7F6F3;
-  --on-alarm: #FFFFFF;
-  --scope-cleared: #6E5E33;
-}
-
-/* themed browser surfaces */
-::selection { background: color-mix(in srgb, var(--attention) 26%, transparent); }
+/* themed browser surfaces: the parts nobody drew still belong to the system */
+::selection { background: color-mix(in srgb, var(--primary) 28%, transparent); }
 :focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
 * { scrollbar-color: var(--border-strong) transparent; scrollbar-width: thin; }
+:root { accent-color: var(--primary); caret-color: var(--primary); }
 
+/* reduced motion keeps fades and colour, drops travel: durations collapse, nothing moves */
 @media (prefers-reduced-motion: reduce) {
-  :root { --dur-fast: 0ms; --dur-base: 0ms; --dur-slow: 0ms; }
+  :root { --dur-fast: 0ms; --dur-pop: 0ms; --dur-base: 0ms; --dur-slow: 0ms; }
 }

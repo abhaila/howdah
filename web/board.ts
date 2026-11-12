@@ -21,7 +21,7 @@
 import { closeSync, existsSync, fstatSync, openSync, readSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import type { LoggedEvent } from "../log/events";
-import { deriveSummary, deriveTimeline, type RunStatus, type RunSummary } from "./derive";
+import { deriveStatus, deriveSummary, deriveTimeline, type RunStatus, type RunSummary } from "./derive";
 
 /** what one run looks like on the board — the summary plus its vital signs */
 export interface RunBoardRow extends RunSummary {
@@ -41,6 +41,15 @@ export interface RunBoardRow extends RunSummary {
   commits: number | null;
   /** the latest PR observation, when one exists */
   pr: { url: string; state: string } | null;
+  /**
+   * HOW-68: WHAT a waiting run is waiting for, as data — the standing park's code, step and
+   * (for a mid-turn ask) its payload. It is exactly what `parkSummary()` (core/park-summary.ts)
+   * reads, so the list row, the inbox row and the browser notification say the same sentence
+   * the run's own ask card does. Null unless the run is `needs-input`: a dead runner or a
+   * finished run has no standing ask, whatever its log once raised. The engine's `reason`
+   * stays where it was (`needs_input_reason`); this never replaces it.
+   */
+  park: { code: string | null; node: string; visit: number; ask: unknown } | null;
 }
 
 /** the per-run fold: everything the row needs, kept small */
@@ -159,6 +168,12 @@ function gitCount(cwd: string, base: string, head: string): number | null {
   return r.status === 0 && Number.isFinite(n) ? n : null;
 }
 
+/** the standing ask as `parkSummary()` wants it — the same ask `deriveSummary` took its reason from */
+function standingPark(events: LoggedEvent[]): RunBoardRow["park"] {
+  const ask = deriveStatus(events).ask;
+  return ask ? { code: ask.code ?? null, node: ask.node, visit: ask.visit, ask: ask.ask ?? null } : null;
+}
+
 /**
  * One run's board row from its fold. `status` arrives already corrected for runner liveness
  * by the caller (the server's `withRunnerLiveness`), so a dead runner reads `harness-dead`
@@ -195,5 +210,6 @@ export function boardRow(
     cost_partial: fold.costPartial || liveTurn,
     commits: opts.commits ? opts.commits(opts.cwd, base, head) : null,
     pr: prObs && prObs.kind === "pr" ? { url: prObs.url, state: prObs.state } : null,
+    park: summary.status === "needs-input" ? standingPark(events) : null,
   };
 }

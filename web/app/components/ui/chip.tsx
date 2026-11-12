@@ -8,6 +8,9 @@
  * an `onClick`: no role, no tabIndex, no key handler, unreachable by keyboard or screen
  * reader (P2.8). A chip is a toggle, so this is a real `<button aria-pressed>` — which
  * makes Enter, Space and the focus ring the platform's job, not ours.
+ *
+ * HOW-68: 4px radius, and a 24px floor (`min-h-6 min-w-6`) — the Logs filters measured
+ * 30–56 × 23px, one pixel under the minimum target, on every run.
  */
 import { forwardRef } from "react";
 import type { ButtonHTMLAttributes } from "react";
@@ -15,13 +18,13 @@ import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "@/lib/utils";
 
 export const chipVariants = cva(
-  "inline-flex cursor-pointer select-none items-center gap-1 rounded-[var(--radius-sm)] border px-2 py-0.5 text-sm transition-[background,color,border-color] duration-[var(--dur-fast)] focus-visible:outline-2 focus-visible:outline-[var(--ring)] focus-visible:outline-offset-1 disabled:pointer-events-none disabled:opacity-50",
+  "inline-flex min-h-6 min-w-6 cursor-pointer select-none items-center justify-center gap-1 rounded-[var(--radius-xs)] border px-2 text-sm transition-[background-color,color,border-color] duration-[var(--dur-fast)] ease-[ease] focus-visible:outline-2 focus-visible:outline-[var(--ring)] focus-visible:outline-offset-2 disabled:pointer-events-none disabled:border-border disabled:bg-transparent disabled:text-disabled",
   {
     variants: {
       /** `on` is the SELECTED state; it must never be only a colour, so it also fills */
       on: {
         true: "border-[var(--border-strong)] bg-card text-foreground",
-        false: "border-border bg-transparent text-muted-foreground hover:border-faint hover:text-foreground",
+        false: "border-border bg-transparent text-muted-foreground hover:border-[var(--border-strong)] hover:text-foreground active:bg-accent",
       },
       /** the one chip allowed the alarm colour: the Logs `attention` filter, when on */
       tone: {
@@ -30,7 +33,7 @@ export const chipVariants = cva(
       },
     },
     compoundVariants: [
-      { tone: "attention", on: true, className: "border-[var(--attention)] bg-[var(--attention)] text-[var(--bg)]" },
+      { tone: "attention", on: true, className: "border-[var(--attention)] bg-[var(--attention)] text-[var(--on-attention)]" },
     ],
     defaultVariants: { on: false, tone: "default" },
   },

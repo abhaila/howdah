@@ -6,6 +6,7 @@ import { EventLog, readLog } from "../log/write";
 import { deriveStatus, deriveSummary, deriveDetail, deriveTimeline, deriveLogRows, deriveContextTable, runDigest, citeParts, sortRuns } from "./derive";
 import { createHowdahServer, guardRequest } from "./server";
 import { AttentionCenter } from "../engine/attention";
+import { readPresence, viewerDelivers } from "../engine/viewer-presence";
 import { renderedHash } from "../core/template";
 import { seedAwaitingRun } from "../engine/slice-decision.fixtures";
 import { defineGraph } from "../core/graph";
@@ -558,6 +559,53 @@ describe("settings + open-ide (T19)", () => {
     const s = (await (await fetch(url2("/api/settings"))).json()) as any;
     expect(s).toMatchObject({ editorCommand: "idea", chime: false });
     expect(s.repos).toBeUndefined(); // workspaces are not settings
+  });
+
+  test("HOW-68 D18: settings say whether the OS banner is clickable, with the fix", async () => {
+    const base3 = mkdtempSync(join(tmpdir(), "howdah-notifier-"));
+    const mk = (which: (b: string) => string | null) => createHowdahServer({ runsDir: join(base3, "runs"), attentionDir: join(base3, "attention"), port: 0, which });
+    const absent = mk(() => null);
+    const present = mk((b) => `/opt/homebrew/bin/${b}`);
+    try {
+      const a = (await (await fetch(`http://localhost:${absent.port}/api/settings`)).json()) as any;
+      expect(a.notifier).toMatchObject({ clickable: false, fix: "brew install terminal-notifier" });
+      const p = (await (await fetch(`http://localhost:${present.port}/api/settings`)).json()) as any;
+      expect(p.notifier).toMatchObject({ clickable: true, path: "/opt/homebrew/bin/terminal-notifier" });
+      expect(p.notifier.fix).toBeUndefined();
+    } finally {
+      absent.stop(true);
+      present.stop(true);
+    }
+  });
+
+  test("HOW-68 D18: a viewer's presence beat is written beside heartbeat.json, under the write guards", async () => {
+    const base3 = mkdtempSync(join(tmpdir(), "howdah-presence-"));
+    mkdirSync(join(base3, "runs"), { recursive: true });
+    const srv = createHowdahServer({ runsDir: join(base3, "runs"), attentionDir: join(base3, "attention"), port: 0 });
+    const u = `http://localhost:${srv.port}/api/viewer/presence`;
+    const post = (body: unknown, headers: Record<string, string> = {}) =>
+      fetch(u, { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body) });
+    try {
+      const before = Date.now();
+      const r = await post({ notify: true });
+      expect(r.status).toBe(200);
+      const file = JSON.parse(readFileSync(join(base3, "viewer.json"), "utf8"));
+      expect(file).toMatchObject({ notify: true, base: `http://localhost:${srv.port}` });
+      expect(new Date(file.at).getTime()).toBeGreaterThanOrEqual(before - 1000);
+      // the engine side reads exactly this file
+      expect(viewerDelivers(readPresence(base3), new Date())).toBe(true);
+      // only the literal `true` means "this viewer announces asks itself"
+      await post({ notify: "yes" });
+      expect(viewerDelivers(readPresence(base3), new Date())).toBe(false);
+      await post({});
+      expect(readPresence(base3)!.notify).toBe(false);
+      // guardRequest applies: a foreign Origin may not claim a viewer is open
+      const foreign = await post({ notify: true }, { origin: "http://evil.example" });
+      expect(foreign.status).toBe(403);
+      expect(readPresence(base3)!.notify).toBe(false);
+    } finally {
+      srv.stop(true);
+    }
   });
 
   test("the TypeSafe key is write-only: never served back, a blank save keeps it, null clears it, env wins", async () => {
@@ -1310,6 +1358,23 @@ describe("deriveContextTable", () => {
     expect(clean.value).toBeUndefined();
     expect(clean.declared_writers).toEqual(["cleanup"]);
     expect(clean.scope).toBe("per-visit");
+  });
+
+  // HOW-68: the Context tab said "Not written yet" beside `goal` on a run that had read it all along
+  test("what was given at launch has its value, is marked an input, and has no step's write", () => {
+    const dir = mkdtempSync(join(tmpdir(), "howdah-ctx-"));
+    const log = new EventLog(join(dir, "r", "run.jsonl"), fixedClock());
+    log.append({ type: "run-started", graph: "g", inputs: { goal: "stop the redirect loop" }, pinned_prompts: {} });
+    log.append({ type: "node-started", node: "plan", visit: 1, attempt_id: "plan#1" });
+    const table = deriveContextTable(log.read(), DECL);
+    const goal = table.find((c) => c.key === "goal")!;
+    expect(goal).toMatchObject({ written: true, value: "stop the redirect loop", input: true, writes: [] });
+    // a key no one gave and no one wrote is still unwritten, and is not an input
+    const plan = table.find((c) => c.key === "implementation_plan")!;
+    expect(plan.written).toBe(false);
+    expect(plan.input).toBeUndefined();
+    // and the digest an agent is given now carries the goal instead of "— not written yet"
+    expect(runDigest("r", log.read(), DECL)).toContain("goal (sticky) = stop the redirect loop");
   });
 
   test("the latest published value wins and the earlier write is marked replaced", () => {

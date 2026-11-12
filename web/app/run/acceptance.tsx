@@ -20,34 +20,46 @@
  * the same list the PR carries, in neutral colours, never as attention. Waiving is offered ONLY
  * while the run is parked at an opted-in gate (`acc.waivable`): anywhere else a waiver would
  * change nothing, and inviting one taught operators to waive without reading.
+ *
+ * HOW-68: a LIST, not a card. It is drawn inside the Plan pane, the Details drawer and the
+ * transcript, and a bordered box in each of those was a card inside a card; the "not proven"
+ * and "unprovable" blocks were two more boxes inside that one. Now a heading, hairline rows,
+ * and each row's state as a glyph AND a word ("Met", "Unmet", "Waived", "After publish",
+ * "Superseded") so no state is told by colour. A waived row was amber: amber means a run is
+ * waiting on you, and a waiver is a decision already made, so it is neutral. How a row is
+ * checked is one small chip. Nothing is uppercase.
  */
-import { useState } from "react";
-import { CheckCircle2, CircleX, Clock, ShieldCheck, Ban } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { CheckCircle2, CircleX, Clock, ShieldCheck, Ban, MinusCircle } from "lucide-react";
 import type { RunDetail } from "../../derive";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { SectionLabel } from "@/components/ui/section-label";
 import { useToast } from "@/components/ui/toast";
 import { evidenceUrl } from "./evidence";
 
 type Row = NonNullable<RunDetail["acceptance"]>["rows"][number];
+type State = "pass" | "fail" | "waived" | "later" | "superseded";
 
 const ALL = "*unprovable";
 const CHECK_LABEL: Record<NonNullable<Row["check"]>, string> = {
   tests: "checked by tests", screenshot: "checked on screen", command: "checked by a command",
   human: "human judgement", "after-publish": "checked after publish",
 };
+const STATE_WORD: Record<State, string> = { pass: "Met", fail: "Unmet", waived: "Waived", later: "After publish", superseded: "Superseded" };
+const STATE_ICON: Record<State, typeof CheckCircle2> = { pass: CheckCircle2, fail: CircleX, waived: Ban, later: Clock, superseded: MinusCircle };
 
 function EvidenceLink({ runId, row, verify }: { runId: string; row: Row; verify: string | null }) {
   const ev = row.evidence;
   if (!ev) return null;
   switch (ev.kind) {
     case "verify.result":
-      return <span className="ac-evidence">tests passed{verify ? ` @ ${verify}` : ""}{ev.note ? ` — ${ev.note}` : ""}</span>;
+      return <span className="ac-evidence">tests passed{verify ? <> @ <span className="font-mono">{verify}</span></> : ""}{ev.note ? ` — ${ev.note}` : ""}</span>;
     case "screenshot":
-      return <a className="ac-evidence pr-link" href={evidenceUrl(runId, ev.file)} target="_blank" rel="noreferrer">screenshot {ev.file.split("/").at(-1)}{ev.note ? ` — ${ev.note}` : ""}</a>;
+      return <a className="ac-evidence text-primary underline underline-offset-2" href={evidenceUrl(runId, ev.file)} target="_blank" rel="noreferrer">screenshot {ev.file.split("/").at(-1)}{ev.note ? ` — ${ev.note}` : ""}</a>;
     case "command":
-      return <span className="ac-evidence"><code>{ev.command}</code> → {ev.output.length > 120 ? `${ev.output.slice(0, 117)}…` : ev.output}</span>;
+      return <span className="ac-evidence"><code className="font-mono text-code">{ev.command}</code> → {ev.output.length > 120 ? `${ev.output.slice(0, 117)}…` : ev.output}</span>;
   }
 }
 
@@ -58,6 +70,33 @@ export function AcceptanceCard({ runId, detail, onChanged }: { runId: string; de
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const { toast } = useToast();
+  // D20: closing the reason field — Esc, Cancel or a waiver that went through — removes the
+  // element that had focus. Focus goes back to the control that opened it; when that is gone
+  // too (the row is waived now) to the next row that can still be waived, else to the card.
+  const card = useRef<HTMLElement | null>(null);
+  const opened = useRef<string | null>(null);
+  useEffect(() => {
+    if (waiving !== null) { opened.current = waiving; return; }
+    const was = opened.current;
+    opened.current = null;
+    const root = card.current;
+    if (was === null || !root) return;
+    const active = document.activeElement;
+    if (active && active !== document.body && active.isConnected && !root.contains(active)) return; // the operator moved on
+    const opener = [...root.querySelectorAll<HTMLElement>("[data-waive-open]")].find((b) => b.dataset.waiveOpen === was);
+    (opener ?? root.querySelector<HTMLElement>("[data-waive-open]") ?? root).focus();
+    held.current = Date.now() + 3000;
+  }, [waiving]);
+  // ...and a waiver that went through reloads the run a moment later, which removes the row's
+  // opener — the very control focus was just returned to. For a few seconds after the field
+  // closes, focus that has fallen off the card is put back on it.
+  const held = useRef(0);
+  useEffect(() => {
+    const root = card.current;
+    if (!root || Date.now() > held.current) return;
+    const a = document.activeElement;
+    if (!a || a === document.body || !a.isConnected) (root.querySelector<HTMLElement>("[data-waive-open]") ?? root).focus();
+  });
   if (!acc) return null;
   const live = acc.rows.filter((r) => !r.superseded);
   const met = live.filter((r) => r.passes || r.waived).length;
@@ -74,32 +113,39 @@ export function AcceptanceCard({ runId, detail, onChanged }: { runId: string; de
     }).catch(() => null);
     const body = (await res?.json().catch(() => null)) as { error?: string; resumed?: boolean; waived?: string[] } | null;
     setBusy(false);
-    if (!res?.ok) { setError(body?.error ?? "could not waive"); return; }
+    if (!res?.ok) { setError(body?.error ?? "Could not waive it."); return; }
     const what = all ? `${body?.waived?.length ?? 0} unprovable criteria` : `"${id}"`;
-    toast(body?.resumed ? `waived ${what} — every criterion is settled, resuming` : `waived ${what}`);
+    toast(body?.resumed ? `Waived ${what} — every criterion is settled, resuming` : `Waived ${what}`);
     setWaiving(null);
     setReason("");
     onChanged();
   };
 
+  // the reason field is a one-line form: it takes focus when it opens, Enter sends it and Esc
+  // puts it away — it used to open unfocused, with a button as the only way to do either
+  const reasonKeys = (id: string) => (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter" && reason.trim() && !busy) { e.preventDefault(); void waive(id); }
+    if (e.key === "Escape") { e.preventDefault(); setWaiving(null); setError(null); }
+  };
+
   return (
-    <section className="ac-card" data-met={acc.unmet === 0 ? "true" : "false"} data-held={acc.waivable && acc.unmet > 0 ? "true" : "false"} aria-label="Acceptance criteria">
+    <section ref={card} tabIndex={-1} data-slot="acceptance-card" className="ac-card" data-met={acc.unmet === 0 ? "true" : "false"} data-held={acc.waivable && acc.unmet > 0 ? "true" : "false"} aria-label="Acceptance criteria">
       <div className="ac-head">
-        <ShieldCheck size={13} aria-hidden />
-        <span className="ac-title">Acceptance</span>
-        <span className="ac-score">{met} of {live.length} met</span>
+        <ShieldCheck size={14} aria-hidden className="shrink-0 text-muted-foreground" />
+        <h3 className="m-0 text-md font-semibold text-foreground">Acceptance</h3>
+        <span className="ac-score text-sm tabular-nums text-muted-foreground">{met} of {live.length} met</span>
         {acc.unmet > 0 && <Badge variant={acc.waivable ? "destructive" : "outline"}>{acc.unmet} unmet</Badge>}
-        <span className="ac-by">judged by {acc.written_by.node}@{acc.written_by.visit}</span>
+        <span className="ac-by">judged by <span className="font-mono">{acc.written_by.node}@{acc.written_by.visit}</span></span>
       </div>
       {acc.not_proven.length > 0 && (
         <div className="ac-not-proven">
-          <span className="ac-not-proven-title">Not proven by this run</span>
-          <ul className="ac-not-proven-list">
+          <SectionLabel>Not proven by this run</SectionLabel>
+          <ul className="m-0 flex list-disc flex-col gap-1 pl-5 text-sm">
             {acc.not_proven.map((r) => (
-              <li key={r.id}><span className="ac-text">{r.text}</span> <span className="ac-not-proven-why">— {r.reason}</span></li>
+              <li key={r.id}><span className="ac-text">{r.text}</span> <span className="text-muted-foreground">— {r.reason}</span></li>
             ))}
           </ul>
-          <span className="ac-not-proven-note">Listed in the pull request description. Nothing to do here.</span>
+          <span className="text-xs text-muted-foreground">Listed in the pull request description. Nothing to do here.</span>
         </div>
       )}
       {acc.unprovable > 0 && acc.waivable && (
@@ -107,28 +153,28 @@ export function AcceptanceCard({ runId, detail, onChanged }: { runId: string; de
           <span>{acc.unprovable} of the unmet criteria can never be proved in this run — say why once to settle them all.</span>
           {waiving === ALL ? (
             <span className="ac-waive">
-              <Input aria-label="why the unprovable criteria are accepted without evidence" placeholder="why these are accepted without evidence" value={reason} onChange={(e) => setReason(e.target.value)} />
+              <Input autoFocus aria-label="why the unprovable criteria are accepted without evidence" placeholder="Why these are accepted without evidence" value={reason} onChange={(e) => setReason(e.target.value)} onKeyDown={reasonKeys(ALL)} />
               <Button size="sm" variant="destructive-outline" disabled={busy || !reason.trim()} onClick={() => waive(ALL)}>Waive {acc.unprovable}</Button>
               <Button size="sm" variant="ghost" disabled={busy} onClick={() => { setWaiving(null); setError(null); }}>Cancel</Button>
             </span>
           ) : (
-            <Button size="sm" variant="outline" onClick={() => { setWaiving(ALL); setReason(""); setError(null); }}>Waive all unprovable…</Button>
+            <Button size="sm" variant="outline" className="self-start" data-waive-open={ALL} onClick={() => { setWaiving(ALL); setReason(""); setError(null); }}>Waive all unprovable…</Button>
           )}
         </div>
       )}
       <ul className="ac-rows">
         {acc.rows.map((r) => {
-          const state = r.superseded ? "superseded" : r.passes ? "pass" : r.waived ? "waived" : r.check === "after-publish" ? "later" : "fail";
+          const state: State = r.superseded ? "superseded" : r.passes ? "pass" : r.waived ? "waived" : r.check === "after-publish" ? "later" : "fail";
+          const Icon = STATE_ICON[state];
           return (
             <li key={r.id} className="ac-row" data-state={state}>
-              {state === "pass" ? <CheckCircle2 size={13} aria-hidden /> : state === "waived" ? <Ban size={13} aria-hidden /> : state === "later" ? <Clock size={13} aria-hidden /> : <CircleX size={13} aria-hidden />}
+              <span className="ac-state"><Icon aria-hidden />{STATE_WORD[state]}</span>
               <div className="ac-row-body">
                 <span className="ac-text">{r.text}</span>
                 <span className="ac-meta">
-                  <span className="m">{r.id}</span>
+                  <span className="font-mono">{r.id}</span>
                   {r.source === "plan" && <Badge variant="outline">proposed by plan</Badge>}
                   {r.check && <Badge variant="outline">{CHECK_LABEL[r.check]}</Badge>}
-                  {state === "superseded" && <span>superseded</span>}
                   {state === "pass" && <EvidenceLink runId={runId} row={r} verify={verifyCommit} />}
                   {state === "waived" && <span className="ac-waived">waived by the operator — {r.waived!.reason}</span>}
                   {state === "fail" && <span>{r.unprovable ? `can't be proved in this run: ${r.unprovable}` : "no evidence yet"}</span>}
@@ -137,12 +183,12 @@ export function AcceptanceCard({ runId, detail, onChanged }: { runId: string; de
                 {/* HOW-72: only a run parked at a gate has one to open — anywhere else a waiver changes nothing */}
                 {state === "fail" && acc.waivable && (waiving === r.id ? (
                   <span className="ac-waive">
-                    <Input aria-label={`why ${r.id} is accepted without evidence`} placeholder="why this is accepted without evidence" value={reason} onChange={(e) => setReason(e.target.value)} />
+                    <Input autoFocus aria-label={`why ${r.id} is accepted without evidence`} placeholder="Why this is accepted without evidence" value={reason} onChange={(e) => setReason(e.target.value)} onKeyDown={reasonKeys(r.id)} />
                     <Button size="sm" variant="destructive-outline" disabled={busy || !reason.trim()} onClick={() => waive(r.id)}>Waive</Button>
                     <Button size="sm" variant="ghost" disabled={busy} onClick={() => { setWaiving(null); setError(null); }}>Cancel</Button>
                   </span>
                 ) : (
-                  <Button size="sm" variant="ghost" className="ac-waive-open" onClick={() => { setWaiving(r.id); setReason(""); setError(null); }}>Waive…</Button>
+                  <Button size="sm" variant="outline" className="ac-waive-open" data-waive-open={r.id} onClick={() => { setWaiving(r.id); setReason(""); setError(null); }}>Waive…</Button>
                 ))}
               </div>
             </li>

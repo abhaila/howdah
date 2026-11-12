@@ -19,26 +19,62 @@
  * HOW-71: the Graphs page's "Draft a graph" lands here as `?graph=draft-graph[&base=<name>]`.
  * A `?base=` that is not one of `bases` reads as "Let the agent choose" AND is never sent: a
  * native select shown an invalid value must not hide what gets POSTed.
+ *
+ * HOW-68 put the form on the shared frame as a 720px reading column:
+ *
+ *   A real label above every field, and what is still missing said IN WORDS beside the one
+ *   primary action ("Still needed: goal, a repo workspace") — the button used to go grey with
+ *   no reason given.
+ *   The command this form will run, in mono, with a copy button: the same argv
+ *   core/launch-args.ts builds for the server, so what is previewed is what is spawned, and a
+ *   run can be taken to a terminal exactly as configured.
+ *   Run overrides behind an "Advanced options" disclosure — six fields most runs never touch.
+ *   ⌘↵ / Ctrl ↵ launches from anywhere on the form, text fields included. The launch bar is the
+ *   frame's foot, so it is on screen at 1024×640 however long the graph's inputs are.
  */
 import { useEffect, useState } from "react";
-import { Play } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, Copy, Play } from "lucide-react";
 import type { GraphCatalog, GraphInfo, Workspaces } from "@/lib/types";
 import { getJSON } from "@/lib/net";
+import { graphDescription } from "@/lib/format";
+import { useShortcuts } from "@/lib/shortcuts";
 import { DRAFT_GRAPH } from "../../../core/catalog";
 import { draftLaunchRequest } from "../../../core/draft-launch";
+import { launchArgs, type LaunchRequest } from "../../../core/launch-args";
 import type { AgentConfigDto } from "../graph-dag";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Kbd } from "@/components/ui/kbd";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { Tooltip } from "@/components/ui/tooltip";
 import { useToast } from "@/components/ui/toast";
 import { AddWorkspace } from "./settings";
 import { ConfigFields } from "./graphs";
+import { FieldError, Hint, LoadError, Screen, Section } from "./frame";
+import { LINK } from "./prompts";
+
+/** one argv word, quoted for a POSIX shell only when it needs to be */
+const shellWord = (w: string) => (/^[A-Za-z0-9_@%+=:,./-]+$/.test(w) ? w : `'${w.replace(/'/g, `'\\''`)}'`);
+
+/**
+ * The command the form will run, as the operator would type it. Built from the SAME argv the
+ * launch route spawns (core/launch-args.ts) minus the `--id` the server mints, so the preview
+ * cannot drift from the launch. Pure, for the test.
+ */
+export function launchCommand(request: LaunchRequest): string {
+  const args = launchArgs(request, "");
+  const at = args.indexOf("--id");
+  if (at !== -1) args.splice(at, 2);
+  return ["bun", "cli/main.ts", ...args].map(shellWord).join(" ");
+}
 
 export function StartRun() {
   const [catalog, setCatalog] = useState<GraphInfo[]>([]);
+  // HOW-68: a catalog that could not be read is said. The form used to open with an empty graph
+  // list and "Still needed: a graph", as if there were none to choose.
+  const [catalogFailed, setCatalogFailed] = useState(false);
   const [workspaces, setWorkspaces] = useState<Workspaces>({ repos: [], folders: [] });
   // HOW-65: a just-saved draft's receipt says "Run it" and lands here with the graph picked
   const [graph, setGraph] = useState<string>(() => new URLSearchParams(location.search).get("graph") ?? "");
@@ -51,14 +87,16 @@ export function StartRun() {
   const [overrides, setOverrides] = useState<AgentConfigDto>({});
   const [showOverrides, setShowOverrides] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const { toast } = useToast();
 
   const loadWorkspaces = () => getJSON<Workspaces>("/api/workspaces").then(setWorkspaces).catch(() => {});
+  // a graph another graph starts takes inputs only its parent can fill (implement-stacked's
+  // `deps` names sibling runs), so it is not offered here — the Graphs page says who starts it
+  const loadCatalog = () => getJSON<GraphCatalog>("/api/graphs").then((c) => { setCatalog(c.graphs); setCatalogFailed(false); }).catch(() => setCatalogFailed(true));
   useEffect(() => {
-    // a graph another graph starts takes inputs only its parent can fill (implement-stacked's
-    // `deps` names sibling runs), so it is not offered here — the Graphs page says who starts it
-    getJSON<GraphCatalog>("/api/graphs").then((c) => setCatalog(c.graphs)).catch(() => {});
+    void loadCatalog();
     loadWorkspaces();
   }, []);
   const graphs = catalog.filter((g) => !g.launched_by);
@@ -69,20 +107,29 @@ export function StartRun() {
   const drafting = graph === DRAFT_GRAPH;
   const options = selected?.kind === "repo" ? workspaces.repos : [...workspaces.repos, ...workspaces.folders];
 
+  // what is still missing, in the form's own words — the reason the button is not ready
+  const missing: string[] = !selected ? ["a graph"] : [
+    ...(drafting ? (intent.trim() ? [] : ["what the graph should do"]) : selected.inputs.filter((k) => !(inputs[k] ?? "").trim())),
+    ...(selected.kind === "repo" && !workspace ? ["a repo workspace"] : []),
+  ];
+  const request: LaunchRequest | null = !selected ? null : drafting
+    ? draftLaunchRequest({ intent, base: chosenBase || undefined, workspace: workspace || undefined, name: name.trim() || undefined, overrides })
+    : { graph, name: name.trim() || undefined, inputs, workspace: workspace || undefined, overrides };
+  const command = request ? launchCommand(request) : "";
+
   const launch = async () => {
+    if (busy || missing.length > 0 || !request) return;
     setBusy(true);
     setError(null);
     try {
       const r = await fetch("/api/runs", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify(drafting
-          ? draftLaunchRequest({ intent, base: chosenBase || undefined, workspace: workspace || undefined, name: name.trim() || undefined, overrides })
-          : { graph, name: name.trim() || undefined, inputs, workspace: workspace || undefined, overrides }),
+        body: JSON.stringify(request),
       });
       if (!r.ok) throw new Error((await r.json() as any).error ?? "launch failed");
       const { id } = (await r.json()) as { id: string };
-      toast(name.trim() ? `launched "${name.trim()}" as ${id}` : `launched ${graph} as ${id}`);
+      toast(name.trim() ? `Launched "${name.trim()}" as ${id}` : `Launched ${graph} as ${id}`);
       location.assign(`/run/${id}`);
     } catch (e) {
       const why = e instanceof Error ? e.message : String(e);
@@ -91,27 +138,53 @@ export function StartRun() {
       setBusy(false);
     }
   };
+  // not a single key, so it works from inside a field — which is where the operator's hands are
+  useShortcuts([{ id: "launch.submit", scope: "New run", label: "Launch the run", keys: "mod+enter", palette: false, disabled: missing.length > 0 || busy, run: () => void launch() }]);
+  useEffect(() => {
+    if (!copied) return;
+    const t = setTimeout(() => setCopied(false), 1600);
+    return () => clearTimeout(t);
+  }, [copied]);
 
+  if (catalogFailed && catalog.length === 0)
+    return <Screen name="new-run" title="New run" width="form"><LoadError what="the graphs" onRetry={() => { void loadCatalog(); loadWorkspaces(); }} /></Screen>;
   return (
-    <div className="runs">
-      <h1>Start a run</h1>
-      <Card className="max-w-[640px]">
-        <CardContent className="pt-5">
+    <Screen
+      name="new-run"
+      title="New run"
+      width="form"
+      footer={
+        <footer data-slot="launch-bar" className="flex min-h-12 shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-t border-border px-6 py-2">
+          <Button disabled={busy ? false : missing.length > 0} loading={busy} onClick={launch}>
+            {!busy && <Play />}{busy ? "Launching" : "Launch run"} <Kbd keys="mod+enter" decorative />
+          </Button>
+          {/* the reason the button is not ready, said in words and announced when it changes */}
+          <p role="status" data-slot="launch-missing" className="m-0 min-w-0 flex-1 text-sm text-muted-foreground">
+            {missing.length > 0 ? `Still needed: ${missing.join(", ")}.` : selected?.kind === "repo" ? "It will create a worktree and a branch in the workspace." : ""}
+          </p>
+        </footer>
+      }
+    >
+      <Section title="What to run">
+        <Label>
+          Graph
+          <Select value={graph} onChange={(e) => { setGraph(e.target.value); setInputs({}); }}>
+            <option value="">Choose a graph…</option>
+            {graphs.map((g) => <option key={g.name} value={g.name}>{g.name}</option>)}
+          </Select>
+        </Label>
+        {selected ? graphDescription(selected.description) && <Hint>{graphDescription(selected.description)}</Hint> : <Hint>A graph is the shape of the work: its steps, and what each hands to the next. <a className={LINK} href="/graphs">See what each one does</a>.</Hint>}
+        {selected && (
           <Label>
-            Graph
-            <Select value={graph} onChange={(e) => { setGraph(e.target.value); setInputs({}); }}>
-              <option value="">choose…</option>
-              {graphs.map((g) => <option key={g.name} value={g.name}>{g.name}</option>)}
-            </Select>
+            Run name (optional)
+            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Shown in the runs list instead of the goal" />
           </Label>
-          {selected && <div className="field-hint">{selected.description}</div>}
-          {selected && (
-            <Label>
-              Run name (optional)
-              <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="shown in the runs list instead of the goal" />
-            </Label>
-          )}
-          {selected && drafting && (
+        )}
+      </Section>
+
+      {selected && (
+        <Section title={drafting ? "The graph to draft" : "Inputs"}>
+          {drafting && (
             <>
               <Label>
                 What should the graph do?
@@ -126,42 +199,54 @@ export function StartRun() {
               </Label>
             </>
           )}
-          {!drafting && selected?.inputs.map((k) => (
+          {!drafting && selected.inputs.length === 0 && <Hint>This graph takes no inputs.</Hint>}
+          {!drafting && selected.inputs.map((k) => (
             <Label key={k}>
               {k}
-              <Input value={inputs[k] ?? ""} onChange={(e) => setInputs({ ...inputs, [k]: e.target.value })} placeholder={k} />
+              <Input value={inputs[k] ?? ""} onChange={(e) => setInputs({ ...inputs, [k]: e.target.value })} />
             </Label>
           ))}
-          {selected && (
-            <Label>
-              Workspace {selected.kind === "repo" ? "(repo required)" : drafting ? "(optional)" : ""}
-              <Select value={workspace} onChange={(e) => setWorkspace(e.target.value)}>
-                <option value="">{selected.kind === "repo" ? (options.length ? "choose a repo…" : "no repos registered") : "none (log-only)"}</option>
-                {options.map((w) => <option key={w.name} value={w.name}>{w.name} — {w.path}</option>)}
-              </Select>
-            </Label>
+          <Label>
+            Workspace {selected.kind === "repo" ? "(repo required)" : drafting ? "(optional)" : ""}
+            <Select value={workspace} onChange={(e) => setWorkspace(e.target.value)}>
+              <option value="">{selected.kind === "repo" ? (options.length ? "Choose a repo…" : "No repos registered") : "None (log only)"}</option>
+              {options.map((w) => <option key={w.name} value={w.name}>{w.name} — {w.path}</option>)}
+            </Select>
+          </Label>
+          {selected.kind === "repo" && options.length === 0 && (
+            <AddWorkspace hint="This graph creates worktrees and pull requests, so it needs a registered git repository." onAdded={loadWorkspaces} />
           )}
-          {selected?.kind === "repo" && options.length === 0 && (
-            <AddWorkspace hint="This graph creates worktrees and PRs, so it needs a registered git repo:" onAdded={loadWorkspaces} />
-          )}
-          {selected && (
-            <div className="field-hint">
-              <Button variant="link" size="inline" aria-expanded={showOverrides} onClick={() => setShowOverrides(!showOverrides)}>
-                Run overrides {showOverrides ? "▾" : "▸"}
-              </Button>{" "}
-              — beat every node and graph setting for this run only
+        </Section>
+      )}
+
+      {selected && (
+        <div className="flex flex-col gap-3">
+          <Button variant="ghost" size="sm" className="-ml-2 self-start" aria-expanded={showOverrides} aria-controls="run-overrides" onClick={() => setShowOverrides(!showOverrides)}>
+            {showOverrides ? <ChevronDown /> : <ChevronRight />}Advanced options
+          </Button>
+          {showOverrides && (
+            <div id="run-overrides" className="flex flex-col gap-3">
+              <Hint>Run overrides beat every step and graph setting, for this run only.</Hint>
+              <ConfigFields value={overrides} onChange={setOverrides} />
             </div>
           )}
-          {selected && showOverrides && <ConfigFields value={overrides} onChange={setOverrides} />}
-          {error && <div className="field-error">{error}</div>}
-          <Button
-            disabled={busy || !selected || (drafting ? !intent.trim() : selected.inputs.some((k) => !(inputs[k] ?? "").trim())) || (selected.kind === "repo" && !workspace)}
-            onClick={launch}
-          >
-            <Play />{busy ? "Launching…" : "Launch run"}
-          </Button>
-        </CardContent>
-      </Card>
-    </div>
+        </div>
+      )}
+
+      {selected && (
+        <Section title="Command" description="What this form runs. Copy it to launch the same run from a terminal.">
+          <div className="flex items-start gap-1 rounded-[var(--radius-sm)] border border-border bg-muted py-1.5 pl-3 pr-1.5">
+            <code data-slot="launch-command" className="min-w-0 flex-1 whitespace-pre-wrap py-0.5 font-mono text-code leading-5 text-foreground [overflow-wrap:anywhere]">{command}</code>
+            <Tooltip content={copied ? "Copied the command" : "Copy the command"} side="left" align="center">
+              <Button variant="ghost" size="icon-sm" aria-label={copied ? "Copied the command" : "Copy the command"} onClick={() => { void navigator.clipboard?.writeText(command).then(() => setCopied(true), () => setCopied(false)); }}>
+                {copied ? <Check /> : <Copy />}
+              </Button>
+            </Tooltip>
+          </div>
+        </Section>
+      )}
+
+      {error && <FieldError pre>{error}</FieldError>}
+    </Screen>
   );
 }

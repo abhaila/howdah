@@ -50,8 +50,7 @@ const SOURCES = walk(APP).sort();
  * is the only place a class may be exempt, and adding to it is a deliberate act.
  */
 const COMPOSED_PREFIXES: Array<{ prefix: string; fedBy: string }> = [
-  { prefix: "depth-", fedBy: "run/logs.tsx: `log-row ${r.kind} depth-${r.depth}`" },
-  { prefix: "kind-", fedBy: "graph-dag.tsx `dag-node … kind-${n.kind}`, builder/node-card.tsx `gb-node kind-${kind}`" },
+  { prefix: "kind-", fedBy: "graph-dag.tsx `gb-node dag-card … kind-${n.kind}`, builder/node-card.tsx `gb-node kind-${kind}`" },
 ];
 
 /**
@@ -65,8 +64,10 @@ const COMPOSED_PREFIXES: Array<{ prefix: string; fedBy: string }> = [
  * listed rather than given empty rules, because an empty rule is a worse lie than a list.
  */
 const STRUCTURAL: string[] = [
-  "dag",            // the <svg> itself; every rule targets what is inside it
   "ap-traces", "ap-rounds", "ghost-item", "map-pane",  // slice.tsx grouping wrappers
+  // slice.tsx cells whose appearance is utilities (HOW-68) and whose name is what a row is
+  // found by — the id cell, a trace's steps, a pinned comment's key and text, drift's count
+  "gr-id", "ap-trace-steps", "ap-comment-key", "ap-comment-text", "plan-feature", "plan-deps", "dv-evidence", "dv-count",
   "dv-group", "dv-reason",                             // drift grouping + its prose line
   "gr-prose",                                          // inherits .gr-sub entirely
   "sd-rowless-ask",                                    // the panel-carried ask; has a testid
@@ -86,15 +87,14 @@ const BEHAVIOURAL: Array<{ name: string; readBy: string }> = [
 ];
 
 const COMPOSED_NAMES: Array<{ name: string; fedBy: string }> = [
-  { name: "meta", fedBy: "screens/prompts.tsx Diff: `dl ${cls}`" },
-  { name: "hunk", fedBy: "screens/prompts.tsx Diff: `dl ${cls}`" },
-  { name: "add", fedBy: "screens/prompts.tsx Diff: `dl ${cls}`" },
-  { name: "del", fedBy: "screens/prompts.tsx Diff: `dl ${cls}`" },
-  { name: "ctx", fedBy: "screens/prompts.tsx Diff: `dl ${cls}`" },
+  // `meta`, `hunk`, `add`, `del` and `ctx` were fed by screens/prompts.tsx's Diff (`dl ${cls}`).
+  // The diff is drawn with utilities and a sign in its own gutter now (HOW-68), so its rules
+  // went from howdah.css and the exemptions go with them.
   // `model`, `tool`, `operator` and `error` were fed by run/view.tsx's TranscriptRow, which
   // went with the Thread tab. Their rules went too, so the exemptions go — which is exactly
   // what the "allowlist stays honest" test below demands, and why it exists.
-  { name: "attention", fedBy: "run/logs.tsx: `log-row ${r.kind}` — deriveLogRows' kind" },
+  // `attention` was fed by run/logs.tsx's `log-row ${r.kind}`. A logged attention event is
+  // history, not a run waiting on you, so its amber rule went (HOW-68) and the exemption with it.
 ];
 
 /** Element/pseudo/at-rule noise a class regex must not mistake for a class name. */
@@ -302,6 +302,72 @@ describe("tokens.css is the single source of colour and type (P3.12)", () => {
         .map(({ line, i }) => `${f}:${i + 1} ${line.trim()}`);
       expect(bad).toEqual([]);
     }
+  });
+});
+
+/**
+ * HOW-68, DESIGN.md rule 5: "nothing is cut without a way to read it … raw `text-overflow:
+ * ellipsis` in CSS is a test failure". The audit found the same defect in a dozen places — a
+ * span that ends in "…" with no tooltip, or with one that only a mouse could open — and the
+ * cure is that an ellipsis can only be written through the `Truncate` primitive, which grows
+ * a tooltip and a focus stop whenever it actually cuts.
+ *
+ * The selectors that ellipsize by hand TODAY are listed below, so this gate stops the
+ * twenty-fourth without demanding all twenty-three be fixed in one commit. The list only
+ * shrinks: each screen's redesign moves its rows onto `Truncate` and deletes its lines here,
+ * and the second test fails if a line is left behind after its rule has gone — an allowlist
+ * that still names a selector nobody uses is how the next raw ellipsis hides.
+ *
+ * `Truncate` itself is exempt by construction: it uses Tailwind's `truncate` utility, which is
+ * generated into app.css and never appears in the two hand-written sheets scanned here.
+ */
+describe("an ellipsis is written with Truncate, never by hand (HOW-68)", () => {
+  const HAND_WRITTEN = SHEETS.filter((f) => !f.endsWith("tokens.css"));
+  /** `file-basename | selector` for every rule that sets `text-overflow: ellipsis` */
+  // empty since HOW-68's polish pass: `.pr-link`, the last hand-written ellipsis, became a Button-styled link
+  const RAW_ELLIPSIS_ALLOWLIST: string[] = [];
+
+  function rawEllipsis(): string[] {
+    const found: string[] = [];
+    for (const f of HAND_WRITTEN) {
+      const css = readFileSync(f, "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+      for (const m of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+        if (/text-overflow:\s*ellipsis/.test(m[2] ?? "")) found.push(`${f.split("/").pop()} | ${(m[1] ?? "").trim().replace(/\s+/g, " ")}`);
+      }
+    }
+    return found;
+  }
+
+  test("no NEW rule ellipsizes by hand — use <Truncate>, which can be read on hover and focus", () => {
+    expect(rawEllipsis().filter((r) => !RAW_ELLIPSIS_ALLOWLIST.includes(r))).toEqual([]);
+  });
+
+  test("the allowlist only shrinks: every entry still names a rule that ellipsizes", () => {
+    const live = rawEllipsis();
+    expect(RAW_ELLIPSIS_ALLOWLIST.filter((r) => !live.includes(r))).toEqual([]);
+  });
+
+  test("Truncate is where the ellipsis lives, and it brings the tooltip with it", () => {
+    const src = readFileSync(join(APP, "components/ui/truncate.tsx"), "utf8");
+    expect(src).toContain('"min-w-0 truncate"');
+    expect(src).toContain("<Tooltip");
+  });
+});
+
+/**
+ * HOW-68: the theme is `light-dark()` pairs in tokens.css, switched by `color-scheme` on
+ * `:root[data-theme]`. Tailwind's `dark:` variant follows `prefers-color-scheme` instead, so a
+ * `dark:` utility answers the OS rather than the app's own toggle — a light page on a dark
+ * machine drew the vendored questionnaire with dark fills. A token is already both themes.
+ */
+describe("one theming mechanism: tokens, never Tailwind's `dark:` variant (HOW-68)", () => {
+  test("no component carries a `dark:` utility", () => {
+    const hits: string[] = [];
+    for (const f of SOURCES) {
+      const src = readFileSync(f, "utf8").replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+      for (const m of src.matchAll(/(?<![\w-])dark:[\w[\]/().:-]+/g)) hits.push(`${f.slice(APP.length + 1)}: ${m[0]}`);
+    }
+    expect(hits).toEqual([]);
   });
 });
 

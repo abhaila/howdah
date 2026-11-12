@@ -1,6 +1,12 @@
 /**
  * HOW-48 — the run header while an agent turn is live: "Stop at next tool call" is the primary
  * action, and the hard stop sits in a menu with a line saying how the two differ.
+ *
+ * HOW-68: that menu is the header's ONE More menu now (`components/ui/menu`, on Base UI, so
+ * its popup is portalled to the document) instead of a hand-written popover of its own, and an
+ * overdue soft stop turns the visible control INTO Stop now rather than adding a sentence and
+ * a second button to a header that must stay one row. What is pinned is unchanged: which verb
+ * is primary, that Stop now explains itself, and which route each one posts to.
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { act } from "react";
@@ -35,6 +41,8 @@ function render(props: Partial<Parameters<typeof RunControls>[0]> = {}): HTMLEle
   return host;
 }
 const buttons = (el: HTMLElement) => [...el.querySelectorAll(".run-controls button")] as HTMLButtonElement[];
+const moreButton = (el: HTMLElement) => el.querySelector('.run-controls button[aria-haspopup="menu"]') as HTMLButtonElement;
+const menuItem = (label: string) => [...document.querySelectorAll('[role="menuitem"]')].find((i) => i.textContent === label) as HTMLElement | undefined;
 
 describe("the run header on a live agent turn", () => {
   test("'Stop at next tool call' is the primary action; there is no bare Pause beside it", () => {
@@ -43,17 +51,19 @@ describe("the run header on a live agent turn", () => {
     expect(buttons(el).some((b) => b.textContent === "Pause")).toBe(false);
   });
 
-  test("'Stop now' sits in the menu with a line explaining the difference", () => {
+  test("'Stop now' sits in the menu with a line explaining the difference", async () => {
     const el = render({ softStoppable: true });
-    const more = el.querySelector('[aria-label="more ways to stop"]') as HTMLButtonElement;
+    const more = moreButton(el);
     expect(more.getAttribute("aria-expanded")).toBe("false");
-    expect(el.querySelector(".run-menu")).toBeNull();
-    act(() => more.click());
+    expect(document.querySelector('[role="menu"]')).toBeNull();
+    await act(async () => more.click());
     expect(more.getAttribute("aria-expanded")).toBe("true");
-    const menu = el.querySelector('.run-menu[role="menu"]')!;
-    expect(menu.querySelector('[role="menuitem"]')!.textContent).toBe("Stop now");
-    expect(menu.querySelector(".run-menu-note")!.textContent).toContain("Stop now interrupts the agent wherever it is");
-    expect(menu.querySelector(".run-menu-note")!.textContent).toContain("Stop at next tool call lets it finish its thought");
+    const menu = document.querySelector('[role="menu"]')!;
+    expect(menuItem("Stop now")).toBeDefined();
+    expect(menu.textContent).toContain("Stop now interrupts the agent wherever it is");
+    expect(menu.textContent).toContain("Stop at next tool call lets it finish its thought");
+    // the explanation is prose under the item, not something the arrow keys land on
+    expect([...menu.querySelectorAll('[role="menuitem"]')].map((i) => i.textContent)).toEqual(["Stop now", "Abort the run…"]);
   });
 
   test("the soft stop posts to /soft-stop; Stop now posts to the old pause", async () => {
@@ -64,8 +74,8 @@ describe("the run header on a live agent turn", () => {
     }) as typeof fetch;
     const el = render({ softStoppable: true });
     await act(async () => { buttons(el)[0]!.click(); await new Promise((r) => setTimeout(r, 10)); });
-    act(() => (el.querySelector('[aria-label="more ways to stop"]') as HTMLButtonElement).click());
-    await act(async () => { (el.querySelector('[role="menuitem"]') as HTMLButtonElement).click(); await new Promise((r) => setTimeout(r, 10)); });
+    await act(async () => moreButton(el).click());
+    await act(async () => { menuItem("Stop now")!.click(); await new Promise((r) => setTimeout(r, 10)); });
     expect(posted).toEqual(["/api/runs/r1/soft-stop", "/api/runs/r1/pause"]);
   });
 
@@ -82,12 +92,17 @@ describe("the run header on a live agent turn", () => {
     const escalate = el.querySelector(".run-escalate")!;
     expect(escalate.textContent).toContain("not stopped after 2m 5s");
     expect(escalate.querySelector("button")!.textContent).toBe("Stop now");
+    // it REPLACES the spinner that had stopped meaning anything; it is not a second control
+    expect(buttons(el)[0]!.textContent).toBe("Stop now");
   });
 
-  test("a step that is not a steerable agent turn keeps the plain Pause", () => {
+  test("a step that is not a steerable agent turn keeps the plain Pause", async () => {
     const el = render({ softStoppable: false });
     expect(buttons(el)[0]!.textContent).toBe("Pause");
-    expect(el.querySelector('[aria-label="more ways to stop"]')).toBeNull();
+    // Pause already IS the hard stop here, so the menu does not offer it a second time
+    await act(async () => moreButton(el).click());
+    expect(menuItem("Stop now")).toBeUndefined();
+    expect(menuItem("Abort the run…")).toBeDefined();
   });
 });
 

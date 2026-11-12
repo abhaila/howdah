@@ -1,8 +1,29 @@
 /**
  * The viewer's shared hooks, moved out of main.tsx (HOW-16 P1). Nothing here renders; the
- * surfaces that consume them are `components/scroll-shell.tsx` and the run screens.
+ * surfaces that consume them are the shell and the run screens.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
+import { observeAsks, type Observation } from "./attention-sound";
+
+/**
+ * Does a media query match, live. The shell's one use: below 1100px the rail collapses to
+ * icons by itself (DESIGN.md Layout). It is state rather than a CSS `@media` rule so the
+ * breakpoint and the operator's own toggle drive the SAME `data-nav` attribute — two
+ * mechanisms were how the old rail had two different collapsed widths.
+ */
+export function useMediaQuery(query: string): boolean {
+  const read = () => typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia(query).matches;
+  const [matches, setMatches] = useState(read);
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") return;
+    const mq = window.matchMedia(query);
+    const on = () => setMatches(mq.matches);
+    on();
+    mq.addEventListener?.("change", on);
+    return () => mq.removeEventListener?.("change", on);
+  }, [query]);
+  return matches;
+}
 
 /** a ticking clock, so live durations count up without the read model refetching */
 export function useNow(tickMs = 1000): number {
@@ -40,9 +61,15 @@ export function useBottomPinnedScroll(followKey: unknown) {
   return { ref, atTop, atBottom, measure, scrollToTop, scrollToBottom };
 }
 
-/** needs-attention surfaces: trunk-raise favicon + one two-note chime on transition */
-export function useAttentionSurfaces(needsInput: boolean) {
-  const prev = useRef(needsInput);
+/**
+ * needs-attention surfaces: the trunk-raise favicon, and the sound.
+ *
+ * The favicon follows `needsInput` directly. The sound does not: it is decided by
+ * lib/attention-sound.ts from WHICH runs are waiting, so it plays for news and never for
+ * navigation (HOW-68). Pass `null` while the screen has no data yet — "nothing loaded" is not
+ * "nothing waiting", and treating it as such is what forgot every standing ask on each mount.
+ */
+export function useAttentionSurfaces(needsInput: boolean, observation: Observation | null = null) {
   useEffect(() => {
     const fav = document.getElementById("favicon") as HTMLLinkElement | null;
     let timer: ReturnType<typeof setInterval> | undefined;
@@ -50,11 +77,13 @@ export function useAttentionSurfaces(needsInput: boolean) {
       let frame = 0;
       const frames = ["/favicon-raise-1.svg", "/favicon-raise-2.svg"];
       timer = setInterval(() => { if (fav) fav.href = frames[(frame = (frame + 1) % 2)]!; }, 900);
-      if (!prev.current) new Audio("/chime.wav").play().catch(() => {});
     } else if (fav) fav.href = "/favicon.svg";
-    prev.current = needsInput;
     return () => { if (timer) clearInterval(timer); if (fav) fav.href = "/favicon.svg"; };
   }, [needsInput]);
+  const seen = observation === null ? null : JSON.stringify(observation);
+  useEffect(() => {
+    if (seen !== null) void observeAsks(JSON.parse(seen) as Observation);
+  }, [seen]);
 }
 
 /**

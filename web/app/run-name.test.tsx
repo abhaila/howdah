@@ -102,28 +102,42 @@ describe("the Runs list (HOW-18)", () => {
     serve({ "/api/runs": [deriveSummary("named-1", logFor("Fix login", "goal A")), deriveSummary("plain-1", logFor(undefined, "goal B"))] });
     const el = mount(<RunsList />);
     await settle();
-    const labels = [...el.querySelectorAll(".run-goal")].map((n) => n.textContent);
+    // HOW-68: the name is the row's `data-col="name"` cell (was the `.run-goal` span)
+    const labels = [...el.querySelectorAll('a[data-nav-row] [data-col="name"]')].map((n) => n.textContent);
     expect(labels).toEqual(["Fix login", "goal B"]);
   });
 });
 
+/**
+ * HOW-68: Details is a drawer, closed by default below 1280px (happy-dom's window is 1024).
+ * The operator's remembered choice opens it, exactly as it would in the browser.
+ */
+const openDetails = () => localStorage.setItem("howdah.run.details.open", "1");
+const detailsRows = (el: HTMLElement) =>
+  [...el.querySelectorAll('[data-slot="drawer"] dt')].map((dt) => [dt.textContent, dt.nextElementSibling?.firstElementChild?.textContent]);
+
 describe("the run page (HOW-18)", () => {
+  beforeEach(openDetails);
+  afterEach(() => localStorage.removeItem("howdah.run.details.open"));
+
   test("the heading is the name, and the Identity rail lists it beside the graph", async () => {
     serve({ "/api/runs/write-doc-abc/shell": deriveDetail("write-doc-abc", logFor("Fix login")) });
     const el = mount(<RunView id="write-doc-abc" graceMs={OPEN_GRACE_MS} />);
     await settle();
-    expect(el.querySelector(".topbar h1")!.textContent).toBe("Fix login");
-    const rows = [...el.querySelectorAll(".rail .kv")].map((r) => [r.querySelector(".k")?.textContent, r.lastElementChild?.textContent]);
-    expect(rows).toContainEqual(["name", "Fix login"]);
-    expect(rows).toContainEqual(["run", "write-doc-abc"]); // the id is still shown — it is identity
+    expect(el.querySelector(".run-head h1")!.textContent).toBe("Fix login");
+    // HOW-68: the inspector rail is the Details drawer, and its rows are a KeyValue <dl>
+    const rows = detailsRows(el);
+    expect(rows).toContainEqual(["Name", "Fix login"]);
+    expect(rows).toContainEqual(["Run", "write-doc-abc"]); // the id is still shown — it is identity
   });
 
   test("an unnamed run renders as before: goal heading, no name row", async () => {
     serve({ "/api/runs/write-doc-abc/shell": deriveDetail("write-doc-abc", logFor()) });
     const el = mount(<RunView id="write-doc-abc" graceMs={OPEN_GRACE_MS} />);
     await settle();
-    expect(el.querySelector(".topbar h1")!.textContent).toBe("add a user endpoint");
-    expect([...el.querySelectorAll(".rail .kv .k")].map((k) => k.textContent)).not.toContain("name");
+    expect(el.querySelector(".run-head h1")!.textContent).toBe("add a user endpoint");
+    expect(detailsRows(el).map(([k]) => k)).not.toContain("Name");
+    expect(detailsRows(el).map(([k]) => k)).toContain("Run"); // the drawer really is open
   });
 });
 
@@ -143,13 +157,33 @@ describe("the launch form (HOW-18)", () => {
     return nameField;
   }
 
+  // HOW-68 confirming review: the form used to open with an empty graph list when the catalog
+  // could not be read, and said "Still needed: a graph" as if there were none.
+  test("a catalog that cannot be read is said, with a retry that brings the form back", async () => {
+    globalThis.fetch = (async () => new Response(JSON.stringify({ error: "nope" }), { status: 500, headers: { "content-type": "application/json" } })) as unknown as typeof fetch;
+    // no clock: the stubbed fetch has already answered, so draining microtasks is the whole wait
+    const drain = () => act(async () => { for (let i = 0; i < 50; i++) await Promise.resolve(); });
+    const el = mount(<StartRun />);
+    await drain();
+    expect(el.textContent).toContain("Could not load the graphs");
+    expect(el.querySelector("select")).toBeNull();
+    serve(catalog);
+    await act(async () => ([...el.querySelectorAll("button")].find((b) => b.textContent === "Try again") as HTMLButtonElement).click());
+    await drain();
+    expect(el.textContent).not.toContain("Could not load the graphs");
+    expect([...el.querySelectorAll("select option")].map((o) => o.textContent)).toContain("research");
+  });
+
   test("the name field is the Input primitive, and the POST carries the trimmed name", async () => {
     const posted = serve(catalog, { id: "research-abc" });
     const assigned: string[] = [];
     window.location.assign = ((u: string) => { assigned.push(u); }) as typeof window.location.assign;
     const el = mount(<StartRun />);
     const nameField = await fill(el, "  Fix login  ");
-    expect(nameField.className).toContain("font-mono"); // Input's own classes — not a raw <input>
+    // Input's own slot — not a raw <input>. HOW-68: this asserted `font-mono` while every
+    // field was mono; a run's NAME is read, not pasted, so it is sans now (DESIGN.md Type).
+    expect(nameField.getAttribute("data-slot")).toBe("input");
+    expect(nameField.className).not.toContain("font-mono");
     await act(async () => ([...el.querySelectorAll("button")].find((b) => b.textContent!.includes("Launch run")) as HTMLButtonElement).click());
     await settle();
     expect(posted).toHaveLength(1);

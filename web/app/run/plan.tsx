@@ -13,16 +13,36 @@
  *
  * Which one a send will take is said beside the button before it is pressed, and a refusal from
  * either route ("runner is live — pause or abort first, then jump") is shown verbatim.
+ *
+ * HOW-68: the pane is ONE scroller — the plan as a document on the page's own ground (it was a
+ * card, with the criteria in a second card and the composer in a third), then the acceptance
+ * list, then the answer box, which is the one held object here. The Comment / Edit switch is a
+ * pair of toggle chips rather than two buttons trading variants.
+ *
+ * IT USES THE WIDTH IT HAS (the operator's first hands-on feedback: "would like full screen for
+ * the plan" — on a 2000px window the plan sat in a 500px column beside 1200px of nothing). The
+ * column was capped at 760px. Now the document runs to a generous measure (about 110
+ * characters: a plan is a reference you scan — headings, lists, code — not a novel), and once
+ * the PANE is wide enough for two columns the acceptance contract and the answer box move
+ * beside it and stay in view while the plan scrolls (`position: sticky`, in the same scroller:
+ * a column taller than the window is carried up with the end of the plan, so nothing in it is
+ * ever unreachable). Narrower, it is the one column it was, without the cap. "The pane", not
+ * the window: a container query, so opening the Details drawer or leaving focus mode reflows it.
  */
 import { useState } from "react";
-import { FileText, Loader2, MessageSquarePlus, PencilLine, Send } from "lucide-react";
+import { MessageSquarePlus, PencilLine, Send } from "lucide-react";
 import type { RunDetail } from "../../derive";
 import { Markdown } from "@/components/ui/markdown";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { EmptyState } from "@/components/ui/empty-state";
+import { Chip } from "@/components/ui/chip";
+import { ScrollPane } from "@/components/ui/scroll-pane";
+import { SectionLabel } from "@/components/ui/section-label";
 import { useToast } from "@/components/ui/toast";
 import { AcceptanceCard } from "./acceptance";
 import { steerableTurn } from "./progress";
+import { fmtWhen } from "@/lib/format";
 
 export const PLAN_KEY = "implementation_plan";
 export const PLAN_NODE = "implementation.plan";
@@ -59,9 +79,9 @@ export function RunPlan({ runId, detail, onChanged }: { runId: string; detail: R
 
   if (!entry) {
     return (
-      <div className="plan-pane">
-        <p className="plan-empty">This run's graph has no planning step, so there is no plan to review. The Build tab has everything it did.</p>
-      </div>
+      <ScrollPane label="Plan" className="plan-pane">
+        <EmptyState title="No plan">This run's graph has no planning step, so there is no plan to review. The Build tab has everything it did.</EmptyState>
+      </ScrollPane>
     );
   }
   const route = planRoute(detail);
@@ -81,7 +101,7 @@ export function RunPlan({ runId, detail, onChanged }: { runId: string; detail: R
           body: JSON.stringify({ node: PLAN_NODE, message: planInstruction(mode, body) }),
         });
       if (!r.ok) throw new Error(((await r.json().catch(() => null)) as { error?: string } | null)?.error ?? "send failed");
-      toast(route.kind === "steer" ? `sent — ${route.node} reads it at its next tool call` : "sent — the plan is being revised, then the build continues from it");
+      toast(route.kind === "steer" ? `Sent — ${route.node} reads it at its next tool call` : "Sent — the plan is being revised, then the build continues from it");
       setText("");
       setMode("comment");
       setTimeout(onChanged, 300);
@@ -94,49 +114,64 @@ export function RunPlan({ runId, detail, onChanged }: { runId: string; detail: R
     }
   };
 
+  const pickMode = (m: "comment" | "edit") => {
+    if (m === mode) return;
+    setMode(m);
+    setText(m === "edit" ? plan ?? "" : "");
+  };
+
   return (
-    <div className="plan-pane">
-      <div className="plan-head">
-        <FileText size={14} aria-hidden />
-        <h2>The plan</h2>
-        {writer && <span className="plan-meta">{writer.node}@{writer.visit} · {new Date(writer.at).toLocaleString()}</span>}
-      </div>
-      {plan
-        ? <Markdown className="plan-doc" text={plan} />
-        : <p className="plan-empty">{entry.veiled ? "The plan is being rewritten." : "The plan has not been written yet."} It appears here as soon as the planning step publishes it.</p>}
-
-      {detail.acceptance && <AcceptanceCard runId={runId} detail={detail} onChanged={onChanged} />}
-
-      <div className="plan-compose" aria-label="answer the plan">
-        <div className="plan-modes">
-          <Button variant={mode === "comment" ? "outline" : "ghost"} size="sm" aria-pressed={mode === "comment"} onClick={() => { setMode("comment"); setText(""); }}>
-            <MessageSquarePlus size={12} aria-hidden />Comment
-          </Button>
-          <Button variant={mode === "edit" ? "outline" : "ghost"} size="sm" aria-pressed={mode === "edit"} disabled={!plan} onClick={() => { setMode("edit"); setText(plan ?? ""); }}>
-            <PencilLine size={12} aria-hidden />Edit the plan
-          </Button>
+    <ScrollPane label="Plan" className="plan-pane">
+      <div className="plan-layout">
+        <div className="plan-main" data-slot="plan-main">
+          <header className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+            <h2 className="m-0 text-xl font-semibold text-foreground">The plan</h2>
+            {writer && (
+              <span className="text-xs text-muted-foreground">
+                written by <span className="font-mono">{writer.node}@{writer.visit}</span> · {fmtWhen(writer.at)}
+              </span>
+            )}
+          </header>
+          {plan
+            ? <Markdown className="plan-doc" text={plan} />
+            : <p className="m-0 text-body text-muted-foreground">{entry.veiled ? "The plan is being rewritten." : "The plan has not been written yet."} It appears here as soon as the planning step publishes it.</p>}
         </div>
-        <Textarea
-          aria-label={mode === "edit" ? "the plan, edited" : "your comment on the plan"}
-          placeholder={mode === "edit" ? "" : "What should change? e.g. \"keep the old endpoint; add a flag instead\""}
-          value={text}
-          rows={mode === "edit" ? 14 : 3}
-          disabled={route.kind === "closed"}
-          onChange={(e) => setText(e.target.value)}
-        />
-        <div className="plan-send">
-          <span className="plan-route">
-            {route.kind === "steer" && <>Goes to <strong>{route.node}</strong> at its next tool call.</>}
-            {route.kind === "jump" && <>Sends the run back to <strong>{PLAN_NODE}</strong> with this, then the build continues from the revised plan.</>}
-            {route.kind === "closed" && <>Nothing to send to — {route.why}.</>}
-          </span>
-          <Button size="sm" disabled={busy || !text.trim() || route.kind === "closed"} onClick={send}>
-            {busy ? <Loader2 className="animate-spin" /> : <Send />}
-            {mode === "edit" ? "Send the edited plan" : "Send comment"}
-          </Button>
+
+        <div className="plan-side" data-slot="plan-side">
+        {detail.acceptance && <AcceptanceCard runId={runId} detail={detail} onChanged={onChanged} />}
+
+        <section className="plan-compose" aria-label="answer the plan">
+          <div className="flex flex-wrap items-center gap-2">
+            <SectionLabel as="h3">Answer the plan</SectionLabel>
+            <span className="ml-auto flex gap-1" role="group" aria-label="How to answer">
+              <Chip on={mode === "comment"} onClick={() => pickMode("comment")}><MessageSquarePlus size={14} aria-hidden />Comment</Chip>
+              <Chip on={mode === "edit"} disabled={!plan} onClick={() => pickMode("edit")}><PencilLine size={14} aria-hidden />Edit the plan</Chip>
+            </span>
+          </div>
+          <Textarea
+            aria-label={mode === "edit" ? "the plan, edited" : "your comment on the plan"}
+            placeholder={mode === "edit" ? "" : "What should change? For example: keep the old endpoint and add a flag instead."}
+            value={text}
+            rows={mode === "edit" ? 14 : 3}
+            mono={mode === "edit"}
+            disabled={route.kind === "closed"}
+            onChange={(e) => setText(e.target.value)}
+          />
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+            <span className="plan-route min-w-0 flex-1 basis-60 text-sm text-muted-foreground">
+              {route.kind === "steer" && <>Goes to <span className="font-mono text-foreground">{route.node}</span> at its next tool call.</>}
+              {route.kind === "jump" && <>Sends the run back to <span className="font-mono text-foreground">{PLAN_NODE}</span> with this, then the build continues from the revised plan.</>}
+              {route.kind === "closed" && <>Nothing to send to — {route.why}.</>}
+            </span>
+            <Button size="sm" loading={busy} disabled={!text.trim() || route.kind === "closed"} onClick={send}>
+              {!busy && <Send aria-hidden />}
+              {mode === "edit" ? "Send the edited plan" : "Send comment"}
+            </Button>
+          </div>
+          {error && <div className="field-error">{error}</div>}
+        </section>
         </div>
-        {error && <div className="field-error">{error}</div>}
       </div>
-    </div>
+    </ScrollPane>
   );
 }

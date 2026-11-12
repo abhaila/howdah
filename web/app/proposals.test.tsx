@@ -61,11 +61,19 @@ function serve(write: { status: number; body: unknown }, proposal: ProposalView 
   return { posts };
 }
 
-async function render(): Promise<HTMLElement> {
+/**
+ * HOW-68: below 1100px the split frame shows ONE pane, and with nothing selected that is the
+ * list. These tests are about the proposal's own controls, so they run at a width where list
+ * and detail sit side by side (happy-dom starts at 1024).
+ */
+const setWidth = (width: number) => (window as unknown as { happyDOM: { setViewport(v: { width: number; height: number }): void } }).happyDOM.setViewport({ width, height: 900 });
+
+async function render(selected: string | null = null): Promise<HTMLElement> {
+  setWidth(1440);
   host = document.createElement("div");
   document.body.appendChild(host);
   root = createRoot(host);
-  await act(async () => { root!.render(<ToastProvider><ProposalsScreen selected={null} /></ToastProvider>); });
+  await act(async () => { root!.render(<ToastProvider><ProposalsScreen selected={selected} /></ToastProvider>); });
   return host;
 }
 
@@ -74,6 +82,7 @@ afterEach(() => {
   host?.remove();
   root = host = null;
   globalThis.fetch = realFetch;
+  setWidth(1024);
 });
 
 const button = (el: HTMLElement, label: string) =>
@@ -110,7 +119,10 @@ describe("rejecting a revision", () => {
     // render outside it — inert behind its backdrop, and unreadable
     expect(el.querySelectorAll("dialog").length).toBe(0);
     expect(posts.length).toBe(1);
-    expect(el.querySelector(".banner.failed")!.textContent).toContain("already accepted");
+    // HOW-68: the refusal is an inline notice (`role="alert"`), no longer a full-bleed `.banner.failed`
+    const refusal = el.querySelector('[data-slot="proposal-error"]')!;
+    expect(refusal.getAttribute("role")).toBe("alert");
+    expect(refusal.textContent).toContain("already accepted");
     expect(el.querySelector('[aria-live="polite"]')!.textContent).toContain("already accepted");
     // and the typed reason is not lost to a refusal
     await act(async () => button(el, "Reject")!.click());
@@ -124,7 +136,7 @@ describe("rejecting a revision", () => {
     await act(async () => button(el, "Reject the revision")!.click());
     expect(el.querySelectorAll("dialog").length).toBe(0);
     expect(posts[0]).toContain("/reject");
-    expect(el.querySelectorAll(".banner.failed").length).toBe(0);
+    expect(el.querySelectorAll('[data-slot="proposal-error"]').length).toBe(0);
     expect(el.querySelector('[aria-live="polite"]')!.textContent).toContain("the reviser reads your reason as feedback");
     await act(async () => button(el, "Reject")!.click());
     expect(reasonInput(el).value).toBe("");

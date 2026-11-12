@@ -108,6 +108,8 @@ if (import.meta.main) {
     runsDir: join(base, "runs"),
     heartbeatPath: join(base, "heartbeat.json"),
     notifiers: [osNotifier],
+    // no viewerBase: AttentionCenter resolves it (HOWDAH_PORT, else where a viewer last said
+    // it was) — launchd starts this with no HOWDAH_PORT, and :4711 was assumed regardless
   });
   console.log(JSON.stringify(result));
 }

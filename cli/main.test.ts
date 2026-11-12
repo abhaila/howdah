@@ -12,7 +12,8 @@ import { claimRunner, releaseRunner } from "../engine/control";
 import { EventLog } from "../log/write";
 import { processStart } from "../log/lockfile";
 import { AttentionCenter } from "../engine/attention";
-import { splitProposalFlag } from "./main";
+import { notifierCheck, splitProposalFlag } from "./main";
+import { notifierStatus } from "../engine/attention";
 import { createHowdahServer } from "../web/server";
 
 const MAIN = join(import.meta.dir, "main.ts");
@@ -271,4 +272,26 @@ describe("legacy locks held by cli/main.ts and the `up` supervisor (final review
       await bystander.exited;
     }
   }, 30000);
+});
+
+describe("doctor: clickable notifications (HOW-68 D18)", () => {
+  test("the row is optional, names what the operator gets, and carries the one-line fix", () => {
+    const missing = notifierCheck(notifierStatus(() => null));
+    expect(missing[0]).toBe("clickable notifications");
+    expect(missing[1]).toBe(false);
+    expect(missing[3]).toBe(true); // optional: Howdah still rings, so doctor does not fail on it
+    expect(missing[2]).toContain("Script Editor");
+    expect(missing[2]).toContain("`brew install terminal-notifier`");
+    const present = notifierCheck(notifierStatus(() => "/opt/homebrew/bin/terminal-notifier"));
+    expect(present[1]).toBe(true);
+    expect(present[2]).not.toContain("brew install");
+  });
+
+  test("`doctor` prints the row", async () => {
+    const { base } = home();
+    const r = await cli(base, "doctor");
+    expect(r.stdout).toMatch(/clickable notifications\s+terminal-notifier/);
+    // doctor probes whatever CLIs this machine has; give a slow runner room (the row itself
+    // names terminal-notifier whether or not it is installed, so PATH does not decide the test)
+  }, 30_000);
 });

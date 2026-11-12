@@ -5,22 +5,31 @@
  * the server, which rebuilds it from the run's PINNED template and re-hashes to prove it.
  * An unproven reconstruction says so — showing a guess as fact is the failure mode here.
  *
- * Two raw controls die here: the `.linkish` span with an onClick (keyboard-unreachable,
- * P2.8) and the `.pc-feedback` hand-CSS button (P1.5) are both Buttons now.
+ * HOW-68: the prompt and the context it read are the shared `CodeBlock` (the rendered prompt
+ * had a 2px indigo stripe down its left edge — a side stripe, which DESIGN.md bans). An
+ * UNVERIFIED rebuild was amber; amber means a run is waiting on you and nothing else, so it is
+ * a warning glyph and plain words instead. `defaultOpen` is for the Steps panel's own
+ * "Prompt & context" tab, where a second click to see the prompt was a click for nothing.
  */
 import { useEffect, useState } from "react";
 import { submitOnEnter } from "@/lib/keys";
-import { MessageSquarePlus, Send } from "lucide-react";
+import { ChevronDown, ChevronRight, MessageSquarePlus, Send, TriangleAlert } from "lucide-react";
 import type { RunDetail } from "../../derive";
 import type { ReconstructedRender } from "../../../prompts/library";
 import { getJSON } from "@/lib/net";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Tabs } from "@/components/ui/tabs";
+import { CodeBlock } from "@/components/ui/markdown";
+import { SectionLabel } from "@/components/ui/section-label";
+import { LoadingBlock } from "@/components/ui/skeleton";
 import { useToast } from "@/components/ui/toast";
 
-export function PromptAndContext({ runId, render }: { runId: string; render: RunDetail["renders"][number] }) {
-  const [open, setOpen] = useState(false);
+const NOTE = "m-0 text-sm leading-[1.5] text-muted-foreground";
+const WARN = "m-0 flex items-start gap-1.5 text-sm font-medium leading-[1.5] text-foreground [&_svg]:mt-0.5 [&_svg]:size-3.5 [&_svg]:shrink-0";
+
+export function PromptAndContext({ runId, render, defaultOpen = false }: { runId: string; render: RunDetail["renders"][number]; defaultOpen?: boolean }) {
+  const [open, setOpen] = useState(defaultOpen);
   const [instance, setInstance] = useState<ReconstructedRender | "missing" | null>(null);
   const [feedback, setFeedback] = useState(false);
 
@@ -33,34 +42,34 @@ export function PromptAndContext({ runId, render }: { runId: string; render: Run
 
   return (
     <div className="prompt-context">
-      <div className="pc-head">
-        <Button variant="link" size="inline" aria-expanded={open} onClick={() => setOpen(!open)}>
-          Prompt &amp; context · {render.prompt} v{render.prompt_version} {open ? "▾" : "▸"}
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <Button variant="ghost" size="sm" className="min-w-0 px-1.5" aria-expanded={open} onClick={() => setOpen(!open)}>
+          {open ? <ChevronDown aria-hidden /> : <ChevronRight aria-hidden />}
+          Prompt &amp; context · <span className="font-mono font-normal">{render.prompt}</span> v{render.prompt_version}
         </Button>
-        <Button variant="ghost" size="sm" onClick={() => { setFeedback(!feedback); setOpen(true); }}>
-          <MessageSquarePlus /> Add feedback
+        <Button variant="ghost" size="sm" className="ml-auto" onClick={() => { setFeedback(!feedback); setOpen(true); }}>
+          <MessageSquarePlus aria-hidden /> Add feedback
         </Button>
       </div>
       {open && (
         <>
-          {instance === null && <div className="pc-note">rebuilding the rendered prompt…</div>}
+          {instance === null && <LoadingBlock label="Rebuilding the rendered prompt" rows={4} />}
           {instance === "missing" && (
-            <div className="pc-note warn">
-              the rendered prompt cannot be rebuilt — this run's pinned copy of {render.prompt} is gone
-            </div>
+            <p className={WARN}>
+              <TriangleAlert aria-hidden />
+              <span>The rendered prompt cannot be rebuilt — this run's pinned copy of <span className="font-mono">{render.prompt}</span> is gone.</span>
+            </p>
           )}
           {instance && instance !== "missing" && (
             <>
-              <div className={`pc-note ${instance.verified ? "" : "warn"}`}>
-                {instance.verified
-                  ? "verified against the recorded rendered_hash — this is exactly what the agent read"
-                  : "UNVERIFIED — the rebuild does not match the recorded hash, so treat it as approximate"}
-              </div>
-              <pre className="pc-rendered">{instance.text}</pre>
+              {instance.verified
+                ? <p className={NOTE}>Verified against the recorded hash — this is exactly what the agent read.</p>
+                : <p className={WARN}><TriangleAlert aria-hidden /><span><strong className="font-semibold">Unverified.</strong> The rebuild does not match the recorded hash, so treat this text as approximate.</span></p>}
+              <CodeBlock wrap clamp label="Rendered prompt">{instance.text}</CodeBlock>
             </>
           )}
-          <div className="pc-note">context read</div>
-          <pre>{JSON.stringify(render.context_read, null, 2)}</pre>
+          <SectionLabel as="h3" className="mt-1">Context read</SectionLabel>
+          <CodeBlock wrap clamp label="Context read">{JSON.stringify(render.context_read, null, 2)}</CodeBlock>
         </>
       )}
       {feedback && (
@@ -103,26 +112,27 @@ export function FeedbackForm({ promptId, runId, node, visit, renderedHash, onDon
       return;
     }
     setState("saved");
-    toast(`feedback recorded against ${promptId}`);
+    toast(`Feedback recorded against ${promptId}`);
   };
 
   if (state === "saved")
     return (
       <div className="feedback-card">
-        <div className="pc-note">
-          feedback recorded against {node}@{visit} — nothing changed yet (R2).{" "}
-          <a href={`/prompts/${encodeURIComponent(promptId)}`}>Open {promptId}</a> to draft a revision.
-        </div>
+        <p className={NOTE}>
+          Feedback recorded against <span className="font-mono">{node}@{visit}</span> — nothing changed yet.{" "}
+          <a className="text-primary underline underline-offset-2" href={`/prompts/${encodeURIComponent(promptId)}`}>Open <span className="font-mono">{promptId}</span></a> to draft a revision.
+        </p>
         <Button variant="ghost" size="sm" onClick={onDone}>Close</Button>
       </div>
     );
 
   return (
     <div className="feedback-card">
-      <div className="pc-note">
-        feedback on <strong>{promptId}</strong> at {node}@{visit} · hash {renderedHash}
-      </div>
+      <p className={NOTE}>
+        Feedback on <span className="font-mono text-foreground">{promptId}</span> at <span className="font-mono">{node}@{visit}</span> · hash <span className="font-mono [overflow-wrap:anywhere]">{renderedHash}</span>
+      </p>
       <Tabs
+        label="Your verdict on this prompt"
         value={verdict}
         onValueChange={(v) => setVerdict(v as "reject" | "accept")}
         items={[{ value: "reject", label: "Needs work" }, { value: "accept", label: "Good" }]}
@@ -136,9 +146,9 @@ export function FeedbackForm({ promptId, runId, node, visit, renderedHash, onDon
         onKeyDown={submitOnEnter(() => void send(), { enabled: Boolean(note.trim()) && state !== "saving" })}
       />
       {error && <div className="field-error">{error}</div>}
-      <div className="feedback-actions">
+      <div className="flex items-center gap-2">
         <Button size="sm" disabled={!note.trim() || state === "saving"} onClick={send}>
-          <Send />{state === "saving" ? "saving…" : "Save feedback"}
+          <Send aria-hidden />{state === "saving" ? "Saving…" : "Save feedback"}
         </Button>
         <Button variant="ghost" size="sm" onClick={onDone}>Cancel</Button>
       </div>

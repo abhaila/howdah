@@ -9,6 +9,7 @@ import { deriveDetail } from "../derive";
 import { FakeLog } from "../slice.fixtures";
 import { conversation } from "./run/chat";
 import { EvidenceStrip } from "./run/evidence";
+import { fmtWhen } from "@/lib/format";
 
 let root: Root | null = null;
 let host: HTMLElement | null = null;
@@ -58,7 +59,8 @@ describe("the Evidence strip", () => {
     act(() => (el.querySelector(".ev-thumb") as HTMLButtonElement).click());
     const dialog = document.querySelector("dialog")!;
     expect(dialog.textContent).toContain("http://127.0.0.1:5555/run/x");
-    expect(dialog.textContent).toContain(new Date("2026-10-12T10:00:00.000Z").toLocaleString());
+    // HOW-68: every moment goes through fmtWhen — a medium date and the time to the minute
+    expect(dialog.textContent).toContain(fmtWhen("2026-10-12T10:00:00.000Z"));
     expect(dialog.querySelector(".ev-console")!.textContent).toBe("the panel threw\nand again");
     expect(dialog.querySelector("a")!.getAttribute("href")).toContain("console.txt");
   });

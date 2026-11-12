@@ -148,10 +148,13 @@ describe("the draft card in the run's Chat — D-4A", () => {
     const card = el.querySelector(".draft-card")!;
     expect(card).not.toBeNull();
     expect(card.querySelector(".draft-basis")?.textContent).toBe("based on quick-task · 3 steps");
-    expect(card.querySelector(".draft-sum")?.textContent).toBe("⚠ 1 step can change your code · ◐ 4 changed · ⓘ 0 worth a look");
+    // HOW-68: the marks are inline SVG now (DESIGN.md: never dingbats), so the line's TEXT is its words
+    expect(card.querySelector(".draft-sum")?.textContent).toBe("1 step can change your code · 4 changed · 0 worth a look");
+    expect(card.querySelectorAll(".draft-sum .draft-glyph svg")).toHaveLength(3);
     const headings = [...card.querySelectorAll(".draft-sec h3")].map((h) => h.textContent);
     // HOW-66: Ask for changes is its own labelled section, after Worth a look
-    expect(headings).toEqual(["Can change your code · 1", "What changed from quick-task · 4", "Unchanged (1)", "Worth a look · 0", "Ask for changes"]);
+    // HOW-68: a heading is a SectionLabel, whose count is its own quiet number rather than "· N" typed into the title
+    expect(headings).toEqual(["Can change your code1", "What changed from quick-task4", "Unchanged (1)", "Worth a look0", "Ask for changes"]);
   });
 
   test("empty: a draft from nothing says `New graph`, every row is added, empty sections say Nothing flagged", async () => {
@@ -193,16 +196,20 @@ describe("the draft card in the run's Chat — D-4A", () => {
     await click(buttonNamed(el, "Save")!);
     expect(calls.find((c) => c.method === "POST")).toMatchObject({ url: "/api/runs/r1/draft/save", body: { name: "my-look" } });
     const receipt = el.querySelector(".draft-receipt")!;
-    expect(receipt.textContent).toBe("✓ Saved as my-look · not edited · Open · Run it");
+    expect(receipt.textContent).toBe("Saved as my-look · not edited · Open · Run it"); // HOW-68: the tick is an SVG
     expect(linkNamed(el, "Open")?.getAttribute("href")).toBe("/graphs/my-look/build");
     expect(linkNamed(el, "Run it")?.getAttribute("href")).toBe("/new?graph=my-look");
     expect(buttonNamed(el, "Save")).toBeUndefined(); // a reload or a second tab never offers it twice
+    // HOW-68 confirming review: the button that was pressed is gone, so the receipt takes focus
+    // (it fell to <body>); a receipt found already saved, below, takes nothing
+    expect(document.activeElement).toBe(receipt);
 
     if (root) act(() => root!.unmount());
     host?.remove();
     serve([{ ...readOnlyDraft(), saved: { name: "my-look", edited: true } }]);
     const again = await mount(<DraftCard runId="r1" />);
     expect(again.querySelector(".draft-receipt")?.textContent).toContain("Saved as my-look · edited on canvas");
+    expect(document.activeElement).not.toBe(again.querySelector(".draft-receipt")); // found saved: no focus taken
   });
 
   test("a 409 is shown word for word and the cursor goes back to the name (D-9A)", async () => {
@@ -309,7 +316,11 @@ describe("Ask for changes and Discard (HOW-66)", () => {
     expect(region).toBeDefined();
     expect(region.querySelector("label")?.textContent).toContain("What should be different?");
     expect(region.querySelector("label textarea")).toBe(changeBox(el)); // the box is labelled, and is the Textarea primitive
-    expect(changeBox(el).className).toContain("font-mono");
+    // HOW-68: the proof it is the primitive is its `data-slot`, not its face. It used to be
+    // `font-mono`, when every field was mono; a field is sans now unless its VALUE is machine
+    // text (DESIGN.md Type), and "what should be different?" is answered in prose.
+    expect(changeBox(el).getAttribute("data-slot")).toBe("textarea");
+    expect(changeBox(el).className).not.toContain("font-mono");
     const redraft = [...region.querySelectorAll("button")].find((b) => b.textContent === "Redraft")!;
     expect(redraft.disabled).toBe(true); // nothing to ask for yet
     typeChange(changeBox(el), "  make the review read-only ");
@@ -332,7 +343,7 @@ describe("Ask for changes and Discard (HOW-66)", () => {
     serve([ready({ redrafts: [{ run: "draft-graph-c1", at: "2026-10-21T10:00:00Z" }, { run: "draft-graph-c2", at: "2026-10-21T11:00:00Z" }] })]);
     const el = await mount(<DraftCard runId="r1" />);
     const receipts = [...el.querySelectorAll(".draft-receipt")].map((r) => r.textContent);
-    expect(receipts).toEqual(["↻ Redrafted → run draft-graph-c1", "↻ Redrafted → run draft-graph-c2"]);
+    expect(receipts).toEqual(["Redrafted → run draft-graph-c1", "Redrafted → run draft-graph-c2"]); // HOW-68: the mark is an SVG
     expect(el.querySelectorAll(".draft-receipt[role=status]")).toHaveLength(2);
     expect(linkNamed(el, "run draft-graph-c1")?.getAttribute("href")).toBe("/run/draft-graph-c1");
     expect(changeBox(el)).not.toBeNull();
@@ -345,7 +356,7 @@ describe("Ask for changes and Discard (HOW-66)", () => {
     await click(buttonNamed(el, "Discard")!);
     expect(calls.filter((c) => c.method === "POST").map((c) => c.url)).toEqual(["/api/runs/r1/draft/discard"]);
     const receipt = el.querySelector(".draft-receipt[role=status]")!;
-    expect(receipt.textContent).toBe("✕ Discarded · this draft will not be saved");
+    expect(receipt.textContent).toBe("Discarded · this draft will not be saved"); // HOW-68: the mark is an SVG
     for (const gone of ["Save", "Review and save", "Redraft", "Discard"]) expect(buttonNamed(el, gone)).toBeUndefined();
     expect(changeBox(el)).toBeNull();
     expect(nameBox(el)).toBeNull();
@@ -355,7 +366,7 @@ describe("Ask for changes and Discard (HOW-66)", () => {
   test("a discarded draft that was redrafted shows both receipts", async () => {
     serve([ready({ discarded: { at: "t" }, redrafts: [{ run: "c1", at: "t" }] })]);
     const el = await mount(<DraftCard runId="r1" />);
-    expect([...el.querySelectorAll(".draft-receipt")].map((r) => r.textContent)).toEqual(["✕ Discarded · this draft will not be saved", "↻ Redrafted → run c1"]);
+    expect([...el.querySelectorAll(".draft-receipt")].map((r) => r.textContent)).toEqual(["Discarded · this draft will not be saved", "Redrafted → run c1"]);
   });
 
   test("a refused discard is shown word for word", async () => {
@@ -395,12 +406,24 @@ describe("/runs/:id/draft", () => {
     expect(el.textContent).toContain("There is no run called `r1`.");
   });
 
+  // HOW-68 confirming review: a 500's `{error}` body is not one of the route's answers. It was
+  // drawn as "No draft to review yet" with an empty reason.
+  test("a server fault is said as one, with its status — not as a run with no draft", async () => {
+    globalThis.fetch = (async () => new Response(JSON.stringify({ error: "derive blew up" }), { status: 500, headers: { "content-type": "application/json" } })) as unknown as typeof fetch;
+    const el = await mount(<DraftReview runId="r1" />);
+    expect(el.textContent).toContain("could not read this draft");
+    expect(el.textContent).toContain("500");
+    expect(el.textContent).not.toContain("derive blew up");
+    expect(linkNamed(el, "Back to the run")?.getAttribute("href")).toBe("/run/r1");
+  });
+
   test("ready, wide: the list, the picture beside it with the removed step struck through, Save and Open on canvas", async () => {
     setWidth(1440);
     serve([ready()]);
     const el = await mount(<DraftReview runId="r1" />);
     expect(el.querySelector(".draft-list")).not.toBeNull();
-    const removed = el.querySelector(".dag-node.removed")!;
+    // HOW-68: the picture is a React Flow canvas of cards now (it was an SVG of `<g class="dag-node">`)
+    const removed = el.querySelector(".dag-card.removed")!;
     expect(removed.getAttribute("aria-label")).toContain("quick-task.work");
     expect(removed.getAttribute("aria-label")).toContain("removed");
     expect(buttonNamed(el, "Save")).toBeDefined(); // the page always offers Save (D-6A)
@@ -411,11 +434,12 @@ describe("/runs/:id/draft", () => {
   test("below 1280px the picture is under the list, behind `Show the draft`", async () => {
     serve([ready()]);
     const el = await mount(<DraftReview runId="r1" />);
-    expect(el.querySelector(".dag-node")).toBeNull();
+    expect(el.querySelector(".dag-card")).toBeNull();
     const show = buttonNamed(el, "Show the draft")!;
     expect(show.getAttribute("aria-expanded")).toBe("false");
     await click(show);
-    expect(el.querySelector(".draft-page-main .dag-node.removed")).not.toBeNull();
+    // HOW-68: the reading column is `data-slot="draft-main"` (was `.draft-page-main`)
+    expect(el.querySelector('[data-slot="draft-main"] .dag-card.removed')).not.toBeNull();
     expect(buttonNamed(el, "Hide the draft")?.getAttribute("aria-expanded")).toBe("true");
   });
 
@@ -425,11 +449,13 @@ describe("/runs/:id/draft", () => {
     const el = await mount(<DraftReview runId="r1" />);
     const row = el.querySelector<HTMLElement>('.draft-row[data-step="quick-review.review"]')!;
     await act(async () => { row.focus(); });
-    const lit = [...el.querySelectorAll(".dag-node.highlight")];
+    // HOW-68: the lit step wears the accent ring the selected card wears (`.selected`); the old
+    // `.highlight` outline was amber, which means a run is waiting on you and nothing else
+    const lit = [...el.querySelectorAll(".dag-card.selected")];
     expect(lit).toHaveLength(1);
     expect(lit[0]!.getAttribute("aria-label")).toContain("quick-review.review");
     await act(async () => { row.blur(); });
-    expect(el.querySelectorAll(".dag-node.highlight")).toHaveLength(0);
+    expect(el.querySelectorAll(".dag-card.selected")).toHaveLength(0);
   });
 
   test("draftShape: removed steps are drawn, and nothing routes into them", () => {

@@ -1,7 +1,7 @@
 /**
  * HOW-73 — the run view and the builder over a parallel step. The Steps pane draws the branches
  * of one visit as one block of concurrent rows; the DAG draws the fork and the join and puts the
- * branches in one layer (web/app/lib/layout.ts, the ONE placement); and the builder OPENS a
+ * branches in one layer (web/app/lib/dag-layout.ts since HOW-68; lib/layout.ts for the builder); and the builder OPENS a
  * parallel graph and draws it without crashing — editing one there is deferred, and the panel
  * says so.
  */
@@ -11,7 +11,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { deriveDetail } from "../derive";
 import { FakeLog } from "../slice.fixtures";
 import { RunSteps } from "./run/steps";
-import { GraphDag, type GraphShapeDto } from "./graph-dag";
+import { GraphDag, dagFlow, type GraphShapeDto } from "./graph-dag";
 import { layout } from "./lib/layout";
 import { specToFlow } from "./builder/canvas";
 import { GraphBuilder } from "./screens/graph-builder";
@@ -80,6 +80,14 @@ describe("GraphDag: fork and join", () => {
     expect(el.querySelectorAll('[data-edge-kind="fork"]')).toHaveLength(3);
     expect(el.querySelectorAll('[data-edge-kind="join"]')).toHaveLength(3);
     for (const p of el.querySelectorAll("[data-edge-kind]")) expect(p.getAttribute("stroke-dasharray")).toBe("4 3");
+    // HOW-68: the read-only picture is laid out by lib/dag-layout.ts now (a real layered layout),
+    // so "the branches share one layer, between the fork and the join" is asked of what it drew...
+    const box = new Map(dagFlow(shape).cards.map((c) => [c.node.id, c.box]));
+    const mids = BRANCHES.map((b) => box.get(b)!.y + box.get(b)!.height / 2);
+    expect(new Set(mids).size).toBe(1);
+    expect(box.get("done")!.y).toBeGreaterThan(mids[0]!);
+    expect(box.get("fan")!.y).toBeLessThan(mids[0]!);
+    // ...and of lib/layout.ts too, which still places the same steps for the builder
     const pos = layout(shape);
     const ys = BRANCHES.map((b) => pos.get(b)!.y);
     expect(new Set(ys).size).toBe(1);

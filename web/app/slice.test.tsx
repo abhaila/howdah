@@ -132,7 +132,7 @@ describe("ApprovalCard", () => {
     const { slice, log, id } = awaitingSlice();
     const el = render(<ApprovalCard runId="r1" slice={slice} onChanged={noop} />);
     expect($(el, ".approval-card")!.classList.contains("needs-you")).toBe(true);
-    expect($(el, "h3")!.textContent).toBe("Needs you — approve this design");
+    expect($(el, "h3")!.textContent).toBe("Approve this design?"); // HOW-68: the card says what it asks; "Needs you —" was the prefix every ask card dropped
     act(() => root!.unmount());
 
     log.add({ type: "slice-approved", proposal_id: id, proposal_hash: `h${id}`, manifest_hash: "m1" });
@@ -243,6 +243,8 @@ describe("ApprovalCard", () => {
     await decide(el, "Approve");
     const alert = $(el, '[role="alert"]')!;
     expect(alert.textContent).toBe(refusal);
+    // the confirming review: focus fell to <body> after a refused approval — the refusal takes it
+    expect(document.activeElement).toBe(alert);
     expect(el.textContent).not.toMatch(/\bfailed\b/i);
     expect(changed).toHaveBeenCalledTimes(1); // the log moved on: reload to show where
   });
@@ -267,7 +269,7 @@ describe("ApprovalCard", () => {
     failApproval(log, 1, "approval executor threw: base unreadable");
     const el = render(<ApprovalCard runId="r1" slice={deriveSlice(log.events)!} onChanged={noop} />);
     expect($(el, ".approval-card")!.classList.contains("needs-you")).toBe(true);
-    expect($(el, "h3")!.textContent).toBe("Needs you — see the Ask tab");
+    expect($(el, "h3")!.textContent).toBe("This step is waiting on a reply — see the Ask tab"); // HOW-68: as above
     expect($(el, '[data-testid="ap-explain"]')!.textContent).toBe(
       "The run parked on slice.approve (attempt-failed): approval executor threw: base unreadable. Answer it in the Ask tab — a reply, not a design decision, moves it on.",
     );
@@ -319,7 +321,8 @@ describe("ApprovalCard", () => {
     proposeAndPark(log, ghostsV2(), 2);
     const el = render(<ApprovalCard runId="r1" slice={deriveSlice(log.events)!} onChanged={noop} />);
     const orphans = $(el, '[data-testid="orphaned"]')!;
-    expect($(orphans, ".rh")!.textContent).toBe("Orphaned (no longer in this proposal)");
+    // HOW-68: section labels are the SectionLabel primitive now (was a shared `.rh` h2)
+    expect($(orphans, '[data-slot="section-label"]')!.textContent).toBe("Orphaned (no longer in this proposal)");
     expect($(orphans, ".ap-comment-key")!.textContent).toBe("com.x.Users.legacy()");
     expect($(orphans, ".ap-comment-text")!.textContent).toBe("keep legacy for now");
     expect($(el, '.ghost-item[data-id="com.x.Users.legacy()"]')).toBeNull();
@@ -436,8 +439,10 @@ describe("ApprovalCard over a slice plan", () => {
     started(log, "quick-task");
     proposeAndPark(log, { something: "else" });
     const el = render(<ApprovalCard runId="r1" slice={deriveSlice(log.events)!} onChanged={noop} />);
-    expect($(el, ".pd-note")!.textContent).toContain("not a ghost set");
-    expect($(el, ".sd-raw")!.textContent).toContain("something");
+    // HOW-68: the note is a paragraph and the raw proposal the shared CodeBlock (were `.pd-note`
+    // and `.sd-raw`, two other surfaces' classes)
+    expect($(el, ".approval-card p")!.textContent).toContain("not a ghost set");
+    expect($(el, ".code-block")!.textContent).toContain("something");
     expect($$(el, ".plan-slice")).toHaveLength(0);
   });
 });
@@ -543,7 +548,8 @@ describe("slice panes and progress", () => {
     expect(failure).not.toBeNull();
     const el = render(<StatusBadge status={status} />);
     expect($(el, ".status")!.dataset.status).toBe("needs-input");
-    expect(el.textContent?.trim()).toBe("needs input");
+// HOW-68: the label is the operator's words; `data-status` above still carries the enum
+    expect(el.textContent?.trim()).toBe("Waiting on you");
   });
 });
 

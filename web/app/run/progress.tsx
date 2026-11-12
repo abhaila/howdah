@@ -23,6 +23,14 @@
  * whether the agent is moving) and a one-phrase summary. Collapsed-ness is an operator
  * preference stored like a pane width (lib/panel.ts), never a run fact. The rail copy has no
  * toggle: the rail is where the detail lives, and it is already out of the stream's way.
+ *
+ * HOW-68: the pinned plan was capped with `max-height` + `overflow-y: auto` — a second scroller
+ * inside the Build pane's head, against DESIGN.md's "one scroller per pane". Pinned, it now
+ * shows a WINDOW of the plan around the item in progress and says how many it left out; the
+ * whole plan is in Details (the `rail` variant), which scrolls with the drawer. The block
+ * labels are `SectionLabel`s rather than uppercase micro-labels, a commit subject is cut with
+ * `Truncate`, and "quiet for a while" is said in words and weight, not in amber: amber means
+ * a run is waiting on you, and a quiet agent is not that.
  */
 import { useId, useState } from "react";
 import { Camera, CheckCircle2, ChevronDown, ChevronRight, Circle, CircleDot, GitCommitHorizontal, ListChecks } from "lucide-react";
@@ -30,6 +38,8 @@ import { evidenceUrl } from "./evidence";
 import type { RunDetail } from "../../derive";
 import type { LiveGit } from "../../live-git";
 import { Button } from "@/components/ui/button";
+import { SectionLabel } from "@/components/ui/section-label";
+import { Truncate } from "@/components/ui/truncate";
 import { useNow } from "@/lib/hooks";
 import { readStored, writeStored } from "@/lib/panel";
 import { fmtAgo, liveness } from "@/lib/liveness";
@@ -67,6 +77,18 @@ const ago = (iso: string, now: number) => fmtAgo(now - new Date(iso).getTime());
 /** one preference for every run: an operator who wants the stream clear wants it clear everywhere */
 export const PROGRESS_COLLAPSED_KEY = "howdah.chat.progress.collapsed";
 const parseFlag = (raw: string) => (raw === "true" ? true : raw === "false" ? false : null);
+/** below this window height the pinned panel starts collapsed (the operator's own choice still wins) */
+const SHORT_WINDOW = 720;
+/** how many plan items the pinned panel shows; the rest are counted, and all of them are in Details */
+export const PINNED_PLAN_WINDOW = 6;
+
+/** the slice of a plan the pinned panel shows: a window that keeps the item in progress in view */
+export function planWindow<T extends { status: string }>(items: readonly T[], size = PINNED_PLAN_WINDOW): { from: number; shown: T[] } {
+  if (items.length <= size) return { from: 0, shown: [...items] };
+  const at = Math.max(0, items.findIndex((i) => i.status === "in_progress"));
+  const from = Math.min(Math.max(0, at - 1), items.length - size);
+  return { from, shown: items.slice(from, from + size) };
+}
 
 export function ProgressPanel({ detail, liveGit, variant = "pinned", runId }: {
   detail: RunDetail;
@@ -78,7 +100,9 @@ export function ProgressPanel({ detail, liveGit, variant = "pinned", runId }: {
 }) {
   const now = useNow();
   const bodyId = useId();
-  const [stored, setStored] = useState(() => readStored(PROGRESS_COLLAPSED_KEY, false, parseFlag));
+  // until the operator has chosen: open, except in a window too short to give it 250px and
+  // still leave the transcript room (HOW-68 — at 1024×640 it left the conversation 158px)
+  const [stored, setStored] = useState(() => readStored(PROGRESS_COLLAPSED_KEY, typeof window !== "undefined" && window.innerHeight < SHORT_WINDOW, parseFlag));
   const collapsible = variant === "pinned";
   const collapsed = collapsible && stored;
   const step = liveStep(detail);
@@ -108,7 +132,7 @@ export function ProgressPanel({ detail, liveGit, variant = "pinned", runId }: {
             aria-label={`${collapsed ? "Expand" : "Collapse"} live progress for ${step.node}@${step.visit}`}
             onClick={() => { setStored(!collapsed); writeStored(PROGRESS_COLLAPSED_KEY, String(!collapsed)); }}
           >
-            {collapsed ? <ChevronRight size={12} aria-hidden /> : <ChevronDown size={12} aria-hidden />}
+            {collapsed ? <ChevronRight aria-hidden /> : <ChevronDown aria-hidden />}
             <span className="pp-step">{step.node}@{step.visit}</span>
           </Button>
         ) : (
@@ -124,21 +148,28 @@ export function ProgressPanel({ detail, liveGit, variant = "pinned", runId }: {
       {!collapsed && (
         <div className="pp-body" id={bodyId}>
           <div className="pp-block">
-            <div className="pp-label"><ListChecks size={12} aria-hidden /> Plan{plan && plan.items.length > 0 && <> · {done} of {plan.items.length} done</>}</div>
-            {plan && plan.items.length > 0 ? (
-              <ul className="pp-plan">
-                {plan.items.map((item, i) => {
-                  const Icon = STATUS_ICON[item.status];
-                  return (
-                    <li key={i} className="pp-item" data-status={item.status}>
-                      <Icon size={12} aria-hidden />
-                      <span>{item.content}</span>
-                      <span className="sr-only">({item.status.replace("_", " ")})</span>
-                    </li>
-                  );
-                })}
-              </ul>
-            ) : (
+            <SectionLabel className="items-center gap-1.5"><ListChecks size={12} aria-hidden /> Plan{plan && plan.items.length > 0 && <> · {done} of {plan.items.length} done</>}</SectionLabel>
+            {plan && plan.items.length > 0 ? (() => {
+              const { from, shown } = collapsible ? planWindow(plan.items) : { from: 0, shown: plan.items };
+              const hidden = plan.items.length - shown.length;
+              return (
+                <>
+                  <ul className="pp-plan">
+                    {shown.map((item, i) => {
+                      const Icon = STATUS_ICON[item.status];
+                      return (
+                        <li key={from + i} className="pp-item" data-status={item.status}>
+                          <Icon size={12} aria-hidden />
+                          <span>{item.content}</span>
+                          <span className="sr-only">({item.status.replace("_", " ")})</span>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                  {hidden > 0 && <div className="pp-empty">{hidden} more — the whole plan is in Details</div>}
+                </>
+              );
+            })() : (
               <div className="pp-empty">{harness === "claude" ? "no plan reported yet" : "no plan reported by this harness"}</div>
             )}
           </div>
@@ -150,14 +181,14 @@ export function ProgressPanel({ detail, liveGit, variant = "pinned", runId }: {
             if (!screens.length || !runId) return null;
             return (
               <div className="pp-block">
-                <div className="pp-label"><Camera size={12} aria-hidden /> Evidence · {screens.length} screen{screens.length === 1 ? "" : "s"}</div>
+                <SectionLabel className="items-center gap-1.5"><Camera size={12} aria-hidden /> Evidence · {screens.length} screen{screens.length === 1 ? "" : "s"}</SectionLabel>
                 {newest && <img className="pp-evidence" src={evidenceUrl(runId, newest.file)} alt={`newest screenshot: ${newest.path}`} loading="lazy" />}
               </div>
             );
           })()}
 
           <div className="pp-block">
-            <div className="pp-label"><GitCommitHorizontal size={12} aria-hidden /> Worktree</div>
+            <SectionLabel className="items-center gap-1.5"><GitCommitHorizontal size={12} aria-hidden /> Worktree</SectionLabel>
             {git ? (
               <>
                 <div className="pp-git">
@@ -170,7 +201,7 @@ export function ProgressPanel({ detail, liveGit, variant = "pinned", runId }: {
                     {git.commits.slice(0, 5).map((c) => (
                       <li key={c.sha} className="pp-commit">
                         <span className="m">{c.sha}</span>
-                        <span className="pp-subject">{c.subject}</span>
+                        <Truncate className="pp-subject">{c.subject}</Truncate>
                         <span className="pp-age">{ago(c.at, now)}</span>
                       </li>
                     ))}

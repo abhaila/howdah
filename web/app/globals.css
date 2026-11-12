@@ -17,6 +17,7 @@
   --color-muted: var(--bg-inset);
   --color-muted-foreground: var(--fg-muted);
   --color-faint: var(--fg-faint);
+  --color-disabled: var(--fg-disabled);
   --color-border: var(--border);
   --color-input: var(--border-strong);
   --color-ring: var(--ring);
@@ -30,9 +31,11 @@
   --color-accent-foreground: var(--fg);
   --font-sans: var(--font-display);
   /* literal stack: mapping var(--font-mono) here would be self-referential and void the token */
-  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", monospace;
+  --font-mono: "DM Mono", ui-monospace, "SF Mono", Menlo, monospace;
   --radius-md: var(--radius-sm);
   --radius-lg: var(--radius);
+  /* the one shadow, for floating layers only (tokens.css `--float-shadow`): `shadow-float` */
+  --shadow-float: var(--float-shadow);
 
   /* The type scale, re-exported into Tailwind's own namespace (HOW-16 P3.12). This is what
      makes `text-base` in a component and `var(--type-base)` in howdah.css the SAME number:
@@ -49,89 +52,86 @@
   --text-xl: var(--type-xl);
 }
 
-/* ---- system-map 1d: approval card, drift view, map progress ------------------------------
-   Rules from DESIGN.md: rows not cards (26px, hairline-separated), shape before colour, and
-   amber ONLY for the needs-you state of the approval card. The failure red appears only on
-   drift outcomes where the code disagrees with the approved design (`.problem`, from
-   engine/slice-map PROBLEM_OUTCOMES). */
+/* ---- system-map 1d: approval card, drift view, map progress (web/app/slice.tsx) ----------
+   Layout, plus the three things that are this surface's own: the card's shell, the glyph
+   colours, and the progress track. HOW-68: rows are 28–32px so every control in one is a 24px
+   target; the card's border is amber ONLY while its round is `awaiting` — the one thing
+   waiting on you — never for a step parked for another reason; ids ellipsize through
+   `Truncate` (no rule here sets `text-overflow`); a comment is a row, not a side stripe. The
+   only red is a drift outcome where the code disagrees with the approved design (`.problem`,
+   from engine/slice-map PROBLEM_OUTCOMES). */
 
 .approval-card {
-  border: 1px solid var(--border-strong); background: var(--bg-raised);
-  border-radius: var(--radius); padding: 12px 14px;
+  min-width: 0; padding: 12px 16px;
+  border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--bg-raised);
 }
-/* the needs-you moment: the .ask-card border; its entrance is shared in howdah.css */
-.approval-card.needs-you { border-color: var(--attention-border); }
+.approval-card[data-state="awaiting"] { border-color: var(--attention-border); }
+/* a notification's deep link lands on the card with room above it */
+.approval-card.needs-you { scroll-margin-top: 16px; }
 .approval-card h3 { margin: 0; font-size: var(--type-md); font-weight: 600; }
-.ap-head { display: flex; align-items: baseline; gap: 10px; }
-.ap-round { margin-left: auto; font-size: var(--type-xs); color: var(--fg-muted); }
-.ap-explain { font-size: var(--type-base); color: var(--fg-muted); margin: 6px 0 8px; line-height: 1.5; }
-.ap-tiers { display: flex; flex-wrap: wrap; gap: 12px; }
-.ap-tier { display: inline-flex; align-items: center; gap: 4px; font-family: var(--font-mono); font-size: var(--type-xs); }
-.ap-aside { text-transform: none; letter-spacing: 0; color: var(--fg-faint); font-weight: 400; margin-left: 6px; }
-.ap-actions { flex-wrap: wrap; margin-top: 12px; display: flex; gap: 8px; align-items: center; }
-.ap-block { font-family: var(--font-mono); }
-.ap-refusal { color: var(--fg); margin-top: 8px; }
-.ap-redesign { margin-top: 10px; }
-.ap-redesign .actions { display: flex; gap: 8px; margin-top: 8px; }
+.ap-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; }
+.ap-round { margin-left: auto; font-size: var(--type-xs); font-variant-numeric: tabular-nums; color: var(--fg-muted); }
+.ap-explain { max-width: 75ch; margin: 6px 0 10px; font-size: var(--type-body); line-height: 1.5; color: var(--fg-muted); }
+.ap-tiers { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: var(--type-xs); color: var(--fg-muted); }
+.ap-tier { display: inline-flex; align-items: center; gap: 5px; }
+.ap-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 14px; }
 
-.ghost-list { margin-top: 8px; }
+.ghost-list { margin-top: 10px; }
 .ghost-group { border-top: 1px solid var(--border); }
 .ghost-children { padding-left: 16px; }
-.ghost-row { display: flex; align-items: center; gap: 7px; height: 26px; min-width: 0; color: var(--fg-muted); }
-.ghost-row .op-glyph, .ghost-row .tier-glyph { flex-shrink: 0; }
-.ghost-context .gr-id { color: var(--fg-faint); }
-.gr-tier { width: 9px; display: inline-flex; flex-shrink: 0; }
-.gr-id { font-size: var(--type-sm); color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-.gr-arrow { color: var(--fg-faint); }
-.gr-kind { font-size: var(--type-xs); color: var(--fg-faint); white-space: nowrap; }
+.ghost-row { display: flex; align-items: center; gap: 8px; min-height: 32px; min-width: 0; color: var(--fg-muted); }
+.gr-tier { width: 12px; display: inline-flex; flex-shrink: 0; }
+.gr-kind { flex-shrink: 0; font-size: var(--type-xs); color: var(--fg-muted); white-space: nowrap; }
 /* appearance is Button variant="ghost" size="sm" (HOW-16 P1.5/P1.6); only placement is ours */
-.gr-pin { margin-left: auto; }
-.gr-id-wrap { min-width: 0; flex: 1 1 auto; }
-.dv-key-wrap { min-width: 0; flex: 1 1 auto; }
-.gr-sub { display: flex; flex-wrap: wrap; gap: 4px 12px; padding: 0 0 5px 34px; font-size: var(--type-xs); color: var(--fg-muted); }
-.gr-file { color: var(--fg-faint); }
-.gr-unverified { color: var(--fg-faint); font-style: italic; }
-.gr-pin-form { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 2px 0 8px 34px; }
+.gr-pin { margin-left: auto; flex-shrink: 0; }
+.gr-id-wrap, .dv-key-wrap { min-width: 0; flex: 0 1 auto; }
+.gr-sub { display: flex; flex-wrap: wrap; gap: 2px 12px; padding: 0 0 6px 40px; font-size: var(--type-sm); line-height: 1.5; color: var(--fg-muted); }
+.gr-pin-form { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 2px 0 8px 40px; }
 .gr-pin-form input { flex: 1 1 200px; }
-.ap-comment {
-  display: flex; gap: 8px; align-items: baseline; padding: 3px 0 3px 34px;
-  font-size: var(--type-sm); color: var(--fg); border-left: 2px solid var(--operator); margin-left: 14px;
-}
-.ap-orphans .ap-comment { margin-left: 0; padding-left: 10px; }
-.ap-comment-key { color: var(--fg-faint); font-size: var(--type-xs); }
-.ap-comment-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
-.ap-comment-meta { color: var(--fg-faint); font-size: var(--type-2xs); white-space: nowrap; }
-.ap-trace { display: flex; flex-direction: column; padding: 3px 0; border-bottom: 1px solid var(--border); }
-.ap-trace-name { font-size: var(--type-sm); }
-.ap-trace-steps { font-size: var(--type-xs); color: var(--fg-muted); overflow-wrap: anywhere; }
-.ap-round-row { display: flex; gap: 10px; height: 26px; align-items: center; font-size: var(--type-sm); color: var(--fg-muted); border-bottom: 1px solid var(--border); }
+.ap-comment { display: flex; align-items: flex-start; gap: 8px; padding: 3px 0 3px 40px; }
+.ap-orphans .ap-comment { padding-left: 0; }
+.ap-trace { display: flex; flex-direction: column; gap: 2px; padding: 6px 0; border-bottom: 1px solid var(--border); }
+.ap-round-row { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 12px; min-height: 28px; font-size: var(--type-sm); color: var(--fg-muted); border-bottom: 1px solid var(--border); }
 
 /* HOW-23: a slice plan reuses the ghost row's frame — the same shape, without the glyphs,
    because a slice is judged as prose and a ghost is judged against the map */
-.plan-list { margin-top: 8px; }
-.plan-feature { margin-bottom: 8px; }
-.plan-slice { border-top: 1px solid var(--border); padding-top: 3px; }
-.plan-n { width: 16px; flex-shrink: 0; font-size: var(--type-xs); color: var(--fg-faint); }
-.plan-sub { padding-left: 16px; }
-.plan-deps { color: var(--fg-muted); }
+.plan-list { margin-top: 10px; }
+.plan-slice { border-top: 1px solid var(--border); padding-top: 2px; }
+.plan-n { width: 16px; flex-shrink: 0; font-size: var(--type-xs); font-variant-numeric: tabular-nums; color: var(--fg-muted); }
+.plan-sub { padding-left: 24px; }
 
-.drift-view .dv-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 8px; }
-.dv-title { font-weight: 600; font-size: var(--type-md); }
-.dv-stamp { font-size: var(--type-xs); color: var(--fg-muted); }
-.dv-base { font-size: var(--type-xs); color: var(--fg-faint); margin-left: auto; }
-.dv-group-head { display: flex; align-items: center; gap: 6px; }
-.dv-count { color: var(--fg-muted); }
+.drift-view { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.dv-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; }
 .dv-item { border-bottom: 1px solid var(--border); }
-.dv-row { display: flex; align-items: center; gap: 7px; height: 26px; min-width: 0; }
-.dv-key { font-size: var(--type-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-.dv-kind { font-size: var(--type-xs); color: var(--fg-faint); margin-left: auto; white-space: nowrap; }
-.dv-sub { display: flex; flex-direction: column; gap: 2px; padding: 0 0 6px 19px; font-size: var(--type-sm); color: var(--fg-muted); }
-.dv-evidence { font-size: var(--type-xs); color: var(--fg-faint); }
+.dv-row { display: flex; align-items: center; gap: 8px; min-height: 28px; min-width: 0; }
+.dv-sub { display: flex; flex-direction: column; gap: 2px; padding: 0 0 6px 20px; font-size: var(--type-sm); line-height: 1.5; color: var(--fg-muted); }
 .drift-glyph, .op-glyph, .tier-glyph { color: var(--fg-muted); flex-shrink: 0; }
 /* the only colour in the drift view: the code disagrees with the approved design */
 .drift-glyph.problem { color: var(--status-failed-recoverable); }
 
-.map-progress { display: inline-flex; align-items: center; gap: 6px; font-size: var(--type-xs); color: var(--fg-muted); white-space: nowrap; }
-.mp-track { width: 48px; height: 3px; background: var(--bg-inset); border-radius: 1.5px; overflow: hidden; }
-.mp-fill { display: block; height: 3px; background: var(--status-running); }
-.mp-skipped { color: var(--fg-faint); }
+.map-progress { display: inline-flex; align-items: center; gap: 6px; min-width: 0; font-size: var(--type-xs); color: var(--fg-muted); white-space: nowrap; }
+.mp-track { width: 48px; height: 4px; flex-shrink: 0; background: var(--bg-inset); border-radius: 2px; }
+.mp-fill { display: block; height: 4px; border-radius: 2px; background: var(--status-running); }
+
+/* HOW-68 confirming review — Windows High Contrast and other forced-colour modes. The browser
+   replaces every fill and text colour with the user's palette, which took three things with it:
+   a filled button had no edge left at all ("Next" on a question read as loose text), every tab
+   showed the same rule because a transparent border is drawn in that mode, and the rail's "where
+   you are" was a change of ground. System colour keywords are the one thing still honoured, so
+   each is restated in them. Focus rings and status glyphs need nothing: an outline and an SVG
+   shape both survive. */
+@media (forced-colors: active) {
+  [data-slot="button"], [data-slot="menu-trigger"], [data-slot="questionnaire"] button { border: 1px solid ButtonText; }
+  [data-slot="button"]:disabled, [data-slot="questionnaire"] button:disabled { border-color: GrayText; }
+  [role="tab"] { border-bottom-color: Canvas; }
+  [role="tab"][aria-selected="true"] { border-bottom-color: Highlight; }
+  .sidebar a.nav.active[aria-current="page"] { forced-color-adjust: none; background: Highlight; color: HighlightText; border-color: Highlight; }
+  .sidebar a.nav.active[aria-current="page"] * { color: HighlightText; background: transparent; border-color: HighlightText; }
+  /* an SVG stroke is not restated by the browser, so a graph's wires kept the theme's own
+     colours on the system's canvas: the routes a run TOOK were near-white on white. A wire is
+     text-coloured; one the run did not take is the system's grey; the builder's the same. */
+  .dag-wire { stroke: GrayText; }
+  .dag-wire.taken, .gb-edge { stroke: CanvasText; }
+  .dag-arrow { fill: GrayText; }
+  .dag-arrow-on { fill: CanvasText; }
+}

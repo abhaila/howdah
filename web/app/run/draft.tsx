@@ -27,8 +27,17 @@
  * and offers neither Save, nor a redraft, nor a second Discard.
  *
  * Nothing here computes the diff: core/draft-diff.ts does, on the server (web/draft.ts).
+ *
+ * HOW-68 (DESIGN.md). The card kept its order and every word; what changed is how it is drawn.
+ * The marks were dingbats typed into the text (a warning sign, a half-moon, a circled i, a
+ * tick, a looped arrow) — they are inline SVG now, `aria-hidden` beside the word that says the
+ * same thing, so no symbol carries meaning alone and none is read out as a character. The
+ * section headings are `SectionLabel` with the count as its quiet number. "added", "removed",
+ * "new" and a step's kind are WORDS and so are in the reading face; mono is left to the step
+ * ids and the instructions diff. A busy button is `loading`, not a renamed disabled one.
  */
 import { forwardRef, useCallback, useEffect, useId, useRef, useState } from "react";
+import { Check, ChevronRight, CircleDot, Equal, Info, Minus, Plus, RotateCw, TriangleAlert, X, type LucideIcon } from "lucide-react";
 import type { ReadyDraft, RunDraft } from "../../draft";
 import type { BodyChange, StepRow } from "../../../core/draft-diff";
 import { BODY_COLLAPSE_LINES } from "../../../core/draft-diff";
@@ -41,6 +50,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { SectionLabel } from "@/components/ui/section-label";
 import { Textarea } from "@/components/ui/textarea";
 
 /** The run's draft, re-read on demand; `poll` re-reads every 3s while it is still drafting. */
@@ -52,7 +62,14 @@ export function useRunDraft(runId: string, opts: { poll?: boolean } = {}): { dra
     let live = true;
     // not getJSON: a 404/409 here CARRIES the reason the page shows, so its body is the answer
     fetch(`/api/runs/${encodeURIComponent(runId)}/draft`)
-      .then((r) => r.json())
+      .then(async (r) => {
+        const d = (await r.json().catch(() => null)) as RunDraft | null;
+        // HOW-68: only a body that IS one of the route's answers is believed. A 500's
+        // `{error}` has no `state`, and was drawn as "No draft to review yet" with no reason
+        // — a server fault presented as a fact about the run.
+        if (d && typeof d === "object" && typeof (d as { state?: unknown }).state === "string") return d;
+        return { state: "unknown", reason: `Howdah could not read this draft: the server answered ${r.status}. Check the terminal running \`bun run web\`, then reload.` } satisfies RunDraft;
+      })
       .then((d: RunDraft) => live && setDraft(d))
       .catch(() => live && setDraft({ state: "unknown", reason: "Could not reach Howdah to read this draft." }));
     return () => { live = false; };
@@ -114,6 +131,11 @@ export function draftCounts(d: ReadyDraft): { risk: number; changed: number; adv
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
+/** A mark beside a word: decoration for the eye, silent to a screen reader (the word says it). */
+function Glyph({ icon: Icon, className }: { icon: LucideIcon; className?: string }) {
+  return <span aria-hidden className={`draft-glyph${className ? ` ${className}` : ""}`}><Icon size={14} /></span>;
+}
+
 /** "based on X · N steps" or "New graph · N steps" */
 export function draftBasis(d: ReadyDraft): string {
   const steps = plural(d.draft.spec.nodes.length, "step");
@@ -124,11 +146,11 @@ export function DraftSummary({ draft }: { draft: ReadyDraft }) {
   const c = draftCounts(draft);
   return (
     <p className="draft-sum">
-      <span><span aria-hidden className="draft-glyph risk">⚠</span> {plural(c.risk, "step")} can change your code</span>
+      <span><Glyph icon={TriangleAlert} className="risk" />{plural(c.risk, "step")} can change your code</span>
       <span aria-hidden> · </span>
-      <span><span aria-hidden className="draft-glyph">◐</span> {c.changed} changed</span>
+      <span><Glyph icon={CircleDot} />{c.changed} changed</span>
       <span aria-hidden> · </span>
-      <span><span aria-hidden className="draft-glyph">ⓘ</span> {c.advice} worth a look</span>
+      <span><Glyph icon={Info} />{c.advice} worth a look</span>
     </p>
   );
 }
@@ -171,11 +193,11 @@ export function BodyDiff({ body }: { body: BodyChange }) {
   );
 }
 
-const CHANGE_MARK: Record<StepRow["change"], { glyph: string; word: string }> = {
-  added: { glyph: "+", word: "added" },
-  removed: { glyph: "−", word: "removed" },
-  changed: { glyph: "◐", word: "changed" },
-  unchanged: { glyph: "=", word: "unchanged" },
+const CHANGE_MARK: Record<StepRow["change"], { glyph: LucideIcon; word: string }> = {
+  added: { glyph: Plus, word: "added" },
+  removed: { glyph: Minus, word: "removed" },
+  changed: { glyph: CircleDot, word: "changed" },
+  unchanged: { glyph: Equal, word: "unchanged" },
 };
 
 /** One step's row. Focusable, so focusing it can highlight its box on the review page. */
@@ -194,10 +216,10 @@ function StepLine({ row, onFocusRow }: { row: StepRow; onFocusRow?: (id: string 
       onMouseLeave={() => onFocusRow?.(null)}
     >
       <div className="draft-row-head">
-        <span aria-hidden className="draft-glyph">{mark.glyph}</span>
+        <Glyph icon={mark.glyph} />
         <span className="draft-tag">{mark.word}</span>
         <strong>{row.title}</strong>
-        {row.title !== row.id && <code className="draft-id">{row.id}</code>}
+        {row.title !== row.id && <span className="draft-id">{row.id}</span>}
         <span className="draft-kind">{row.kind}</span>
       </div>
       {row.changes.length > 0 && <ul className="draft-facts">{row.changes.map((c) => <li key={c}>{problemProse(c)}</li>)}</ul>}
@@ -212,7 +234,7 @@ function Section({ title, count, children }: { title: string; count: number; chi
   const empty = count === 0;
   return (
     <section className="draft-sec" role="region" aria-labelledby={id}>
-      <h3 id={id}>{title} · {count}</h3>
+      <SectionLabel as="h3" id={id} count={count}>{title}</SectionLabel>
       {empty ? <p className="draft-none">Nothing flagged</p> : children}
     </section>
   );
@@ -235,7 +257,7 @@ export function DraftList({ draft, onFocusRow }: { draft: ReadyDraft; onFocusRow
           {diff.permission.map((p) => (
             <li key={p.id} className="draft-row risk" tabIndex={0} data-step={p.id} aria-label={`${p.title}, can change your code${p.isNew ? ", new" : ""}`} {...focus(p.id)}>
               <div className="draft-row-head">
-                <span aria-hidden className="draft-glyph risk">⚠</span>
+                <Glyph icon={TriangleAlert} className="risk" />
                 <span className="draft-tag">{p.isNew ? "new" : "as before"}</span>
                 <strong>{p.title}</strong>
               </div>
@@ -256,7 +278,7 @@ export function DraftList({ draft, onFocusRow }: { draft: ReadyDraft; onFocusRow
           {diff.graph.length > 0 && (
             <li className="draft-row" tabIndex={0} aria-label="the graph itself, changed">
               <div className="draft-row-head">
-                <span aria-hidden className="draft-glyph">◐</span>
+                <Glyph icon={CircleDot} />
                 <span className="draft-tag">changed</span>
                 <strong>The graph</strong>
               </div>
@@ -268,9 +290,9 @@ export function DraftList({ draft, onFocusRow }: { draft: ReadyDraft; onFocusRow
       </Section>
 
       <section className="draft-sec" role="region" aria-labelledby={`${unchangedId}-h`}>
-        <h3 id={`${unchangedId}-h`}>
-          <Button variant="ghost" size="sm" aria-expanded={showUnchanged} aria-controls={unchangedId} onClick={() => setShowUnchanged((s) => !s)}>
-            Unchanged ({diff.unchanged.length})
+        <h3 id={`${unchangedId}-h`} className="m-0">
+          <Button variant="ghost" size="sm" className="draft-disclosure" aria-expanded={showUnchanged} aria-controls={unchangedId} onClick={() => setShowUnchanged((s) => !s)}>
+            <ChevronRight aria-hidden className={showUnchanged ? "rotate-90" : undefined} />Unchanged ({diff.unchanged.length})
           </Button>
         </h3>
         <div id={unchangedId} hidden={!showUnchanged}>
@@ -285,7 +307,7 @@ export function DraftList({ draft, onFocusRow }: { draft: ReadyDraft; onFocusRow
           {draft.advice.map((p: SpecProblem, i) => (
             <li key={i} className="draft-row" tabIndex={0} data-step={p.node} aria-label={`worth a look: ${p.message.replace(/\*\*|`/g, "")}`} {...(p.node ? focus(p.node) : {})}>
               <div className="draft-row-head">
-                <span aria-hidden className="draft-glyph">ⓘ</span>
+                <Glyph icon={Info} />
                 <span className="draft-tag">worth a look</span>
               </div>
               <p className="draft-note">{problemProse(p.message)}</p>
@@ -316,11 +338,20 @@ export const DraftName = forwardRef<HTMLInputElement, { value: string; onChange:
   );
 });
 
-/** `✓ Saved as X · not edited | edited on canvas · Open · Run it` */
-export function DraftReceipt({ saved }: { saved: { name: string; edited: boolean } }) {
+/** `Saved as X · not edited | edited on canvas · Open · Run it`, behind a check mark */
+export function DraftReceipt({ saved, takeFocus = false }: {
+  saved: { name: string; edited: boolean };
+  /** HOW-68: true on the render that follows THIS page's own Save. The Save button is gone by
+   *  then, and focus fell to `<body>` — a keyboard user was sent back to the top of the page at
+   *  the moment "Run it" appeared. The receipt is what the screen now says, so it takes focus;
+   *  a receipt found on load (saved earlier, or in another tab) takes nothing. */
+  takeFocus?: boolean;
+}) {
+  const ref = useRef<HTMLParagraphElement>(null);
+  useEffect(() => { if (takeFocus) ref.current?.focus(); }, [takeFocus]);
   return (
-    <p className="draft-receipt" role="status">
-      <span aria-hidden className="draft-glyph ok">✓</span> Saved as <strong>{saved.name}</strong>
+    <p ref={ref} tabIndex={-1} className="draft-receipt rounded-[var(--radius-sm)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--ring)]" role="status">
+      <Glyph icon={Check} className="ok" />Saved as <strong>{saved.name}</strong>
       <span aria-hidden> · </span>{saved.edited ? "edited on canvas" : "not edited"}
       <span aria-hidden> · </span><a href={`/graphs/${saved.name}/build`}>Open</a>
       <span aria-hidden> · </span><a href={`/new?graph=${encodeURIComponent(saved.name)}`}>Run it</a>
@@ -335,8 +366,8 @@ export function RedraftReceipts({ redrafts }: { redrafts: ReadyDraft["redrafts"]
     <>
       {redrafts.map((r) => (
         <p key={r.run} className="draft-receipt" role="status">
-          <span aria-hidden className="draft-glyph">↻</span> Redrafted <span aria-hidden>→</span>{" "}
-          <a href={`/run/${encodeURIComponent(r.run)}`}>run {r.run}</a>
+          <Glyph icon={RotateCw} />Redrafted <span aria-hidden>→</span>{" "}
+          <a href={`/run/${encodeURIComponent(r.run)}`}>run <span className="m">{r.run}</span></a>
         </p>
       ))}
     </>
@@ -347,7 +378,7 @@ export function RedraftReceipts({ redrafts }: { redrafts: ReadyDraft["redrafts"]
 export function DiscardedReceipt() {
   return (
     <p className="draft-receipt" role="status">
-      <span aria-hidden className="draft-glyph">✕</span> <strong>Discarded</strong>
+      <Glyph icon={X} /><strong>Discarded</strong>
       <span aria-hidden> · </span>this draft will not be saved
     </p>
   );
@@ -372,13 +403,13 @@ export function RedraftSection({ runId }: { runId: string }) {
   };
   return (
     <section className="draft-sec" role="region" aria-labelledby={heading}>
-      <h3 id={heading}>Ask for changes</h3>
+      <SectionLabel as="h3" id={heading}>Ask for changes</SectionLabel>
       <Label>
         What should be different?
         <Textarea value={change} onChange={(e) => setChange(e.target.value)} rows={3} placeholder="e.g. add a review step before it finishes" />
       </Label>
       <div className="actions">
-        <Button variant="outline" onClick={submit} disabled={busy || !change.trim()}>{busy ? "Redrafting…" : "Redraft"}</Button>
+        <Button variant="outline" onClick={submit} loading={busy} disabled={busy || !change.trim()}>{busy ? "Redrafting…" : "Redraft"}</Button>
       </div>
       {error && <p className="field-error wrap-pre" role="alert">{error}</p>}
     </section>
@@ -394,16 +425,18 @@ export function useDraftSave(runId: string, draft: ReadyDraft, onSaved: () => vo
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const nameRef = useRef<HTMLInputElement>(null);
+  /** this page pressed Save and it worked: the receipt that now appears takes focus */
+  const [savedHere, setSavedHere] = useState(false);
   const save = useCallback(async () => {
     setBusy(true);
     setError(null);
     const r = await saveDraft(runId, name.trim());
     setBusy(false);
-    if (r.ok) { onSaved(); return; }
+    if (r.ok) { setSavedHere(true); onSaved(); return; }
     setError(r.error);
     if (r.conflict) nameRef.current?.focus();
   }, [runId, name, onSaved]);
-  return { name, setName, busy, error, save, nameRef };
+  return { name, setName, busy, error, save, nameRef, savedHere };
 }
 
 /** The card at the foot of a finished draft-graph run's Chat (D-2A, D-6A). Never the diagram. */
@@ -432,10 +465,10 @@ function ReadyCard({ runId, draft, onSaved }: { runId: string; draft: ReadyDraft
   return (
     <Card className="draft-card" aria-label="the drafted graph">
       <div className="draft-head">
-        <h2>Draft ready</h2>
+        <h2>The draft is ready</h2>
         <p className="draft-basis">{draftBasis(draft)}</p>
       </div>
-      {draft.saved && <DraftReceipt saved={draft.saved} />}
+      {draft.saved && <DraftReceipt saved={draft.saved} takeFocus={s.savedHere} />}
       {draft.discarded && <DiscardedReceipt />}
       <RedraftReceipts redrafts={draft.redrafts} />
       {open && <DraftName ref={s.nameRef} value={s.name} onChange={s.setName} />}
@@ -446,7 +479,7 @@ function ReadyCard({ runId, draft, onSaved }: { runId: string; draft: ReadyDraft
         <div className="actions">
           {draft.grantsNewWrite
             ? <Button onClick={() => navigate(reviewHref)}>Review and save</Button>
-            : <Button onClick={s.save} disabled={s.busy}>{s.busy ? "Saving…" : "Save"}</Button>}
+            : <Button onClick={s.save} loading={s.busy} disabled={s.busy}>{s.busy ? "Saving…" : "Save"}</Button>}
           <Button variant="outline" onClick={() => navigate(reviewHref)}>Review all changes</Button>
         </div>
       )}
@@ -456,7 +489,7 @@ function ReadyCard({ runId, draft, onSaved }: { runId: string; draft: ReadyDraft
       {!draft.discarded && <RedraftSection runId={runId} />}
       {open && (
         <div className="actions">
-          <Button variant="outline" onClick={discard} disabled={discarding}>{discarding ? "Discarding…" : "Discard"}</Button>
+          <Button variant="ghost" className="draft-discard" onClick={discard} loading={discarding} disabled={discarding}>{discarding ? "Discarding…" : "Discard"}</Button>
         </div>
       )}
       {discardError && <p className="field-error wrap-pre" role="alert">{discardError}</p>}

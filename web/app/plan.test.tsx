@@ -9,7 +9,8 @@ import { createRoot, type Root } from "react-dom/client";
 import { deriveDetail, type RunDetail } from "../derive";
 import { FakeLog } from "../slice.fixtures";
 import { RunPlan, planInstruction, planRoute } from "./run/plan";
-import { RunReport, canMapChange } from "./run/report";
+import { RELAYED_KEYS, REPORT_SANDBOX, RunReport, canMapChange } from "./run/report";
+import { REPORT_RELAY_KEYS, renderRunReport } from "../../core/run-report";
 import { ToastProvider } from "@/components/ui/toast";
 
 let root: Root | null = null;
@@ -92,8 +93,88 @@ test("the Report tab frames the derived page, sandboxed, with Open and Download"
   const el = render(<RunReport runId="r1" detail={planned()} />);
   const frame = el.querySelector("iframe")!;
   expect(frame.getAttribute("src")).toBe("/api/runs/r1/report");
-  expect(frame.getAttribute("sandbox")).toBe("allow-scripts");
-  expect([...el.querySelectorAll("a")].map((a) => a.getAttribute("href"))).toEqual(["/api/runs/r1/report", "/api/runs/r1/report?download=1"]);
+  // HOW-68 feedback: the page's PR link has to open in the operator's browser. `allow-scripts`
+  // alone BLOCKED a new tab, so the link loaded the forge inside the frame; the sandbox now
+  // permits a new tab that is an ordinary page — and still nothing that reaches this origin.
+  expect(frame.getAttribute("sandbox")).toBe("allow-scripts allow-popups allow-popups-to-escape-sandbox");
+  expect(REPORT_SANDBOX.split(" ").sort()).toEqual(["allow-popups", "allow-popups-to-escape-sandbox", "allow-scripts"]);
+  for (const never of ["allow-same-origin", "allow-top-navigation", "allow-forms", "allow-downloads", "allow-modals"]) expect(REPORT_SANDBOX).not.toContain(never);
+  const links = [...el.querySelectorAll("a")];
+  expect(links.map((a) => a.getAttribute("href"))).toEqual(["/api/runs/r1/report", "/api/runs/r1/report?download=1"]);
+  // Open is a new tab that is handed neither this window nor where it came from; Download is a download
+  expect(links[0]!.getAttribute("target")).toBe("_blank");
+  expect(links[0]!.getAttribute("rel")).toBe("noopener noreferrer");
+  expect(links[1]!.hasAttribute("download")).toBe(true);
+});
+
+// The confirming review: keys did not reach the app while focus was inside the report's frame.
+describe("the framed report hands the viewer's own keys back", () => {
+  test("the page posts exactly the relayed keys, and only when it is framed", () => {
+    expect([...RELAYED_KEYS]).toEqual([...REPORT_RELAY_KEYS]);
+    const html = renderRunReport({ run_id: "r1", graph: "g", status: "done", generated_at: "2026-10-30T12:00:00.000Z", change: null, criteria: [], tests: null, screens: null, review: null, pull_requests: [], steps: [] });
+    expect(html).toContain("window.parent!==window");
+    expect(html).toContain(`postMessage({howdahKey:k},'*')`);
+    expect(html).toContain(JSON.stringify(REPORT_RELAY_KEYS));
+    // a modified key or one typed in a field is the page's own
+    expect(html).toContain("e.ctrlKey||e.metaKey||e.altKey");
+  });
+
+  test("the pane replays a relayed key from ITS frame as a keydown, and nothing else", () => {
+    const settings = (window as unknown as { happyDOM?: { settings: { disableIframePageLoading: boolean } } }).happyDOM?.settings;
+    if (settings) settings.disableIframePageLoading = true;
+    const el = render(<RunReport runId="r1" detail={planned()} />);
+    const frame = el.querySelector("iframe")!;
+    const heard: string[] = [];
+    const onKey = (e: KeyboardEvent) => heard.push(e.key);
+    document.addEventListener("keydown", onKey);
+    const say = (data: unknown, source: unknown) =>
+      act(() => { window.dispatchEvent(Object.assign(new MessageEvent("message", { data }), { source }) as MessageEvent); });
+    try {
+      const own = frame.contentWindow;
+      Object.defineProperty(frame, "contentWindow", { configurable: true, value: own ?? {} });
+      say({ howdahKey: "f" }, frame.contentWindow);
+      say({ howdahKey: "Escape" }, frame.contentWindow);
+      say({ howdahKey: "3" }, frame.contentWindow);
+      expect(heard).toEqual(["f", "Escape", "3"]);
+      say({ howdahKey: "k" }, frame.contentWindow); // not on the list: a report cannot type into the viewer
+      say({ howdahKey: "f" }, {}); // another window
+      say({ howdahKey: "f" }, window); // this window
+      say("f", frame.contentWindow);
+      expect(heard).toEqual(["f", "Escape", "3"]);
+    } finally {
+      document.removeEventListener("keydown", onKey);
+    }
+    // and the pane says what is not relayed
+    expect(el.textContent).toContain("for any other shortcut press");
+  });
+});
+
+describe("HOW-68 feedback: the plan uses the width its pane has", () => {
+  test("the plan and the answer are two regions of ONE scroller: the document, then the contract and the composer", () => {
+    const el = render(<RunPlan runId="r1" detail={planned()} onChanged={() => {}} />);
+    const pane = el.querySelector(".plan-pane")!;
+    const layout = pane.querySelector(".plan-layout")!;
+    expect([...layout.children].map((c) => (c as HTMLElement).dataset.slot)).toEqual(["plan-main", "plan-side"]);
+    expect(layout.querySelector('[data-slot="plan-main"] .plan-doc')).not.toBeNull();
+    expect(layout.querySelector('[data-slot="plan-side"] .plan-compose')).not.toBeNull();
+    // in reading order the plan comes before the box that answers it, whichever side it is drawn on
+    expect(layout.querySelector(".plan-doc")!.compareDocumentPosition(layout.querySelector(".plan-compose")!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  test("no 760px cap: one column to ~110 characters, and two once the PANE (not the window) has room", async () => {
+    const css = await Bun.file(new URL("../public/howdah.css", import.meta.url)).text();
+    const rule = (sel: string) => css.match(new RegExp(`${sel}\\s*\\{([^}]*)\\}`))?.[1] ?? "";
+    expect(css).not.toContain(".plan-column");
+    expect(rule("\\.plan-pane")).toContain("container-type: inline-size");
+    expect(rule("\\.plan-layout")).toContain("minmax(0, 880px)");
+    // the markdown primitive's 75ch measure is the transcript's; the plan's is its column
+    expect(css).toMatch(/\.md\.plan-doc > \* \{ max-width: none; \}/);
+    const wide = css.match(/@container \(min-width: 1160px\) \{([\s\S]*?)\n\}/)?.[1] ?? "";
+    expect(wide).toContain("minmax(0, 880px) minmax(340px, 460px)");
+    // beside the plan the contract stays in view — sticky in the SAME scroller, never a second one
+    expect(wide).toMatch(/\.plan-side \{ position: sticky;/);
+    expect(wide).not.toContain("overflow");
+  });
 });
 
 describe("Map this change (HOW-78)", () => {

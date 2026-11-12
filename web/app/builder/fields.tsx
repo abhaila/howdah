@@ -6,6 +6,14 @@
  * pane exists as its own thing. Two steps declaring different scopes for one key is a
  * GraphError (core/graph.ts declarations()); asking once, per field, in plain language makes
  * that error unreachable instead of merely reported.
+ *
+ * HOW-68 (DESIGN.md). The registry was a six-column table inside a card inside a 360px panel,
+ * so it scrolled sideways under a second scrollbar and every name box was three characters
+ * wide. A field is now a short stacked form — its name and kind on one line, its freshness
+ * under it, "ask me" and who writes it under that — one hairline between fields. Every control
+ * keeps its accessible name, and each one now has a visible label above it as well. The name
+ * and the choices are machine text (they are matched exactly, in a prompt and in a condition),
+ * so those two boxes are mono; nothing else is.
  */
 import { useState } from "react";
 import { Plus, Trash2 } from "lucide-react";
@@ -13,13 +21,13 @@ import { FIELD_KINDS, SCOPE_CHOICES, fieldRemoval, removalHasCost, type Draft, t
 import type { FieldKind, FieldSpec, GraphSpec } from "../../../core/graph-spec";
 import type { Scope } from "../../../core/context";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { AlertDialog } from "@/components/ui/dialog";
-import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Tooltip } from "@/components/ui/tooltip";
+import { Section } from "./section";
 import { useTypedText } from "@/lib/hooks";
 
 /**
@@ -48,45 +56,54 @@ function FieldRow({ f, spec, writers, dispatch, onRemove }: {
   const [name, setName] = useTypedText(f.key, (t) => (t.trim() ? t : f.key));
   const joined = (f.choices ?? []).join(", ");
   const [choices, setChoices] = useTypedText(joined, (t) => splitChoices(t).join(", "));
+  const from = writers.length ? writers.join(", ") : spec.inputs.includes(f.key) ? "you, at launch" : "nothing yet";
   return (
-    <TableRow>
-      <TableCell>
-        <Input
-          className="font-mono" value={name} aria-label={`the name of the ${f.key} field`}
-          onChange={(e) => { setName(e.target.value); dispatch({ type: "update-field", key: f.key, patch: { key: e.target.value } }); }}
-        />
-        {f.kind === "choice" && (
+    <div className="flex flex-col gap-2 border-b border-border pb-3 last:border-b-0 last:pb-0">
+      <div className="flex items-end gap-2">
+        <Label className="min-w-0 flex-1">
+          Name
           <Input
-            value={choices} placeholder="pass, reject" aria-label={`the choices for ${f.key}`}
+            mono value={name} aria-label={`the name of the ${f.key} field`}
+            onChange={(e) => { setName(e.target.value); dispatch({ type: "update-field", key: f.key, patch: { key: e.target.value } }); }}
+          />
+        </Label>
+        <Label className="w-[7.5rem] shrink-0">
+          Kind
+          <Select value={f.kind} aria-label={`the kind of ${f.key}`} onChange={(e) => dispatch({ type: "update-field", key: f.key, patch: { kind: e.target.value as FieldKind } })}>
+            {FIELD_KINDS.map((k) => <option key={k.kind} value={k.kind}>{k.label}</option>)}
+          </Select>
+        </Label>
+        <Tooltip content={`Remove ${f.key}`} side="top" align="end">
+          <Button variant="ghost" size="icon" aria-label={`remove the ${f.key} field`} onClick={() => onRemove(f.key)}>
+            <Trash2 />
+          </Button>
+        </Tooltip>
+      </div>
+      {f.kind === "choice" && (
+        <Label>
+          Choices, separated by commas
+          <Input
+            mono value={choices} placeholder="pass, reject" aria-label={`the choices for ${f.key}`}
             onChange={(e) => { setChoices(e.target.value); dispatch({ type: "update-field", key: f.key, patch: { choices: splitChoices(e.target.value) } }); }}
           />
-        )}
-      </TableCell>
-      <TableCell>
-        <Select value={f.kind} aria-label={`the kind of ${f.key}`} onChange={(e) => dispatch({ type: "update-field", key: f.key, patch: { kind: e.target.value as FieldKind } })}>
-          {FIELD_KINDS.map((k) => <option key={k.kind} value={k.kind}>{k.label}</option>)}
-        </Select>
-      </TableCell>
-      <TableCell>
+        </Label>
+      )}
+      <Label>
+        When its step runs again
         <Select value={f.scope} aria-label={`how fresh ${f.key} has to be`} onChange={(e) => dispatch({ type: "update-field", key: f.key, patch: { scope: e.target.value as Scope } })}>
           {SCOPE_CHOICES.map((s) => <option key={s.scope} value={s.scope}>{s.label}</option>)}
         </Select>
-        <div className="field-hint">{SCOPE_CHOICES.find((s) => s.scope === f.scope)?.help}</div>
-      </TableCell>
-      <TableCell>
+      </Label>
+      <div className="field-hint">{SCOPE_CHOICES.find((s) => s.scope === f.scope)?.help}</div>
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
         <Checkbox
-          label="ask me" checked={spec.inputs.includes(f.key)}
+          label="Ask me at launch" checked={spec.inputs.includes(f.key)}
           aria-label={`ask me for ${f.key} when a run starts`}
           onChange={() => dispatch({ type: "toggle-input", key: f.key })}
         />
-      </TableCell>
-      <TableCell>{writers.length ? writers.join(", ") : spec.inputs.includes(f.key) ? "you, at launch" : "— nothing yet"}</TableCell>
-      <TableCell>
-        <Button variant="ghost" size="icon" aria-label={`remove the ${f.key} field`} onClick={() => onRemove(f.key)}>
-          <Trash2 size={13} />
-        </Button>
-      </TableCell>
-    </TableRow>
+        <span className="text-xs text-muted-foreground">Written by {from}</span>
+      </div>
+    </div>
   );
 }
 
@@ -153,53 +170,34 @@ export function FieldsPane({ draft, dispatch }: { draft: Draft; dispatch: (a: Dr
     spec.nodes.filter((n) => ("writes" in n && n.writes.includes(key))).map((n) => n.title || n.id);
 
   return (
-    <div className="flex flex-col gap-3">
-      <Card>
-        <CardHeader>
-          <CardTitle>What it works with</CardTitle>
-          <CardDescription>
-            Every value the steps pass between them. Tick "ask me" for the ones you type in when a run starts.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {spec.fields.length === 0 ? (
-            <EmptyState>no fields yet</EmptyState>
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Name</TableHead>
-                  <TableHead>Kind</TableHead>
-                  <TableHead>Freshness</TableHead>
-                  <TableHead>Ask me at launch</TableHead>
-                  <TableHead>Written by</TableHead>
-                  <TableHead>{""}</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {spec.fields.map((f) => (
-                  <FieldRow key={f.key} f={f} spec={spec} writers={writersOf(f.key)} dispatch={dispatch} onRemove={askOrRemove} />
-                ))}
-              </TableBody>
-            </Table>
-          )}
-          <div className="actions">
-            <Button variant="outline" size="sm" onClick={() => dispatch({ type: "add-field" })}><Plus />Add a field</Button>
-          </div>
-          <div className="field-hint">
-            Removing a field deletes every branch that tested it, and any step whose instructions
-            still name it will need its text fixed. You are told what goes before it happens.
-          </div>
-          <AlertDialog
-            open={pending !== null}
-            onClose={() => setPending(null)}
-            onConfirm={() => remove(pending!)}
-            title={`Remove ${pending ?? ""}?`}
-            description={cost ? <RemovalCost field={pending ?? ""} cost={cost} /> : undefined}
-            confirmLabel="Remove it anyway"
-          />
-        </CardContent>
-      </Card>
-    </div>
+    <Section
+      title="What it works with"
+      hint={<>Every value the steps pass between them. Tick "Ask me at launch" for the ones you type in when a run starts.</>}
+    >
+      {spec.fields.length === 0 ? (
+        <div className="field-hint">No fields yet. Add one for each value a step hands to the next.</div>
+      ) : (
+        <div className="flex flex-col gap-3">
+          {spec.fields.map((f) => (
+            <FieldRow key={f.key} f={f} spec={spec} writers={writersOf(f.key)} dispatch={dispatch} onRemove={askOrRemove} />
+          ))}
+        </div>
+      )}
+      <div className="flex">
+        <Button variant="outline" size="sm" onClick={() => dispatch({ type: "add-field" })}><Plus />Add a field</Button>
+      </div>
+      <div className="field-hint">
+        Removing a field deletes every branch that tested it, and any step whose instructions
+        still name it will need its text fixed. You are told what goes before it happens.
+      </div>
+      <AlertDialog
+        open={pending !== null}
+        onClose={() => setPending(null)}
+        onConfirm={() => remove(pending!)}
+        title={`Remove ${pending ?? ""}?`}
+        description={cost ? <RemovalCost field={pending ?? ""} cost={cost} /> : undefined}
+        confirmLabel="Remove it anyway"
+      />
+    </Section>
   );
 }

@@ -1,29 +1,53 @@
 /**
  * Settings and workspace registration, out of main.tsx (HOW-16 P1).
  *
- * Two HOW-16 fixes are here. The attention chime was a raw
- * `<input type="checkbox" className="w-auto">` that inherited a text field's styling and had
- * no focus treatment of its own; it is a `Checkbox` with a real label association (P1.5).
- * And removing a workspace was a single un-asked click on an icon button — a destructive
- * verb with no confirmation surface anywhere in the app (P1.4). It asks now, through an
- * AlertDialog, and says in the dialog what removing does NOT do: touch the files.
+ * HOW-16 made the sound setting a real `Checkbox` and put removing a workspace behind an
+ * AlertDialog that says what removing does NOT do: touch the files.
  *
- * `.linkish` (a `<span onClick>`, keyboard-unreachable, P2.8) is a `Button variant="link"`.
+ * HOW-68 redrew the screen as sections on the shared frame (screens/frame.tsx) — Editor,
+ * Notifications and sound, Keyboard, Integrations, Workspaces — and cleared what the audit
+ * measured here:
+ *
+ *   3.1.9  a workspace's PATH ran out of its card and under the remove button while its NAME
+ *          was cut to "acm…". The name is now never cut (it wraps), the path is a `Truncate`
+ *          cut in the middle — its distinguishing tail survives, the whole value shows on
+ *          hover and focus — and a copy button gives it to the clipboard whole.
+ *   3.5    the remove "×" was 14–16px wide. It is a 24px control with a name that says which
+ *          workspace it removes.
+ *   3.8    a `gh` failure was printed raw, in red, with no way forward. It is an inline error
+ *          that says what Howdah was doing, what to run, and offers Retry; the tool's own
+ *          words are kept, under it.
+ *
+ * Two controls are new, and both apply at once, in THIS browser, without Save:
+ *
+ *   Single-key shortcuts (WCAG 2.1.4): `lib/shortcuts.ts` owns the setting; this is its switch.
+ *   Desktop notifications: shows the browser's permission as it is, and asks for it ONLY when
+ *   "Enable desktop notifications" is pressed — never on load (DESIGN.md "Notifications and
+ *   sound"). "Send a test notification" shows what one looks like.
+ *
+ * Everything else on the page is saved to config.json by the ONE primary action, Save, which
+ * lives in the header so it is reachable however far the page has scrolled (⌘S / Ctrl S).
  */
-import { useEffect, useState } from "react";
-import { GitBranch, FolderGit2, Plus, X } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Bell, BellOff, Check, Copy, FolderGit2, GitBranch, Plus, RotateCw, Send, X } from "lucide-react";
 import type { GhRepoDto, Workspaces } from "@/lib/types";
+import { SETTINGS_CHANGED } from "@/lib/attention-sound";
+import { PRESENCE_CHANGED } from "@/lib/presence";
+import { notifyConfirmed, notifyPermission, requestNotifyPermission, sendTestNotification, setNotifyConfirmed, type NotifyPermission } from "@/lib/notify";
 import { getJSON } from "@/lib/net";
+import { useShortcuts, useSingleKeys } from "@/lib/shortcuts";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { AlertDialog } from "@/components/ui/dialog";
+import { Kbd } from "@/components/ui/kbd";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip } from "@/components/ui/tooltip";
-import { LoadingBlock } from "@/components/ui/skeleton";
+import { Truncate } from "@/components/ui/truncate";
 import { useToast } from "@/components/ui/toast";
+import { CODE, FieldError, Hint, LoadError, Screen, ScreenLoading, Section } from "./frame";
 
 export function GithubRepoPicker({ onAdded }: { onAdded: () => void }) {
   const [repos, setRepos] = useState<GhRepoDto[] | null>(null);
@@ -74,25 +98,48 @@ export function GithubRepoPicker({ onAdded }: { onAdded: () => void }) {
 
   const shown = (repos ?? []).filter((r) => !query || query.includes("/") || r.nameWithOwner.toLowerCase().includes(query.toLowerCase())).slice(0, 8);
   return (
-    <div className="gh-picker">
-      <Input aria-label="search your GitHub repos" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search your GitHub repos, or type owner/name for any repo…" />
-      {error && <div className="field-error">{error}</div>}
-      {repos === null && !error && <div className="field-hint">loading your repos from GitHub…</div>}
-      {shown.map((r) => (
-        <div key={r.nameWithOwner} className="gh-repo-row">
-          <span className="run-goal">{r.nameWithOwner}</span>
-          <span className="gh-meta">
-            {r.isPrivate ? "private" : "public"}
-            {r.registeredAs ? ` · registered as ${r.registeredAs}` : r.localPath ? " · clone found" : " · will clone"}
-          </span>
-          {r.registeredAs
-            ? <span className="gh-added" aria-label="already registered">✓</span>
-            : <Button size="sm" disabled={busy !== null} onClick={() => add(r.nameWithOwner)}>
-                <Plus />{busy === r.nameWithOwner ? (r.localPath ? "Adding…" : "Cloning…") : "Add"}
-              </Button>}
+    <div data-slot="gh-picker" className="flex flex-col gap-2">
+      <Label>
+        Add a repository from GitHub
+        <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search your repositories, or type owner/name for any repository" />
+      </Label>
+      {error && (
+        // the failure, said for a person: what Howdah was doing, what to do, and the tool's own words kept
+        <div role="alert" data-slot="gh-error" className="flex flex-col gap-1.5 rounded-[var(--radius-sm)] border border-border bg-card p-3">
+          <p className="m-0 text-sm font-medium text-destructive">GitHub could not be reached through the gh CLI.</p>
+          <Hint>
+            Howdah lists and clones repositories with <code className={CODE}>gh</code>. Run <code className={CODE}>gh auth login</code> in
+            a terminal, then retry. A local folder can still be registered below.
+          </Hint>
+          <p className="m-0 whitespace-pre-wrap font-mono text-code text-muted-foreground [overflow-wrap:anywhere]">{error}</p>
+          <Button variant="outline" size="sm" className="self-start" onClick={() => { setError(null); void load(query.includes("/") ? query : undefined); }}><RotateCw />Retry</Button>
         </div>
-      ))}
-      {repos !== null && shown.length === 0 && <div className="field-hint">no matches — try owner/name</div>}
+      )}
+      {repos === null && !error && (
+        <div role="status" aria-busy="true" className="flex flex-col gap-1.5">
+          <span className="sr-only">Loading your repositories from GitHub</span>
+          <Skeleton className="h-8 w-full" /><Skeleton className="h-8 w-full" />
+        </div>
+      )}
+      {shown.length > 0 && (
+        <ul className="m-0 flex list-none flex-col p-0">
+          {shown.map((r) => (
+            <li key={r.nameWithOwner} className="flex min-h-9 items-center gap-3 border-b border-border py-1 text-sm">
+              <Truncate mono className="flex-1 text-code text-foreground">{r.nameWithOwner}</Truncate>
+              <span className="shrink-0 text-xs text-muted-foreground">
+                {r.isPrivate ? "private" : "public"}
+                {r.registeredAs ? ` · registered as ${r.registeredAs}` : r.localPath ? " · clone found" : " · will clone"}
+              </span>
+              {r.registeredAs
+                ? <span className="inline-flex h-7 shrink-0 items-center gap-1 px-2 text-xs text-muted-foreground"><Check aria-hidden className="size-3.5" />Added</span>
+                : <Button variant="outline" size="sm" disabled={busy !== null} loading={busy === r.nameWithOwner} onClick={() => add(r.nameWithOwner)} aria-label={`Add ${r.nameWithOwner}`}>
+                    {busy !== r.nameWithOwner && <Plus />}{busy === r.nameWithOwner ? (r.localPath ? "Adding" : "Cloning") : "Add"}
+                  </Button>}
+            </li>
+          ))}
+        </ul>
+      )}
+      {repos !== null && shown.length === 0 && <Hint>No repository matches. Type <code className={CODE}>owner/name</code> to look one up directly.</Hint>}
     </div>
   );
 }
@@ -128,24 +175,31 @@ export function AddWorkspace({ onAdded, hint }: { onAdded: () => void; hint?: st
     }
   };
   return (
-    <div className="add-workspace">
-      {hint && <div className="field-hint">{hint}</div>}
+    <div data-slot="add-workspace" className="flex flex-col gap-3">
+      {hint && <Hint>{hint}</Hint>}
       <GithubRepoPicker onAdded={onAdded} />
       {!manual ? (
-        <div className="field-hint">
-          Plain folder (notes, docs — no git)?{" "}
-          <Button variant="link" size="inline" onClick={() => setManual(true)}>register a local path</Button>
-        </div>
+        <Hint>
+          A plain folder (notes, docs, no git)?{" "}
+          <Button variant="link" size="inline" onClick={() => setManual(true)}>Register a local path</Button>
+        </Hint>
       ) : (
-        <>
-          <div className="add-workspace-row">
-            <Input aria-label="workspace name" value={name} onChange={(e) => setName(e.target.value)} placeholder="name (e.g. notes)" className="flex-1" />
-            <Input aria-label="workspace path" value={path} onChange={(e) => setPath(e.target.value)} placeholder="~/notes or /Users/areeb/…" className="flex-[2]" />
-            <Button onClick={add} disabled={busy || !name.trim() || !path.trim()}><Plus />{busy ? "…" : "Add"}</Button>
+        <div className="flex flex-col gap-2">
+          <div className="flex flex-wrap items-end gap-2">
+            <Label className="min-w-[140px] flex-1">
+              Name
+              {/* the form opens from a link that then leaves the page: focus goes to its first field, not to <body> */}
+              <Input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="notes" />
+            </Label>
+            <Label className="min-w-[220px] flex-[2]">
+              Path
+              <Input mono value={path} onChange={(e) => setPath(e.target.value)} placeholder="~/notes" onKeyDown={(e) => { if (e.key === "Enter" && name.trim() && path.trim() && !busy) void add(); }} />
+            </Label>
+            <Button variant="outline" onClick={add} loading={busy} disabled={!name.trim() || !path.trim()}>{!busy && <Plus />}Register</Button>
           </div>
-          {error && <div className="field-error">{error}</div>}
-          <div className="field-hint">A git repo registers as a repo; any other folder registers as Plain.</div>
-        </>
+          {error && <FieldError>{error}</FieldError>}
+          <Hint>A git repository registers as a repo; any other folder registers as plain.</Hint>
+        </div>
       )}
     </div>
   );
@@ -159,87 +213,240 @@ interface SettingsDto {
   typesafeApiKeyState?: "env" | "saved" | "unset";
   /** write-only: what the operator just typed. Blank means "leave it"; null means "clear it". */
   typesafeApiKey?: string | null;
+  /**
+   * A fact about this machine, not a setting (engine/attention.ts `notifierStatus`): whether
+   * the notification that fires with NO viewer open can be clicked, and the line that fixes it.
+   */
+  notifier?: { clickable: boolean; detail: string; fix?: string };
+}
+
+/** the browser's permission, in words, and what the operator can do about it */
+const PERMISSION_COPY: Record<NotifyPermission, string> = {
+  granted: "On. A run that starts waiting while this tab is in the background is announced with its name and what it is asking; clicking the notification opens the ask. While a viewer tab is open, this is the only notification you get.",
+  default: "Off. The browser has not been asked yet.",
+  denied: "Blocked by the browser for this site. Allow notifications in the browser's site settings, then reload this page.",
+  unsupported: "This browser cannot show notifications. The count beside “Needs you” and the tab's icon still change.",
+};
+
+function CopyPath({ what, text, noun = "path" }: { what: string; text: string; noun?: string }) {
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return;
+    const t = setTimeout(() => setCopied(false), 1600);
+    return () => clearTimeout(t);
+  }, [copied]);
+  const name = copied ? `Copied the ${what} ${noun}` : `Copy the ${what} ${noun}`;
+  return (
+    <Tooltip content={name} side="left" align="center">
+      <Button variant="ghost" size="icon-sm" aria-label={name} onClick={() => { void navigator.clipboard?.writeText(text).then(() => setCopied(true), () => setCopied(false)); }}>
+        {copied ? <Check /> : <Copy />}
+      </Button>
+    </Tooltip>
+  );
 }
 
 export function Settings() {
   const [s, setS] = useState<SettingsDto | null>(null);
-  const [saved, setSaved] = useState(false);
-  const [ws, setWs] = useState<Workspaces>({ repos: [], folders: [] });
+  const [saving, setSaving] = useState(false);
+  const [ws, setWs] = useState<Workspaces | null>(null);
   const [removing, setRemoving] = useState<string | null>(null);
+  const [permission, setPermission] = useState<NotifyPermission>(() => notifyPermission());
+  // declared with the other state, above the loading return: hooks may not follow an early return
+  const [confirmed, setConfirmed] = useState<boolean>(() => notifyConfirmed());
+  const [asking, setAsking] = useState<"idle" | "sent" | "not-seen">("idle");
+  // the two answer buttons leave the page with the answer, so focus goes back to the control
+  // the question came from — "Send a test notification" — not to <body>
+  const testButton = useRef<HTMLButtonElement | null>(null);
+  const [singleKeys, setSingleKeys] = useSingleKeys();
   const { toast } = useToast();
   const loadWs = () => getJSON<Workspaces>("/api/workspaces").then(setWs).catch(() => {});
   const removeWs = async (name: string) => {
     const r = await fetch("/api/workspaces", { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ name }) }).catch(() => null);
     setRemoving(null);
-    toast(r?.ok ? `${name} is no longer registered — its files are untouched` : `could not remove ${name}`, r?.ok ? "default" : "error");
+    toast(r?.ok ? `${name} is no longer registered — its files are untouched` : `Could not remove ${name}`, r?.ok ? "default" : "error");
     loadWs();
   };
-  useEffect(() => { getJSON<SettingsDto>("/api/settings").then(setS).catch(() => {}); loadWs(); }, []);
-  if (!s) return <LoadingBlock label="Loading settings" rows={3} />;
+  const [failed, setFailed] = useState(false);
+  const loadSettings = () => { setFailed(false); return getJSON<SettingsDto>("/api/settings").then(setS).catch(() => setFailed(true)); };
+  useEffect(() => { void loadSettings(); loadWs(); }, []);
   const save = async () => {
+    if (!s || saving) return;
+    setSaving(true);
     const r = await fetch("/api/settings", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(s) }).catch(() => null);
     // The key is write-only, so the screen cannot know the new state on its own: re-read it,
     // and drop whatever was typed so the box does not keep holding a credential.
     if (r?.ok) await getJSON<SettingsDto>("/api/settings").then(setS).catch(() => {});
-    setSaved(true);
-    toast(r?.ok ? "settings saved" : "could not save settings", r?.ok ? "default" : "error");
-    setTimeout(() => setSaved(false), 1500);
+    if (r?.ok) window.dispatchEvent(new Event(SETTINGS_CHANGED)); // the sound setting applies at once
+    setSaving(false);
+    toast(r?.ok ? "Settings saved" : "Could not save the settings", r?.ok ? "default" : "error");
   };
+  useShortcuts([{ id: "settings.save", scope: "Settings", label: "Save settings", keys: "mod+s", disabled: !s, run: () => void save() }]);
+  if (!s) return failed ? <Screen name="settings" title="Settings" width="form"><LoadError what="your settings" onRetry={() => void loadSettings()} /></Screen> : <ScreenLoading name="settings" title="Settings" label="Loading settings" rows={5} />;
+
+  const enableNotifications = async () => {
+    const next = await requestNotifyPermission(); // the ONLY call site: a click, never a page load
+    setPermission(next);
+    window.dispatchEvent(new Event(PRESENCE_CHANGED)); // the server learns who delivers now, not in 20s
+    if (next === "granted") toast("Desktop notifications are on");
+    else if (next === "denied") toast("The browser blocked notifications for this site", "error");
+  };
+  // HOW-68: the browser saying "granted" does not mean a notification reached the screen
+  // (macOS can drop Chrome's silently), so a test is followed by the only reliable check: ask.
+  const testNotification = () => {
+    if (!sendTestNotification()) { toast("The browser would not show a notification", "error"); return; }
+    setAsking("sent");
+  };
+  const answerTest = (seen: boolean) => {
+    setNotifyConfirmed(seen);
+    setConfirmed(seen);
+    setAsking(seen ? "idle" : "not-seen");
+    testButton.current?.focus();
+    window.dispatchEvent(new Event(PRESENCE_CHANGED)); // the engine learns at once who delivers
+    if (seen) toast("Desktop notifications are confirmed for this browser");
+  };
+  const workspaces = ws ? [...ws.repos.map((w) => ({ ...w, kind: "repo" as const })), ...ws.folders.map((w) => ({ ...w, kind: "plain" as const }))] : null;
+
   return (
-    <div className="runs">
-      <h1>Settings</h1>
-      <Card className="max-w-[640px]">
-        <CardContent className="pt-5">
-          <Label>
-            Editor command (Open-in-IDE)
-            <Input value={s.editorCommand ?? ""} onChange={(e) => setS({ ...s, editorCommand: e.target.value })} placeholder="idea — IntelliJ launcher on PATH (Tools → Create Command-line Launcher)" />
-          </Label>
-          <Label>
-            Slack webhook (attention DMs)
-            <Input value={s.slackWebhook ?? ""} onChange={(e) => setS({ ...s, slackWebhook: e.target.value })} placeholder="https://hooks.slack.com/…" />
-          </Label>
-          <Label>
-            TypeSafe API key (Jev decision calls)
-            {s.typesafeApiKeyState === "env" ? (
-              <div className="field-hint">
-                Set by <code>TYPESAFE_API_KEY</code> in the environment, which wins over anything saved here.
-              </div>
-            ) : (
-              <Input
-                type="password"
-                value={s.typesafeApiKey ?? ""}
-                onChange={(e) => setS({ ...s, typesafeApiKey: e.target.value })}
-                placeholder={s.typesafeApiKeyState === "saved" ? "A key is saved — type a new one to replace it" : "console.typesafe.ai/keys"}
-              />
-            )}
-          </Label>
-          {s.typesafeApiKeyState === "saved" && (
-            <div className="field-hint">
-              Howdah never shows a saved key back.{" "}
-              <Button variant="link" size="inline" onClick={() => { setS({ ...s, typesafeApiKey: null }); }}>Clear it</Button>
-              {s.typesafeApiKey === null && " — press Save to confirm."}
+    <Screen
+      name="settings"
+      title="Settings"
+      width="form"
+      actions={<Button onClick={save} loading={saving}>Save <Kbd keys="mod+s" decorative /></Button>}
+    >
+      <Section title="Editor">
+        <Label>
+          Editor command
+          <Input mono value={s.editorCommand ?? ""} onChange={(e) => setS({ ...s, editorCommand: e.target.value })} placeholder="idea" />
+        </Label>
+        <Hint>What “Open in IDE” runs, with the worktree's path. It has to be on your PATH — for IntelliJ, Tools → Create Command-line Launcher.</Hint>
+      </Section>
+
+      <Section title="Notifications and sound">
+        <div data-slot="notify-permission" data-permission={permission} className="flex flex-col gap-2">
+          <div className="flex items-start gap-2 text-sm leading-5">
+            {permission === "granted" ? <Bell aria-hidden className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" /> : <BellOff aria-hidden className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />}
+            <p className="m-0"><span className="font-medium">Desktop notifications.</span> <span className="text-muted-foreground">{PERMISSION_COPY[permission]}</span></p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {permission === "default" && <Button variant="outline" size="sm" onClick={enableNotifications}><Bell />Enable desktop notifications</Button>}
+            <Button ref={testButton} variant="outline" size="sm" disabled={permission !== "granted"} onClick={testNotification}><Send />Send a test notification</Button>
+          </div>
+          {asking === "sent" && (
+            <div data-slot="notify-confirm" role="group" aria-label="Did the test notification appear?" className="flex flex-wrap items-center gap-2 text-sm">
+              <span>Did a notification appear on your screen?</span>
+              <Button variant="outline" size="sm" onClick={() => answerTest(true)}>Yes, I saw it</Button>
+              <Button variant="outline" size="sm" onClick={() => answerTest(false)}>No, nothing appeared</Button>
             </div>
           )}
-          <Checkbox label="Attention chime" checked={s.chime !== false} onChange={(e) => setS({ ...s, chime: e.target.checked })} />
-          <Button onClick={save} className="self-start">{saved ? "Saved" : "Save"}</Button>
-        </CardContent>
-      </Card>
-
-      <h1 className="section-gap">Workspaces</h1>
-      <Card className="max-w-[640px]">
-        <CardContent className="pt-5">
-          {[...ws.repos.map((w) => ({ ...w, kind: "repo" })), ...ws.folders.map((w) => ({ ...w, kind: "plain" }))].map((w) => (
-            <div key={w.name} className="ws-row">
-              <Badge variant="outline">{w.kind === "repo" ? <GitBranch /> : <FolderGit2 />}{w.kind}</Badge>
-              <span className="run-goal">{w.name}</span>
-              <Tooltip content={w.path}><span className="run-meta">{w.path}</span></Tooltip>
-              <Button variant="ghost" size="icon" className="ml-auto size-6 text-faint hover:text-destructive" aria-label={`remove the ${w.name} workspace`} onClick={() => setRemoving(w.name)}><X /></Button>
+          {asking === "not-seen" && (
+            <div data-slot="notify-help" role="status" className="flex flex-col gap-1 text-sm leading-5">
+              <p className="m-0 font-medium">The browser accepted it, so the system is not showing it. Check, in this order:</p>
+              <ol className="m-0 flex list-decimal flex-col gap-1 pl-5 text-muted-foreground">
+                <li>macOS System Settings → Notifications → your browser: “Allow notifications” on, and the style set to Banners or Alerts.</li>
+                <li>macOS Focus or Do Not Disturb is off (Control Centre → Focus).</li>
+                <li>In the browser's own settings, notifications for this site are allowed and not “quieter”.</li>
+              </ol>
+              <p className="m-0 text-muted-foreground">Then send another test. Until you confirm one, Howdah keeps sending the system notification as well, so an ask is never missed.</p>
             </div>
-          ))}
-          {ws.repos.length + ws.folders.length === 0 && <div className="field-hint">No workspaces yet.</div>}
-          <AddWorkspace onAdded={loadWs} />
-        </CardContent>
-      </Card>
+          )}
+          <Hint>
+            {permission === "granted" && confirmed
+              ? "Confirmed in this browser: while this viewer is open it delivers the notification, and the system one stays quiet. Nothing is posted while you are looking at this tab; the count beside “Needs you” says it."
+              : permission === "granted"
+                ? "Not confirmed yet. Send a test and say whether you saw it; until then the system notification is sent as well."
+                : "Applies at once, in this browser. Nothing is posted while you are looking at this tab: the count beside “Needs you” says it."}
+          </Hint>
+        </div>
+        {s.notifier && (
+          <div data-slot="os-notifier" data-clickable={s.notifier.clickable ? "yes" : "no"} className="flex flex-col gap-2">
+            <p className="m-0 text-sm leading-5">
+              <span className="font-medium">With no viewer open.</span>{" "}
+              <span className="text-muted-foreground">
+                {s.notifier.clickable
+                  ? "macOS shows the notification as Howdah's own, and clicking it opens the ask."
+                  : "macOS shows the notification as “Script Editor”, and clicking it does not open the ask. Install terminal-notifier to get one that does:"}
+              </span>
+            </p>
+            {s.notifier.fix && (
+              <div className="flex items-center gap-2">
+                <code className="m min-w-0 flex-1 rounded-[var(--radius-sm)] border border-border bg-card px-2 py-1 text-sm">{s.notifier.fix}</code>
+                <CopyPath what="install" noun="command" text={s.notifier.fix} />
+              </div>
+            )}
+          </div>
+        )}
+        <Checkbox label="Play a sound when a run starts waiting on you" checked={s.chime === true} onChange={(e) => setS({ ...s, chime: e.target.checked })} />
+        <Hint>A short soft tone, off unless you turn it on. It plays once per run that newly waits, never on navigation. Saved with Save.</Hint>
+      </Section>
+
+      <Section title="Keyboard">
+        <Checkbox label="Single-key shortcuts" checked={singleKeys} onChange={(e) => setSingleKeys(e.target.checked)} />
+        <Hint>
+          Keys pressed alone, like <Kbd keys="c" /> for a new run or <Kbd keys="g r" /> for Runs. They are always ignored while you
+          type in a field. Turn them off if stray keys or speech input trigger them: <Kbd keys="mod+k" /> still reaches every
+          command, and <Kbd keys="?" /> lists them. Applies at once, in this browser.
+        </Hint>
+      </Section>
+
+      <Section title="Integrations">
+        <Label>
+          Slack webhook
+          <Input mono value={s.slackWebhook ?? ""} onChange={(e) => setS({ ...s, slackWebhook: e.target.value })} placeholder="https://hooks.slack.com/…" />
+        </Label>
+        <Hint>Where a run that needs you is sent as a direct message.</Hint>
+        {s.typesafeApiKeyState === "env" ? (
+          <div className="flex flex-col gap-1">
+            <span className="text-xs font-semibold text-muted-foreground">TypeSafe API key</span>
+            <Hint>Set by <code className={CODE}>TYPESAFE_API_KEY</code> in the environment, which wins over anything saved here.</Hint>
+          </div>
+        ) : (
+          <Label>
+            TypeSafe API key
+            <Input
+              mono
+              type="password"
+              autoComplete="off"
+              value={s.typesafeApiKey ?? ""}
+              onChange={(e) => setS({ ...s, typesafeApiKey: e.target.value })}
+              placeholder={s.typesafeApiKeyState === "saved" ? "A key is saved. Type a new one to replace it" : "from console.typesafe.ai/keys"}
+            />
+          </Label>
+        )}
+        <Hint>
+          Used for Jev decision calls.
+          {s.typesafeApiKeyState === "saved" && (
+            <>
+              {" "}Howdah never shows a saved key back.{" "}
+              <Button variant="link" size="inline" onClick={() => { setS({ ...s, typesafeApiKey: null }); }}>Clear it</Button>
+              {s.typesafeApiKey === null && " — press Save to confirm."}
+            </>
+          )}
+        </Hint>
+      </Section>
+
+      <Section title="Workspaces" count={workspaces?.length} description="The folders a run may work in. A repo gets worktrees, branches and pull requests; a plain folder is edited in place.">
+        {workspaces === null ? (
+          <div role="status" aria-busy="true" className="flex flex-col gap-1.5"><span className="sr-only">Loading workspaces</span><Skeleton className="h-8 w-full" /><Skeleton className="h-8 w-full" /></div>
+        ) : workspaces.length === 0 ? (
+          <Hint>No workspaces yet. Add a repository from GitHub or register a local folder below; a run needs one to work in.</Hint>
+        ) : (
+          <ul data-slot="workspaces" className="m-0 flex list-none flex-col p-0">
+            {workspaces.map((w) => (
+              <li key={w.name} data-workspace={w.name} className="flex min-h-9 items-center gap-3 border-b border-border py-1 text-sm">
+                <Badge variant="outline" className="shrink-0">{w.kind === "repo" ? <GitBranch aria-hidden /> : <FolderGit2 aria-hidden />}{w.kind}</Badge>
+                {/* the NAME is never cut: it is what a run is launched against, so it wraps instead */}
+                <span data-col="name" className="max-w-[45%] shrink-0 text-body font-medium text-foreground [overflow-wrap:anywhere]">{w.name}</span>
+                <Truncate mono middle={22} className="flex-1 text-code text-muted-foreground">{w.path}</Truncate>
+                <CopyPath what={w.name} text={w.path} />
+                <Tooltip content={`Remove ${w.name}`} side="left" align="center">
+                  <Button variant="ghost" size="icon-sm" className="hover:text-destructive" aria-label={`remove the ${w.name} workspace`} onClick={() => setRemoving(w.name)}><X /></Button>
+                </Tooltip>
+              </li>
+            ))}
+          </ul>
+        )}
+        <AddWorkspace onAdded={loadWs} />
+      </Section>
 
       <AlertDialog
         open={removing !== null}
@@ -249,6 +456,6 @@ export function Settings() {
         description="Howdah forgets this workspace, so no new run can choose it. The folder, its git history and any existing worktrees are left exactly as they are."
         confirmLabel="Remove the workspace"
       />
-    </div>
+    </Screen>
   );
 }

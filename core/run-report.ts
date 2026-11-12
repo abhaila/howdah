@@ -25,6 +25,21 @@
  * (prompts/implementation.report.md); everything else is a FACT the log already holds. Nothing is
  * stored: web/report.ts gathers the model, `GET /api/runs/:id/report` and `howdah report` render it.
  *
+ * HOW-68 — ONE LOOK. The page used to be a fixed beige, all-mono sheet in both themes: a third
+ * look beside the viewer's two. It now wears the viewer's own Indigo system. It still cannot
+ * reach tokens.css (it must open from a file), so it carries a COPY of the values it needs as
+ * `light-dark()` pairs under `color-scheme: light dark`: standalone it follows the reader's
+ * system; framed by the viewer it is told the operator's explicit choice as `?theme=light|dark`,
+ * which a two-line script in the head turns into `data-theme` before first paint. Type is the
+ * viewer's scale (12 / 13 / 14 / 16 / 20, nothing under 12) in "DM Sans" and "DM Mono" FIRST
+ * with system fallbacks — no font is embedded or fetched, because the frame is sandboxed without
+ * an origin (a font request from it would need CORS and a wider CSP) and the file must read the
+ * same offline. Labels are sentence case; nothing is uppercase or letter-spaced. Amber is absent:
+ * nothing on a report is waiting on anyone. The four component statuses are told apart by their
+ * BORDER (heavy accent, accent, plain, dashed) and by a word printed in every box, with fill as
+ * the third channel. Every control is a real button of at least 28px with a visible focus ring,
+ * the request path's rows included (they were clickable `li`s no keyboard could reach).
+ *
  * Node-free and dependency-free: the page must open from a file:// URL or an email attachment, so
  * it links nothing — its CSS, its one script and its screenshots (as data: URIs) are inside it. It
  * carries its own palette for the same reason; it cannot reach tokens.css. Every status is a WORD
@@ -213,8 +228,10 @@ export function esc(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
 
-const STATUS_WORD: Record<ComponentStatus, string> = { new: "NEW", changed: "CHANGED", reused: "REUSED AS IS", external: "EXTERNAL" };
-const LEGEND_WORD: Record<ComponentStatus, string> = { new: "NEW IN THIS CHANGE", changed: "CHANGED", reused: "REUSED AS IS", external: "EXTERNAL" };
+const STATUS_WORD: Record<ComponentStatus, string> = { new: "New", changed: "Changed", reused: "Reused as is", external: "External" };
+const LEGEND_WORD: Record<ComponentStatus, string> = { new: "New in this change", changed: "Changed", reused: "Reused as is", external: "External" };
+/** the one word printed inside a box — the status must be readable without the legend or a colour */
+const BOX_WORD: Record<ComponentStatus, string> = { new: "New", changed: "Changed", reused: "Reused", external: "External" };
 
 /** box geometry for the map — one lane (column) per group, in first-appearance order */
 const BOX_W = 176;
@@ -261,8 +278,8 @@ function clip(s: string, n: number): string {
   return s.length <= n ? s : `${s.slice(0, n - 1)}…`;
 }
 
-/** characters of the 15px mono label that fit inside a box */
-const LABEL_CHARS = 17;
+/** characters of the 14px label that fit inside a box, in the widest fallback face */
+const LABEL_CHARS = 19;
 
 /** Word-wrap into at most `lines` lines of `width`; the last line is clipped with an ellipsis. */
 export function wrap(s: string, width: number, lines: number): string[] {
@@ -325,7 +342,7 @@ function mapSvg(map: ChangeMap): string {
     const d = linked ? wirePath(a, b) : `M${a.x + BOX_W / 2},${a.y + BOX_H / 2} L${b.x + BOX_W / 2},${b.y + BOX_H / 2}`;
     hops.push(`<path class="hop" data-hop="${i}" d="${d}"/>`);
   }
-  const laneHeads = lanes.filter((l) => l.name).map((l) => `<text class="lane" x="${l.x}" y="${PAD + 14}">${esc(clip(l.name.toUpperCase(), 30))}</text>`).join("");
+  const laneHeads = lanes.filter((l) => l.name).map((l) => `<text class="lane" x="${l.x}" y="${PAD + 14}">${esc(clip(l.name, 30))}</text>`).join("");
   const nodes = boxes.map(({ c, x, y }) => {
     const top = `M0,0 L${DEPTH},${-DEPTH} L${BOX_W + DEPTH},${-DEPTH} L${BOX_W},0 Z`;
     const side = `M${BOX_W},0 L${BOX_W + DEPTH},${-DEPTH} L${BOX_W + DEPTH},${BOX_H - DEPTH} L${BOX_W},${BOX_H} Z`;
@@ -335,10 +352,9 @@ function mapSvg(map: ChangeMap): string {
       <path class="face side" d="${side}"/><path class="shade side" d="${side}"/>
       <rect class="face" width="${BOX_W}" height="${BOX_H}"/>
       <line x1="0" y1="26" x2="${BOX_W}" y2="26"/>
-      <text class="tag" x="10" y="18">${esc(clip((c.tag ?? c.id).toUpperCase(), 16))}</text>
-      <circle class="pip" cx="${BOX_W - 14}" cy="13" r="4"/>
+      <text class="tag" x="10" y="18">${esc(clip(c.tag ?? c.id, 14))}</text>
+      <text class="badge" x="${BOX_W - 10}" y="18" text-anchor="end">${BOX_WORD[c.status]}</text>
       ${wrap(c.label, LABEL_CHARS, 2).map((line, i) => `<text class="label" x="10" y="${50 + i * 19}">${esc(line)}</text>`).join("")}
-      ${c.status === "new" ? `<text class="badge" x="${BOX_W - 10}" y="${BOX_H - 9}" text-anchor="end">NEW</text>` : ""}
     </g>`;
   }).join("");
   return `<svg class="map" viewBox="0 0 ${width} ${height}" data-w="${width}" data-h="${height}" role="img" aria-label="${esc(`topology of the change: ${map.components.length} components`)}">
@@ -352,7 +368,8 @@ function pre(text: string, cls = "doc"): string {
   return `<div class="${cls}">${esc(text)}</div>`;
 }
 
-const STATE_WORD: Record<ReportCriterion["state"], string> = { pass: "PASS", fail: "UNMET", waived: "WAIVED", superseded: "SUPERSEDED" };
+const STATE_WORD: Record<ReportCriterion["state"], string> = { pass: "Met", fail: "Unmet", waived: "Waived", superseded: "Superseded" };
+const cap = (s: string): string => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
 
 function hhmm(iso: string, prevDay: string | null): { label: string; day: string } {
   const d = new Date(iso);
@@ -368,6 +385,17 @@ function findingsText(f: unknown): string | null {
   if (Array.isArray(f) && f.length === 0) return null;
   return JSON.stringify(f, null, 2);
 }
+
+/**
+ * Every link this page writes leaves it: a pull request, on the forge. Framed by the viewer the
+ * page is an `<iframe>`, and a plain link there loads GitHub INSIDE the frame — which GitHub
+ * refuses (`X-Frame-Options`), so the operator saw a broken pane where the PR should be (HOW-68
+ * feedback). So each one opens a new tab in the reader's own browser and hands the opened page
+ * neither this window (`noopener`) nor where it came from (`noreferrer`); `<base target="_blank">`
+ * in the head is the safety net for a link a later edit forgets to mark. The viewer's frame
+ * permits exactly that and nothing more (run/report.tsx `allow-popups…`).
+ */
+export const EXTERNAL_LINK = ' target="_blank" rel="noopener noreferrer"';
 
 /** "SequenceHQ/sequence-web/pull/92" → "sequence-web / #92" */
 export function prLabel(url: string): string {
@@ -387,8 +415,8 @@ function componentPanel(c: ChangeComponent, map: ChangeMap, shown: boolean): str
   const inFlow = c.in_flow ?? (steps.length ? steps.map((s) => `Step ${s.n}: ${s.text}`).join(" ") : null);
   return `
   <section class="panel" data-panel="${esc(c.id)}"${shown ? "" : " hidden"}>
-    <div class="eyebrow">Selected / ${esc((c.tag ?? c.id).toUpperCase())}</div>
-    <h3>${esc(c.label)}</h3>
+    <div class="eyebrow">Selected · <code>${esc(c.tag ?? c.id)}</code></div>
+    <h2>${esc(c.label)}</h2>
     ${c.kind ? `<div class="kind">${esc(c.kind)}</div>` : ""}
     <div class="status-row"><span class="eyebrow">Status</span><span class="st s-${c.status}"><i></i>${STATUS_WORD[c.status]}</span></div>
     <div class="tab-body" data-tab="does">
@@ -417,16 +445,16 @@ export function renderRunReport(m: RunReportModel): string {
   const title = map?.title ?? m.name ?? m.ticket ?? m.run_id;
   const hasFlow = !!map && map.flow.some((f) => f.component);
   const head = [
-    { k: pr ? "Pull request" : "Run", v: pr ? `${prLabel(pr.url)} · ${pr.state}` : `${m.graph} · ${m.run_id}`, href: pr?.url },
+    { k: pr ? "Pull request" : "Run", v: pr ? `${prLabel(pr.url)} · ${pr.state.toLowerCase()}` : `${m.graph} · ${m.run_id}`, href: pr?.url },
     { k: "Ticket", v: m.ticket ?? m.name ?? "—" },
     { k: "Diff", v: diffLabel(map?.diff) ?? "—" },
     { k: "Tests", v: m.tests ? `${m.tests.outcome}${m.tests.commit ? ` @ ${m.tests.commit.slice(0, 8)}` : ""}` : "not run" },
     { k: "Criteria", v: live ? `${passed}/${live} met` : "none written" },
   ];
   const controls = hasFlow
-    ? `<div class="controls"><button type="button" data-act="play">▶ Play flow</button><button type="button" data-act="step">Trace one step</button><button type="button" data-act="reset">Reset view</button></div>`
+    ? `<div class="controls"><button type="button" class="primary" data-act="play">Play flow</button><button type="button" data-act="step">Trace one step</button><button type="button" data-act="reset">Reset view</button></div>`
     : "";
-  const strip = `<header class="strip">${head.map((h) => `<div class="cell"><div class="eyebrow">${esc(h.k)}</div>${h.href ? `<a href="${esc(h.href)}">${esc(clip(h.v, 60))}</a>` : `<span>${esc(clip(h.v, 60))}</span>`}</div>`).join("")}${controls}</header>`;
+  const strip = `<header class="strip">${head.map((h) => `<div class="cell"><div class="eyebrow">${esc(h.k)}</div>${h.href ? `<a href="${esc(h.href)}"${EXTERNAL_LINK}>${esc(h.v)}</a>` : `<span>${esc(h.v)}</span>`}</div>`).join("")}${controls}</header>`;
 
   let stage: string;
   if (map && map.components.length) {
@@ -434,10 +462,13 @@ export function renderRunReport(m: RunReportModel): string {
     const byId = new Map(map.components.map((c) => [c.id, c]));
     const pathList = map.flow.map((f, i) => {
       const c = f.component ? byId.get(f.component) : undefined;
-      return `<li data-step="${i}"${c ? ` data-for="${esc(c.id)}"` : ""}><span class="n">${i + 1}</span><span class="t">${esc(c ? c.label : f.text)}</span>${c ? `<span class="tg">${esc(clip((c.tag ?? c.id).toUpperCase(), 6))}</span>` : ""}</li>`;
+      const cells = `<span class="n">${i + 1}</span><span class="t">${esc(c ? c.label : f.text)}</span>${c ? `<span class="tg">${esc(clip(c.tag ?? c.id, 8))}</span>` : ""}`;
+      // a step that names a component is a control (it selects it and moves the token); one that
+      // does not is only a line of the path
+      return `<li data-step="${i}"${c ? ` data-for="${esc(c.id)}"` : ""}>${c ? `<button type="button" class="row">${cells}</button>` : `<div class="row">${cells}</div>`}</li>`;
     }).join("");
     const support = map.components.filter((c) => !onPath.has(c.id))
-      .map((c) => `<li data-for="${esc(c.id)}"><span class="n">+</span><span class="t">${esc(c.label)}</span><span class="tg">${esc(clip((c.tag ?? c.id).toUpperCase(), 6))}</span></li>`).join("");
+      .map((c) => `<li data-for="${esc(c.id)}"><button type="button" class="row"><span class="n">+</span><span class="t">${esc(c.label)}</span><span class="tg">${esc(clip(c.tag ?? c.id, 8))}</span></button></li>`).join("");
     const legend = COMPONENT_STATUSES.filter((s) => map.components.some((c) => c.status === s))
       .map((s) => `<li class="key s-${s}"><i></i>${LEGEND_WORD[s]}</li>`).join("");
     const first = map.flow.find((f) => f.component)?.component ?? map.components[0]!.id;
@@ -454,9 +485,9 @@ export function renderRunReport(m: RunReportModel): string {
         <ul class="legend">${legend}</ul>
       </aside>
       <div class="centre">
-        <div class="topbar"><span class="eyebrow">Live topology${flowName ? ` / ${esc(flowName)}` : ""}</span><span class="state" data-state>${hasFlow ? "PAUSED" : ""}</span>
-          <span class="zoom"><button type="button" data-act="in" aria-label="zoom in">+</button><button type="button" data-act="out" aria-label="zoom out">−</button></span></div>
-        <div class="canvas">${mapSvg(map)}</div>
+        <div class="topbar"><span class="eyebrow">Live topology${flowName ? ` / ${esc(flowName)}` : ""}</span><span class="state" data-state>${hasFlow ? "Paused" : ""}</span>
+          <span class="zoom"><button type="button" data-act="out" aria-label="Zoom out">−</button><button type="button" data-act="in" aria-label="Zoom in">+</button></span></div>
+        <div class="canvas" tabindex="0" role="region" aria-label="Topology of the change">${mapSvg(map)}</div>
       </div>
       <aside class="right">
         <div class="tabs" role="tablist"><button type="button" role="tab" data-tab="does" aria-selected="true">What it does</button><button type="button" role="tab" data-tab="built" aria-selected="false">How it's built</button></div>
@@ -487,7 +518,7 @@ export function renderRunReport(m: RunReportModel): string {
   const supporting: string[] = [];
   const ex = map?.example;
   if (ex) {
-    supporting.push(`<div class="col"><div class="eyebrow">Worked example</div><h3>${esc(ex.title)}</h3>${ex.body ? `<p class="muted">${esc(ex.body)}</p>` : ""}
+    supporting.push(`<div class="col"><div class="eyebrow">Worked example</div><h2>${esc(ex.title)}</h2>${ex.body ? `<p class="muted">${esc(ex.body)}</p>` : ""}
       ${ex.steps.length ? `<ol class="example">${ex.steps.map((s, i) => `<li><span class="n">${i + 1}</span>${esc(s)}</li>`).join("")}</ol>` : ""}
       ${ex.outcome ? `<div class="outcome">${ex.outcome.label ? `<span class="chip">${esc(ex.outcome.label)}</span>` : ""}<p>${esc(ex.outcome.body)}</p></div>` : ""}</div>`);
   }
@@ -498,7 +529,7 @@ export function renderRunReport(m: RunReportModel): string {
       day = t.day;
       return `<li class="k-${s.kind}"><time datetime="${esc(s.at)}">${esc(t.label)}</time><span class="dot"></span><div><b>${esc(s.title)}</b>${s.detail ? `<p>${esc(s.detail)}</p>` : ""}</div></li>`;
     }).join("");
-    supporting.push(`<div class="col"><div class="eyebrow">${esc(m.run_id)}</div><h3>How the run got here</h3><p class="muted">Times are UTC, from the run log.</p><ol class="steps">${rows}</ol></div>`);
+    supporting.push(`<div class="col"><div class="eyebrow">${esc(m.run_id)}</div><h2>How the run got here</h2><p class="muted">Times are UTC, from the run log.</p><ol class="steps">${rows}</ol></div>`);
   }
 
   // evidence and plan: the receipts, collapsed below the change
@@ -508,15 +539,15 @@ export function renderRunReport(m: RunReportModel): string {
       <tr class="c-${c.state}"><td class="state">${STATE_WORD[c.state]}</td><td><span class="cid">${esc(c.id)}</span> ${esc(c.text)}${c.note ? `<div class="note">${esc(c.note)}</div>` : ""}</td></tr>`).join("")}</tbody></table>`);
   }
   if (m.tests) {
-    evidence.push(`<div class="eyebrow">Tests</div><div class="kv"><b>${esc(m.tests.outcome.toUpperCase())}</b>${m.tests.command ? ` <code>${esc(m.tests.command)}</code>` : ""}${m.tests.reason ? ` — ${esc(m.tests.reason)}` : ""}</div>${m.tests.tail ? `<details><summary>Output tail</summary>${pre(m.tests.tail, "code")}</details>` : ""}`);
+    evidence.push(`<div class="eyebrow">Tests</div><div class="kv"><b>${esc(cap(m.tests.outcome))}</b>${m.tests.command ? ` <code>${esc(m.tests.command)}</code>` : ""}${m.tests.reason ? ` — ${esc(m.tests.reason)}` : ""}</div>${m.tests.tail ? `<details><summary>Output tail</summary>${pre(m.tests.tail, "code")}</details>` : ""}`);
   }
   if (m.screens) {
     const shots = m.screens.shots.map((s) => `<figure>${s.src ? `<img src="${esc(s.src)}" alt="${esc(`screenshot of ${s.path}`)}" loading="lazy">` : `<div class="noimg">not embedded — too large; it is in the run's evidence folder</div>`}<figcaption><code>${esc(s.path)}</code>${s.console_errors ? ` · ${s.console_errors} console error${s.console_errors === 1 ? "" : "s"}` : ""}</figcaption></figure>`).join("");
-    evidence.push(`<div class="eyebrow">Screens</div><div class="kv"><b>${esc(m.screens.outcome.toUpperCase())}</b>${m.screens.reason ? ` — ${esc(m.screens.reason)}` : ""}</div>${shots ? `<div class="shots">${shots}</div>` : ""}`);
+    evidence.push(`<div class="eyebrow">Screens</div><div class="kv"><b>${esc(cap(m.screens.outcome))}</b>${m.screens.reason ? ` — ${esc(m.screens.reason)}` : ""}</div>${shots ? `<div class="shots">${shots}</div>` : ""}`);
   }
   if (m.review?.verdict) {
     const f = findingsText(m.review.findings);
-    evidence.push(`<div class="eyebrow">Last review</div><div class="kv"><b>${esc(m.review.verdict.toUpperCase())}</b></div>${f ? pre(f, "code") : ""}`);
+    evidence.push(`<div class="eyebrow">Last review</div><div class="kv"><b>${esc(cap(m.review.verdict))}</b></div>${f ? pre(f, "code") : ""}`);
   }
 
   const cost = m.usage && m.usage.cost_usd !== null ? `$${m.usage.cost_usd.toFixed(2)}${m.usage.partial ? " (partial)" : ""}` : null;
@@ -527,7 +558,9 @@ export function renderRunReport(m: RunReportModel): string {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="generator" content="howdah run report">
+<base target="_blank">
 <title>${esc(clip(title, 80))}</title>
+<script>${THEME_JS}</script>
 <style>${REPORT_CSS}</style>
 </head>
 <body>
@@ -550,11 +583,29 @@ ${m.plan ? `<details class="block"><summary><span class="eyebrow">The plan</span
  * the component it arrives at; Trace one step advances one hop; Reset returns to the first step.
  * The two tabs switch every panel at once, so the reader stays on "how it's built" while stepping.
  */
+/**
+ * The keys the framed report hands back to the viewer (HOW-68). A sandboxed frame keeps every
+ * keystroke typed while focus is inside it, so `Esc`, `F` and the tab numbers did nothing in
+ * the one pane you most often click into. The page posts THESE keys, unmodified and not from a
+ * field, to its parent; web/app/run/report.tsx accepts them only from its own frame and only if
+ * they are in this list. A standalone file has no parent and posts nothing.
+ */
+export const REPORT_RELAY_KEYS: readonly string[] = ["Escape", "f", "?", "1", "2", "3", "4", "5", "6", "7"];
+
 const REPORT_JS = `(function(){
+  // hand the viewer's own keys back to it when this page is framed (see REPORT_RELAY_KEYS)
+  if(window.parent!==window) document.addEventListener('keydown',function(e){
+    if(e.defaultPrevented||e.ctrlKey||e.metaKey||e.altKey) return;
+    var t=e.target; if(t&&(/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName||'')||t.isContentEditable)) return;
+    var k=e.key.length===1?e.key.toLowerCase():e.key;
+    if(${JSON.stringify(["Escape", "f", "?", "1", "2", "3", "4", "5", "6", "7"])}.indexOf(k)>=0) window.parent.postMessage({howdahKey:k},'*');
+  });
   var data={flow:[]}; try{ data=JSON.parse(document.getElementById('report-data').textContent); }catch(e){}
   var flow=data.flow||[], svg=document.querySelector('svg.map'), token=document.querySelector('svg.map .token');
   var stateEl=document.querySelector('[data-state]'), step=-1, timer=null, tab='does', zoom=1, anim=null;
   function all(s){ return Array.prototype.slice.call(document.querySelectorAll(s)); }
+  // reduced motion: the token still lands on each step, it just does not travel there
+  var still=false; try{ still=window.matchMedia('(prefers-reduced-motion: reduce)').matches; }catch(e){}
   function select(id){
     if(!id) return;
     all('[data-id]').forEach(function(n){ n.classList.toggle('on', n.getAttribute('data-id')===id); });
@@ -575,15 +626,15 @@ const REPORT_JS = `(function(){
     var prev=step; step=i; mark(i); select(flow[i]);
     var hop=svg&&svg.querySelector('path.hop[data-hop="'+i+'"]');
     if(anim) cancelAnimationFrame(anim);
-    if(i>prev && prev>=0 && hop && hop.getTotalLength && hop.getTotalLength()>0){
+    if(i>prev && prev>=0 && hop && hop.getTotalLength && hop.getTotalLength()>0 && !still){
       var len=hop.getTotalLength(), from=centre(flow[prev]), start=hop.getPointAtLength(0), rev=from&&start&&Math.hypot(start.x-from.x,start.y-from.y)>Math.hypot(hop.getPointAtLength(len).x-from.x,hop.getPointAtLength(len).y-from.y);
       var t0=null; var run=function(ts){ if(t0===null) t0=ts; var k=Math.min(1,(ts-t0)/700); place(hop.getPointAtLength(rev?len*(1-k):len*k)); if(k<1) anim=requestAnimationFrame(run); else place(centre(flow[i])); };
       anim=requestAnimationFrame(run);
     } else place(centre(flow[i]));
   }
   function next(){ var i=step+1; while(i<flow.length && !flow[i]) i++; if(i>=flow.length){ stop(); return false; } go(i); return true; }
-  function stop(){ if(timer){ clearInterval(timer); timer=null; } if(stateEl) stateEl.textContent='PAUSED'; var b=document.querySelector('[data-act="play"]'); if(b) b.textContent='\\u25B6 Play flow'; }
-  function play(){ if(timer){ stop(); return; } if(step>=flow.length-1) step=-1; if(stateEl) stateEl.textContent='FLOWING'; var b=document.querySelector('[data-act="play"]'); if(b) b.textContent='\\u23F8 Pause flow'; next(); timer=setInterval(function(){ if(!next()) stop(); },1600); }
+  function stop(){ if(timer){ clearInterval(timer); timer=null; } if(stateEl) stateEl.textContent='Paused'; var b=document.querySelector('[data-act="play"]'); if(b) b.textContent='Play flow'; }
+  function play(){ if(timer){ stop(); return; } if(step>=flow.length-1) step=-1; if(stateEl) stateEl.textContent='Playing'; var b=document.querySelector('[data-act="play"]'); if(b) b.textContent='Pause flow'; next(); timer=setInterval(function(){ if(!next()) stop(); },1600); }
   function setZoom(z){ zoom=Math.max(0.5,Math.min(2,z)); if(svg) svg.style.width=(Number(svg.getAttribute('data-w'))*zoom)+'px'; }
   all('[data-act]').forEach(function(b){ b.addEventListener('click',function(){ var a=b.getAttribute('data-act');
     if(a==='play') play(); else if(a==='step'){ stop(); if(!next()){ step=-1; next(); } } else if(a==='reset'){ stop(); step=-1; mark(-1); if(token) token.classList.remove('live'); select(flow.filter(Boolean)[0]); setZoom(1); }
@@ -599,135 +650,175 @@ const REPORT_JS = `(function(){
   setZoom(1);
 })();`;
 
+/**
+ * The viewer's theme, when the page is framed by it. The frame is sandboxed without an origin,
+ * so the page cannot read the viewer's setting; the viewer passes its EXPLICIT choice in the
+ * URL and this turns it into `data-theme` before the stylesheet below is applied. Without the
+ * parameter (the standalone file, or a viewer following the system) nothing is set and
+ * `color-scheme: light dark` follows the reader's system.
+ */
+const THEME_JS = `(function(){try{var m=/[?&]theme=(light|dark)(&|$)/.exec(location.search);if(m)document.documentElement.setAttribute('data-theme',m[1]);}catch(e){}})();`;
+
+/**
+ * The page's own stylesheet: a copy of the Indigo values from web/public/tokens.css (see the
+ * header for why a copy). Keep the two in step when a token's VALUE changes.
+ */
 const REPORT_CSS = `
-:root{--paper:#d9d4a8;--panel:#d2cc9c;--deep:#cbc595;--ink:#1d1c16;--muted:#5d5a45;--rule:#8f8a68;--faint:#b5af86;
-  --new:#c4d45e;--changed:#9db0e0;--reused:#d6cfa6;--external:#d48c62;--fail:#b4442c;--op:#c26a2c;--on:#1d1c16;--on-ink:#e9e5c8;
-  --mono:ui-monospace,SFMono-Regular,"JetBrains Mono",Menlo,Consolas,monospace}
-@media (prefers-color-scheme:dark){:root{--paper:#1f1e18;--panel:#29281f;--deep:#24231b;--ink:#e9e5c8;--muted:#a7a386;--rule:#5b5843;--faint:#3a3829;
-  --new:#7d8a2e;--changed:#4f6299;--reused:#56523b;--external:#94552f;--fail:#e0765c;--op:#e08a4a;--on:#e9e5c8;--on-ink:#1f1e18}}
+:root{color-scheme:light dark;
+  --bg:light-dark(#F5F6FA,#0D0E14);--raised:light-dark(#FFFFFF,#15161F);--inset:light-dark(#E8EAF3,#1D1F2B);
+  --fg:light-dark(#171927,#E7E8F2);--muted:light-dark(#4C5069,#A2A6C0);--faint:light-dark(#5E6285,#8589A6);
+  --border:light-dark(#D9DCEA,#262838);--border-strong:light-dark(#BBC0D8,#393C52);
+  --primary:light-dark(#4347C9,#A5A8FF);--primary-hover:light-dark(#3438B0,#BCBEFF);--primary-fg:light-dark(#FFFFFF,#0D0E14);
+  --fail:light-dark(#B3261E,#F2796B);
+  --new:light-dark(#DCDDFA,#2C2E66);--changed:light-dark(#ECEDFB,#1F2140);--reused:light-dark(#FFFFFF,#15161F);--external:light-dark(#E8EAF3,#1D1F2B);
+  --sans:"DM Sans",system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  --mono:"DM Mono",ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,monospace}
+:root[data-theme="light"]{color-scheme:light}
+:root[data-theme="dark"]{color-scheme:dark}
 *{box-sizing:border-box}
-html,body{margin:0;background:var(--paper);color:var(--ink);font:13px/1.55 var(--mono)}
-a{color:inherit}
-code{background:var(--panel);padding:0 3px;font-size:12px}
-button{font:inherit;color:inherit;background:transparent;border:1px solid var(--ink);padding:5px 10px;font-size:10px;letter-spacing:.14em;text-transform:uppercase;cursor:pointer}
-button:hover,button:focus-visible{background:var(--on);color:var(--on-ink)}
-.eyebrow{font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:var(--muted);margin:18px 0 8px}
-.eyebrow.ruled{border-bottom:1px solid var(--rule);padding-bottom:5px;margin-top:20px}
+html,body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 var(--sans)}
+*{scrollbar-color:var(--border-strong) transparent;scrollbar-width:thin}
+::selection{background:color-mix(in srgb,var(--primary) 28%,transparent)}
+:focus-visible{outline:2px solid var(--primary);outline-offset:2px}
+a{color:var(--primary);text-decoration:underline;text-underline-offset:3px}
+code{font-family:var(--mono);font-size:12px;background:var(--inset);padding:1px 4px;border-radius:4px}
+b{font-weight:600}
+h1,h2{font-weight:600;color:var(--fg);text-wrap:balance}
+p,li{text-wrap:pretty}
+button{font:500 13px/1 var(--sans);color:var(--fg);background:var(--raised);border:1px solid var(--border-strong);border-radius:8px;min-height:28px;padding:0 12px;cursor:pointer}
+button:hover{background:var(--inset)}
+button:active{transform:scale(.97)}
+button.primary{background:var(--primary);border-color:var(--primary);color:var(--primary-fg);font-weight:600}
+button.primary:hover{background:var(--primary-hover);border-color:var(--primary-hover)}
+.eyebrow{font-size:12px;font-weight:600;line-height:1.4;color:var(--muted);margin:18px 0 8px}
+.eyebrow code{font-weight:400}
+.eyebrow.ruled{border-bottom:1px solid var(--border);padding-bottom:6px;margin-top:20px}
 .muted{color:var(--muted)}
-.strip{display:flex;flex-wrap:wrap;border-bottom:1px solid var(--rule);align-items:stretch}
-.strip .cell{flex:1 1 170px;padding:9px 16px 10px;border-right:1px solid var(--rule);min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.strip .cell .eyebrow{margin:0 0 3px}
-.controls{display:flex;gap:6px;align-items:center;padding:8px 14px}
-.stage{display:grid;grid-template-columns:250px minmax(0,1fr) 300px;min-height:min(86vh,900px);border-bottom:1px solid var(--rule)}
-.stage.empty{grid-template-columns:250px minmax(0,1fr)}
-.left,.right{padding:4px 16px 20px;overflow:auto;max-height:min(86vh,900px)}
-.left{border-right:1px solid var(--rule)}
-.right{border-left:1px solid var(--rule);padding-top:0}
-.left h1{font-size:17px;line-height:1.35;margin:0 0 10px;font-weight:600}
+.strip{display:flex;flex-wrap:wrap;align-items:stretch;border-bottom:1px solid var(--border);background:var(--raised)}
+.strip .cell{flex:1 1 170px;min-width:0;padding:10px 16px;border-right:1px solid var(--border);font-size:13px;line-height:1.4;overflow-wrap:anywhere}
+.strip .cell .eyebrow{margin:0 0 2px}
+.controls{display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:8px 16px}
+.stage{display:grid;grid-template-columns:260px minmax(0,1fr) 320px;min-height:min(86vh,900px);border-bottom:1px solid var(--border)}
+.stage.empty{grid-template-columns:260px minmax(0,1fr)}
+.left,.right{padding:4px 16px 20px;min-width:0}
+.left{border-right:1px solid var(--border)}
+.right{border-left:1px solid var(--border);padding-top:0}
+.left h1{font-size:20px;line-height:1.3;margin:0 0 10px}
 .lede{color:var(--muted);margin:0 0 6px;white-space:pre-wrap}
-ol.path{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
-ol.path li{display:grid;grid-template-columns:18px 1fr auto;gap:8px;align-items:center;border:1px solid var(--ink);padding:7px 9px;font-size:12px;cursor:pointer;line-height:1.3}
-ol.path li .n,ol.path li .tg{font-size:10px;color:var(--muted);letter-spacing:.08em}
-ol.path li.on,ol.path li.now{background:var(--on);color:var(--on-ink)}
-ol.path li.on .n,ol.path li.on .tg,ol.path li.now .n,ol.path li.now .tg{color:var(--on-ink)}
-ol.path.support li{border-color:var(--rule)}
-.legend{list-style:none;padding:12px 0 0;margin:16px 0 0;border-top:1px solid var(--rule);display:flex;flex-direction:column;gap:6px;font-size:10px;letter-spacing:.12em;color:var(--muted)}
-.legend i,.st i{display:inline-block;width:10px;height:10px;border:1px solid var(--ink);margin-right:8px;vertical-align:-1px}
-.s-new i{background:var(--new)}.s-changed i{background:var(--changed)}.s-reused i{background:var(--reused)}.s-external i{background:var(--external)}
-.centre{display:flex;flex-direction:column;min-width:0;background:var(--deep)}
-.topbar{display:flex;align-items:center;gap:12px;padding:6px 14px}
+ol.path{list-style:none;margin:0;padding:0;display:flex;flex-direction:column}
+ol.path li{border-bottom:1px solid var(--border)}
+ol.path li:last-child{border-bottom:0}
+ol.path .row{display:grid;grid-template-columns:20px minmax(0,1fr) auto;gap:8px;align-items:center;width:100%;min-height:36px;padding:6px 8px;border:0;border-radius:6px;background:transparent;text-align:left;font:400 13px/1.4 var(--sans);color:var(--fg)}
+ol.path button.row:hover{background:var(--raised)}
+ol.path .n{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+ol.path .tg{font:12px var(--mono);color:var(--muted)}
+ol.path li.on .row{background:var(--raised);box-shadow:inset 0 0 0 1px var(--border-strong);font-weight:500}
+ol.path li.now .row{background:var(--raised);box-shadow:inset 0 0 0 1px var(--primary);font-weight:500}
+ol.path li.now .n{color:var(--primary);font-weight:600}
+.legend{list-style:none;padding:12px 0 0;margin:16px 0 0;border-top:1px solid var(--border);display:flex;flex-direction:column;gap:6px;font-size:12px;color:var(--muted)}
+.legend i,.st i{display:inline-block;width:12px;height:12px;border-radius:3px;border:1px solid var(--border-strong);margin-right:8px;vertical-align:-2px}
+.s-new i{background:var(--new);border:2px solid var(--primary)}.s-changed i{background:var(--changed);border-color:var(--primary)}.s-reused i{background:var(--reused)}.s-external i{background:var(--external);border-style:dashed}
+.centre{display:flex;flex-direction:column;min-width:0;background:var(--inset);position:sticky;top:0;align-self:start;height:min(86vh,900px)}
+.topbar{display:flex;align-items:center;gap:12px;min-height:44px;padding:6px 16px}
 .topbar .eyebrow{margin:0}
-.topbar .state{font-size:10px;letter-spacing:.16em;color:var(--op);font-weight:700}
-.zoom{margin-left:auto;display:flex;flex-direction:column;gap:4px}
-.zoom button{width:26px;height:26px;padding:0;font-size:14px;letter-spacing:0}
-.canvas{flex:1;overflow:auto;display:flex;align-items:center;justify-content:center;padding:8px}
-svg.map{display:block;max-width:none;height:auto;overflow:visible}
-svg.map .slab{fill:var(--panel);stroke:var(--rule);stroke-width:1}
-svg.map .grid{stroke:var(--faint);stroke-width:.6;fill:none;opacity:.7}
-svg.map .lane{font:11px var(--mono);letter-spacing:.18em;fill:var(--muted)}
-svg.map .wire{fill:none;stroke:var(--ink);stroke-width:1.4}
+.topbar .state{font-size:12px;font-weight:600;color:var(--primary)}
+.zoom{margin-left:auto;display:flex;gap:4px}
+.zoom button{width:28px;padding:0;font-size:16px}
+.canvas{flex:1;min-height:0;overflow:auto;display:flex;padding:8px}
+.canvas:focus-visible{outline-offset:-2px}
+svg.map{display:block;flex:none;margin:auto;max-width:none;height:auto;overflow:visible}
+svg.map .slab{fill:var(--bg);stroke:var(--border);stroke-width:1}
+svg.map .grid{stroke:var(--border);stroke-width:.6;fill:none}
+svg.map .lane{font:600 12px var(--sans);fill:var(--muted)}
+svg.map .wire{fill:none;stroke:var(--faint);stroke-width:1.4}
 svg.map .wire.dashed{stroke-dasharray:6 5}
 svg.map .hop{fill:none;stroke:none}
-svg.map .box{cursor:pointer;outline:none}
-svg.map .box .face{stroke:var(--ink);stroke-width:1.6;stroke-linejoin:round}
-svg.map .box .shade{stroke:none;pointer-events:none}
-svg.map .box .shade.top{fill:#fff;opacity:.28}
-svg.map .box .shade.side{fill:#000;opacity:.22}
-svg.map .box line{stroke:var(--ink);stroke-width:1}
-svg.map .box.on .face,svg.map .box:focus-visible .face{stroke-width:3.6}
-svg.map .box.off-path{opacity:.92}
-svg.map .s-new .face{fill:var(--new)}svg.map .s-changed .face{fill:var(--changed)}svg.map .s-reused .face{fill:var(--reused)}svg.map .s-external .face{fill:var(--external)}
-svg.map text{fill:var(--ink);font-family:var(--mono)}
-svg.map .tag{font-size:11px;letter-spacing:.16em}
-svg.map .label{font-size:15px}
-svg.map .badge{font-size:10px;font-weight:700;letter-spacing:.16em}
-svg.map .pip{fill:var(--ink)}
-svg.map .token{fill:var(--new);stroke:var(--ink);stroke-width:1.5;opacity:0;transition:opacity .2s}
+svg.map .box{cursor:pointer}
+svg.map .box:focus-visible{outline:2px solid var(--primary);outline-offset:4px}
+svg.map .box .face{stroke:var(--border-strong);stroke-width:1.2;stroke-linejoin:round}
+svg.map .box .shade{stroke:none;pointer-events:none;fill:var(--fg)}
+svg.map .box .shade.top{opacity:.04}
+svg.map .box .shade.side{opacity:.12}
+svg.map .box line{stroke:var(--border);stroke-width:1}
+svg.map .box.on .face{stroke:var(--primary);stroke-width:2.6}
+svg.map .s-new .face{fill:var(--new);stroke:var(--primary);stroke-width:2}
+svg.map .s-changed .face{fill:var(--changed);stroke:var(--primary)}
+svg.map .s-reused .face{fill:var(--reused)}
+svg.map .s-external .face{fill:var(--external);stroke-dasharray:5 4}
+svg.map text{fill:var(--fg);font-family:var(--sans)}
+svg.map .tag{font:12px var(--mono);fill:var(--muted)}
+svg.map .label{font-size:14px;font-weight:500}
+svg.map .badge{font-size:12px;font-weight:600;fill:var(--muted)}
+svg.map .s-new .badge{fill:var(--primary)}
+svg.map .token{fill:var(--primary);stroke:var(--raised);stroke-width:2;opacity:0}
 svg.map .token.live{opacity:1}
-.tabs{display:grid;grid-template-columns:1fr 1fr;margin:0 -16px 0;border-bottom:1px solid var(--ink)}
-.tabs button{border:0;border-right:1px solid var(--rule);padding:10px 6px}
-.tabs button[aria-selected="true"]{background:var(--on);color:var(--on-ink)}
-.panel h3{font-size:20px;margin:0;font-weight:600}
-.panel .kind{color:var(--muted);font-size:11px;margin-top:2px}
-.status-row{display:flex;justify-content:space-between;align-items:center;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule);margin-top:14px;padding:6px 0}
+.tabs{display:flex;gap:16px;margin:0 -16px;padding:0 16px;border-bottom:1px solid var(--border)}
+.tabs button{min-height:36px;padding:0 2px;border:0;border-bottom:2px solid transparent;border-radius:0;background:transparent;color:var(--muted);font-weight:400}
+.tabs button:hover{background:transparent;color:var(--fg)}
+.tabs button:focus-visible{outline-offset:-2px}
+.tabs button[aria-selected="true"]{border-bottom-color:var(--primary);color:var(--fg);font-weight:500}
+.panel h2{font-size:16px;line-height:1.3;margin:0}
+.panel .kind{color:var(--muted);font-size:12px;margin-top:2px}
+.status-row{display:flex;justify-content:space-between;align-items:center;border-top:1px solid var(--border);border-bottom:1px solid var(--border);margin-top:14px;padding:6px 0}
 .status-row .eyebrow{margin:0}
-.st{font-size:10px;font-weight:700;letter-spacing:.14em}
-.st i{border-radius:50%;width:8px;height:8px;margin-right:6px}
+.st{font-size:13px;font-weight:500}
 .panel p{margin:6px 0}
-.panel ul{margin:6px 0;padding-left:16px}
+.panel ul{margin:6px 0;padding-left:18px}
 .panel li{margin:4px 0}
-.trace{border:1px solid var(--ink);padding:4px 12px 10px;margin-top:22px}
-.trace .eyebrow{margin-top:8px}
-.trace ol{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:5px;font-size:12px}
-.trace li{display:grid;grid-template-columns:18px 1fr;gap:6px;color:var(--muted)}
-.trace li .n{font-size:10px;text-align:center;border:1px solid transparent;height:16px;line-height:14px}
-.trace li.now{color:var(--ink);font-weight:700}
-.trace li.now .n{background:var(--on);color:var(--on-ink)}
-.trace li.done{color:var(--ink)}
-.risks ul{margin:0;padding-left:16px}
+.trace{border-top:1px solid var(--border);margin-top:22px}
+.trace .eyebrow{margin-top:14px}
+.trace ol{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px;font-size:13px}
+.trace li{display:grid;grid-template-columns:20px minmax(0,1fr);gap:8px;color:var(--muted)}
+.trace li .n{font-size:12px;text-align:center;height:20px;line-height:20px;border-radius:4px;font-variant-numeric:tabular-nums}
+.trace li.now{color:var(--fg);font-weight:500}
+.trace li.now .n{background:var(--primary);color:var(--primary-fg);font-weight:600}
+.trace li.done{color:var(--fg)}
+.risks ul{margin:0;padding-left:18px}
 .nomap{max-width:640px;margin:48px auto;padding:0 20px}
-.nomap p{line-height:1.6}
-.doc,.code{white-space:pre-wrap;word-break:break-word;background:var(--panel);border:1px solid var(--rule);padding:10px 12px;max-height:60vh;overflow:auto}
-.code{font-size:12px}
-.supporting{border-bottom:1px solid var(--rule)}
-.divider{text-align:center;border-bottom:1px solid var(--rule);height:0;margin:0}
-.divider span{position:relative;top:-9px;background:var(--paper);padding:0 14px;font-size:11px;letter-spacing:.3em;text-transform:uppercase;color:var(--muted)}
+.doc,.code{white-space:pre-wrap;overflow-wrap:anywhere;background:var(--inset);border-radius:6px;padding:10px 12px;max-height:60vh;overflow:auto}
+.doc{max-width:75ch}
+.code{font:12px/1.5 var(--mono);color:var(--muted)}
+.supporting{border-bottom:1px solid var(--border)}
+.divider{padding:16px 20px 0}
+.divider span{font-size:12px;font-weight:600;color:var(--muted)}
 .cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr))}
-.cols .col{padding:10px 20px 24px;border-right:1px solid var(--rule)}
+.cols .col{min-width:0;padding:4px 20px 24px;border-right:1px solid var(--border)}
 .cols .col:last-child{border-right:0}
-.cols h3{font-size:14px;margin:0 0 4px}
-ol.example{list-style:none;padding:0;margin:10px 0;display:flex;flex-direction:column;gap:6px}
-ol.example li{border:1px solid var(--ink);padding:6px 10px;display:flex;gap:12px}
-ol.example li .n{color:var(--muted)}
-.outcome{border:1px solid var(--ink);padding:10px 12px;margin-top:10px}
-.chip{display:inline-block;border:1px solid var(--ink);font-size:10px;letter-spacing:.12em;padding:1px 6px;margin-bottom:4px}
+.cols h2{font-size:16px;line-height:1.3;margin:0 0 4px}
+ol.example{list-style:none;padding:0;margin:10px 0;display:flex;flex-direction:column}
+ol.example li{display:flex;gap:12px;padding:6px 0;border-bottom:1px solid var(--border)}
+ol.example li .n{flex:none;width:20px;font-size:12px;line-height:21px;color:var(--muted);font-variant-numeric:tabular-nums}
+.outcome{margin-top:12px}
+.chip{display:inline-block;border-radius:4px;background:var(--inset);font:12px/1.4 var(--mono);color:var(--fg);padding:1px 6px;margin-bottom:4px}
 .outcome p{margin:4px 0 0}
 ol.steps{list-style:none;margin:8px 0 0;padding:0}
-ol.steps li{display:grid;grid-template-columns:72px 14px 1fr;gap:8px;padding:4px 0}
-ol.steps time{color:var(--muted);font-size:11px;padding-top:2px}
-ol.steps .dot{width:10px;height:10px;border:1.4px solid var(--ink);margin-top:5px}
-ol.steps .k-operator .dot{background:var(--op)}
-ol.steps .k-failed .dot{background:var(--fail)}
-ol.steps .k-finished .dot{background:var(--new)}
-ol.steps p{margin:0;color:var(--muted)}
-details.block{border-bottom:1px solid var(--rule);padding:4px 20px 12px}
-details.block>summary{cursor:pointer;padding:8px 0;color:var(--muted)}
-details.block>summary .eyebrow{display:inline;margin:0 8px 0 0;color:var(--ink)}
-details summary{cursor:pointer;color:var(--muted)}
+ol.steps li{display:grid;grid-template-columns:76px 12px minmax(0,1fr);gap:8px;padding:4px 0}
+ol.steps time{color:var(--muted);font-size:12px;line-height:21px;font-variant-numeric:tabular-nums}
+ol.steps .dot{width:8px;height:8px;border-radius:50%;border:1.5px solid var(--faint);margin-top:6px}
+ol.steps .k-operator .dot{background:var(--primary);border-color:var(--primary)}
+ol.steps .k-failed .dot{background:var(--fail);border-color:var(--fail);border-radius:1px}
+ol.steps .k-finished .dot{background:var(--faint)}
+ol.steps p{margin:0;color:var(--muted);font-size:13px}
+details.block{border-bottom:1px solid var(--border);padding:4px 20px 12px}
+details summary{cursor:pointer;color:var(--muted);min-height:28px;padding:4px 0;border-radius:6px}
+details.block>summary{padding:10px 0;font-size:13px}
+details.block>summary .eyebrow{display:inline;margin:0 8px 0 0;color:var(--fg);font-size:14px}
 table.criteria{border-collapse:collapse;width:100%}
-table.criteria td{border-top:1px solid var(--rule);padding:6px 8px;vertical-align:top}
-table.criteria td.state{width:110px;font-size:10px;font-weight:700;letter-spacing:.12em}
+table.criteria td{border-top:1px solid var(--border);padding:8px;vertical-align:top}
+table.criteria td.state{width:110px;font-size:13px;font-weight:500}
 tr.c-fail td.state{color:var(--fail)}
+tr.c-waived td.state,tr.c-superseded td.state{color:var(--muted)}
 tr.c-superseded{color:var(--muted);text-decoration:line-through}
-.cid{color:var(--muted)}
-.note{color:var(--muted);font-size:12px;margin-top:2px;word-break:break-word}
-.shots{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:10px;margin-top:8px}
-.shots figure{margin:0;border:1px solid var(--rule);background:var(--panel)}
-.shots img{display:block;width:100%;height:auto}
-.shots figcaption{padding:4px 8px;font-size:12px}
+.cid{font:12px var(--mono);color:var(--muted)}
+.note{color:var(--muted);font-size:13px;margin-top:2px;overflow-wrap:anywhere}
+.shots{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px;margin-top:8px}
+.shots figure{margin:0;border:1px solid var(--border);border-radius:8px;background:var(--raised)}
+.shots img{display:block;width:100%;height:auto;border-radius:7px 7px 0 0}
+.shots figcaption{padding:6px 8px;font-size:12px}
 .noimg{padding:24px 8px;color:var(--muted)}
-footer{padding:12px 20px 32px;color:var(--muted);font-size:11px}
-@media (max-width:1100px){.stage{grid-template-columns:230px minmax(0,1fr)}.stage .right{grid-column:1 / -1;border-left:0;border-top:1px solid var(--rule);max-height:none}}
-@media (max-width:760px){.stage,.stage.empty{grid-template-columns:1fr}.left{border-right:0;max-height:none}.canvas{min-height:360px}}
-@media print{.controls,.zoom{display:none}.doc,.code{max-height:none}details.block{display:block}}
+footer{padding:12px 20px 32px;color:var(--muted);font-size:12px}
+@media (max-width:1100px){.stage{grid-template-columns:230px minmax(0,1fr)}.stage .right{grid-column:1 / -1;border-left:0;border-top:1px solid var(--border)}}
+@media (max-width:760px){.stage,.stage.empty{grid-template-columns:1fr}.left{border-right:0}.centre{position:static;height:auto}.canvas{min-height:360px}}
+@media (prefers-reduced-motion:reduce){button:active{transform:none}}
+@media print{:root{color-scheme:light}.centre{position:static;height:auto}.controls,.zoom{display:none}.doc,.code{max-height:none}details.block{display:block}}
 `;
