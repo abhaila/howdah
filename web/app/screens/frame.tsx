@@ -48,7 +48,9 @@ export function ScreenHeader({ title, description, actions, lead }: {
   lead?: React.ReactNode;
 }) {
   return (
-    <header data-slot="screen-header" className="flex min-h-12 shrink-0 items-center gap-3 border-b border-border px-6 py-2">
+    <header data-slot="screen-header" // 48px with or without a 32px control in it: 7px of padding each side plus the hairline,
+    // so a header that has a button is not 1px taller than one that has none (it was 49 vs 48)
+    className="flex min-h-12 shrink-0 items-center gap-3 border-b border-border px-6 py-[7px]">
       {lead}
       <h1 className="m-0 flex min-w-0 shrink-0 text-lg font-semibold leading-6">{title}</h1>
       {description !== undefined && <p className="m-0 hidden min-w-0 flex-1 text-sm leading-5 text-muted-foreground min-[900px]:block">{description}</p>}

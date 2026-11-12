@@ -42,6 +42,17 @@ import { runLine, type RunLine } from "@/lib/board";
 import { getJSON } from "@/lib/net";
 import { runLabel } from "@/lib/format";
 import { fmtAgo } from "@/lib/liveness";
+import { fmtWhen } from "@/lib/format";
+import { Tooltip } from "@/components/ui/tooltip";
+
+/**
+ * The server's reading of the wait ("waiting 19h 6m" — a sentence, written for the CLI's
+ * inbox), as the column the Runs list prints: the number alone, hours padded ("19h 06m").
+ * The figure stays the server's, measured at the moment it answered; only its spelling changes.
+ */
+export function waitedColumn(waited: string): string {
+  return waited.replace(/^waiting\s+/i, "").replace(/^(\d+h) (\d)m$/, "$1 0$2m");
+}
 import { useAttentionSurfaces } from "@/lib/hooks";
 import { useListNav } from "@/lib/list-nav";
 import { parkSummary } from "../../../core/park-summary";
@@ -143,7 +154,11 @@ export function AttentionInbox() {
                   </span>
                   <span data-col="line" className="flex min-w-0"><Line line={line} /></span>
                   <span data-col="step" className="flex min-w-0">{step !== null && <Truncate mono middle={14} className="text-code text-muted-foreground">{step}</Truncate>}</span>
-                  <span data-col="waited" className="whitespace-nowrap text-right tabular-nums text-muted-foreground">{item.waited}</span>
+                  {/* the wait, written the way the Runs list writes it ("19h 06m"): under a heading that
+                      already says "Waiting on you", the server's "waiting …" said the word 21 times */}
+                  <Tooltip side="left" content={`Waiting on you since ${fmtWhen(item.raised_at)}`}>
+                    <span data-col="waited" className="whitespace-nowrap text-right tabular-nums text-muted-foreground">{waitedColumn(item.waited)}</span>
+                  </Tooltip>
                 </Row>
               ))}
             </section>

@@ -116,7 +116,7 @@ describe("AttentionInbox", () => {
     expect(row.getAttribute("href")).toBe("/run/implement-ticket-mu9kvg39#needs-input");
     expect(row.textContent).toContain("attempt failed");
     expect(row.textContent).toContain("implementation.plan");
-    expect(row.querySelector('[data-col="waited"]')!.textContent).toBe("waiting 2h 11m");
+    expect(row.querySelector('[data-col="waited"]')!.textContent).toBe("2h 11m"); // HOW-68: the heading says "Waiting on you" once; the column is the number
     // the wait is plain text: the triangle already said "waiting on you" (DESIGN.md rule 1)
     expect(row.querySelector('[data-col="waited"]')!.className).not.toContain("attention");
     expect(row.querySelector("svg.status-glyph")!.getAttribute("data-shape")).toBe("triangle");
@@ -133,7 +133,7 @@ describe("AttentionInbox", () => {
     expect(el.querySelectorAll("a")).toHaveLength(0); // /run/howdah says "No run howdah"
     const row = el.querySelector("[data-needs-input]")!;
     expect(row.textContent).toContain("howdah up"); // the fix is in the reason, where it reads
-    expect(row.querySelector('[data-col="waited"]')!.textContent).toBe("waiting 20m");
+    expect(row.querySelector('[data-col="waited"]')!.textContent).toBe("20m");
     expect(row.querySelector('[data-col="step"]')!.textContent).toBe(""); // `__harness__` is not a step anyone can open
   });
 
@@ -224,7 +224,7 @@ describe("AttentionInbox", () => {
     expect(cell("name")).toBe("HOW-431 Rate-limit headers"); // the NAME, not the 100-character id
     expect(cell("line")).toBe("Publish? Some acceptance criteria are not proven.");
     expect(cell("step")).toBe("delivery.publish");
-    expect(cell("waited")).toBe("waiting 2h 11m");
+    expect(cell("waited")).toBe("2h 11m");
     expect(row.textContent).not.toContain(LONG);
     // every cell that can be long is a Truncate, so nothing wraps into the next row (audit 3.1.8)
     for (const name of ["name", "line", "step"]) expect(row.querySelector(`[data-col="${name}"] [data-slot="truncate"]`), name).not.toBeNull();
@@ -236,4 +236,12 @@ describe("AttentionInbox", () => {
     expect(fallback.line.parts.map((p) => p.value)).toEqual(["Needs you.", "first line"]);
     expect(inboxLine(HARNESS_ITEM, undefined, Date.now()).step).toBeNull();
   });
+});
+
+test("waitedColumn: the server's sentence becomes the board's column, hours padded (HOW-68)", async () => {
+  const { waitedColumn } = await import("./screens/attention");
+  expect(waitedColumn("waiting 19h 6m")).toBe("19h 06m");
+  expect(waitedColumn("waiting 2h 11m")).toBe("2h 11m");
+  expect(waitedColumn("waiting 20m")).toBe("20m");
+  expect(waitedColumn("3d")).toBe("3d"); // an unexpected shape is printed as given
 });

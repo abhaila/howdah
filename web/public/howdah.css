@@ -124,7 +124,7 @@ main { position: relative; flex: 1; min-width: 0; min-height: 0; overflow: hidde
 /* ONE row at every supported width: the name is the part that gives (it is a Truncate), the
    controls never shrink, and what does not fit is behind More. Pinned by web/app/panel.test.tsx. */
 .run-head { flex: none; display: flex; align-items: center; gap: 10px; height: 48px; padding: 0 16px 0 12px; }
-.run-head h1 { display: flex; flex: 0 1 auto; min-width: 0; margin: 0; font-size: var(--type-lg); line-height: 1.4; }
+.run-head h1 { display: flex; flex: 0 1 auto; min-width: 0; margin: 0; font-size: var(--type-lg); line-height: 24px; }
 /* the alarm, said once in the frame: amber glyph and words, and it is the way to the card */
 .run-status-line { flex: none; color: var(--attention); font-weight: 500; }
 .run-status-line:hover { color: var(--attention); }
@@ -833,7 +833,6 @@ div.act-notice, .act-notice > summary { display: flex; align-items: flex-start; 
 .ac-unprovable { display: flex; flex-direction: column; gap: 8px; font-size: var(--type-sm); line-height: 1.5; color: var(--fg-muted); }
 /* HOW-72: what the PR discloses — informational, so neutral */
 .ac-not-proven { display: flex; flex-direction: column; gap: 6px; }
-.ac-not-proven-title { color: var(--fg); }
 
 /* ---- HOW-65: the draft card (run/draft.tsx) and its review page (screens/draft-review.tsx) ----
    Risk first, then what changed, then what did not, then advice (HOW-56 D-2A). Every glyph has

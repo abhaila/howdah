@@ -216,7 +216,7 @@ describe("the Acceptance card", () => {
     test("the card lists each row with its reason, neutrally, and offers no waiver", () => {
       const el = render(<AcceptanceCard runId="r1" detail={deriveDetail("r1", disclosedLog().events)} onChanged={() => {}} />);
       const box = el.querySelector(".ac-not-proven")!;
-      expect(box.querySelector(".ac-not-proven-title")!.textContent).toBe("Not proven by this run");
+      expect(box.querySelector('[data-slot="section-label"]')!.textContent).toBe("Not proven by this run");
       expect([...box.querySelectorAll("li")].map((li) => li.textContent)).toEqual(["the full suite runs — no tests ran in this run"]);
       expect(el.querySelector(".ac-waive-open")).toBeNull();
       expect([...el.querySelectorAll("button")].some((b) => b.textContent?.startsWith("Waive"))).toBe(false);

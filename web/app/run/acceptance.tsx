@@ -105,7 +105,7 @@ export function AcceptanceCard({ runId, detail, onChanged }: { runId: string; de
       </div>
       {acc.not_proven.length > 0 && (
         <div className="ac-not-proven">
-          <SectionLabel className="ac-not-proven-title">Not proven by this run</SectionLabel>
+          <SectionLabel>Not proven by this run</SectionLabel>
           <ul className="m-0 flex list-disc flex-col gap-1 pl-5 text-sm">
             {acc.not_proven.map((r) => (
               <li key={r.id}><span className="ac-text">{r.text}</span> <span className="text-muted-foreground">— {r.reason}</span></li>

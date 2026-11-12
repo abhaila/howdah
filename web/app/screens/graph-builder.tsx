@@ -400,7 +400,7 @@ export function GraphBuilder({ name, fromRun }: { name?: string; fromRun?: strin
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <header className="flex h-12 shrink-0 items-center gap-3 border-b border-border px-4">
-        <h1 className="m-0 flex min-w-0 shrink items-center text-lg font-semibold">
+        <h1 className="m-0 flex min-w-0 shrink items-center text-lg font-semibold leading-6">
           <Truncate>{draft.saved ? `Editing ${draft.spec.name}` : "Build a graph"}</Truncate>
         </h1>
         {!draft.saved && (
