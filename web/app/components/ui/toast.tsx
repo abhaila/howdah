@@ -12,9 +12,16 @@
  * explains why a round moved still belongs beside the control that was refused — a toast
  * that has faded cannot be re-read. Toasts second those messages; they never carry them
  * alone.
+ *
+ * HOW-68 (DESIGN.md Motion): a toast arrives in 180ms — opacity plus 6px of rise, on the
+ * strong ease-out — as a `@starting-style` TRANSITION, not a keyframe, so a second toast
+ * landing while the first is still arriving retargets instead of jumping. It leaves without
+ * ceremony. It casts the floating shadow (`shadow-float`, a token; the old one was a literal
+ * black that read as a smudge in the light theme), an error is said by an icon and a word as
+ * well as by red, and its dismiss control is a 24px target — it was 20.
  */
 import { createContext, useCallback, useContext, useMemo, useRef, useState } from "react";
-import { X } from "lucide-react";
+import { CircleAlert, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "./button";
 
@@ -74,12 +81,17 @@ export function Toaster({ toasts, onDismiss }: { toasts: Toast[]; onDismiss: (id
           key={t.id}
           data-tone={t.tone}
           className={cn(
-            "pointer-events-auto flex items-start gap-2 rounded-[var(--radius)] border bg-card px-3 py-2 text-sm leading-snug shadow-[0_4px_16px_rgba(0,0,0,0.35)]",
-            t.tone === "error" ? "border-destructive text-destructive" : "border-[var(--border-strong)] text-foreground",
+            "pointer-events-auto flex items-start gap-2 rounded-[var(--radius)] border bg-card py-2 pl-3 pr-2 text-sm leading-snug text-foreground shadow-float",
+            "transition-[opacity,translate] duration-[var(--dur-base)] ease-[var(--ease-out-strong)] starting:translate-y-1.5 starting:opacity-0",
+            t.tone === "error" ? "border-destructive" : "border-[var(--border-strong)]",
           )}
         >
-          <span className="min-w-0 flex-1 break-words">{t.text}</span>
-          <Button variant="ghost" size="icon" className="size-5 shrink-0" aria-label="dismiss" onClick={() => onDismiss(t.id)}><X /></Button>
+          {t.tone === "error" && <CircleAlert aria-hidden className="mt-[3px] size-3.5 shrink-0 text-destructive" />}
+          <span className="min-w-0 flex-1 py-0.5 [overflow-wrap:anywhere]">
+            {t.tone === "error" && <span className="sr-only">Error: </span>}
+            {t.text}
+          </span>
+          <Button variant="ghost" size="icon-sm" className="shrink-0" aria-label="dismiss" onClick={() => onDismiss(t.id)}><X /></Button>
         </div>
       ))}
     </div>

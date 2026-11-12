@@ -214,7 +214,7 @@ export function StepsSplit({ list, detail }: { list: React.ReactNode; detail: Re
             <Tooltip content={full ? "restore the step list" : "full width"}>
               <Button
                 variant="outline"
-                size="icon"
+                size="icon-sm"
                 className="pane-toggle"
                 data-control="full"
                 aria-pressed={full}

@@ -5,6 +5,26 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { observeAsks, type Observation } from "./attention-sound";
 
+/**
+ * Does a media query match, live. The shell's one use: below 1100px the rail collapses to
+ * icons by itself (DESIGN.md Layout). It is state rather than a CSS `@media` rule so the
+ * breakpoint and the operator's own toggle drive the SAME `data-nav` attribute — two
+ * mechanisms were how the old rail had two different collapsed widths.
+ */
+export function useMediaQuery(query: string): boolean {
+  const read = () => typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia(query).matches;
+  const [matches, setMatches] = useState(read);
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") return;
+    const mq = window.matchMedia(query);
+    const on = () => setMatches(mq.matches);
+    on();
+    mq.addEventListener?.("change", on);
+    return () => mq.removeEventListener?.("change", on);
+  }, [query]);
+  return matches;
+}
+
 /** a ticking clock, so live durations count up without the read model refetching */
 export function useNow(tickMs = 1000): number {
   const [now, setNow] = useState(Date.now());

@@ -149,7 +149,10 @@ describe("the launch form (HOW-18)", () => {
     window.location.assign = ((u: string) => { assigned.push(u); }) as typeof window.location.assign;
     const el = mount(<StartRun />);
     const nameField = await fill(el, "  Fix login  ");
-    expect(nameField.className).toContain("font-mono"); // Input's own classes — not a raw <input>
+    // Input's own slot — not a raw <input>. HOW-68: this asserted `font-mono` while every
+    // field was mono; a run's NAME is read, not pasted, so it is sans now (DESIGN.md Type).
+    expect(nameField.getAttribute("data-slot")).toBe("input");
+    expect(nameField.className).not.toContain("font-mono");
     await act(async () => ([...el.querySelectorAll("button")].find((b) => b.textContent!.includes("Launch run")) as HTMLButtonElement).click());
     await settle();
     expect(posted).toHaveLength(1);

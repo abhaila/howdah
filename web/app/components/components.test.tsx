@@ -84,8 +84,12 @@ describe("PanelTabs — the selected tab carries its own selected styling (P0.1)
   test("selected is never ONLY a colour: the underline look adds a rule and weight", () => {
     const el = tabs("underline");
     const [ask, drift] = $$(el, '[role="tab"]');
-    expect(ask!.className).toContain("border-b-[var(--fg)]");
-    expect(ask!.className).toContain("font-semibold");
+    // HOW-68: the rule is INDIGO (`--primary`: "what you press and where you are") and the
+    // weight is 500 ("names and selected things"); it was the ink colour at 600. The
+    // contract this test exists for is unchanged: a rule AND a weight, never a colour alone.
+    expect(ask!.className).toContain("border-b-[var(--primary)]");
+    expect(ask!.className).toContain("font-medium");
+    expect(drift!.className).not.toContain("font-medium");
     expect(drift!.className).toContain("border-b-transparent");
   });
 
@@ -101,7 +105,7 @@ describe("PanelTabs — the selected tab carries its own selected styling (P0.1)
     const [, drift] = $$(el, '[role="tab"]');
     act(() => drift!.click());
     expect($$(el, '[role="tab"]')[1]!.getAttribute("aria-selected")).toBe("true");
-    expect($$(el, '[role="tab"]')[1]!.className).toContain("border-b-[var(--fg)]");
+    expect($$(el, '[role="tab"]')[1]!.className).toContain("border-b-[var(--primary)]");
 
     // HOW-27: the keyboard is Base UI's composite now, and it reads the FOCUSED element — a
     // bare keydown on an unfocused tab is not a keypress anybody made.
@@ -115,7 +119,7 @@ describe("PanelTabs — the selected tab carries its own selected styling (P0.1)
     act(() => first.focus());
     press(first, " ");
     expect($$(el, '[role="tab"]')[0]!.getAttribute("aria-selected")).toBe("true");
-    expect($$(el, '[role="tab"]')[0]!.className).toContain("border-b-[var(--fg)]");
+    expect($$(el, '[role="tab"]')[0]!.className).toContain("border-b-[var(--primary)]");
   });
 
   /**
@@ -143,7 +147,11 @@ describe("PanelTabs — the selected tab carries its own selected styling (P0.1)
     const [steps, logs] = $$(el, '[role="tab"]');
     expect(steps!.getAttribute("aria-selected")).toBe("true");
     expect(steps!.className).not.toBe(logs!.className);
-    expect(steps!.className).toContain("bg-card");
+    // HOW-68: `Tabs` is the underline strip now, not a segmented control, so "selected" is the
+    // indigo rule and a weight rather than a raised fill (DESIGN.md: one way a tab looks)
+    expect(steps!.className).toContain("border-b-[var(--primary)]");
+    expect(steps!.className).toContain("font-medium");
+    expect(logs!.className).toContain("border-b-transparent");
   });
 });
 
@@ -162,7 +170,8 @@ describe("Chip — the on state styles itself (P0.2) and is operable by keyboard
     const el = renderPrimitive(<Chip>engine</Chip>);
     const chip = $(el, "button")!;
     // border + padding + radius came from a rule that did not exist; they come from cva now
-    expect(chip.className).toContain("rounded-[var(--radius-sm)]");
+    expect(chip.className).toContain("rounded-[var(--radius-xs)]"); // HOW-68: 4px, DESIGN.md "4 chips"
+    expect(chip.className).toContain("min-h-6"); // and the 24px target floor
     expect(chip.className).toContain("border");
     expect(chip.className).toContain("px-2");
   });
@@ -198,7 +207,7 @@ describe("Badge — the static pills (P0.2)", () => {
   test("a bare Badge carries a base style, which `.pill` never had", () => {
     const el = renderPrimitive(<Badge>read-only</Badge>);
     const b = $(el, "span")!;
-    expect(b.className).toContain("rounded-[var(--radius-sm)]");
+    expect(b.className).toContain("rounded-[var(--radius-xs)]"); // HOW-68: 4px, DESIGN.md "4 chips"
     expect(b.className).toContain("px-1.5");
   });
 
@@ -238,12 +247,30 @@ describe("Row — one surface, and clickable means reachable (P1.6 + P2.8)", () 
     expect(a.getAttribute("href")).toBe("/run/abc");
   });
 
-  test("needs-input outranks selected — a parked row never reads as merely highlighted", () => {
+  /**
+   * HOW-68 REPLACED the assertion that stood here ("needs-input outranks selected", which
+   * required the amber tint and the 3px amber stripe to win over the selected styling).
+   * DESIGN.md rule 1: the alarm is said once, as the status glyph, so a waiting row is not
+   * painted at all, and "never a coloured side stripe" removes the other half. What must still
+   * hold is that the FACT survives for whoever needs to find the row, and that selection is an
+   * outline all the way round rather than a stripe down one edge.
+   */
+  test("a waiting row is MARKED, not painted; selected is an outline, never a side stripe", () => {
     const el = renderPrimitive(<Row selected needsInput onClick={() => {}}>parked</Row>);
-    const cls = $(el, "button")!.className;
-    expect(cls).toContain("var(--attention)");
-    // the attention ground wins: the selected inset rule is not what is drawn
-    expect(cls).toContain("var(--attention-bg)");
+    const row = $(el, "button")!;
+    expect(row.getAttribute("data-needs-input")).toBe("true");
+    expect(row.getAttribute("data-selected")).toBe("true");
+    expect(row.className).not.toContain("var(--attention");
+    // the outline: an inset 1px shadow on every side (0 0 0 1px), on the raised ground
+    expect(row.className).toContain("shadow-[inset_0_0_0_1px_var(--border-strong)]");
+    expect(row.className).toContain("bg-card");
+    expect(row.className).not.toMatch(/inset_[1-9]px_0_0/); // a stripe is an x-offset shadow
+  });
+
+  test("an ordinary row carries neither mark", () => {
+    const el = renderPrimitive(<Row onClick={() => {}}>plain</Row>);
+    expect($(el, "button")!.hasAttribute("data-needs-input")).toBe(false);
+    expect($(el, "button")!.hasAttribute("data-selected")).toBe(false);
   });
 
   test("every row kind's columns still come from its own class", () => {

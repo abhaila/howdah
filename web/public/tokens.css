@@ -105,14 +105,25 @@
   --scrim: light-dark(rgba(23, 25, 39, 0.38), rgba(0, 0, 0, 0.6));
 
   /*
+   * The one shadow, for things that FLOAT: menu, popover, tooltip, toast, dialog, palette
+   * (DESIGN.md Chrome — a panel is separated by a border and a change of ground, never by
+   * this). An offset and a soft blur, two layers; `light-dark()` only takes colours, so the
+   * pair is the shadow's colour and the geometry is shared. globals.css exports it to
+   * Tailwind as `shadow-float`.
+   */
+  --float-shadow-color: light-dark(rgba(23, 25, 39, 0.16), rgba(0, 0, 0, 0.6));
+  --float-shadow: 0 10px 28px -6px var(--float-shadow-color), 0 2px 6px -2px var(--float-shadow-color);
+
+  /*
    * Motion (animations.dev lessons). Nothing keyboard-triggered or seen dozens of times a day
    * animates at all. What does animate enters on a strong ease-out and stays under 300ms;
    * hover, colour and opacity use plain `ease`.
    */
   --ease-out-strong: cubic-bezier(0.19, 1, 0.22, 1);
   --ease-in-out: cubic-bezier(0.645, 0.045, 0.355, 1);
-  --dur-fast: 120ms;
-  --dur-base: 180ms;
+  --dur-fast: 120ms;   /* press, hover colour, exits */
+  --dur-pop: 150ms;    /* menus, popovers and tooltips entering from their trigger */
+  --dur-base: 180ms;   /* dialogs and toasts */
   --dur-slow: 320ms;
 
   /* shape */
@@ -138,5 +149,5 @@
 
 /* reduced motion keeps fades and colour, drops travel: durations collapse, nothing moves */
 @media (prefers-reduced-motion: reduce) {
-  :root { --dur-fast: 0ms; --dur-base: 0ms; --dur-slow: 0ms; }
+  :root { --dur-fast: 0ms; --dur-pop: 0ms; --dur-base: 0ms; --dur-slow: 0ms; }
 }

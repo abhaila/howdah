@@ -309,7 +309,11 @@ describe("Ask for changes and Discard (HOW-66)", () => {
     expect(region).toBeDefined();
     expect(region.querySelector("label")?.textContent).toContain("What should be different?");
     expect(region.querySelector("label textarea")).toBe(changeBox(el)); // the box is labelled, and is the Textarea primitive
-    expect(changeBox(el).className).toContain("font-mono");
+    // HOW-68: the proof it is the primitive is its `data-slot`, not its face. It used to be
+    // `font-mono`, when every field was mono; a field is sans now unless its VALUE is machine
+    // text (DESIGN.md Type), and "what should be different?" is answered in prose.
+    expect(changeBox(el).getAttribute("data-slot")).toBe("textarea");
+    expect(changeBox(el).className).not.toContain("font-mono");
     const redraft = [...region.querySelectorAll("button")].find((b) => b.textContent === "Redraft")!;
     expect(redraft.disabled).toBe(true); // nothing to ask for yet
     typeChange(changeBox(el), "  make the review read-only ");

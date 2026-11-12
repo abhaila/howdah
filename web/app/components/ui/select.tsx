@@ -18,17 +18,32 @@
  * app asks for. Swapping a correct 28-line control for a 198-line one to gain nothing is the
  * over-engineering the component sweep exists to remove. If styled options are ever wanted the
  * swap is one file, and every call site stays as it is.
+ *
+ * HOW-68 (DESIGN.md Colour + Type). The field sits on `--bg-raised` — "a held object: card,
+ * input, menu" — with a `--border-strong` edge, which is the token that clears 3:1 as a
+ * control boundary; it used to be an inset well with a hairline. And it is SANS unless asked:
+ * "mono only for what you would paste". Most of what is typed here is a name, a sentence or a
+ * filter, and the placeholder ("Ask about this run…") is always prose. Pass `mono` for the
+ * fields whose VALUE is machine text — a path, a model id, a command.
  */
 import { forwardRef } from "react";
 import type { SelectHTMLAttributes } from "react";
 import { ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-export const Select = forwardRef<HTMLSelectElement, SelectHTMLAttributes<HTMLSelectElement>>(({ className, children, ...props }, ref) => (
+export interface SelectProps extends SelectHTMLAttributes<HTMLSelectElement> {
+  /** the options are machine text (model ids, prompt ids) */
+  mono?: boolean;
+}
+
+export const Select = forwardRef<HTMLSelectElement, SelectProps>(({ className, children, mono = false, ...props }, ref) => (
   <span className={cn("relative block w-full", className)}>
     <select
       ref={ref}
-      className="h-8 w-full appearance-none rounded-[var(--radius-sm)] border border-border bg-muted pl-2.5 pr-8 font-mono text-base text-foreground focus-visible:outline-2 focus-visible:outline-[var(--ring)] focus-visible:outline-offset-1"
+      className={cn(
+        "h-8 w-full cursor-pointer appearance-none rounded-[var(--radius-sm)] border border-input bg-card pl-2.5 pr-8 text-base font-normal text-foreground focus-visible:outline-2 focus-visible:outline-[var(--ring)] focus-visible:outline-offset-2 disabled:cursor-default disabled:opacity-50",
+        mono && "font-mono",
+      )}
       {...props}
     >
       {children}

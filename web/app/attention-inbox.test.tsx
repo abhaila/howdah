@@ -115,8 +115,11 @@ describe("AttentionInbox", () => {
     expect(row.textContent).toContain("attempt failed");
     expect(row.textContent).toContain("implementation.plan");
     expect(row.querySelector(".wait-timer")!.textContent).toBe("waiting 2h 11m");
-    // the one row state allowed the alarm colour, straight off the shared Row primitive
-    expect(row.className).toContain("var(--attention-bg)");
+    // HOW-68: the row carries the FACT and no paint. It used to assert the amber tint
+    // (`--attention-bg`); DESIGN.md rule 1 says the alarm is said once, and a tinted row beside
+    // an amber glyph and an amber nav count said it three times. Row keeps `data-needs-input`.
+    expect(row.getAttribute("data-needs-input")).toBe("true");
+    expect(row.className).not.toContain("var(--attention");
   });
 
   test("a record with no run page is readable text, not a link to a run that does not exist", async () => {
@@ -168,7 +171,8 @@ describe("AttentionInbox", () => {
     const el = await render();
     const row = el.querySelector("a.run-row") as HTMLAnchorElement;
     expect(row.getAttribute("href")).toBe("/run/draft-graph-mv2#needs-input");
-    expect(row.className).toContain("var(--attention-bg)");
+    // HOW-68: marked as waiting, not tinted (see the first test in this file)
+    expect(row.getAttribute("data-needs-input")).toBe("true");
     expect(row.textContent).toContain("runs:launch");
     expect(el.querySelector('section[aria-label="Ready for you"]')).toBeNull();
     await act(async () => { await Bun.sleep(1000); });

@@ -12,16 +12,29 @@
  * rendered as a real `<button>` (or `<a>` when it navigates), so Tab reaches it, Enter and
  * Space fire it, and the focus ring is the platform's — the graph list row, the graph
  * tuning table row and the log rows all used to be `<div onClick>`.
+ *
+ * HOW-68 (DESIGN.md Chrome + rule 1, "the alarm is said once"):
+ *
+ *   SELECTED is `--bg-raised` with a 1px `--border-strong` outline all the way round, and the
+ *   6px row radius. It was an inset 2px rule down the left edge — a side stripe, which
+ *   DESIGN.md bans outright ("no border-left wider than 1px anywhere").
+ *   NEEDS-INPUT HAS NO STYLING AT ALL. It was an amber tint plus a 3px amber stripe, on every
+ *   waiting row, beside the amber status glyph and the amber nav count: the alarm said three
+ *   times. A waiting row is marked by its status glyph and by nothing else. The prop stays,
+ *   and sets `data-needs-input`, because the fact is still true of the row and a consumer
+ *   (or a test) may need to find it — it just no longer paints.
+ *
+ * Hover is a colour change only and it is NOT animated: list rows are swept dozens of times a
+ * day, and a highlight that fades trails one row behind the pointer (DESIGN.md Motion).
  */
 import { forwardRef } from "react";
 import { cn } from "@/lib/utils";
 
 const STATES =
-  "w-full text-left transition-[background] duration-[var(--dur-fast)] focus-visible:outline-2 focus-visible:outline-[var(--ring)] focus-visible:-outline-offset-2";
+  "w-full text-left focus-visible:outline-2 focus-visible:outline-[var(--ring)] focus-visible:-outline-offset-2";
 const CLICKABLE = "cursor-pointer hover:bg-card";
-const SELECTED = "bg-card shadow-[inset_2px_0_0_var(--border-strong)]";
-/** the one row state allowed the alarm colour — an agent is waiting on a human (R3.3) */
-const NEEDS_INPUT = "bg-[var(--attention-bg)] shadow-[inset_3px_0_0_var(--attention)]";
+/** an outline all the way round, drawn inside the box so the row's height does not change */
+const SELECTED = "rounded-[var(--radius-sm)] bg-card shadow-[inset_0_0_0_1px_var(--border-strong)]";
 
 export interface RowProps {
   className?: string;
@@ -48,15 +61,15 @@ export const Row = forwardRef<HTMLElement, RowProps>(function Row(
     STATES,
     (href || onClick) && CLICKABLE,
     selected && SELECTED,
-    // needs-input outranks selected: a parked row must never read as merely highlighted
-    needsInput && NEEDS_INPUT,
     className,
   );
+  // the fact, without the paint: a waiting row is marked by its amber status glyph only
+  const marks = { "data-selected": selected || undefined, "data-needs-input": needsInput || undefined };
   if (href !== undefined) {
-    return <a ref={ref as React.Ref<HTMLAnchorElement>} className={cls} href={href} {...rest}>{children}</a>;
+    return <a ref={ref as React.Ref<HTMLAnchorElement>} className={cls} href={href} {...marks} {...rest}>{children}</a>;
   }
   if (onClick !== undefined && as !== "div") {
-    return <button ref={ref as React.Ref<HTMLButtonElement>} type="button" className={cls} onClick={onClick} {...rest}>{children}</button>;
+    return <button ref={ref as React.Ref<HTMLButtonElement>} type="button" className={cls} onClick={onClick} {...marks} {...rest}>{children}</button>;
   }
-  return <div ref={ref as React.Ref<HTMLDivElement>} className={cls} {...rest}>{children}</div>;
+  return <div ref={ref as React.Ref<HTMLDivElement>} className={cls} {...marks} {...rest}>{children}</div>;
 });

@@ -4,6 +4,8 @@
  *
  * It exists so the graph-tuning table stops repeating `border-b border-border py-2 pr-3` on
  * every one of its eighteen cells — the cell padding and the hairline are the table's, once.
+ *
+ * HOW-68: the header is 12px/600 in `--fg-muted`, not uppercase (DESIGN.md Type).
  */
 import type { HTMLAttributes, TdHTMLAttributes, ThHTMLAttributes } from "react";
 import { cn } from "@/lib/utils";
@@ -16,7 +18,7 @@ export function Table({ className, ...props }: HTMLAttributes<HTMLTableElement>)
   );
 }
 export function TableHeader({ className, ...props }: HTMLAttributes<HTMLTableSectionElement>) {
-  return <thead className={cn("text-xs uppercase text-muted-foreground", className)} {...props} />;
+  return <thead className={cn("text-xs font-semibold text-muted-foreground", className)} {...props} />;
 }
 export function TableBody({ className, ...props }: HTMLAttributes<HTMLTableSectionElement>) {
   return <tbody className={cn(className)} {...props} />;
@@ -25,7 +27,7 @@ export function TableRow({ className, ...props }: HTMLAttributes<HTMLTableRowEle
   return <tr className={cn("border-b border-border last:border-b-0", className)} {...props} />;
 }
 export function TableHead({ className, ...props }: ThHTMLAttributes<HTMLTableCellElement>) {
-  return <th scope="col" className={cn("py-1.5 pr-3 font-normal", className)} {...props} />;
+  return <th scope="col" className={cn("py-1.5 pr-3 font-semibold", className)} {...props} />;
 }
 export function TableCell({ className, ...props }: TdHTMLAttributes<HTMLTableCellElement>) {
   return <td className={cn("py-2 pr-3", className)} {...props} />;

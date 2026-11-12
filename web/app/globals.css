@@ -33,6 +33,8 @@
   --font-mono: "DM Mono", ui-monospace, "SF Mono", Menlo, monospace;
   --radius-md: var(--radius-sm);
   --radius-lg: var(--radius);
+  /* the one shadow, for floating layers only (tokens.css `--float-shadow`): `shadow-float` */
+  --shadow-float: var(--float-shadow);
 
   /* The type scale, re-exported into Tailwind's own namespace (HOW-16 P3.12). This is what
      makes `text-base` in a component and `var(--type-base)` in howdah.css the SAME number:

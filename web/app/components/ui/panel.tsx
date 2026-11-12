@@ -10,6 +10,14 @@
  * a control that positions itself against a zero-width lane resolves `left: 50%` to the lane's
  * edge and lands on top of its neighbour — the overlap howdah.css's lane comment describes.
  * So the resizer keeps a real width at all times and the toggle is static inside it.
+ *
+ * HOW-68: the toggle is a 24px target (`icon-sm`). It measured 14–17px, and it sat in a 9px
+ * lane whose hover rule took the pointer across the middle of the button — a Playwright click
+ * on its centre was refused with "pane-resize intercepts pointer events". The size is the
+ * Button's now rather than a `width: 17px` override in howdah.css, and the lane's rule there
+ * puts the toggle above the divider line. The separator also shows the focus ring it used to
+ * suppress (`.pane-resize:focus-visible { outline: none }`): a focus stop with no ring is the
+ * one thing DESIGN.md's Components section says every control must not be.
  */
 import type { ReactNode } from "react";
 import { PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen } from "lucide-react";
@@ -81,14 +89,14 @@ export function PanelToggle({
     <Tooltip content={`${verb} ${label}`}>
       <Button
         variant="ghost"
-        size="icon"
+        size="icon-sm"
         className={cn("pane-toggle", className)}
         aria-expanded={!panel.collapsed}
         aria-label={`${verb} ${label}`}
         onPointerDown={(e) => e.stopPropagation()} /* inside a resizer this is a click, never a drag */
         onClick={panel.toggle}
       >
-        <Icon size={13} />
+        <Icon />
       </Button>
     </Tooltip>
   );

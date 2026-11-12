@@ -10,7 +10,9 @@ body {
   font-variant-numeric: tabular-nums; /* durations, costs and counts line up without a mono face */
 }
 h1, h2, h3 { font-weight: 600; letter-spacing: 0; }
-a { color: inherit; }
+/* No `a { color: inherit }` here any more: Tailwind's preflight already says it, in a layer.
+   Said again in this UNLAYERED sheet it outranked every colour utility, so a link wearing
+   Button's classes (the 404's "Go to Runs") drew its label in the page ink, on indigo. */
 /* DM Mono is for what you would PASTE: ids, paths, commands, code (DESIGN.md Type). It used
    to be the face of every label, timer and key/value row as well — 13.6k mono elements to
    7.6k sans, alternating inside almost every row (HOW-68). A label, a duration and a cost are
@@ -25,54 +27,83 @@ code, pre, .prompt-context, .mono-note, .m {
 /* a key/value pair's value, in the Steps detail panel's `.kv` rows */
 .v { min-width: 0; overflow-wrap: anywhere; text-align: right; }
 
-/* The app shell owns the viewport: the PAGE never scrolls, panes do.
-   The run view already worked this way (`height: 100vh; overflow: hidden`) while the other
-   six screens scrolled the document, so "does this pane scroll or does the page?" had two
-   answers depending on where you were, and a pane that filled up clipped instead of
-   scrolling. One model now — shell fills the viewport, `main` hands its height down, and
-   every screen container scrolls inside it. */
-.shell { display: flex; height: 100vh; overflow: hidden; }
+/* The app shell IS the viewport: the PAGE never scrolls, panes do (DESIGN.md Layout).
+   `100dvh`, not `100vh`: the dynamic unit is the visible height, so a browser whose toolbar
+   comes and goes cannot push the foot of a pane under it. One model — the shell fills the
+   viewport, `main` is a column that hands its height down, and each screen owns the ONE
+   element that scrolls (`ScrollPane`, or `.runs` for the screens not yet moved onto it). */
+.shell { display: flex; height: 100dvh; overflow: hidden; }
 
-/* sidebar */
+/* Keyboard users skip the rail: the first Tab on any screen lands here (the audit: "tab order
+   starts with the logo, seven nav links … before any content; there is no skip link"). It is
+   off-screen until focused; the appearance is Button's. */
+.skip-link { position: absolute; left: 8px; top: 8px; z-index: 60; transform: translateY(-300%); }
+.skip-link:focus-visible { transform: none; }
+
+/* The rail (HOW-68): 176px on the inset ground, so it reads as furniture and `main` as the
+   page. Items are 32px targets — rows of a list you act on. */
 .sidebar {
-  width: 184px; flex-shrink: 0; overflow-y: auto; padding: 18px 10px; /* DESIGN.md Layout: left rail 184px */
-  border-right: 1px solid var(--border);
+  width: 176px; flex-shrink: 0; overflow-y: auto; padding: 12px 8px 8px;
+  background: var(--bg-inset); border-right: 1px solid var(--border);
   display: flex; flex-direction: column; gap: 2px;
 }
-.sidebar .mark { width: 28px; height: 28px; color: var(--fg); }
-.mark-btn { display: flex; align-items: center; gap: 9px; margin: 2px 8px 18px; text-decoration: none; }
-.mark-btn .wordmark { font-family: var(--font-display); font-size: var(--type-base); font-weight: 600; letter-spacing: 0.07em; text-transform: uppercase; color: var(--fg); }
-.sidebar a.nav {
-  display: flex; align-items: center; gap: 9px;
-  padding: 7px 10px; border-radius: var(--radius);
-  text-decoration: none; color: var(--fg-muted); font-size: var(--type-base);
-  transition: background var(--dur-fast) var(--ease-out-strong), color var(--dur-fast);
+.sidebar .mark { width: 22px; height: 22px; flex-shrink: 0; color: var(--fg); }
+.mark-btn {
+  display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 8px; margin-bottom: 8px;
+  border-radius: var(--radius-sm); text-decoration: none;
 }
-.sidebar a.nav:hover { background: var(--bg-inset); color: var(--fg); }
-.sidebar a.nav.active { background: var(--bg-inset); color: var(--fg); font-weight: 600; }
-.sidebar .spacer { flex: 1; }
-/* The nav's footer controls: theme and collapse, both icon-only Buttons. They sit in a row
-   and stack when the rail collapses, so neither needs placement rules of its own.
-   `.pane-toggle` hides itself until its lane is approached — right for a divider you only
-   want when you reach for it, wrong here: these are permanent nav controls, and inheriting
-   that made the sidebar's collapse button invisible until it was focused. */
-.nav-footer { display: flex; align-items: center; gap: 2px; padding: 0 6px; }
-.nav-footer .pane-toggle { opacity: 1; margin: 0; background: transparent; width: auto; height: auto; }
+/* the wordmark is the name, set in the reading face at heading weight — not an uppercase,
+   letter-spaced label (DESIGN.md Type: hierarchy from weight, never from tracking) */
+.mark-btn .wordmark { font-size: var(--type-body); font-weight: 600; color: var(--fg); white-space: nowrap; }
+/* each item sits in a Tooltip trigger, which only speaks when the rail is icons */
+.nav-tip { display: flex; }
+.sidebar a.nav {
+  position: relative; flex: 1; min-width: 0;
+  display: flex; align-items: center; gap: 8px;
+  height: 32px; padding: 0 7px; border: 1px solid transparent; border-radius: var(--radius-sm);
+  text-decoration: none; color: var(--fg-muted); font-size: var(--type-base);
+  white-space: nowrap; /* "Needs you" used to wrap to two lines beside its counts */
+}
+.sidebar a.nav svg { flex-shrink: 0; }
+.sidebar a.nav .label { flex: 1; min-width: 0; }
+/* hover is a wash of the ink, so it shows on the inset ground; no transition — the rail is
+   swept and switched all day, and where you ARE is instant (DESIGN.md Motion) */
+.sidebar a.nav:hover { background: color-mix(in srgb, var(--fg) 7%, transparent); color: var(--fg); }
+/* where you are: a held object on the raised ground with a hairline — never a side stripe */
+.sidebar a.nav.active { background: var(--bg-raised); border-color: var(--border); color: var(--fg); font-weight: 500; }
+.sidebar .spacer { flex: 1; min-height: 8px; }
 
-/* The collapsed nav is the icon rail: labels go, icons stay, everything stays reachable.
-   One rule drives it from `data-nav` so the operator toggle and the 900px breakpoint below
-   cannot describe two different collapsed states. */
-.shell[data-nav="rail"] .sidebar { width: 60px; }
+/* The rail's foot: the way into the palette, then theme and collapse. */
+.nav-footer { display: flex; flex-direction: column; gap: 2px; }
+.nav-footer-row { display: flex; align-items: center; gap: 2px; }
+.nav-cmd { width: 100%; justify-content: flex-start; gap: 8px; padding: 0 7px; font-weight: 400; }
+.nav-cmd-icon { display: none; }
+
+/* The collapsed rail: labels go, icons stay, everything stays reachable and NAMED (each item
+   carries an aria-label, and its Tooltip shows the label and its key). `data-nav` is set by
+   the shell from the operator's toggle OR the window being under 1100px, so there is one
+   collapsed state, not a toggle's and a breakpoint's. No width transition: `[` is a key. */
+.shell[data-nav="rail"] .sidebar { width: 49px; }
 .shell[data-nav="rail"] .sidebar .label,
-.shell[data-nav="rail"] .sidebar .wordmark { display: none; }
-.shell[data-nav="rail"] .mark-btn { justify-content: center; margin-left: 0; margin-right: 0; }
-.shell[data-nav="rail"] .sidebar a.nav { justify-content: center; padding-left: 0; padding-right: 0; }
-/* the rail is too narrow for two controls side by side, so they stack */
-.shell[data-nav="rail"] .nav-footer { flex-direction: column; padding: 0; }
-.sidebar { transition: width var(--dur-base) var(--ease-out-strong); }
-@media (max-width: 900px) { .sidebar { width: 60px; } .sidebar .label, .sidebar .wordmark { display: none; } }
+.shell[data-nav="rail"] .sidebar .wordmark,
+.shell[data-nav="rail"] .sidebar .nav-kbd { display: none; }
+.shell[data-nav="rail"] .mark-btn,
+.shell[data-nav="rail"] .sidebar a.nav,
+.shell[data-nav="rail"] .nav-cmd { justify-content: center; padding-left: 0; padding-right: 0; }
+.shell[data-nav="rail"] .nav-cmd-icon { display: block; }
+.shell[data-nav="rail"] .nav-footer-row { flex-direction: column; }
+/* a count rides the icon's corner; the quiet one is in the tooltip and the item's name */
+.shell[data-nav="rail"] .nav-badge { position: absolute; top: -6px; right: -6px; margin: 0; }
+.shell[data-nav="rail"] .nav-badge.quiet { display: none; }
 
-main { flex: 1; min-width: 0; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
+/* `main` is a column: a screen is header (fixed) → body (scrolls), and the body is the
+   screen's own scroller.
+   `position: relative` is load-bearing: it makes `main` the containing block for anything
+   absolutely positioned inside it. Without it a visually-hidden label (`sr-only` is
+   `position: absolute`) deep in a scroller is positioned against the VIEWPORT at its static
+   offset, escapes every `overflow` on the way up, and makes the document itself scroll —
+   measured at 3,331px of page scroll under a shell that "never scrolls". */
+main { position: relative; flex: 1; min-width: 0; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
 
 /* runs list */
 /* every screen shares this page container: full-width (left-anchored), generous air.
@@ -206,7 +237,7 @@ main { flex: 1; min-width: 0; min-height: 0; overflow: hidden; display: flex; fl
 .allowance-unreachable { color: var(--fg-faint); font-style: italic; }
 
 .empty { color: var(--fg-muted); text-align: center; padding: 110px 0; }
-.empty .mark { width: 56px; height: 56px; color: var(--fg-faint); margin-bottom: 12px; }
+.empty .mark { display: block; width: 56px; height: 56px; color: var(--fg-faint); margin: 0 auto 12px; }
 .empty code { background: var(--bg-inset); padding: 2px 6px; border-radius: 4px; }
 
 /* form hints and errors — the fields themselves are Label/Input/Select/Textarea */
@@ -401,38 +432,6 @@ main { flex: 1; min-width: 0; min-height: 0; overflow: hidden; display: flex; fl
 
 /* ---- motion pass (animate skill) ------------------------------------------------- */
 
-/* load splash: the mark draws itself (line-drawing recipe), once per session */
-.splash {
-  position: fixed; inset: 0; z-index: 50;
-  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px;
-  background: var(--bg); color: var(--fg);
-  transition: opacity 350ms var(--ease-out-strong);
-}
-.splash.leaving { opacity: 0; pointer-events: none; transition-duration: 420ms; }
-.splash-mark { width: 84px; height: 84px; overflow: visible; }
-.splash-stroke {
-  stroke-dasharray: 100 110; /* gap > dash: round caps peek otherwise */
-  stroke-dashoffset: 100;
-  animation: howdah-draw 1150ms var(--ease-out-strong) forwards;
-}
-.splash-eye {
-  opacity: 0;
-  transform: scale(0.5);
-  transform-box: fill-box; transform-origin: center;
-  animation: howdah-eye 220ms var(--ease-out-strong) 980ms forwards;
-}
-.splash-word {
-  font-family: var(--font-display); font-weight: 400; font-size: var(--type-lg); letter-spacing: 0.09em; text-transform: uppercase;
-  opacity: 0; transform: translateY(4px);
-  animation: howdah-word 300ms var(--ease-out-strong) 1080ms forwards;
-}
-@keyframes howdah-draw { to { stroke-dashoffset: 0; } }
-@keyframes howdah-eye  { to { opacity: 1; transform: scale(1); } }
-@keyframes howdah-word { to { opacity: 1; transform: translateY(0); } }
-@media (prefers-reduced-motion: reduce) {
-  .splash-stroke, .splash-eye, .splash-word { animation: none; opacity: 1; transform: none; stroke-dashoffset: 0; }
-}
-
 /* needs-attention entrance — the approved motion moment; @starting-style = interruptible */
 .banner {
   transition: opacity var(--dur-base) var(--ease-out-strong), transform var(--dur-base) var(--ease-out-strong);
@@ -491,13 +490,14 @@ main { flex: 1; min-width: 0; min-height: 0; overflow: hidden; display: flex; fl
 /* ---- prompt library + proposal review (T21) ------------------------------------- */
 
 .nav-badge {
-  margin-left: auto; background: var(--attention); color: var(--on-attention);
-  font-family: var(--font-mono); font-size: var(--type-2xs); font-weight: 700;
-  border-radius: 9px; padding: 0 6px; line-height: 16px; min-width: 16px; text-align: center;
+  margin-left: auto; flex-shrink: 0; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--attention); color: var(--on-attention);
+  font-size: var(--type-xs); font-weight: 600; line-height: 1; font-variant-numeric: tabular-nums;
 }
-/* HOW-67: the "Ready for you" count — a draft can wait, so it is grey, never amber */
-.nav-badge.quiet { background: var(--bg-inset); color: var(--fg-muted); }
-.nav-badge + .nav-badge { margin-left: 4px; }
+/* a count that is not the alarm (drafts ready, proposals pending): a plain number */
+.nav-badge.quiet { background: transparent; color: var(--fg-muted); font-weight: 400; padding: 0 2px; min-width: 0; }
+.nav-badge + .nav-badge { margin-left: 2px; }
 
 /* list + detail, wider than the graphs split: prompt ids and v-ranges need the room,
    and the detail column must not run flush into the viewport edge */
@@ -648,13 +648,22 @@ main { flex: 1; min-width: 0; min-height: 0; overflow: hidden; display: flex; fl
 .pane-resize {
   position: relative; flex: 0 0 9px; cursor: col-resize; touch-action: none;
   background: transparent;
+  /* its controls are centred on the lane whatever its width — a flex column centres an item
+     wider than itself evenly, where `margin: auto` pins it to one edge */
+  display: flex; flex-direction: column; align-items: center;
+  /* the lane is its own stacking context, so the line below can sit UNDER its controls */
+  isolation: isolate;
 }
+/* `z-index: -1`: the line is positioned and the controls are in flow, so without it the line
+   painted over the middle of the toggle and took its clicks (the audit's "pane-resize
+   intercepts pointer events"). The controls stay unpositioned, which split.test.tsx pins. */
 .pane-resize::before {
-  content: ""; position: absolute; inset: 0 4px; background: var(--border);
-  transition: background var(--dur-fast) ease, inset var(--dur-fast) ease;
+  content: ""; position: absolute; z-index: -1; inset: 0 4px; background: var(--border);
 }
 .pane-resize:hover::before, .pane-resize:focus-visible::before { inset: 0 3px; background: var(--border-strong); }
-.pane-resize:focus-visible { outline: none; }
+/* a focus stop shows the ring like every other (HOW-68; it used to be `outline: none`, so the
+   only sign of focus was a 1px rule becoming 3px) */
+.pane-resize:focus-visible { outline: 2px solid var(--ring); outline-offset: 0; }
 
 /* A closed or full-width pane keeps its divider as a real LANE rather than collapsing it to
    zero. A zero-width anchor put the restore control on top of the panel's own scope tabs — an
@@ -669,8 +678,9 @@ main { flex: 1; min-width: 0; min-height: 0; overflow: hidden; display: flex; fl
 /* The toggle lives INSIDE the lane, statically — never absolutely placed against it. It is
    revealed on approach and always available to the keyboard. */
 .pane-toggle {
-  width: 17px; height: 17px; padding: 0; background: var(--bg);
-  margin: 10px auto 0; opacity: 0; transition: opacity var(--dur-fast) ease;
+  /* 24px, from Button's `icon-sm`. In flow, over the divider line (see `.pane-resize::before`). */
+  flex-shrink: 0; background: var(--bg);
+  margin-top: 8px; opacity: 0; transition: opacity var(--dur-fast) ease;
 }
 .steps-split:hover .pane-toggle, .logs-split:hover .pane-toggle, .ctx-split:hover .pane-toggle,
 .runview:hover .pane-toggle, .pane-toggle:focus-visible, .pane-resize:focus-visible .pane-toggle { opacity: 1; }
@@ -680,7 +690,7 @@ main { flex: 1; min-width: 0; min-height: 0; overflow: hidden; display: flex; fl
 /* The lane's controls stack down it, in normal flow. NOTHING here is absolutely positioned:
    that is the whole point of the lane, and it is why a control can never land on the pane
    beside it the way the old restore button did. */
-.pane-controls { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.pane-controls { display: flex; flex-direction: column; align-items: center; gap: 4px; }
 /* In full width the controls own the lane: always visible, over nothing. */
 .steps-split[data-detail="full"] .pane-toggle { opacity: 1; }
 .sd-scope { display: flex; gap: 6px; padding: 12px 16px; border-bottom: 1px solid var(--border); }

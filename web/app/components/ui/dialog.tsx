@@ -20,8 +20,25 @@
  * scroll-lock and no z-index. base-vega's dialog reimplements all of that in userland. This is
  * one of the few places where the hand-written version is not the compromise — it is the better
  * one, and moving it would be a regression bought with a larger file.
+ *
+ * HOW-68 (DESIGN.md Motion + Chrome):
+ *
+ *   IT ARRIVES, ONCE. 180ms of opacity plus 6px of rise on the strong ease-out, written as
+ *   `@starting-style` (Tailwind's `starting:`) so it is a TRANSITION — interruptible, and no
+ *   keyframe to restart. Never from `scale(0)`, never `ease-in`. It does not animate out: the
+ *   operator has already decided, and the element is unmounted. Reduced motion zeroes the
+ *   duration tokens, so nothing moves.
+ *   THE SCRIM IS A TOKEN (`--scrim`), not `black/55` — the old one was the same in both
+ *   themes, which is how a light page got a dark-theme shadow over it.
+ *   IT FLOATS, so it casts the one shadow floating things cast (`shadow-float`).
+ *   IT IS A LAYER CONTAINER. A `showModal()` dialog is in the top layer and makes the rest of
+ *   the document inert, so a Tooltip, Menu or Popover opened from inside it and portalled to
+ *   `<body>` was painted underneath and could not be clicked. The dialog offers its own
+ *   element through `LayerContainer` and those three portal into it.
+ *   A TALL BODY SCROLLS INSIDE IT (`max-h` + one scroller) instead of running off the screen.
  */
-import { useCallback, useEffect, useId, useRef } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { LayerContainer } from "@/lib/layer";
 import { cn } from "@/lib/utils";
 import { Button } from "./button";
 
@@ -35,7 +52,12 @@ export function Dialog({ open, onClose, title, description, children, alert = fa
   alert?: boolean;
   className?: string;
 }) {
-  const ref = useRef<HTMLDialogElement>(null);
+  const ref = useRef<HTMLDialogElement | null>(null);
+  // state as well as a ref: the floating layers inside need a RENDER when the element exists
+  const [layer, setLayer] = useState<HTMLElement | null>(null);
+  // a STABLE ref callback: an inline one is a new function every render, so React would call
+  // the old one with null and the new one with the element each time, and churn this state
+  const attach = useCallback((el: HTMLDialogElement | null) => { ref.current = el; setLayer(el); }, []);
   const titleId = useId();
   const descId = useId();
 
@@ -53,22 +75,25 @@ export function Dialog({ open, onClose, title, description, children, alert = fa
   if (!open) return null;
   return (
     <dialog
-      ref={ref}
+      ref={attach}
       role={alert ? "alertdialog" : "dialog"}
       aria-labelledby={titleId}
       aria-describedby={description ? descId : undefined}
       className={cn(
-        "m-auto w-[min(92vw,460px)] rounded-[var(--radius)] border border-[var(--border-strong)] bg-card p-0 text-foreground backdrop:bg-black/55",
+        "m-auto max-h-[min(86dvh,720px)] w-[min(92vw,460px)] overflow-visible rounded-[var(--radius)] border border-[var(--border-strong)] bg-card p-0 text-foreground shadow-float backdrop:bg-[var(--scrim)]",
+        "transition-[opacity,translate] duration-[var(--dur-base)] ease-[var(--ease-out-strong)] starting:translate-y-1.5 starting:opacity-0",
         className,
       )}
       onCancel={(e) => { e.preventDefault(); close(); }}
       onClick={(e) => { if (e.target === ref.current) close(); }}
     >
-      <div className="flex flex-col gap-3 p-4">
-        <h3 id={titleId} className="m-0 text-md font-semibold">{title}</h3>
-        {description && <div id={descId} className="text-sm leading-relaxed text-muted-foreground">{description}</div>}
-        {children}
-      </div>
+      <LayerContainer.Provider value={layer}>
+        <div className="flex max-h-[min(86dvh,720px)] flex-col gap-3 overflow-y-auto p-4">
+          <h3 id={titleId} className="m-0 text-md font-semibold">{title}</h3>
+          {description && <div id={descId} className="text-sm leading-relaxed text-muted-foreground">{description}</div>}
+          {children}
+        </div>
+      </LayerContainer.Provider>
     </dialog>
   );
 }

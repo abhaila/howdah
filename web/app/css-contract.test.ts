@@ -306,6 +306,78 @@ describe("tokens.css is the single source of colour and type (P3.12)", () => {
 });
 
 /**
+ * HOW-68, DESIGN.md rule 5: "nothing is cut without a way to read it … raw `text-overflow:
+ * ellipsis` in CSS is a test failure". The audit found the same defect in a dozen places — a
+ * span that ends in "…" with no tooltip, or with one that only a mouse could open — and the
+ * cure is that an ellipsis can only be written through the `Truncate` primitive, which grows
+ * a tooltip and a focus stop whenever it actually cuts.
+ *
+ * The selectors that ellipsize by hand TODAY are listed below, so this gate stops the
+ * twenty-fourth without demanding all twenty-three be fixed in one commit. The list only
+ * shrinks: each screen's redesign moves its rows onto `Truncate` and deletes its lines here,
+ * and the second test fails if a line is left behind after its rule has gone — an allowlist
+ * that still names a selector nobody uses is how the next raw ellipsis hides.
+ *
+ * `Truncate` itself is exempt by construction: it uses Tailwind's `truncate` utility, which is
+ * generated into app.css and never appears in the two hand-written sheets scanned here.
+ */
+describe("an ellipsis is written with Truncate, never by hand (HOW-68)", () => {
+  const HAND_WRITTEN = SHEETS.filter((f) => !f.endsWith("tokens.css"));
+  /** `file-basename | selector` for every rule that sets `text-overflow: ellipsis` */
+  const RAW_ELLIPSIS_ALLOWLIST: string[] = [
+    "howdah.css | .run-goal",            // runs list, inbox, settings workspace names
+    "howdah.css | .topbar h1",           // the run's name
+    "howdah.css | .tl-node",             // inspector timeline (455 hits in the audit)
+    "howdah.css | .kv .path",
+    "howdah.css | .home-strip code",
+    "howdah.css | .pr-link",
+    "howdah.css | .ws-row .run-meta",
+    "howdah.css | .gb-node-open",
+    "howdah.css | .gb-node-sub",
+    "howdah.css | .pd-row > span:last-child, .pd-row > a:first-child",
+    "howdah.css | .step-node",
+    "howdah.css | .log-node",
+    "howdah.css | .ctx-key",
+    "howdah.css | .ctx-value",
+    "howdah.css | .ctx-writer",
+    "howdah.css | .chat-eyebrow",
+    "howdah.css | .act-tool-sum",
+    "howdah.css | .pp-subject",
+    "howdah.css | .board-vitals > span",
+    "howdah.css | .bv-step-text",
+    "howdah.css | .ev-thumb-path",
+    "globals.css | .gr-id",
+    "globals.css | .dv-key",
+  ];
+
+  function rawEllipsis(): string[] {
+    const found: string[] = [];
+    for (const f of HAND_WRITTEN) {
+      const css = readFileSync(f, "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+      for (const m of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+        if (/text-overflow:\s*ellipsis/.test(m[2] ?? "")) found.push(`${f.split("/").pop()} | ${(m[1] ?? "").trim().replace(/\s+/g, " ")}`);
+      }
+    }
+    return found;
+  }
+
+  test("no NEW rule ellipsizes by hand — use <Truncate>, which can be read on hover and focus", () => {
+    expect(rawEllipsis().filter((r) => !RAW_ELLIPSIS_ALLOWLIST.includes(r))).toEqual([]);
+  });
+
+  test("the allowlist only shrinks: every entry still names a rule that ellipsizes", () => {
+    const live = rawEllipsis();
+    expect(RAW_ELLIPSIS_ALLOWLIST.filter((r) => !live.includes(r))).toEqual([]);
+  });
+
+  test("Truncate is where the ellipsis lives, and it brings the tooltip with it", () => {
+    const src = readFileSync(join(APP, "components/ui/truncate.tsx"), "utf8");
+    expect(src).toContain('"min-w-0 truncate"');
+    expect(src).toContain("<Tooltip");
+  });
+});
+
+/**
  * HOW-27 widened this from "no Radix" to what the rule was always protecting. `@base-ui/react`
  * is now a dependency (base-vega's primitives are built on it), so a test that only forbids the
  * string `@radix-ui/` would pass while the layer quietly grew a second primitives library. What
