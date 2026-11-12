@@ -33,7 +33,7 @@ import { PROPOSALS_CHANGED } from "@/lib/types";
 import { getJSON } from "@/lib/net";
 import { fmtWhen } from "@/lib/format";
 import { useListNav } from "@/lib/list-nav";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Row } from "@/components/ui/row";
@@ -44,7 +44,7 @@ import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Truncate } from "@/components/ui/truncate";
 import { useToast } from "@/components/ui/toast";
-import { CODE, Hint, KeyHints, LIST_HINTS, LoadError, Section, SplitScreen } from "./frame";
+import { CODE, Hint, KeyHints, LIST_HINTS, LoadError, Screen, Section, SplitScreen } from "./frame";
 import { Diff, FeedbackEntry, LINK, PRE } from "./prompts";
 
 /** a fact about the proposal that changes what may be done with it; the refusal is shown whole */
@@ -117,17 +117,15 @@ export function ProposalsScreen({ selected }: { selected: string | null }) {
     return <SplitScreen {...frame} list={bars(6, "h-10 w-full")} detail={bars(3, "h-24 w-full")} detailLabel="Proposal" hasDetail={false} />;
   }
   if (list.length === 0) {
+    // nothing to list and nothing to detail: ONE pane saying so. As a split it printed "No
+    // proposals yet." twice at 1440px, and under 1100px — where a split shows its list side —
+    // only the bare line, with nothing about how a proposal comes to exist (HOW-68)
     return (
-      <SplitScreen
-        {...frame}
-        list={<Hint className="px-2">No proposals yet.</Hint>}
-        detail={
-          <EmptyState title="No proposals yet">
-            A proposal is a drafted revision of a prompt. Add feedback to a turn in a run, then draft one with <code>bun reviser/revise.ts &lt;prompt-id&gt;</code>.
-          </EmptyState>
-        }
-        detailLabel="Proposal" hasDetail={false}
-      />
+      <Screen name={frame.name} title={frame.title} description={frame.description}>
+        <EmptyState title="No proposals yet" actions={<a className={buttonVariants({ variant: "outline" })} href="/prompts">Go to Prompts</a>}>
+          A proposal is a drafted revision of a prompt. Add feedback to a turn in a run, then draft one with <code>bun reviser/revise.ts &lt;prompt-id&gt;</code>.
+        </EmptyState>
+      </Screen>
     );
   }
 

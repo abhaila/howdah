@@ -1,6 +1,6 @@
 # Design overhaul (HOW-68): the plan and the loop
 
-Status: **agreed 2026-11-12; the loop is running.** `DESIGN.md` is now the authority and wins
+Status: **agreed 2026-11-12; three iterations of the loop have run (see "Loop log").** `DESIGN.md` is now the authority and wins
 over this file; this file is the plan, the checklist and the log of the loop.
 
 - Vision and mockups: https://claude.ai/artifact/NktPftzTLnWvLQ7i5nxZ1m
@@ -107,7 +107,7 @@ Settings (WCAG 2.1.4).
 
 **3. Surfaces**, worst first. One row each in the checklist below.
 
-**4. Close-out:** delete dead CSS, update `CLAUDE.md`'s web section, final full capture.
+**4. Close-out:** delete dead CSS, update `CLAUDE.md`'s web section, final full capture — done in iteration 3.
 
 ## The loop
 
@@ -116,63 +116,161 @@ For each checklist row: **implement → capture → check → record**.
 ```bash
 export HOWDAH_VISUAL_OUT=/tmp/howdah-visual
 bash tools/visual/serve.sh stop
-bun tools/visual/seed.ts                  # demo home: 28 runs across every status (~10s)
-bash tools/visual/serve.sh                # viewer on :4799, served from a private repo copy
-node tools/visual/shoot.mjs <substring>   # captures + in-page audits for matching screens
-bun test web/app && bun node_modules/typescript/lib/tsc.js --noEmit
+bun tools/visual/seed.ts                  # demo home: ~45 runs across every status and park kind, plus an EMPTY home (~3s)
+bash tools/visual/serve.sh > $HOWDAH_VISUAL_OUT/serve.out 2>&1 < /dev/null
+                                          # viewer on :4799 from a private repo copy; the empty home on :4800
+node tools/visual/shoot.mjs               # every screen, both themes, 1024×700 and 1024×640 (~17 min); or a substring / STEPS=<regex>
+(cd $HOWDAH_VISUAL_OUT && python3 "$OLDPWD/tools/visual/analyze.py")   # the gate: STANDARDS: PASS/FAIL, exit 1 on FAIL
+bun test web && bun node_modules/typescript/lib/tsc.js --noEmit
 ```
 
+**The gate** is the last block `analyze.py` prints. It counts, over every audited screen:
+font sizes outside 12/13/14/16/20/28 · faces other than DM Sans / DM Mono · an ellipsis with no
+way to read it · targets under 24px · focus stops with no ring · clipped or unreachable content
+or a scrolling document · contrast failures on live (non-disabled) text · capture steps that
+failed. Every count must be zero. Three things are measured and deliberately not counted, and
+the audit says so where it lists them: a visually-hidden label, React Flow's canvas (content
+past the pane is reached by panning; a canvas zoomed out by the operator shrinks its targets
+as browser zoom would), and text on a disabled control.
+
 A row passes when all of these hold:
-- every minimum standard's check is green for that surface;
+- the gate prints PASS for the capture it is judged on;
 - the capture has been looked at in both themes at 1440×900 and at 1024×700;
 - it matches `DESIGN.md` (tokens only, primitives only, no new one-off CSS);
 - the affected tests pass.
 
 A row that fails goes round again. The loop ends when every row passes in one full capture.
 
+What the gate cannot see is checked by three small Playwright scripts kept with the capture
+(not in the repo: they are probes, and their findings became tests): **motion** with reduced
+motion OFF (the harness forces it on), **keyboard** end to end, and **consistency** across
+surfaces. Their results are in the Loop log.
+
 ## Checklist
 
-Status: ☐ not started · ◐ in progress · ☑ passes.
+Status: ☐ not started · ◐ in progress · ☑ passes (the gate, and looked at in dark, light and at 1024).
 
 ### Foundations
 | | Item |
 |---|---|
-| ☑ | Sound: off by default, setting honoured, only for news (viewer and OS) |
+| ☑ | Sound: off by default, setting honoured, only for news (viewer and OS) — the seeded home no longer sets `chime`, so Settings is captured in its default (unchecked) state |
 | ☑ | `PRODUCT.md`, `DESIGN.md` |
-| ☑ | Tokens, type scale, bundled fonts, contrast test (`web/app/tokens.test.ts`) |
+| ☑ | Tokens, type scale, bundled fonts, contrast test (`web/app/tokens.test.ts`) — now also `--fg-disabled` (≥3:1, <4.5:1) and the diff colours on their own tinted row |
 | ☑ | Primitives: Menu, Popover, CommandPalette, Drawer, Kbd, Truncate, Toolbar, KeyValue, ScrollPane (+ SectionLabel, ShortcutSheet) |
-| ◐ | Existing primitives: targets ≥24px, focus ring everywhere, states complete — done and measured on `/dev/components`; `message-scroller` and `questionnaire` (the chat pane's vendored pair) are judged with the Build surface |
+| ☑ | Existing primitives: targets ≥24px, focus ring everywhere, states complete. `questionnaire` lost its `dark:` utilities (they followed the OS, not the toggle); `message-scroller`'s pin no longer animates; Button's disabled state is a readable token and loading keeps its colours |
 | ☑ | Shell: rail, palette, shortcuts (`lib/shortcuts.ts`), `?` sheet, 404, skip link |
-| ☐ | Scroll contract |
-| ☐ | Native notifications |
+| ☑ | Scroll contract — 0 clipped, unreachable or document-scrolling screens in the final capture, 1024×640 included |
+| ◐ | Native notifications — the viewer path (`lib/notify.ts`) is built and unit-tested; headless Chromium blocks the permission, so only Settings' "blocked" state was captured and a real notification was never seen on screen. The OS path was not exercised in this pass |
 | ☑ | Component gallery route (`/dev/components`; harness step `components-gallery`) |
 
 ### Surfaces
-| | Surface | Known defects to clear (audit §) |
-|---|---|---|
-| ☐ | Run: header, tabs, actions | wrapped actions row, 13px back arrow, clipped tab strip (3.1.3, 3.1.12, 3.5) |
-| ☐ | Run: Build (transcript, ask cards, composer) | banner duplicates card, 240px transcript, unreachable at 1024 (3.1.2, 3.1.5, 3.1.6) |
-| ☐ | Run: ask cards (prose, question, effect, no-reply, approval) | approval hidden under Steps (3.8) |
-| ☐ | Run: Details drawer (inspector) | mono everywhere, truncated timeline, 17px toggle under the resizer (3.2, 3.5) |
-| ☐ | Run: Plan | unused bottom band (3.1.13) |
-| ☐ | Run: Report | fixed beige all-mono page in both themes (3.4) |
-| ☐ | Run: Steps + step detail | clipped duration column, 8px list at 1024, 23px scope toggle (3.1.4, 3.1.7) |
-| ☐ | Run: Context | 8px list at 1024 |
-| ☐ | Run: Logs | 0px summary column (3.1.1) |
-| ☐ | Run: Graph | 9px edge labels |
-| ☐ | Runs list | tinted rows, three type styles per row, no reason shown |
-| ☐ | Needs you | overlapping rows, id crowds out the reason (3.1.8) |
-| ☐ | New run | |
-| ☐ | Graphs list and source editor | |
-| ☐ | Graph builder | 106px canvas at 1024, 5px card text, focus-less nodes (3.1.10, 3.1.11, 3.6) |
-| ☐ | Prompts and prompt detail | |
-| ☐ | Proposals | unexplained 502 in the console |
-| ☐ | Draft review | |
-| ☐ | Settings | paths overflow the card, names cut to "acm…" (3.1.9) |
-| ☐ | Dialogs, toasts, tooltips | |
-| ☐ | Empty, loading, error and unknown-id states | skeleton flush to the rail, no 404 (3.1.14) |
+Every row below was judged on the final capture of iteration 3 (584 captures, 281 audited
+screens, gate PASS) and looked at in dark and light at 1440×900 and in dark at 1024×700 (the
+run view also at 1024×640).
 
-States the seed does not produce yet, to add before their surfaces are judged: a `parallel`
-step, steer and soft-stop events, the Drift pane, a stacked run in `runs:await`, a gated
-acceptance park, permission asks, and the `mcp-elicitation`, `turn-timeout`, `no-progress`
-and `repair-stalled` parks.
+| | Surface | What was cleared (audit §), and what was looked at |
+|---|---|---|
+| ☑ | Run: header, tabs, actions | one row at every width, 24px back control, tab strip with key hints (3.1.3, 3.1.12, 3.5); a 100-character run id and name at 1024 |
+| ☑ | Run: Build (transcript, ask cards, composer) | the ask is said once — no banner, and no `[failed: …]` line above the card that says it; the transcript is the body; answerable at 1024×640 with the drawer open or shut (3.1.2, 3.1.5, 3.1.6); steers (delivered and pending) and the steer composer on a live turn; a stacked run waiting on its dependency |
+| ☑ | Run: ask cards | prose, question, ambiguous effect, no-reply (Retry, and routing parks with the way to the Graph tab), approval in the conversation (3.8), permission (the command, Allow / Deny), MCP elicitation, soft stop, gated acceptance with Waive; turn-timeout, no-progress, repair-stalled, stale-base, context-exhausted, stuck, harness-unauthenticated |
+| ☑ | Run: Details drawer (inspector) | sans labels, values wrap and paths break at `/`, timeline rows open their step (3.2, 3.5) |
+| ☑ | Run: Plan | one scroller around a 720px column (3.1.13) |
+| ☑ | Run: Report | follows the theme; a frame around the self-contained page (3.4). The page inside the frame is `core/run-report.ts`'s and is not measured by the in-page audit (it is an iframe) |
+| ☑ | Run: Steps + step detail | grid rows, fixed numeric columns, the detail replaces the list under 1100px and a step picked elsewhere lands on it (3.1.4, 3.1.7); a `parallel` group; two attempts of one visit as two rows; the Drift pane; an UNVERIFIED prompt |
+| ☑ | Run: Context | a real list at 1024; what was given at launch reads "you, at launch" |
+| ☑ | Run: Logs | summary column never 0px (3.1.1); the fetch-error state |
+| ☑ | Run: Graph | 12px edge labels; the fork/join wires of a parallel step |
+| ☑ | Runs list | rows, one sentence per row from `parkSummary`, every status including queued and failed-recoverable; the empty state |
+| ☑ | Needs you | name, sentence, step, wait — one row each (3.1.8); the wait is a number, not "waiting …" 21 times; the empty state |
+| ☑ | New run | with and without workspaces |
+| ☑ | Graphs list and source editor | built-in and local graphs, a broken local graph, the tuning table |
+| ☑ | Graph builder | canvas at 100% by default, 12–13px cards, ringed nodes (3.1.10, 3.1.11, 3.6); wires side to side on a left-to-right graph with captions off the cards; a parallel step is drawn and opened (it is not editable yet, by design) |
+| ☑ | Prompts and prompt detail | |
+| ☑ | Proposals | pending, stale and orphaned, each saying what may be done; the empty state is one pane. The "unexplained 502" is `/api/github/repos` on SETTINGS when `gh` is unavailable, and Settings explains it in place |
+| ☑ | Draft review | the card and the page share one list; marks are SVG, headings `SectionLabel` |
+| ☑ | Settings | paths wrap in the card, names are not cut (3.1.9); sound unchecked by default |
+| ☑ | Dialogs, toasts, tooltips | 20 dialogs close on Esc with focus inside, and focus returns to what opened them; menu, palette, `?` sheet, toast and dialog also at 1024 |
+| ☑ | Empty, loading, error and unknown-id states | an empty home (no runs, workspaces or proposals) on every screen; 404; a run id that does not exist (3.1.14). Loading skeletons are on screen for under a second and were judged in the gallery, not in place |
+
+### States the demo home produces, and the ones it still cannot
+
+Added in iteration 3 (`tools/visual/seed.ts` section O, `live.ts`), each reached the way a
+real run reaches it unless a seam is named in the seed: a `parallel` step (a finished run and
+one with a failed branch, on a local graph), a delivered and a pending steer on a live turn, a
+delivered soft stop, the Drift pane, a stacked run waiting in `deps.wait` with a live runner, a
+gated acceptance park (a local graph with `requiresAcceptance`), a permission ask, an
+`mcp-elicitation` ask, parks for `turn-timeout`, `no-progress` (by the engine's own tree
+comparison), `repair-stalled` and `stale-base` (by the real gate), a queued and a
+failed-recoverable run, an empty home, a stale and an orphaned proposal, an UNVERIFIED prompt
+reconstruction, failed evidence, and a Logs fetch error (forced by cutting the route for one
+capture step).
+
+Still not produced, so not judged: a real desktop notification (headless Chromium blocks the
+permission); a codex `request_user_input` question and any cursor or opencode transcript; the
+`tools-unsupported`, `max-steps` and `approval-missing` parks; a harness fallback hop
+mid-run; a parallel step with a branch waiting on a question while its siblings stream; the
+Settings GitHub picker with `gh` logged in. The quick-task graph's own description reads
+"TODO: one line on what this graph does" — it is in `graphs/quick-task.ts`, outside this
+pass, and shows on the Graphs list and New run.
+
+## Loop log
+
+What each iteration did, and what the gate measured at its end.
+
+**Iteration 0 — audit.** 351 captures of the T25 viewer on 28 seeded runs; the defect list in
+`design-overhaul-audit.md`. No gate yet. Measured then: ten font sizes from 9 to 17px, 13.6k
+mono elements to 7.6k sans, faint text at 3.06:1, a parked run unanswerable at 1024×700.
+
+**Iteration 1 — foundations.** `DESIGN.md`/`PRODUCT.md`, the Indigo tokens and six-step scale,
+bundled fonts, the nine new primitives, the shell, the shortcut registry, `parkSummary`.
+
+**Iteration 2 — surfaces.** Four agents redesigned the run view, the screens and the builder
+in one tree. Capture: 392 PNGs, 177 audited screens. The gate did not exist yet; applied to
+that capture afterwards it reads **FAIL**: 0 sizes off scale, 0 foreign faces, 0 raw
+truncation, 0 small targets, 0 unringed stops — but 97 clipped/unreachable (every one a false
+positive: `sr-only` labels and React Flow's canvas), 34 contrast failures (disabled and
+loading buttons at 2.3–2.8:1, and the diff "+" gutter at 4.45:1) and 6 capture steps that
+timed out.
+
+**Iteration 3 — check against the plan.** One pass over the whole viewer as the design
+director.
+- *Punch list (14):* the engine's `[failed: …]` line is a quiet notice and is not printed
+  above the card that says the same thing; the no-reply card reads heading → items → hint →
+  action → disclosure; builder wires leave and enter by the sides that face each other and a
+  caption never sits on a card; a step chosen in Build or in the Details timeline lands on its
+  detail at narrow widths; exactly one `#needs-input`, and it takes focus; two attempts of one
+  visit are two rows with their own identity; the draft card's dingbats are inline SVG and its
+  headings `SectionLabel`; transcript prose uses the 720px column; disabled buttons are
+  readable and loading ones keep their colours; a path breaks at its slashes; the seeded home
+  no longer turns the sound on; `questionnaire` has no `dark:` utilities; the six failing
+  capture steps run; the audit's false positives are excluded and it now fails loudly.
+- *Seed:* 19 states added (see below), a second viewer over an empty home, two live runs.
+- *First full capture of this iteration:* 574 PNGs, 273 audited screens, 0 failed steps.
+  **FAIL** on one line — 37 targets under 24px: the captions and cards of a canvas zoomed to
+  49% (30; judged by-design and excluded, as browser zoom would be), a 17px "Open linear's
+  link" inside a sentence (5; now a 28px outline control, and the last hand-written ellipsis
+  went with it) and the new notice's 20px summary (2; now 24px). Every other line 0.
+- *Found by looking, and fixed:* a permission ask showed no command (it shows it, with Allow
+  and Deny); the gated acceptance park advised a retry that would park again; a routing park
+  had no action (it offers the way to the Graph tab); the Context tab said "Not written yet"
+  beside the run's own goal (inputs are "you, at launch"); a question's header was drawn under
+  its question; "5m 60s" and "8h 0m" (one duration format); dates read three ways (one
+  `fmtWhen`); the inbox said "waiting" 21 times under "Waiting on you"; the approval card
+  still opened with "Needs you —"; toasts and three empty states started in lower case;
+  "UNVERIFIED" was an uppercase label; screen headers were 48 or 49px by whether they held a
+  button; an empty state's title was a second `h1`; a 117-character line on Prompts.
+- *Motion, reduced motion off:* the ask arrives once (opacity 0 → 1, 6px, scale 0.985 → 1,
+  320ms) and never again on a tab switch, in-app navigation or a reload; menu, popover and
+  tooltip open from their trigger in 150ms on the strong ease-out; press settles at 0.97 in
+  120ms; hover moves nothing; no loop but four spinners on loading buttons. Three things DID
+  animate on a key and no longer do: the transcript's scroll pin on a number-key tab switch
+  and on `⌘I`, and the `?` sheet (a dialog opened from the keyboard is now instant).
+- *Keyboard:* 20 screens tabbed to the wrap — no lost focus, no trap, 0 unringed, 0 off-screen
+  stops; every DESIGN.md key does what the `?` sheet says; Esc closes the topmost of sheet over
+  drawer. Three failures found and fixed: focus fell to `<body>` when the palette, the `?`
+  sheet or any dialog closed (they unmount before the platform can restore it), and Esc on
+  "About this home" closed a tooltip nobody had asked for instead of the popover.
+- *Consistency (measured on 25 views × 2 themes):* 0 views with more than one primary button,
+  0 with amber where nothing waits, 0 uppercase; one section-label style (12px/600 muted);
+  screen headers 48px.
+- *Final capture:* FINAL

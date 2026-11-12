@@ -496,6 +496,19 @@ async function narrowPass() {
     await step("build-to-step-detail", async () => { await go(`/run/${R.done}`); await page.getByRole("button", { name: /^open implementation\.plan@1 in Steps/ }).first().click(); await page.getByRole("button", { name: /Back to Steps/ }).waitFor({ timeout: 2500 }); await snap("run-done-step-picked-from-build-lands-on-detail", aud); });
     await step("details-to-step-detail", async () => { await go(`/run/${R.done}`); await page.getByRole("button", { name: "Show details" }).click(); await page.getByRole("button", { name: /^open verify\.run@1 in Steps/ }).first().click(); await page.getByRole("button", { name: /Back to Steps/ }).waitFor({ timeout: 2500 }); await snap("run-done-step-picked-from-details-lands-on-detail", aud); });
     await step("builder-ltr", async () => { await go("/graphs/triage-bug/build"); await page.getByRole("button", { name: "Show the whole graph" }).click(); await snap("builder-existing-whole-graph", { ...aud, wait: 600 }); });
+    // HOW-68: the floating layers and the empty states at the narrow width
+    await step("layers", async () => {
+      await go(`/run/${R.live}`);
+      await page.getByRole("button", { name: "More run actions" }).click(); await snap("run-live-more-menu", { wait: 250 });
+      await page.getByRole("menuitem", { name: /^Abort/ }).click(); await page.waitForSelector("dialog[open]", { timeout: 3000 }); await snap("dialog-run-abort-confirm", aud);
+      await page.keyboard.press("Escape");
+      await page.keyboard.press("Control+k"); await page.keyboard.type("go"); await snap("command-palette", aud); await page.keyboard.press("Escape");
+      await page.locator("main").click({ position: { x: 300, y: 12 } }); await page.keyboard.press("?"); await snap("shortcut-sheet", aud); await page.keyboard.press("Escape");
+      await go(`/run/${R.done}`); await page.getByRole("button", { name: "More run actions" }).click(); await page.getByRole("menuitem", { name: /Copy resume command/ }).click(); await snap("run-done-toast-copied", { wait: 250 });
+    });
+    for (const [name, path] of [["runs-list", "/"], ["attention-inbox", "/attention"], ["proposals", "/proposals"], ["new-run", "/new"]])
+      await step(`empty-${name}`, async () => { await page.goto(EMPTY + path, { waitUntil: "domcontentloaded" }); await page.waitForTimeout(900); await snap(`empty-home-${name}`, aud); });
+    await step("unknown-run-gone", async () => { await go("/run/does-not-exist"); await page.getByText("No run with this id").waitFor({ timeout: 14000 }); await snap("run-unknown-id-not-found", aud); });
     // HOW-68: below 1100px the panel is a drawer — closed until something is selected, or opened on the graph
     await step("builder", async () => { await go("/graphs/triage-bug/build"); await snap("builder-existing-graph-panel", aud); await page.getByRole("button", { name: "Graph settings" }).click(); await snap("builder-existing-drawer-graph", aud); await page.keyboard.press("Escape"); await page.getByRole("button", { name: /^Edit triage-bug\.fix/ }).click({ force: true }); await snap("builder-existing-step-selected", aud); await page.keyboard.press("Escape"); await page.getByRole("button", { name: /^Name the next step/ }).click(); await snap("builder-palette-strip-name-popover"); });
     await step("graphs", async () => { await go("/graphs"); await page.getByRole("button", { name: "the implement-ticket graph" }).click(); await snap("graphs-implement-ticket-selected", { ...aud, wait: 900 }); });

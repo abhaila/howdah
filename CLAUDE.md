@@ -760,15 +760,18 @@ Design section. Its five rules are each held by something that fails:
 - **Keyboard first.** `app/lib/shortcuts.ts` is the ONE registry: a screen registers with
   `useShortcuts`, and the `?` sheet and the ⌘K palette are rendered from it, so a shortcut
   cannot exist unlisted. Single keys are ignored in a text field and can be turned off.
-  `useEscapeLayer` gives Esc to the topmost of menu, dialog, detail panel, drawer; `Kbd` prints
-  a key from the same string it was registered with. Lists move with J/K (`lib/list-nav.ts`).
+  `useEscapeLayer` gives Esc to the topmost of menu, dialog, detail panel, drawer, and focus
+  goes back to what opened a layer (`lib/layer.ts` `useReturnFocus` — Dialog and the palette
+  unmount on close, so the platform cannot do it); `Kbd` prints a key from the same string it
+  was registered with. Lists move with J/K (`lib/list-nav.ts`).
 - **Nothing is cut without a way to read it.** `Truncate` is the only way to ellipsize — it
   knows when it is cut and shows the full value on hover AND focus; raw `text-overflow` in a
   stylesheet is a test failure. Values wrap where there is room (`KeyValue` breaks a path at
   its slashes).
 
 Motion is DESIGN.md's and mostly absence: nothing keyboard-triggered or high-frequency
-animates (tabs, selection, palette, drawer), nothing loops but a spinner on something loading,
+animates (tabs, selection, palette, drawer, the transcript's scroll pin, a dialog or menu
+opened from the keyboard — `data-instant`), nothing loops but a spinner on something loading,
 and the one authored moment is the ask card arriving — played by `data-arriving`, which
 `ask.tsx` sets only for an ask that is seconds old and not yet drawn, never on a tab switch.
 A run that newly starts waiting posts a real browser `Notification` (`lib/notify.ts`;
