@@ -31,7 +31,7 @@
  * session; anything else is simply there.
  */
 import { useCallback, useEffect, useId, useRef, useState } from "react";
-import { RotateCcw, Send } from "lucide-react";
+import { Ban, Check, RotateCcw, Route, Send } from "lucide-react";
 import type { RunDetail } from "../../derive";
 import { parkSummary } from "../../../core/park-summary";
 import { Button } from "@/components/ui/button";
@@ -55,9 +55,12 @@ import {
 import { submitOnEnter } from "@/lib/keys";
 import { fmtWait } from "@/lib/format";
 import { useNow } from "@/lib/hooks";
+import { useRegisteredShortcuts } from "@/lib/shortcuts";
 import { useToast } from "@/components/ui/toast";
 import { StatusGlyph } from "../status";
 import { ApprovalCard } from "../slice";
+import { toolSummary } from "./activity";
+import { CodeBlock } from "@/components/ui/markdown";
 
 type Ask = NonNullable<RunDetail["ask"]>;
 
@@ -83,11 +86,12 @@ function useArriving(runId: string, ask: Ask): boolean {
 }
 
 /** The engine's own words, unchanged, one click away (DESIGN.md: "Full message"). */
-function FullMessage({ reason, closed = false }: { reason: string; closed?: boolean }) {
+function FullMessage({ reason, closed = false, children }: { reason: string; closed?: boolean; /** more of the record, under its own label (NoReplyCard's refusal) */ children?: React.ReactNode }) {
   return (
-    <details className="ask-full" open={!closed && reason.length <= SHORT_REASON}>
+    <details className="ask-full" open={!closed && !children && reason.length <= SHORT_REASON}>
       <summary>Full message</summary>
       <div className="ask-message">{reason}</div>
+      {children}
     </details>
   );
 }
@@ -97,7 +101,7 @@ function FullMessage({ reason, closed = false }: { reason: string; closed?: bool
  * and the run header's "Waiting on you" target; `collapsing` is the exit half of the
  * sending → delivered → collapsing moment.
  */
-function AskShell({ runId, ask, title, hint, collapsing = false, messageClosed = false, shellRef, children }: {
+function AskShell({ runId, ask, title, hint, collapsing = false, messageClosed = false, shellRef, record, children }: {
   runId: string;
   ask: Ask;
   title: string;
@@ -106,6 +110,8 @@ function AskShell({ runId, ask, title, hint, collapsing = false, messageClosed =
   /** the card already shows what the message says (a question card shows the question) */
   messageClosed?: boolean;
   shellRef?: React.RefObject<HTMLElement | null>;
+  /** shown inside the "Full message" disclosure, after the engine's reason */
+  record?: React.ReactNode;
   children: React.ReactNode;
 }) {
   const headingId = useId();
@@ -127,7 +133,7 @@ function AskShell({ runId, ask, title, hint, collapsing = false, messageClosed =
       </header>
       <div className="ask-where"><span className="m">{ask.node}@{ask.visit}</span>{hint ? <> · {hint}</> : null}</div>
       {children}
-      <FullMessage reason={ask.reason} closed={messageClosed} />
+      <FullMessage reason={ask.reason} closed={messageClosed}>{record}</FullMessage>
     </section>
   );
 }
@@ -232,6 +238,22 @@ function elicitationAsk(ask: NonNullable<RunDetail["ask"]>): { server: string; u
   return { server: typeof a.server === "string" ? a.server : "the MCP server", ...(typeof a.url === "string" ? { url: a.url } : {}) };
 }
 
+/**
+ * HOW-68: a harness PERMISSION ask (claude's `can_use_tool`), read for what it is about. The
+ * park's reason is "Bash needs permission" and nothing else — the command itself was in the ask
+ * payload and not on the card, so the operator was asked to allow something they could not see.
+ * Parsed defensively, like every ask payload (core/ask.ts): anything unexpected is `null` and
+ * the card falls back to the plain reply box.
+ */
+function permissionAsk(ask: NonNullable<RunDetail["ask"]>): { tool: string; what: string; why: string | null } | null {
+  const a = ask.ask as { kind?: unknown; tool_name?: unknown; input?: unknown } | null | undefined;
+  if (!a || a.kind !== "can_use_tool" || typeof a.tool_name !== "string") return null;
+  let what = "";
+  try { what = toolSummary(typeof a.input === "string" ? a.input : JSON.stringify(a.input ?? {})); } catch { what = ""; }
+  const why = (a.input as { description?: unknown } | null | undefined)?.description;
+  return { tool: a.tool_name, what, why: typeof why === "string" && why.trim() !== "" && why.trim() !== what ? why.trim() : null };
+}
+
 export function AskCard({ runId, ask, detail, onResolved }: { runId: string; ask: NonNullable<RunDetail["ask"]>; detail: RunDetail; onResolved: () => void }) {
   const [text, setText] = useState("");
   const [state, setState] = useState<"idle" | "sending" | "delivered" | "failed" | "refused">("idle");
@@ -243,14 +265,15 @@ export function AskCard({ runId, ask, detail, onResolved }: { runId: string; ask
   useEffect(() => { if (location.hash === "#needs-input") ref.current?.focus(); }, []);
   const context = attentionContext(detail, ask);
   const elicitation = elicitationAsk(ask);
+  const permission = permissionAsk(ask);
 
-  const send = useCallback(async () => {
+  const send = useCallback(async (override?: string) => {
     setState("sending");
     try {
       const r = await fetch(`/api/runs/${runId}/reply`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ text }),
+        body: JSON.stringify({ text: override ?? text }),
       });
       if (r.status === 409) {
         const body = (await r.json().catch(() => ({}))) as { error?: string };
@@ -281,6 +304,12 @@ export function AskCard({ runId, ask, detail, onResolved }: { runId: string; ask
           send an empty reply or "done" to let the agent continue. Reply "decline" to refuse — the tool call fails and the agent carries on without it.
         </div>
       )}
+      {permission && (
+        <div className="ask-permission">
+          {permission.why && <div>{permission.why}</div>}
+          <CodeBlock wrap label={`what ${permission.tool} would run`}>{permission.what}</CodeBlock>
+        </div>
+      )}
       {context && <div className="field-error ask-context">{context}</div>}
       {ask.code === "harness-unauthenticated" && <HarnessLogin runId={runId} ask={ask} detail={detail} />}
       <Textarea
@@ -290,18 +319,32 @@ export function AskCard({ runId, ask, detail, onResolved }: { runId: string; ask
         aria-label="your reply"
         value={text}
         onChange={(e) => setText(e.target.value)}
-        onKeyDown={submitOnEnter(() => void send(), { enabled: !busy })}
-        placeholder={ask.code === "attempt-failed" || ask.reason === "attempt failed" ? "What should it do differently? An empty reply retries the step as it is." : "Your reply…"}
+        // on a permission ask Enter sends what was TYPED, which is a refusal's reason — an empty
+        // Enter does nothing, because an empty reply to a permission means "allow"
+        onKeyDown={submitOnEnter(() => { if (!permission) void send(); else if (text.trim()) void send(`deny: ${text.trim()}`); }, { enabled: !busy })}
+        placeholder={permission ? "To refuse: why not, or what to do instead (optional)…"
+          : ask.code === "attempt-failed" || ask.reason === "attempt failed" ? "What should it do differently? An empty reply retries the step as it is." : "Your reply…"}
         disabled={busy}
       />
       <div className="actions">
-        <Button onClick={send} loading={state === "sending"} disabled={busy}>
-          {state !== "sending" && <Send />}{state === "sending" ? "Sending…" : state === "delivered" ? "Delivered" : "Reply"}
-        </Button>
-        <span className="ask-keys"><Kbd keys="enter" /> to send · <Kbd keys="shift+enter" /> for a new line · <Kbd keys="r" /> to come back here</span>
+        {permission ? (
+          <>
+            {/* the two answers, as themselves (engine/executors/reply.ts reads "allow" / "deny …").
+                Allow is the one primary; Deny carries whatever was typed as the agent's reason */}
+            <Button onClick={() => void send("allow")} loading={state === "sending"} disabled={busy}>
+              {state !== "sending" && <Check />}{state === "sending" ? "Sending…" : state === "delivered" ? "Delivered" : `Allow ${permission.tool}`}
+            </Button>
+            <Button variant="outline" onClick={() => void send(text.trim() ? `deny: ${text.trim()}` : "deny")} disabled={busy}><Ban />Deny</Button>
+          </>
+        ) : (
+          <Button onClick={() => void send()} loading={state === "sending"} disabled={busy}>
+            {state !== "sending" && <Send />}{state === "sending" ? "Sending…" : state === "delivered" ? "Delivered" : "Reply"}
+          </Button>
+        )}
+        {!permission && <span className="ask-keys"><Kbd keys="enter" /> to send · <Kbd keys="shift+enter" /> for a new line · <Kbd keys="r" /> to come back here</span>}
         {state === "failed" && (
           <span className="send-state" role="alert">
-            The reply did not reach the runner. <Button variant="link" size="inline" onClick={send}>retry</Button>
+            The reply did not reach the runner. <Button variant="link" size="inline" onClick={() => void send()}>retry</Button>
           </span>
         )}
       </div>
@@ -585,7 +628,9 @@ export function EffectCard({
  * known all along: a command node has no prompt to carry a reply. So whether the box is drawn
  * is now the READ MODEL's answer (`detail.ask_reply`, engine/control.ts replyVerdict — the very
  * function the reply route runs), never a rule re-derived here. This card draws no composer:
- * it says why, quoting the route's refusal VERBATIM, and offers the action that does work.
+ * it offers the action that does work and keeps the route's refusal VERBATIM — in the body
+ * when the refusal is the only guidance there is, and under "Full message" (labelled "Why there
+ * is no reply box") when Retry is the answer and the refusal is only the explanation (HOW-68).
  * Where the refusal's own remedy is "fix the cause, then resume" that is "Retry this step" —
  * the same POST the run's Resume button makes — with AskCard's sending → delivered →
  * collapsing moment and `id="needs-input"`, so a notification's deep link still lands here.
@@ -629,16 +674,41 @@ export function NoReplyCard({ runId, ask, detail, refusal, retry, onResolved }: 
 
   const busy = state === "sending" || state === "delivered";
   const summary = parkSummary({ code: ask.code, node: ask.node, ask: ask.ask });
+  // HOW-68: a routing park's answer is a JUMP, and jumping is done on the Graph tab (click a
+  // step, say what to do). The card said so only as a CLI command; it now offers the way there.
+  // The tab switch is the run view's own registered command, so the button exists exactly where
+  // that command does — never as a dead control in another frame — and prints its key.
+  const openGraph = useRegisteredShortcuts().find((sc) => sc.id === "run.tab.graph" && !sc.disabled && sc.run);
+  const jumps = !retry && (ask.code === "max-visits" || ask.code === "no-edge");
   return (
-    <AskShell runId={runId} ask={ask} title={summary.title} hint={summary.hint} collapsing={state === "delivered"}>
+    <AskShell
+      runId={runId} ask={ask} title={summary.title} hint={summary.hint} collapsing={state === "delivered"}
+      // HOW-68: where Retry is the answer, the card reads heading → items → hint → action, and
+      // WHY there is no reply box (the route's refusal, verbatim) is part of the record below it
+      record={retry ? (
+        <>
+          <div className="ask-record-label">Why there is no reply box</div>
+          <div className="ask-message">This step has no agent to read a reply. The reply route says:</div>
+          <div className="ask-message no-reply-why">{refusal}</div>
+        </>
+      ) : undefined}
+    >
       <AskItems ask={ask} detail={detail} />
       {context && <div className="field-error ask-context">{context}</div>}
-      <div className="field-hint">
-        {retry
-          ? "There is no reply box because this step has no agent to read one:"
-          : "A reply can't move this run. Here is what can:"}
-      </div>
-      <div className="send-state no-reply-why">{refusal}</div>
+      {/* no Retry to offer: the refusal names the verb that DOES work, so it is the card's body */}
+      {!retry && (
+        <>
+          <div className="field-hint">A reply can't move this run. Here is what can:</div>
+          <div className="send-state no-reply-why">{refusal}</div>
+        </>
+      )}
+      {jumps && openGraph && (
+        <div className="actions">
+          <Button onClick={() => openGraph.run?.()}>
+            <Route />Choose the next step on the graph<Kbd keys={typeof openGraph.keys === "string" ? openGraph.keys : "7"} decorative />
+          </Button>
+        </div>
+      )}
       {retry && (
         <div className="actions">
           <Button onClick={resume} loading={state === "sending"} disabled={busy}>

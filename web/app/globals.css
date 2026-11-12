@@ -17,6 +17,7 @@
   --color-muted: var(--bg-inset);
   --color-muted-foreground: var(--fg-muted);
   --color-faint: var(--fg-faint);
+  --color-disabled: var(--fg-disabled);
   --color-border: var(--border);
   --color-input: var(--border-strong);
   --color-ring: var(--ring);

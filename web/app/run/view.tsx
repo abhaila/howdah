@@ -40,7 +40,8 @@ import type { RunDetail } from "../../derive";
 import { applyLiveEvent, type CoalescedTurn } from "../../../log/coalesce";
 import type { LoggedEvent } from "../../../log/events";
 import { GraphDag, useGraphShape } from "../graph-dag";
-import { StatusBadge, StatusGlyph, askRowKey } from "../status";
+import { StatusBadge, StatusGlyph, askRowKey, resolveStepKey, stepKey } from "../status";
+import { Row } from "@/components/ui/row";
 import { getJSON } from "@/lib/net";
 import { fmtDur, fmtWait, liveDuration, runLabel } from "@/lib/format";
 import { useAttentionSurfaces, useNow } from "@/lib/hooks";
@@ -392,9 +393,11 @@ function mergeTurns(base: CoalescedTurn[], extra: CoalescedTurn[]): CoalescedTur
 /** The step the Steps pane is showing: the one the operator picked, else the one that needs them, else the newest. */
 function selectedStepKey(detail: DetailDto, picked: string | null): string | null {
   const askKey = askRowKey(detail.timeline, detail.ask);
-  const waiting = askKey ? detail.timeline.find((t) => `${t.node}@${t.visit}` === askKey) : undefined;
+  const waiting = askKey ? detail.timeline.find((t) => stepKey(t) === askKey) : undefined;
   const row = waiting ?? detail.timeline.at(-1);
-  return picked ?? (row ? `${row.node}@${row.visit}` : null);
+  // a bare `node@visit` (picked in Build, or a step chosen before its visit was re-attempted)
+  // means that visit's latest attempt
+  return resolveStepKey(detail.timeline, picked) ?? (row ? stepKey(row) : null);
 }
 
 /** `graceMs` is a seam for the component test (web/app/runview.test.tsx); nothing else sets it. */
@@ -604,6 +607,7 @@ export function RunView({ id, graceMs = OPEN_GRACE_MS }: { id: string; graceMs?:
     return (
       <ScrollPane label="Run not found" className="p-8" data-screen="run-missing">
         <EmptyState
+          as="h1"
           title="No run with this id"
           actions={<a className={PRIMARY_LINK} href="/">Back to runs</a>}
         >
@@ -720,7 +724,13 @@ function RunFrame({ id, detail, tab, setTab, picked, setPicked, liveGit, now, re
     const first = detail.timeline.findIndex((r) => loaded.has(`${r.node}@${r.visit}`));
     return first <= 0 ? detail : { ...detail, timeline: detail.timeline.slice(first) };
   })();
-  const selectedRow = detail.timeline.find((t) => `${t.node}@${t.visit}` === selectedKey) ?? null;
+  const selectedRow = detail.timeline.find((t) => stepKey(t) === selectedKey) ?? null;
+  // HOW-68: a step chosen OUTSIDE the Steps list (the Build transcript, the Details timeline)
+  // lands on that step's detail — narrow, the split would otherwise show the list it is in.
+  // Leaving Steps forgets the request, so coming back by the tab strip shows the list again.
+  const [stepOpen, setStepOpen] = useState(0);
+  useEffect(() => { if (tab !== "steps") setStepOpen(0); }, [tab]);
+  const showStep = useCallback((key: string) => { setPicked(key); setTab("steps"); setStepOpen((n) => n + 1); }, [setPicked, setTab]);
   const steerable = steerableTurn(detail);
   const escalateMs = detail.soft_stop_escalate_ms ?? SOFT_STOP_ESCALATE_MS;
   const overdue = summary.status === "running" && steerable ? softStopOverdue(detail.soft_stop, now, escalateMs) : null;
@@ -808,13 +818,14 @@ function RunFrame({ id, detail, tab, setTab, picked, setPicked, liveGit, now, re
           ) : tab === "context" ? (
             <RunContext entries={detail.context} />
           ) : tab === "chat" ? (
-            <RunChat runId={id} detail={chatDetail} ask={ask} liveGit={liveGit} onResolved={reload} onPickStep={(k) => { setPicked(k); setTab("steps"); }} earlier={transcriptStart > 0} onEarlier={loadEarlier} />
+            <RunChat runId={id} detail={chatDetail} ask={ask} liveGit={liveGit} onResolved={reload} onPickStep={showStep} earlier={transcriptStart > 0} onEarlier={loadEarlier} />
           ) : tab === "logs" ? (
             <RunLogs runId={id} />
           ) : tab === "graph" ? (
             <RunGraph runId={id} graph={summary.graph} timeline={detail.timeline} status={summary.status} onJumped={reload} />
           ) : (
             <StepsSplit
+              openRequest={stepOpen}
               list={<RunSteps timeline={detail.timeline} ask={ask} selected={selectedKey} now={now} onSelect={setPicked} mapping={detail.slice?.mapping} />}
               detail={<StepDetail runId={id} row={selectedRow} detail={detail} ask={ask} now={now} onResolved={reload} />}
             />
@@ -823,7 +834,7 @@ function RunFrame({ id, detail, tab, setTab, picked, setPicked, liveGit, now, re
       </div>
 
       <Drawer open={drawer.open} onClose={drawer.close} label="Run details" title="Details" returnFocus={detailsButton}>
-        <RunDetails id={id} detail={detail} liveGit={liveGit} now={now} tab={tab} reload={reload} resumeCommand={resumeCommand} onCopyResume={copyResume} />
+        <RunDetails id={id} detail={detail} liveGit={liveGit} now={now} tab={tab} reload={reload} resumeCommand={resumeCommand} onCopyResume={copyResume} onPickStep={showStep} />
       </Drawer>
     </div>
   );
@@ -849,7 +860,9 @@ function Group({ title, children }: { title: string; children: React.ReactNode }
  * with the full `node@visit`; the proportional bars went, because Steps draws that picture at
  * a size where it can be read.
  */
-function RunDetails({ id, detail, liveGit, now, tab, reload, resumeCommand, onCopyResume }: {
+function RunDetails({ id, detail, liveGit, now, tab, reload, resumeCommand, onCopyResume, onPickStep }: {
+  /** open a step in Steps, on its detail */
+  onPickStep: (key: string) => void;
   id: string;
   detail: DetailDto;
   liveGit: LiveGit | null;
@@ -863,7 +876,8 @@ function RunDetails({ id, detail, liveGit, now, tab, reload, resumeCommand, onCo
   const run: KeyValueItem[] = [
     ...(summary.name ? [{ label: "Name", value: summary.name }] : []),
     { label: "Run", value: id, mono: true, copy: true },
-    { label: "Graph", value: summary.graph, mono: true },
+    // a queued run's log has no `run-started` yet, so the read model has no graph to name ("?")
+    { label: "Graph", value: summary.graph === "?" ? null : summary.graph, mono: true },
     ...(detail.identity.cwd ? [{ label: detail.identity.folder_kind === "repo" ? "Repo" : "Folder", value: detail.identity.cwd, mono: true, copy: true }] : []),
     ...(detail.git?.intended?.branch ? [{ label: "Branch", value: detail.git.intended.branch, mono: true, copy: true }] : []),
     // HOW-23: a child of a fan-out says which run planned it. A link, not a status — the
@@ -883,11 +897,14 @@ function RunDetails({ id, detail, liveGit, now, tab, reload, resumeCommand, onCo
       <Group title="Timeline">
         {detail.timeline.length === 0 ? <p className="run-details-note">No step has started yet.</p> : (
           <ol className="run-details-list">
-            {detail.timeline.map((t, i) => (
-              <li key={i}>
-                <StatusGlyph status={STEP_STATUS[t.status]} size={12} label={t.status} />
-                <span className="m run-details-step">{t.node}@{t.visit}</span>
-                <span className="run-details-dur">{fmtDur(liveDuration(t, now))}</span>
+            {detail.timeline.map((t) => (
+              <li key={stepKey(t)}>
+                {/* a row is the way to its step: it opens Steps on that step's detail */}
+                <Row className="run-details-row" onClick={() => onPickStep(stepKey(t))} aria-label={`open ${t.node}@${t.visit} in Steps — ${t.status}, ${fmtDur(liveDuration(t, now))}`}>
+                  <StatusGlyph status={STEP_STATUS[t.status]} size={12} label={t.status} />
+                  <span className="m run-details-step">{t.node}@{t.visit}</span>
+                  <span className="run-details-dur">{fmtDur(liveDuration(t, now))}</span>
+                </Row>
               </li>
             ))}
           </ol>

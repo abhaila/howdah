@@ -256,7 +256,7 @@ function holdForKeyboardFocus(e: React.FocusEvent<HTMLDivElement>) {
 }
 
 /** one transcript row. Split out so the scroller's item wrapper stays one line per message. */
-function Row({ m, onPickStep, lastActivityAt, runId, parked, died }: { m: ChatMessage; onPickStep: (key: string) => void; lastActivityAt: string | null; runId: string; parked: boolean; died: boolean }) {
+function Row({ m, onPickStep, lastActivityAt, runId, parked, died, standing }: { m: ChatMessage; onPickStep: (key: string) => void; lastActivityAt: string | null; runId: string; parked: boolean; died: boolean; /** these are the words of the step whose park is still standing: its failure is the card's to say */ standing: boolean }) {
   switch (m.kind) {
     case "step":
       return (
@@ -292,7 +292,7 @@ function Row({ m, onPickStep, lastActivityAt, runId, parked, died }: { m: ChatMe
                 ? <ToolBeat key={i} call={b.part} result={b.result} />
                 : b.kind === "thinking"
                   ? <p key={i} className="act-thinking">{b.part.content.trim()}</p>
-                  : <AgentProse key={i} text={b.part.content} />,
+                  : <AgentProse key={i} text={b.part.content} hideFailure={standing} />,
           )}
           <TurnNote state={m.state} lastActivityAt={lastActivityAt} className="cv-unfinished" />
         </div>
@@ -388,6 +388,9 @@ export function RunChat({ runId, detail, ask, onPickStep, onResolved, liveGit = 
   // `attention-raised` row would print the same reason directly above that card.
   const standingKey = ask ? `ask:${ask.seq}` : null;
   const messages = conversation(detail).filter((m) => m.key !== standingKey);
+  // ...and so is the engine's failure line at the end of that step's turn (activity.tsx
+  // splitEngineNotes): the card's "Full message" has the reason verbatim
+  const standingBeats = ask ? `beats:${ask.node}@${ask.visit}` : null;
   const suggestions = suggestionsFor(detail, ask);
   const toolCount = useMemo(
     () => messages.reduce((n, m) => n + (m.kind === "beats" ? m.beats.filter((b) => b.kind === "tool").length : 0), 0),
@@ -525,7 +528,7 @@ export function RunChat({ runId, detail, ask, onPickStep, onResolved, liveGit = 
                 <div className="chat-empty">
                   <h2 className="chat-empty-title">Waiting for the first step</h2>
                   <p className="chat-empty-sub">
-                    nothing has happened in this run yet — each step, what the agent said and did,
+                    Nothing has happened in this run yet. Each step, what the agent said and did,
                     and anything it asks you will appear here as it happens.
                   </p>
                 </div>
@@ -535,6 +538,7 @@ export function RunChat({ runId, detail, ask, onPickStep, onResolved, liveGit = 
                   <Row m={m} onPickStep={onPickStep} lastActivityAt={detail.last_agent_event_at} runId={runId} parked={m.kind === "step" && ask !== null && ask !== undefined && ask.node === m.node && ask.visit === m.visit}
                     // a step still "running" in the timeline whose turn the read model derived as died is not running
                     died={m.kind === "step" && detail.turn_states[`${m.node}@${m.visit}`] === "died"}
+                    standing={standingBeats !== null && (m.key === standingBeats || m.key.startsWith(`${standingBeats}:`))}
                   />
                 </MessageScrollerItem>
               ))}

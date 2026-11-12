@@ -233,3 +233,25 @@ describe("groupBeats (HOW-30)", () => {
     expect(groupBeats([])).toEqual([]);
   });
 });
+
+describe("splitEngineNotes (HOW-68)", () => {
+  test("peels the engine's bracketed closing lines off the end, in order", async () => {
+    const { splitEngineNotes } = await import("./run/activity");
+    const r = splitEngineNotes("Done what I could.\n[output contract violation: no outputs line]\n[failed: output contract violation: no outputs line]");
+    expect(r.prose).toBe("Done what I could.");
+    expect(r.notes).toEqual([
+      { kind: "failure", text: "output contract violation: no outputs line" },
+      { kind: "failure", text: "output contract violation: no outputs line" },
+    ]);
+  });
+  test("a reason with brackets and newlines in it stays one note", async () => {
+    const { splitEngineNotes } = await import("./run/activity");
+    const r = splitEngineNotes("x\n[attempt failed: gh exited 1 [stderr]\nsecond line]");
+    expect(r).toEqual({ prose: "x", notes: [{ kind: "failure", text: "gh exited 1 [stderr]\nsecond line" }] });
+  });
+  test("the allowance hop is a note, not a failure, and an agent's own brackets are prose", async () => {
+    const { splitEngineNotes } = await import("./run/activity");
+    expect(splitEngineNotes("\n[claude allowance exhausted: retrying this node with codex]").notes).toEqual([{ kind: "note", text: "claude allowance exhausted: retrying this node with codex" }]);
+    expect(splitEngineNotes("See the list [1] and [note: mine]")).toEqual({ prose: "See the list [1] and [note: mine]", notes: [] });
+  });
+});

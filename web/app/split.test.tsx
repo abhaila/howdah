@@ -315,6 +315,43 @@ describe("SplitView: narrow, Escape, and keyboard selection (HOW-68)", () => {
     expect(el.querySelector('[data-testid="list"]')).not.toBeNull();
   });
 
+  // HOW-68: a step chosen in the Build transcript (or the Details timeline) lands on its DETAIL.
+  // Narrow, the split shows one side, and it used to be the list the step was in.
+  test("narrow: a selection made outside the list opens the detail, once per request", () => {
+    withSplitWidth(900);
+    function Outside({ request }: { request: number }) {
+      return (
+        <SplitView
+          storageKey="howdah.test-split" label="the detail" listLabel="Things" openRequest={request}
+          list={<div data-testid="list">list</div>} detail={<div data-testid="detail">detail</div>}
+        />
+      );
+    }
+    resetShortcutsForTest();
+    uninstall = installShortcuts();
+    host = document.createElement("div");
+    document.body.appendChild(host);
+    root = createRoot(host);
+    act(() => root!.render(<Outside request={0} />));
+    expect(host.querySelector('[data-testid="detail"]')).toBeNull(); // nothing asked: the list
+
+    act(() => root!.render(<Outside request={1} />));
+    expect(host.querySelector('[data-testid="detail"]')).not.toBeNull();
+    expect(host.querySelector('[data-testid="list"]')).toBeNull();
+
+    // Back is the operator's: the same request does not re-open what they closed
+    key("Escape");
+    expect(host.querySelector('[data-testid="list"]')).not.toBeNull();
+    act(() => root!.render(<Outside request={1} />));
+    expect(host.querySelector('[data-testid="detail"]')).toBeNull();
+
+    // mounted WITH a request (the Steps tab opening because a step was picked in Build)
+    act(() => root!.unmount());
+    root = createRoot(host);
+    act(() => root!.render(<Outside request={2} />));
+    expect(host.querySelector('[data-testid="detail"]')).not.toBeNull();
+  });
+
   test("J and K move the selection and take focus with it; a repeated id is not a dead end", () => {
     withSplitWidth(1300);
     const el = mount();

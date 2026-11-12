@@ -18,7 +18,7 @@ import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "@/lib/utils";
 
 export const chipVariants = cva(
-  "inline-flex min-h-6 min-w-6 cursor-pointer select-none items-center justify-center gap-1 rounded-[var(--radius-xs)] border px-2 text-sm transition-[background-color,color,border-color] duration-[var(--dur-fast)] ease-[ease] focus-visible:outline-2 focus-visible:outline-[var(--ring)] focus-visible:outline-offset-2 disabled:pointer-events-none disabled:opacity-50",
+  "inline-flex min-h-6 min-w-6 cursor-pointer select-none items-center justify-center gap-1 rounded-[var(--radius-xs)] border px-2 text-sm transition-[background-color,color,border-color] duration-[var(--dur-fast)] ease-[ease] focus-visible:outline-2 focus-visible:outline-[var(--ring)] focus-visible:outline-offset-2 disabled:pointer-events-none disabled:border-border disabled:bg-transparent disabled:text-disabled",
   {
     variants: {
       /** `on` is the SELECTED state; it must never be only a colour, so it also fills */

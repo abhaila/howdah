@@ -64,6 +64,10 @@
   --fg: light-dark(#171927, #E7E8F2);
   --fg-muted: light-dark(#4C5069, #A2A6C0);
   --fg-faint: light-dark(#5E6285, #8589A6);
+  /* a DISABLED control's label: exempt from 4.5:1, but it still has to be READABLE — the old
+     50% opacity measured 2.3–2.8:1. At least 3:1 on every ground and under 4.5:1 on purpose,
+     so it cannot be taken for live text (tokens.test.ts pins both ends). */
+  --fg-disabled: light-dark(#7C8098, #6E728E);
   --border: light-dark(#D9DCEA, #262838);
   --border-strong: light-dark(#BBC0D8, #393C52);
 
@@ -91,8 +95,8 @@
 
   /* accents (quiet) */
   --operator: light-dark(#4347C9, #A5A8FF);
-  --diff-add: light-dark(#2F6B45, #7CC495);
-  --diff-del: light-dark(#B3261E, #F2796B);
+  --diff-add: light-dark(#2A6340, #7CC495);
+  --diff-del: light-dark(#A8231B, #F2796B);
 
   /* ink that sits ON a saturated fill */
   --on-attention: light-dark(#FFFFFF, #1A1408);

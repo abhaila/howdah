@@ -23,6 +23,7 @@ export function NotFound({ path, onOpenPalette }: { path: string; onOpenPalette?
     <div className="runs" data-screen="not-found">
       <EmptyState
         mark={<Mark className="mark" />}
+        as="h1"
         title="Nothing lives here"
         actions={
           <>

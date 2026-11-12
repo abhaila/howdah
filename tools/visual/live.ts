@@ -5,6 +5,12 @@
  * seconds. Start it after seed.ts and leave it running while shoot.mjs runs:
  *
  *   bun <scratch>/live.ts &
+ *
+ * HOW-68 adds two things only a LIVE runner can show. The streaming turn is STEERED: one steer
+ * is delivered (appended with the `steer-delivered` the executor writes when the harness echoes
+ * it) and a later one is left pending, so the transcript draws both states. And a second
+ * engine holds a stacked run inside its `deps.wait` — waiting on a dependency, with a real
+ * runner behind it, which is the difference between "waiting" and "harness dead".
  */
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -13,6 +19,7 @@ import { ticketScripts } from "./content";
 process.env.HOWDAH_HOME = HOME;
 const { Engine } = await import("../../engine/run");
 const { implementTicket } = await import("../../graphs/implement-ticket");
+const { implementStacked } = await import("../../graphs/implement-stacked");
 const { git } = await import("../../graphs/slice-fixture");
 
 const ID = "implement-ticket-mhv6live";
@@ -53,11 +60,37 @@ const engine = new Engine(implementTicket, {
         if (i % 3 === 1) chunk("text", `Working through ${f.split("/").at(-1)} — step ${i}. `);
         else if (i % 3 === 2) { chunk("tool_call", JSON.stringify({ file_path: f }), { tool_id: `live_${i}`, tool_name: "Read" }); chunk("tool_result", `     1\t// ${f}\n     2\t…`, { tool_id: `live_${i}`, tool_name: "Read" }); }
         else { chunk("tool_call", JSON.stringify({ command: `./gradlew :gateway:test --tests '*Retry*' 2>&1 | tail -5` }), { tool_id: `live_${i}`, tool_name: "Bash" }); writeFileSync(join(wt, "LIVE.md"), `edit ${i}\n`); if (i % 12 === 0) chunk("tool_call", todos(Math.min(4, i / 12)), { tool_id: `live_t${i}`, tool_name: "TodoWrite" }); }
+        // the operator's own words to the running agent (engine/steer.ts appends the first event;
+        // claude.ts the second, once the harness has echoed the message at a tool boundary)
+        if (i === 2) {
+          const sent = log.append({ type: "operator-steered", node, visit, text: "Keep the key expiry at 24h — the receivers cache responses for a day, and a shorter key lets a late retry through.", by: "operator" });
+          log.append({ type: "steer-delivered", node, visit, steer_seq: sent.seq, after_tool_id: `live_${i}` });
+        }
+        if (i === 6) log.append({ type: "operator-steered", node, visit, text: "Also count the replays you refuse — a `webhook.replay_refused` metric, tagged by endpoint.", by: "operator" });
         if (i > 150) await Bun.sleep(60_000); // stop growing the log; stay alive
       }
       return new Promise(() => {});
     },
   },
 });
+// ---- a stacked run WAITING on its dependency (HOW-57), with this process as its runner -----------------
+const PARENT = "plan-feature-mhu7d3k2";
+const WAITING = `${PARENT}--audit-export`;
+rmSync(join(RUNS, WAITING), { recursive: true, force: true });
+const deps = [{ slice: "api-handler", until: "merged", run_id: `${PARENT}--api-handler`, workspace: "acme-api" }];
+const stacked = new Engine(implementStacked, {
+  dir: join(RUNS, WAITING), promptsDir: join(ROOT, "prompts"), cwd: API, folderKind: "repo", parent: PARENT, name: "HOW-444 Export deleted accounts in the audit log",
+  executors: {
+    // SEAM: `runs:await` is a stub publishing what the real one reads off its dependency's log
+    command: async (a) => {
+      a.log.append({ type: "chunk", node: a.nodeId, visit: a.visit, turn: 1, index: 0, kind: "text", content: "api-handler · merged: not yet — its run is still at implementation.implement\n" });
+      return ok({ "deps.ready": false, "deps.waiting": "waiting on api-handler · merged (running: implementation.implement)", "deps.base": "", "deps.base_tip": "", "deps.prs": [] });
+    },
+    wait: async () => new Promise(() => {}),
+    agent: scripted, worktree: async () => ok({}),
+  },
+});
+void stacked.start({ goal: "Deleted accounts appear in the audit-log export", work: "HOW-444: the CSV export should carry soft-deleted accounts with their deletion date.", deps: JSON.stringify(deps) }).catch((e: unknown) => console.error(WAITING, e));
+
 console.log("live run:", ID, "pid", process.pid);
 await engine.start({ goal: "Add idempotency keys to outgoing webhooks so a retried delivery is never processed twice", work: "HOW-436: receivers report duplicate events after our retries. Send an Idempotency-Key header, persist it, and refuse a replay." });

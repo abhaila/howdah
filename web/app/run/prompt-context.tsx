@@ -64,7 +64,7 @@ export function PromptAndContext({ runId, render, defaultOpen = false }: { runId
             <>
               {instance.verified
                 ? <p className={NOTE}>Verified against the recorded hash — this is exactly what the agent read.</p>
-                : <p className={WARN}><TriangleAlert aria-hidden /><span>UNVERIFIED — the rebuild does not match the recorded hash, so treat it as approximate.</span></p>}
+                : <p className={WARN}><TriangleAlert aria-hidden /><span><strong className="font-semibold">Unverified.</strong> The rebuild does not match the recorded hash, so treat this text as approximate.</span></p>}
               <CodeBlock wrap clamp label="Rendered prompt">{instance.text}</CodeBlock>
             </>
           )}

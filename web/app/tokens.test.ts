@@ -68,6 +68,30 @@ describe("tokens.css contrast (WCAG 2.2 AA)", () => {
       expect(contrast(ring[1], g[1])).toBeGreaterThanOrEqual(3);
     }
   });
+
+  // HOW-68: a disabled label is exempt from 4.5:1 but was unreadable at 50% opacity (2.3–2.8:1)
+  test("--fg-disabled is readable (≥3:1) on every ground and still reads as off (<4.5:1)", () => {
+    const t = pair("fg-disabled");
+    for (const ground of ["bg", "bg-raised", "bg-inset"]) {
+      const g = pair(ground);
+      for (const i of [0, 1] as const) {
+        expect(contrast(t[i], g[i]), `${ground} ${i ? "dark" : "light"}`).toBeGreaterThanOrEqual(3);
+        expect(contrast(t[i], g[i]), `${ground} ${i ? "dark" : "light"}`).toBeLessThan(4.5);
+      }
+    }
+  });
+
+  // the diff gutter and text sit on a row tinted with 13% of their own colour over the page
+  test("--diff-add and --diff-del clear 4.5:1 on their own tinted row", () => {
+    const mix = (fg: string, bg: string, a: number) => [0, 2, 4].map((i) => Math.round(parseInt(fg.slice(i, i + 2), 16) * a + parseInt(bg.slice(i, i + 2), 16) * (1 - a)).toString(16).padStart(2, "0")).join("");
+    for (const token of ["diff-add", "diff-del"]) {
+      const t = pair(token);
+      for (const ground of ["bg", "bg-raised", "bg-inset"]) {
+        const g = pair(ground);
+        for (const i of [0, 1] as const) expect(contrast(t[i], mix(t[i], g[i], 0.13)), `${token} on tinted ${ground} ${i ? "dark" : "light"}`).toBeGreaterThanOrEqual(4.5);
+      }
+    }
+  });
 });
 
 describe("tokens.css type", () => {

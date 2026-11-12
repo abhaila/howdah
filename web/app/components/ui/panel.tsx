@@ -148,7 +148,7 @@ export const useSplit = (): SplitApi => useContext(SplitContext);
 
 export function SplitView({
   storageKey, list, detail, label, listLabel, className,
-  min = 320, def = 420, minList = 360, narrowBelow = 1100, allowFull = false,
+  min = 320, def = 420, minList = 360, narrowBelow = 1100, allowFull = false, openRequest,
 }: {
   /** localStorage prefix for the remembered width and open/closed state */
   storageKey: string;
@@ -166,6 +166,12 @@ export function SplitView({
   narrowBelow?: number;
   /** offer a full-width detail (the approval card outgrows any split) */
   allowFull?: boolean;
+  /**
+   * The selection was made somewhere ELSE (a step chosen in the Build transcript): a number the
+   * caller bumps, and each new non-zero value opens the detail once — which, narrow, is what
+   * lands the operator on the step rather than on the list it is in. 0 / absent asks nothing.
+   */
+  openRequest?: number;
 }) {
   const panel = usePanel({ key: storageKey, min, def, minOther: minList, side: "right" });
   const [full, setFull] = useState(false);
@@ -203,6 +209,16 @@ export function SplitView({
     else setCollapsed(true);
   }, [narrow, full, setCollapsed]);
   const api = useMemo<SplitApi>(() => ({ open, close, narrow, detailOpen }), [open, close, narrow, detailOpen]);
+
+  // An outside selection opens the detail ONCE per request. The box is unmeasured on the first
+  // pass (width 0 reads as wide), so the request is only marked honoured once the real shape is
+  // known — otherwise a narrow split would un-collapse the wide panel and still show the list.
+  const honoured = useRef(0);
+  useLayoutEffect(() => {
+    if (!openRequest || honoured.current === openRequest) return;
+    open();
+    if (width > 0) honoured.current = openRequest;
+  }, [openRequest, open, width]);
 
   useEscapeLayer(close, { active: detailOpen, kind: "panel", ref: detailRef });
 

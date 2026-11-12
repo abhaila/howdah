@@ -1,4 +1,10 @@
-import json,collections,sys
+"""Turn shots/audit.json into shots/audit-summary.md, and judge it.
+
+Run from $HOWDAH_VISUAL_OUT. The last thing printed is the STANDARDS block — the HOW-68 loop's
+gate (docs/designs/design-overhaul.md "Minimum standards"). It exits 1 when any count is not
+zero, so a capture that regressed cannot be read as a pass.
+"""
+import json,collections,sys,os
 A=json.load(open("shots/audit.json"))
 out=[]
 P=out.append
@@ -57,14 +63,15 @@ for key,d in sorted(agg.items(), key=lambda x:-x[1]['n'])[:45]:
     P(f"- {key}: {d['n']}× / {len(d['screens'])} screens, sizes {sorted(d['dims'])[:4]}, e.g. {sorted(d['screens'])[0]}; {list(d['texts'])[:3]}")
 P('\n## CONTRAST FAILURES')
 for theme in ('dark','light'):
-    agg=collections.defaultdict(lambda:{'screens':set(),'n':0,'samples':set(),'ratio':0,'need':0,'sizes':set()})
+    agg=collections.defaultdict(lambda:{'screens':set(),'n':0,'off':0,'samples':set(),'ratio':0,'need':0,'sizes':set()})
     for k,v in A.items():
         if not k.startswith(theme+'-'): continue
         for pair,d in v['contrast'].items():
-            a=agg[pair]; a['screens'].add(k); a['n']+=d['count']; a['samples'].update(d['samples'][:2]); a['ratio']=d['ratio']; a['need']=d['need']; a['sizes'].update(d['sizes'])
+            a=agg[pair]; a['screens'].add(k); a['n']+=d['count']; a['off']+=d.get('disabled',0); a['samples'].update(d['samples'][:2]); a['ratio']=d['ratio']; a['need']=d['need']; a['sizes'].update(d['sizes'])
     P(f'### {theme}')
     for pair,d in sorted(agg.items(), key=lambda x:-x[1]['n'])[:22]:
-        P(f"- {pair}: {d['ratio']}:1 (need {d['need']}) — {d['n']} els / {len(d['screens'])} screens; sizes {sorted(d['sizes'])}; e.g. {list(d['samples'])[:3]}; first {sorted(d['screens'])[0]}")
+        off=' — ALL on disabled controls (exempt)' if d['off']>=d['n'] else (f" — {d['off']} of them on disabled controls" if d['off'] else '')
+        P(f"- {pair}: {d['ratio']}:1 (need {d['need']}) — {d['n']} els / {len(d['screens'])} screens{off}; sizes {sorted(d['sizes'])}; e.g. {list(d['samples'])[:3]}; first {sorted(d['screens'])[0]}")
 P('\n## FOCUS: stops without outline/box-shadow')
 agg=collections.defaultdict(lambda:{'screens':set(),'n':0,'texts':set(),'styles':set()})
 for k,v in A.items():
@@ -78,5 +85,36 @@ for key,d in sorted(agg.items(), key=lambda x:-x[1]['n']):
 P('\n## FOCUS STOP COUNTS'); 
 for k,v in sorted(A.items()):
     if v.get('focus'): P(f"- {k}: {v['focus']['stops']} stops in 40 tabs, {len(v['focus']['unringed'])} unringed")
+
+# ---- the gate -------------------------------------------------------------------------------
+SIZES={'12px','13px','14px','16px','20px','28px'}
+FAMILIES={'DM Sans','DM Mono'}
+def tally(pred):
+    """(count, screens it was seen on)"""
+    n=0; where=[]
+    for k,v in sorted(A.items()):
+        c=pred(v)
+        if c: n+=c; where.append(k)
+    return n,where
+try: step_failures=json.load(open('shots/failures.json'))
+except Exception: step_failures=[]
+doc_over=lambda v: 1 if (v['doc']['scrollH']>v['doc']['clientH']+2 or v['doc']['scrollW']>v['doc']['clientW']+2) else 0
+checks=[
+ ('font sizes outside 12/13/14/16/20/28', tally(lambda v: sum(d['count'] for s,d in v['sizes'].items() if s not in SIZES))),
+ ('families outside DM Sans / DM Mono', tally(lambda v: sum(d['count'] for f,d in v['fonts'].items() if f not in FAMILIES))),
+ ('raw truncation (ellipsis with no way to read it)', tally(lambda v: sum(1 for t in v['truncated'] if not t['escape']))),
+ ('targets under 24px', tally(lambda v: len(v['small']))),
+ ('focus stops with no ring', tally(lambda v: len(v['focus']['unringed']) if v.get('focus') else 0)),
+ ('clipped or unreachable content, or a scrolling document', tally(lambda v: len(v['clipped'])+len(v['unreachable'])+doc_over(v))),
+ ('contrast failures on live (non-disabled) text', tally(lambda v: sum(max(0,d['count']-d.get('disabled',0)) for d in v['contrast'].values()))),
+ ('capture steps that failed', (len(step_failures), step_failures[:6])),
+]
+ok=all(n==0 for _,(n,_) in checks)
+gate=['','## STANDARDS: '+('PASS' if ok else 'FAIL'),f'({len(A)} audited screens)']
+for name,(n,where) in checks:
+    gate.append(f"- {'ok  ' if n==0 else 'FAIL'} {n:>5}  {name}"+('' if n==0 else '  — e.g. '+', '.join(str(w)[:90] for w in where[:3])))
+out.extend(gate)
 open('shots/audit-summary.md','w').write('\n'.join(out)+'\n')
-print(len(out),'lines')
+print(len(out),'lines → shots/audit-summary.md')
+print('\n'.join(gate))
+sys.exit(0 if ok else 1)

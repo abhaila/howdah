@@ -140,7 +140,7 @@ describe("AttentionInbox", () => {
   test("nothing waiting says so", async () => {
     serve([]);
     const el = await render();
-    expect(el.querySelector(".empty")!.textContent).toContain("nothing needs you");
+    expect(el.querySelector(".empty")!.textContent).toContain("Every run is on its own") // HOW-68: the title already says "Nothing needs you"; the body does not repeat it in lower case;
     expect(el.querySelectorAll("a[data-nav-row]")).toHaveLength(0);
   });
 
@@ -164,7 +164,7 @@ describe("AttentionInbox", () => {
     expect(row.outerHTML).not.toContain("attention"); // nothing amber anywhere in a ready row
     expect(el.querySelector('[data-col="waited"]')).toBeNull(); // the wait column is the asks' alone
     expect(el.querySelector(".empty")).toBeNull();
-    expect(el.textContent).toContain("nothing is waiting on you");
+    expect(el.textContent).toContain("Nothing is waiting on you.");
     await act(async () => { await Bun.sleep(1000); });
     expect(surfaces.chimes()).toBe(0);
     expect(favicon!.getAttribute("href")).toBe("/favicon.svg");

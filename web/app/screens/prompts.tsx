@@ -60,7 +60,7 @@ export function FeedbackEntry({ f }: { f: { verdict: string; run: string; node: 
         <span className="font-mono text-code">{f.node}@{f.visit}</span>
         {f.at && <span>{fmtWhen(f.at)}</span>}
       </div>
-      <p className="m-0 whitespace-pre-wrap text-body leading-normal text-foreground [overflow-wrap:anywhere]">{f.note}</p>
+      <p className="m-0 max-w-[75ch] whitespace-pre-wrap text-body leading-normal text-foreground [overflow-wrap:anywhere]">{f.note}</p>
     </div>
   );
 }

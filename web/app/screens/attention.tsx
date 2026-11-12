@@ -119,13 +119,13 @@ export function AttentionInbox() {
     >
       {nothing ? (
         <EmptyState mark={<Mark className="mark" />} title="Nothing needs you" actions={<a className={buttonVariants({ variant: "outline" })} href="/">Go to Runs</a>}>
-          nothing needs you — every run is on its own. A run that parks on a question, a failure or
+          Every run is on its own. A run that parks on a question, a failure or
           an approval appears here, and in the count beside “Needs you”.
         </EmptyState>
       ) : (
         <div ref={nav.ref} {...nav.containerProps} className="flex flex-col gap-6">
           {items.length === 0 ? (
-            <p data-slot="inbox-note" className="m-0 text-sm text-muted-foreground">nothing is waiting on you</p>
+            <p data-slot="inbox-note" className="m-0 text-sm text-muted-foreground">Nothing is waiting on you.</p>
           ) : (
             <section aria-label="Waiting on you" className="flex flex-col">
               <SectionLabel as="h2" count={items.length} className="border-b border-border px-2 pb-1.5">Waiting on you</SectionLabel>

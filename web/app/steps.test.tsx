@@ -310,3 +310,43 @@ describe("HOW-46: the Steps pane reads the derived turn state", () => {
     expect(el.textContent).not.toContain("died inside this turn");
   });
 });
+
+
+// HOW-68: an approval step parks without consuming a visit, so the same node@visit can be on
+// the timeline twice — a failed attempt, then the one that was decided. Keyed by `node@visit`
+// the two rows shared a React key and highlighted together.
+describe("two attempts of one visit are two rows (HOW-68)", () => {
+  test("derive marks the second attempt; each row has its own identity and selection", async () => {
+    const { RunSteps } = await import("./run/steps");
+    const { stepKey, resolveStepKey } = await import("./status");
+    const log = new FakeLog();
+    log.add({ type: "run-started", graph: "implement-slice", inputs: {}, pinned_prompts: {} });
+    log.add({ type: "node-started", node: "approve", visit: 1, attempt_id: "approve#1" });
+    log.add({ type: "node-finished", node: "approve", visit: 1, status: "failed", writes: {} });
+    log.add({ type: "node-started", node: "approve", visit: 1, attempt_id: "approve#1" });
+    log.add({ type: "node-finished", node: "approve", visit: 1, status: "succeeded", writes: {} });
+    const detail = deriveDetail("r1", log.events);
+    expect(detail.timeline.map((t) => t.attempt)).toEqual([undefined, 2]);
+    expect(detail.timeline.map(stepKey)).toEqual(["approve@1", "approve@1#2"]);
+    // a bare node@visit (what the Build transcript hands over) means the latest attempt
+    expect(resolveStepKey(detail.timeline, "approve@1")).toBe("approve@1#2");
+    expect(resolveStepKey(detail.timeline, "approve@1#2")).toBe("approve@1#2");
+
+    const errors: unknown[][] = [];
+    const realError = console.error;
+    console.error = (...a: unknown[]) => { errors.push(a); };
+    try {
+      host = document.createElement("div");
+      document.body.appendChild(host);
+      root = createRoot(host);
+      act(() => root!.render(<RunSteps timeline={detail.timeline} ask={null} selected="approve@1#2" now={Date.now()} onSelect={() => {}} />));
+      const el = host;
+      const rows = [...el.querySelectorAll("button.step-row")];
+      expect(rows).toHaveLength(2);
+      expect(rows.map((r) => r.hasAttribute("data-selected"))).toEqual([false, true]);
+      // both are still NAMED approve@1 — the log's own identity — and told apart by how they ended
+      expect(rows.map((r) => r.getAttribute("aria-label")!.split(",")[0])).toEqual(["approve@1 — failed", "approve@1 — succeeded"]);
+    } finally { console.error = realError; }
+    expect(errors.filter((e) => String(e[0]).includes("same key"))).toEqual([]);
+  });
+});

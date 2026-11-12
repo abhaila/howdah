@@ -44,7 +44,27 @@ const R = {
   draftReady: "draft-graph-mhv4r1aa",
   draftSaved: "draft-graph-mhs0p7bb",
   research: "research-mht4n8s2",
+  // HOW-68: the states added for the design review (seed.ts section O, live.ts)
+  parallelDone: "review-change-mhv5pa7l",
+  parallelParked: "review-change-mhv6pb2x",
+  timeout: "quick-task-mhv6t1mo",
+  noProgress: "implement-ticket-mhv5np0g",
+  repairStalled: "implement-ticket-mhv3rs7l",
+  staleBase: "implement-slice-mhv2st4b",
+  drift: "implement-slice-mhv1dr1f",
+  gated: "gated-publish-mhv4ga9t",
+  permission: "quick-task-mhv6pm3x",
+  elicitation: "research-mhv6el1c",
+  softStopped: "quick-task-mhv6ss0p",
+  queued: "quick-task-mhv7q0ue",
+  failedRecoverable: "quick-task-mhv6fr2k",
+  unverified: "quick-task-mho1k3p1",
+  evidenceFailed: "implement-ticket-mhs2ev1d",
+  stackedWaiting: "plan-feature-mhu7d3k2--audit-export",
+  contextExhausted: "quick-task-mhu1x0d7",
 };
+/** the second viewer serve.sh starts over the EMPTY home: no runs, workspaces, local graphs or proposals */
+const EMPTY = process.env.HOWDAH_EMPTY_BASE ?? `http://localhost:${Number(process.env.HOWDAH_VISUAL_PORT ?? 4799) + 1}`;
 
 const audits = {};
 const dialogs = [];
@@ -58,6 +78,16 @@ const AUDIT = () => {
   const path = (e) => { const p = []; for (let n = e, i = 0; n && n !== document.body && i < 3; n = n.parentElement, i++) p.unshift(sel(n)); return p.join(" > "); };
   const txt = (e) => (e.innerText || e.getAttribute("aria-label") || "").trim().replace(/\s+/g, " ").slice(0, 70);
   const inView = (e) => { const r = e.getBoundingClientRect(); return r.bottom > 0 && r.top < innerHeight && r.right > 0 && r.left < innerWidth; };
+  // Two things that clip or sit off-view BY DESIGN, and were reported as defects:
+  //   a visually-hidden label (`sr-only`: a 1px box clipping its own text, for screen readers);
+  //   React Flow's canvas — a pannable viewport whose content is meant to extend past the pane
+  //   and is reached by panning, zooming and "Show the whole graph", not by a scrollbar.
+  const srOnly = (e) => { for (let n = e; n && n !== document.body; n = n.parentElement) { const s = getComputedStyle(n); if (n.classList.contains("sr-only") || (s.position === "absolute" && s.clip !== "auto" && n.clientWidth <= 1 && n.clientHeight <= 1) || s.clipPath === "inset(50%)") return true; } return false; };
+  const inCanvas = (e) => !!e.closest(".react-flow");
+  const exempt = (e) => srOnly(e) || inCanvas(e);
+  // a control that is switched off: exempt from WCAG contrast, and counted separately so a
+  // contrast FAILURE means live text
+  const isDisabled = (e) => !!e.closest(":disabled, [aria-disabled='true'], [data-disabled], [data-off]") && !e.closest("[aria-busy='true']");
 
   // text-bearing elements: those with a direct non-empty text node
   const textEls = [...document.body.querySelectorAll("*")].filter((e) => vis(e) && [...e.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim()));
@@ -75,7 +105,7 @@ const AUDIT = () => {
   // clipped: overflow hidden/clip in an axis whose content is bigger than the box
   const clipped = [];
   for (const e of document.body.querySelectorAll("*")) {
-    if (!vis(e)) continue;
+    if (!vis(e) || exempt(e)) continue;
     const s = getComputedStyle(e);
     const y = (s.overflowY === "hidden" || s.overflowY === "clip") && e.scrollHeight > e.clientHeight + 4;
     const x = (s.overflowX === "hidden" || s.overflowX === "clip") && e.scrollWidth > e.clientWidth + 4 && s.textOverflow !== "ellipsis";
@@ -89,7 +119,7 @@ const AUDIT = () => {
   const main = document.querySelector("main");
   const unreachable = [];
   if (main) for (const e of main.querySelectorAll("*")) {
-    if (!vis(e) || e.children.length) continue;
+    if (!vis(e) || e.children.length || exempt(e)) continue;
     const r = e.getBoundingClientRect();
     if (r.top >= innerHeight - 1 || r.left >= innerWidth - 1) {
       let ok = false;
@@ -137,7 +167,7 @@ const AUDIT = () => {
   const bgOf = (e) => { const stack = []; for (let n = e; n; n = n.parentElement) { const s = getComputedStyle(n); if (s.backgroundImage !== "none") return null; const c = toRgb(s.backgroundColor); if (c.a > 0) { stack.push(c); if (c.a >= 1) break; } } let base = { r: 255, g: 255, b: 255, a: 1 }; const root = toRgb(getComputedStyle(document.documentElement).backgroundColor); if (root.a > 0) base = root; if (stack.length && stack.at(-1).a >= 1) base = stack.pop(); for (const c of stack.reverse()) base = over(c, base); return base; };
   const contrast = {};
   for (const e of textEls) {
-    if (!inView(e)) continue;
+    if (!inView(e) || srOnly(e)) continue;
     const s = getComputedStyle(e);
     if (Number(s.opacity) === 0) continue;
     const bg = bgOf(e); if (!bg) continue;
@@ -149,8 +179,8 @@ const AUDIT = () => {
     if (ratio < need) {
       const hex = (c) => "#" + [c.r, c.g, c.b].map((v) => Math.round(v).toString(16).padStart(2, "0")).join("");
       const key = `${hex(fg)} on ${hex(bg)}`;
-      const row = (contrast[key] ??= { ratio: Math.round(ratio * 100) / 100, need, count: 0, sizes: [], samples: [] });
-      row.count++; if (!row.sizes.includes(s.fontSize)) row.sizes.push(s.fontSize);
+      const row = (contrast[key] ??= { ratio: Math.round(ratio * 100) / 100, need, count: 0, disabled: 0, sizes: [], samples: [] });
+      row.count++; if (isDisabled(e)) row.disabled++; if (!row.sizes.includes(s.fontSize)) row.sizes.push(s.fontSize);
       if (row.samples.length < 4) row.samples.push(`${sel(e)} "${txt(e).slice(0, 30)}"`);
     }
   }
@@ -289,6 +319,8 @@ async function fullPass(theme) {
     // HOW-68: a step that blocks the save (its count is red, never amber) and the empty canvas
     await step("builder-problem", async () => { await go("/graphs/new"); await page.getByRole("textbox", { name: /the graph's name/ }).fill("my-review"); await page.getByRole("button", { name: /^Run a command/ }).click(); await snap("builder-new-step-with-a-problem", { audit: true }); });
     await step("builder-empty", async () => { await go("/graphs/new"); for (const t of ["Do the work", "done"]) { await page.getByRole("button", { name: new RegExp(`^Edit ${t}`) }).click(); await page.getByRole("button", { name: "Remove this step" }).click(); if (await page.locator("dialog[open]").count()) await page.getByRole("button", { name: /^Remove the step/ }).click(); } await snap("builder-empty-canvas"); });
+    // HOW-68: the whole left-to-right graph in one frame — every wire side-to-side, every caption off the cards
+    await step("builder-whole", async () => { await go("/graphs/triage-bug/build"); await page.getByRole("button", { name: "Show the whole graph" }).click(); await snap("builder-existing-whole-graph", { audit: true, wait: 600 }); });
     await step("builder-more", async () => { await go("/graphs/triage-bug/build"); await page.getByRole("button", { name: "More" }).click(); await snap("builder-more-menu"); await page.keyboard.press("Escape"); });
 
     // ---- prompts / proposals / settings
@@ -351,6 +383,11 @@ async function fullPass(theme) {
       ["run-failed", R.failed], ["run-aborted", R.aborted], ["run-harness-dead", R.dead], ["run-live", R.live], ["run-paused", R.paused],
       ["run-plan-feature-awaiting-approval", R.planAwait], ["run-plan-feature-parent-with-children", R.parent], ["run-child-stacked", R.childStacked],
       ["run-implement-slice-awaiting-approval", R.slice], ["run-draft-graph-ready", R.draftReady], ["run-draft-graph-saved", R.draftSaved], ["run-research-done", R.research],
+      // HOW-68: one per park kind and status the seed did not produce before
+      ["run-parallel-done", R.parallelDone], ["run-parallel-branch-parked", R.parallelParked], ["run-needs-input-turn-timeout", R.timeout], ["run-needs-input-no-progress", R.noProgress],
+      ["run-needs-input-repair-stalled", R.repairStalled], ["run-needs-input-stale-base", R.staleBase], ["run-implement-slice-drift", R.drift], ["run-needs-input-gated-acceptance", R.gated],
+      ["run-needs-input-permission", R.permission], ["run-needs-input-mcp-elicitation", R.elicitation], ["run-needs-input-soft-stopped", R.softStopped], ["run-queued", R.queued],
+      ["run-failed-recoverable", R.failedRecoverable], ["run-evidence-failed", R.evidenceFailed], ["run-stacked-waiting", R.stackedWaiting], ["run-needs-input-context-exhausted", R.contextExhausted],
     ];
     for (const [key, id] of states) {
       await step(key, async () => { await go(`/run/${id}`); await snap(`${key}-build-chat`, { audit: A, focus: A && /question|effect|live|long/.test(key) ? 40 : false, wait: 900 }); });
@@ -374,7 +411,7 @@ async function fullPass(theme) {
           await loc.first().click(); await snap(`${key}-steps-approve-${t.toLowerCase().replace(/[^a-z]+/g, "-")}`, { audit: A && /Approval|Map|Drift/.test(t), wait: 900 });
         }
       });
-      await step(`${key}-steps-approval-wide`, async () => { await openApproval(); await page.getByRole("button", { name: /expand the detail panel/i }).click(); await snap(`${key}-steps-approval-full-width`, { audit: A }); await page.evaluate(() => { for (const e of document.querySelectorAll("main *")) if (/(auto|scroll)/.test(getComputedStyle(e).overflowY) && e.scrollHeight > e.clientHeight + 4 && e.getBoundingClientRect().left < innerWidth * 0.6) e.scrollTop = e.scrollHeight; }); await snap(`${key}-steps-approval-full-width-bottom`); });
+      await step(`${key}-steps-approval-wide`, async () => { await openApproval(); /* full width exists only while the split is side by side: with the Details drawer open at 1440 the pane is under 1100px and the detail already replaces the list */ if (await page.getByRole("button", { name: /^Close run details/i }).count()) await page.keyboard.press("Control+i"); await page.getByRole("button", { name: /expand the detail panel/i }).click(); await snap(`${key}-steps-approval-full-width`, { audit: A }); await page.evaluate(() => { for (const e of document.querySelectorAll("main *")) if (/(auto|scroll)/.test(getComputedStyle(e).overflowY) && e.scrollHeight > e.clientHeight + 4 && e.getBoundingClientRect().left < innerWidth * 0.6) e.scrollTop = e.scrollHeight; }); await snap(`${key}-steps-approval-full-width-bottom`); });
       await step(`${key}-steps-approval-pin`, async () => { await openApproval(); await page.getByRole("button", { name: /^pin a comment on/ }).first().click(); await snap(`${key}-steps-approval-pin-comment-open`); });
       await dialog(`${key.replace("run-", "")}-approve-confirm`, async () => { await openApproval(); await page.getByRole("button", { name: "Approve", exact: true }).click(); });
       await dialog(`${key.replace("run-", "")}-send-feedback-confirm`, async () => { await openApproval(); await page.getByRole("button", { name: "Send feedback", exact: true }).click(); });
@@ -382,6 +419,33 @@ async function fullPass(theme) {
     }
     await step("parent-tabs", async () => { await go(`/run/${R.parent}`); await page.evaluate(() => { for (const e of document.querySelectorAll("*")) if (/(auto|scroll)/.test(getComputedStyle(e).overflowY) && e.scrollHeight > e.clientHeight + 4 && e.getBoundingClientRect().left > innerWidth * 0.6) e.scrollTop = e.scrollHeight; }); await snap("run-plan-feature-parent-with-children-inspector-children"); await tab("Plan"); await snap("run-plan-feature-parent-with-children-plan"); await tab("Steps"); await snap("run-plan-feature-parent-with-children-steps"); await tab("Graph"); await snap("run-plan-feature-parent-with-children-graph", { wait: 900 }); });
     await step("research-context-doc", async () => { await go(`/run/${R.research}`); await tab("Context"); await page.getByRole("button", { name: /^context key report_summary/ }).first().click(); await snap("run-research-done-context-document", { audit: true }); });
+    // ---- HOW-68: what is particular to the added states
+    await step("parallel-steps", async () => { await go(`/run/${R.parallelDone}`); await tab("Steps"); await snap("run-parallel-done-steps", { audit: true }); await page.getByRole("button", { name: /^review-change\.style@1/ }).click(); await snap("run-parallel-done-steps-branch-selected", { audit: A }); await tab("Graph"); await snap("run-parallel-done-graph", { audit: A, wait: 900 }); await tab("Context"); await snap("run-parallel-done-context"); });
+    await step("parallel-parked-steps", async () => { await go(`/run/${R.parallelParked}`); await tab("Steps"); await snap("run-parallel-branch-parked-steps", { audit: A }); await tab("Graph"); await snap("run-parallel-branch-parked-graph", { wait: 900 }); });
+    await step("parallel-builder", async () => { await go("/graphs/review-change/build"); await snap("builder-parallel-graph", { audit: A }); await page.getByRole("button", { name: /^Edit review-change\.reviews/ }).click(); await snap("builder-parallel-step-selected"); });
+    await step("gated-waive", async () => { await go(`/run/${R.gated}`); await page.locator("#needs-input").scrollIntoViewIfNeeded(); await snap("run-needs-input-gated-acceptance-card", { audit: true }); await page.getByRole("button", { name: /^Waive/ }).first().click(); await snap("run-needs-input-gated-acceptance-waive-open", { audit: A }); });
+    await step("gated-plan", async () => { await go(`/run/${R.gated}`); await tab("Plan"); await snap("run-needs-input-gated-acceptance-plan"); });
+    await step("drift-pane", async () => { await go(`/run/${R.drift}`); await tab("Steps"); await page.getByRole("button", { name: /^map\.drift@1/ }).click(); await page.getByRole("tab", { name: "Drift", exact: true }).click(); await snap("run-implement-slice-drift-pane", { audit: true, wait: 700 }); for (const t of ["Map", "Approval"]) { const loc = page.getByRole("tab", { name: t, exact: true }); if (await loc.count()) { await loc.first().click(); await snap(`run-implement-slice-drift-${t.toLowerCase()}`, { wait: 700 }); } } });
+    await step("stale-base-card", async () => { await go(`/run/${R.staleBase}`); await page.locator("#needs-input").scrollIntoViewIfNeeded(); await snap("run-needs-input-stale-base-card", { audit: true }); await tab("Steps"); await snap("run-needs-input-stale-base-steps"); });
+    for (const [key, id] of [["permission", R.permission], ["mcp-elicitation", R.elicitation], ["soft-stopped", R.softStopped], ["turn-timeout", R.timeout], ["no-progress", R.noProgress], ["repair-stalled", R.repairStalled]])
+      await step(`${key}-card`, async () => { await go(`/run/${id}`); await page.locator("#needs-input").scrollIntoViewIfNeeded(); await snap(`run-needs-input-${key}-card`, { audit: true }); await page.locator("#needs-input details.ask-full > summary").click().catch(() => {}); await snap(`run-needs-input-${key}-card-full-message`); });
+    await step("live-steers", async () => { await go(`/run/${R.live}`); await page.locator(".cv-steer").first().scrollIntoViewIfNeeded(); await snap("run-live-steer-delivered", { audit: true }); await page.locator('.cv-steer[data-state="pending"]').first().scrollIntoViewIfNeeded(); await snap("run-live-steer-pending"); await page.getByRole("button", { name: /Steer the agent/ }).click(); await page.getByRole("textbox", { name: "steer the agent" }).fill("Skip the docs for now."); await snap("run-live-steer-composer", { audit: A }); });
+    await step("stacked-waiting-steps", async () => { await go(`/run/${R.stackedWaiting}`); await tab("Steps"); await snap("run-stacked-waiting-steps"); await tab("Graph"); await snap("run-stacked-waiting-graph", { wait: 900 }); });
+    await step("unverified-prompt", async () => { await go(`/run/${R.unverified}`); await tab("Steps"); await page.getByRole("button", { name: /^quick-task\.work@1/ }).click(); await page.getByRole("tab", { name: "Prompt & context", exact: true }).click(); await snap("run-prompt-unverified", { audit: true, wait: 900 }); });
+    await step("evidence-failed", async () => { await go(`/run/${R.evidenceFailed}`); await page.locator(".ev-strip").first().scrollIntoViewIfNeeded(); await snap("run-evidence-failed-strip", { audit: true }); });
+    await step("queued-tabs", async () => { await go(`/run/${R.queued}`); for (const t of ["Plan", "Report", "Steps", "Context", "Logs", "Graph"]) { await tab(t); await snap(`run-queued-${t.toLowerCase()}`, { audit: A, wait: 700 }); } });
+    await step("failed-recoverable-steps", async () => { await go(`/run/${R.failedRecoverable}`); await tab("Steps"); await snap("run-failed-recoverable-steps"); });
+    // a Logs fetch that fails: the route is cut for this one step, so the pane's own error state shows
+    await step("logs-error", async () => { await page.route("**/api/runs/*/log*", (r) => r.abort()); try { await go(`/run/${R.done}`); await tab("Logs"); await snap("run-done-logs-fetch-error", { audit: true, wait: 1200 }); } finally { await page.unroute("**/api/runs/*/log*"); } });
+    await step("proposal-stale", async () => { await go(`/proposals/${encodeURIComponent("ticket.local_review.v3.proposal.md")}`); await snap("proposals-stale-selected", { audit: true, wait: 900 }); });
+    await step("proposal-orphaned", async () => { await go(`/proposals/${encodeURIComponent("ticket.triage.v2.proposal.md")}`); await snap("proposals-orphaned-selected", { audit: true, wait: 900 }); });
+    await step("graphs-parallel", async () => { await go("/graphs"); await page.getByRole("button", { name: "the review-change graph" }).click(); await snap("graphs-local-parallel-selected", { wait: 900 }); });
+
+    // ---- HOW-68: the empty home (the second viewer). Every screen with nothing in it.
+    for (const [name, path] of [["runs-list", "/"], ["attention-inbox", "/attention"], ["new-run", "/new"], ["graphs-list", "/graphs"], ["prompts-list", "/prompts"], ["proposals", "/proposals"], ["settings", "/settings"]])
+      await step(`empty-${name}`, async () => { await page.goto(EMPTY + path, { waitUntil: "domcontentloaded" }); await page.waitForTimeout(900); await snap(`empty-home-${name}`, { audit: true, focus: A && name === "runs-list" ? 40 : false }); });
+    await step("empty-palette", async () => { await page.goto(EMPTY + "/", { waitUntil: "domcontentloaded" }); await page.waitForTimeout(700); await page.keyboard.press("Control+k"); await snap("empty-home-palette"); await page.keyboard.press("Escape"); });
+
     await step("unknown-run", async () => { await go("/run/does-not-exist"); await snap("run-unknown-id"); });
     // HOW-68: after the launch grace (10s) the skeleton gives way to a real not-found state
     await step("unknown-run-gone", async () => { await go("/run/does-not-exist"); await page.getByText("No run with this id").waitFor({ timeout: 14000 }); await snap("run-unknown-id-not-found", { audit: A }); });
@@ -418,6 +482,14 @@ async function narrowPass() {
       for (const t of ["Plan", "Report", "Steps", "Context", "Logs", "Graph"]) await step(`${key}-${t}`, async () => { await tab(t); await snap(`${key}-${t.toLowerCase()}`, { ...aud, wait: 700 }); });
       await step(`${key}-steps-selected`, async () => { await go(`/run/${id}`); await tab("Steps"); await page.getByRole("button", { name: /^(implementation\.(implement|plan)|quick-task\.work)@1/ }).first().click({ force: true }); await snap(`${key}-steps-step-selected`, aud); });
     }
+    // HOW-68: the added states at the narrow width, and the two paths into a step's DETAIL from outside the list
+    for (const [key, id] of [["run-parallel-done", R.parallelDone], ["run-needs-input-gated-acceptance", R.gated], ["run-needs-input-stale-base", R.staleBase], ["run-needs-input-permission", R.permission], ["run-needs-input-mcp-elicitation", R.elicitation], ["run-needs-input-repair-stalled", R.repairStalled], ["run-queued", R.queued], ["run-stacked-waiting", R.stackedWaiting]])
+      await step(key, async () => { await go(`/run/${id}`); await snap(`${key}-build-chat`, { ...aud, wait: 900 }); if (await page.locator("#needs-input").count()) { await page.locator("#needs-input").scrollIntoViewIfNeeded(); await snap(`${key}-ask-in-view`, aud); } });
+    await step("parallel-steps", async () => { await go(`/run/${R.parallelDone}`); await tab("Steps"); await snap("run-parallel-done-steps", aud); });
+    await step("drift-pane", async () => { await go(`/run/${R.drift}`); await tab("Steps"); await page.getByRole("button", { name: /^map\.drift@1/ }).click(); await page.getByRole("tab", { name: "Drift", exact: true }).click(); await snap("run-implement-slice-drift-pane", { ...aud, wait: 700 }); });
+    await step("build-to-step-detail", async () => { await go(`/run/${R.done}`); await page.getByRole("button", { name: /^open implementation\.plan@1 in Steps/ }).first().click(); await page.getByRole("button", { name: /Back to Steps/ }).waitFor({ timeout: 2500 }); await snap("run-done-step-picked-from-build-lands-on-detail", aud); });
+    await step("details-to-step-detail", async () => { await go(`/run/${R.done}`); await page.getByRole("button", { name: "Show details" }).click(); await page.getByRole("button", { name: /^open verify\.run@1 in Steps/ }).first().click(); await page.getByRole("button", { name: /Back to Steps/ }).waitFor({ timeout: 2500 }); await snap("run-done-step-picked-from-details-lands-on-detail", aud); });
+    await step("builder-ltr", async () => { await go("/graphs/triage-bug/build"); await page.getByRole("button", { name: "Show the whole graph" }).click(); await snap("builder-existing-whole-graph", { ...aud, wait: 600 }); });
     // HOW-68: below 1100px the panel is a drawer — closed until something is selected, or opened on the graph
     await step("builder", async () => { await go("/graphs/triage-bug/build"); await snap("builder-existing-graph-panel", aud); await page.getByRole("button", { name: "Graph settings" }).click(); await snap("builder-existing-drawer-graph", aud); await page.keyboard.press("Escape"); await page.getByRole("button", { name: /^Edit triage-bug\.fix/ }).click({ force: true }); await snap("builder-existing-step-selected", aud); await page.keyboard.press("Escape"); await page.getByRole("button", { name: /^Name the next step/ }).click(); await snap("builder-palette-strip-name-popover"); });
     await step("graphs", async () => { await go("/graphs"); await page.getByRole("button", { name: "the implement-ticket graph" }).click(); await snap("graphs-implement-ticket-selected", { ...aud, wait: 900 }); });

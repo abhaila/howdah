@@ -38,6 +38,9 @@ describe("parkSummary", () => {
     expect(parkSummary({}).title).toBe("The step is waiting on you.");
     expect(parkSummary({ ask: { kind: "mcp-elicitation" } }).label).toBe("Connect");
     expect(parkSummary({ ask: { kind: "permission" } }).label).toBe("Permission");
+    // HOW-68: a permission ask names the tool it is about, and says what the two answers are
+    expect(parkSummary({ ask: { kind: "can_use_tool", tool_name: "Bash" } })).toEqual({ label: "Permission", title: "The agent is asking to use Bash.", hint: "Allow it, or say why not." });
+    expect(parkSummary({ ask: { kind: "can_use_tool", tool_name: 7 } }).title).toBe("The agent is asking permission to do something.");
   });
 
   test("every summary is short enough for a list row and ends its sentence", () => {

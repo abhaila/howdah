@@ -78,6 +78,11 @@ export function parkSummary(park: ParkLike): ParkSummary {
     return { label: "Question", title: q ?? "The agent has a question.", hint: null };
   }
   if (kind === "mcp-elicitation") return { label: "Connect", title: "A tool the agent uses needs you to connect it.", hint: "Open the link, finish there, then reply." };
-  if (kind !== null) return { label: "Permission", title: "The agent is asking permission to do something.", hint: null };
+  if (kind !== null) {
+    // a harness permission ask (claude's `can_use_tool`): name the tool when the ask carries one
+    const tool = (park.ask as { tool_name?: unknown }).tool_name;
+    const named = typeof tool === "string" && tool.trim() !== "" && tool.length <= 60;
+    return { label: "Permission", title: named ? `The agent is asking to use ${tool}.` : "The agent is asking permission to do something.", hint: "Allow it, or say why not." };
+  }
   return { label: "Needs you", title: `${node} is waiting on you.`, hint: null };
 }

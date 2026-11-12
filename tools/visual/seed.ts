@@ -42,7 +42,7 @@ const { planFeature } = await import("../../graphs/plan-feature");
 const { implementSlice } = await import("../../graphs/implement-slice");
 const { draftGraph } = await import("../../graphs/draft-graph");
 const { CATALOG, cleanDraft } = await import("../../core/fixtures/graph-draft");
-const { SLICE_FIXTURE_DIR, git, commitAll, GHOSTS_V1, GHOSTS_V2, COMMENT_V1, SLICE_GOAL, SLICE_WORK } = await import("../../graphs/slice-fixture");
+const { SLICE_FIXTURE_DIR, git, commitAll, GHOSTS_V1, GHOSTS_V2, COMMENT_V1, DELETE_USER_TS, SLICE_GOAL, SLICE_WORK } = await import("../../graphs/slice-fixture");
 const { saveConfig } = await import("../../config/config");
 const { saveTuning } = await import("../../config/tuning");
 const { AttentionCenter } = await import("../../engine/attention");
@@ -79,7 +79,7 @@ saveConfig({
   },
   folders: { notes: { path: NOTES } },
   editorCommand: "code", defaultHarness: "claude", fallbackChain: ["claude", "codex", "cursor"],
-  viewerBase: `http://localhost:${PORT}`, theme: "system", chime: true,
+  viewerBase: `http://localhost:${PORT}`, theme: "system", // `chime` deliberately absent: the default is silent, and the Settings capture must show that
 } as any, HOME);
 saveTuning({ graphs: { "implement-ticket": { defaults: { model: "claude-fable-5", effort: "high" }, nodes: { "implementation.local_review": { harness: "codex", effort: "medium" } } } } } as any, HOME);
 writeFileSync(join(HOME, "heartbeat.json"), JSON.stringify({ pid: process.pid, at: new Date().toISOString() }) + "\n");
@@ -102,7 +102,10 @@ interface TicketOpts {
   wait?: Executor;
   probe?: "happened" | "not-happened" | "unknown";
   overrides?: EngineOpts["overrides"];
-  evidence?: boolean;
+  /** false = no preview registered (not-checked); "failed" = the preview command died */
+  evidence?: boolean | "failed";
+  /** a step that leaves the worktree exactly as it found it (HOW-54's no-progress park) */
+  noChange?: (node: string, visit: number) => boolean;
 }
 
 const PNG = join(import.meta.dir, "evidence-fixture.png");
@@ -128,7 +131,7 @@ function engineFor(id: string, o: TicketOpts): EngineT {
   const agent: Executor = async (a) => {
     const d: any = a.def;
     const wt = effectiveCwd(a.log.path, a.cwd);
-    if (wt && wt !== a.cwd && existsSync(join(wt, ".git")) && !d.readOnly && d.changesFiles !== false) {
+    if (wt && wt !== a.cwd && existsSync(join(wt, ".git")) && !d.readOnly && d.changesFiles !== false && !o.noChange?.(a.nodeId, a.visit)) {
       writeFileSync(join(wt, "HOWDAH-DEMO.md"), `${a.nodeId}@${a.visit}\n`, { flag: "a" });
       try { commitAll(wt, `${a.nodeId} visit ${a.visit}`); } catch {}
     }
@@ -172,6 +175,11 @@ function engineFor(id: string, o: TicketOpts): EngineT {
           if (o.evidence === false) return ok({ "evidence.items": { outcome: "not-checked", items: [], reason: "this workspace has no preview command — register one with `howdah workspace preview <name> \"<cmd>\" --paths /`" } });
           const rel = `evidence/${a.nodeId}@${a.visit}`;
           mkdirSync(join(dir, rel), { recursive: true });
+          if (o.evidence === "failed") {
+            writeFileSync(join(dir, rel, "preview.log"), "$ bun run dev --port 51877\nerror: Cannot find module '@acme/design-tokens' from 'web/src/theme.ts'\nerror: script \"dev\" exited with code 1\n");
+            say("preview command exited (code 1) after 1.4s\n");
+            return ok({ "evidence.items": { outcome: "failed", items: [], console_file: `${rel}/preview.log`, console_abs_path: join(dir, rel, "preview.log"), command: "bun run dev --port 51877", commit: "8c41f0e2b7aa", dirty: false, reason: "the preview command exited (code 1) before it served http://127.0.0.1:51877/ — see preview.log" } });
+          }
           const items = ["/", "/sign-in-failed"].map((p, i) => {
             const file = `${rel}/${i === 0 ? "root" : "sign-in-failed"}.png`;
             if (existsSync(PNG)) cpSync(PNG, join(dir, file));
@@ -481,6 +489,8 @@ try {
   const pinned = pinComment(join(RUNS, id), COMMENT_V1.entity_id, COMMENT_V1.text);
   sendFeedback(join(RUNS, id));
   const r = await mk().resume();
+  // a pin on the round that is standing, so "Send feedback" is offered (it needs one comment on THIS round)
+  pinComment(join(RUNS, id), DELETE_USER_TS, "name this the way web/src/api.ts names getUser — `deleteUser(id)`, not `removeUser`");
   retime(join(RUNS, id), 100, 80);
   await ring(id);
   note(id, `implement-slice awaiting approval (round 2, ghosts on a real tree-sitter map) → ${JSON.stringify({ state: r.state, code: (r as any).code, pinned: (pinned as any).ok })}`);
@@ -502,6 +512,175 @@ const d2 = cleanDraft();
 const rename = (s: string) => s.replace(/quick-review/g, "reviewed-task");
 const d2r = JSON.parse(rename(JSON.stringify(d2)));
 await draftRun("draft-graph-mhs0p7bb", "Draft: reviewed-task", d2r, [30 * 60, 30 * 60 - 4]);
+
+// O. HOW-68: the states the design review could not check, each produced the way a real run reaches it
+// (where a seam is used instead, it says so) -----------------------------------------------------------
+
+// O1. more park codes ------------------------------------------------------------------------------------
+await run("quick-task-mhv6t1mo", {
+  graph: quickTask, cwd: API, name: "Backfill tenant_id on audit_log", inputs: { goal: "Backfill tenant_id on audit_log (41M rows) in batches of 10k, behind the existing maintenance flag" },
+  script: () => ({
+    steps: [text("Running the backfill against the staging snapshot first."), tool("Bash", { command: "bun scripts/backfill-tenant-id.ts --batch 10000 --snapshot staging 2>&1 | tail -3" }, "batch 2871/4100 … 28,710,000 rows")],
+    fail: { code: "turn-timeout", reason: "the turn ran for 45m 0s without finishing — past this step's 45m limit (turnTimeoutMs). The harness's process group was stopped. Its last tool call was Bash {\"command\":\"bun scripts/backfill-tenant-id.ts --batch 10000 --snapshot staging 2>&1 | tail -3\"}, still running." },
+  }),
+}, [95, 47], "parked turn-timeout", "parked");
+
+// no-progress, by the engine's own rule: the review rejects, and the repair's second visit leaves the tree as it found it
+await run("implement-ticket-mhv5np0g", {
+  name: "HOW-434 Normalise phone numbers at signup", inputs: { goal: "Store phone numbers in E.164 at signup", work: "HOW-434: numbers are stored as typed; normalise to E.164 and reject what cannot be parsed." }, evidence: false,
+  noChange: (node, visit) => node === "implementation.implement_review" && visit >= 2,
+  script: (node, visit) => (node === "implementation.local_review" ? { steps: [text("The Belgian trunk-prefix case is still wrong.")], say: "Rejecting: `+32 (0)470 12 34 56` is stored with the trunk zero.", writes: { review_verdict: "reject", review_findings: [{ severity: "blocker", note: `visit ${visit}: PhoneTest > strips a trunk prefix in brackets — expected +32470123456 but was +320470123456` }], acceptance: ACCEPTANCE_OPEN } } : undefined),
+}, [4 * 60, 3 * 60 + 20], "parked no-progress (the repair's second visit changed nothing)", "no-progress");
+
+// repair-stalled: the probe's own park (core/repair-stall.ts). SEAM: probe:pr is a stub here, so it returns the park the real one decides.
+{
+  const id = "implement-ticket-mhv3rs7l";
+  const url = "https://github.com/acme/acme-api/pull/4144";
+  await run(id, {
+    name: "HOW-432 Cache the tenant lookup", inputs: { goal: "Cache the tenant lookup in the request context", work: "HOW-432: every handler resolves the tenant twice; cache it per request." }, prUrl: url, evidence: false,
+    pr: () => "CHANGES_REQUIRED",
+    command: (a) => {
+      if (a.nodeId === "delivery.repair_check") return ok({ "repair.changed": false });
+      if (a.nodeId === "delivery.probe_pr" && a.visit >= 2)
+        return { status: "failed", writes: {}, code: "repair-stalled", reason: `${url} still reads CHANGES_REQUIRED (GitHub's review decision is still CHANGES_REQUESTED), but delivery.address_reviews@1 made no change and nothing new has arrived on the PR since. To go on: reply on the PR, or re-request review or dismiss the stale review, then Retry this step (\`resume ${id}\`); or \`jump ${id} delivery.address_reviews "<what to change>"\` to make a change; or \`abort ${id}\`.` } as AttemptResult;
+      return undefined;
+    },
+    script: (node) => (node === "delivery.address_reviews" ? { steps: [tool("Bash", { command: "gh pr view 4144 --json reviews,comments | jq '.reviews[-1].body'" }, "\"Should the cache key include the region? Two regions can share a tenant slug.\"")], say: "The reviewer asked a question rather than requesting a change: the cache key already includes the region (TenantKey.kt:12). I replied on the thread and changed no code.", writes: { repair_summary: "Answered on the thread: the key is (region, slug) already. No code changed." } } : undefined),
+  }, [7 * 60, 6 * 60 + 10], "parked repair-stalled (probe asks again for a repair that changed nothing)", "repair-stalled");
+}
+
+// failed evidence: the preview command died, so the reviewer had nothing to look at
+await run("implement-ticket-mhs2ev1d", {
+  name: "HOW-420 Empty state for the invoices table", inputs: { goal: "Show an empty state on the invoices table", work: "HOW-420: a tenant with no invoices sees a blank table." }, cwd: WEB, evidence: "failed",
+  prUrl: "https://github.com/acme/acme-web/pull/830", pr: () => "MERGED",
+}, [9 * 24 * 60, 9 * 24 * 60 - 70], "finished, with evidence that FAILED to capture", "finished success");
+
+// O2. mid-turn asks that are not questions: a permission, and an MCP server asking to be connected ---------
+{
+  const id = "quick-task-mhv6pm3x";
+  const h = hang();
+  await runUntilHang(id, {
+    graph: quickTask, cwd: API, name: "Rotate the staging signing key", inputs: { goal: "Rotate the JWT signing key in staging and restart the auth service" },
+    script: () => ({
+      steps: [text("The new key is generated. Restarting the service needs a command outside this worktree."), tool("Bash", { command: "openssl genpkey -algorithm ed25519 -out /tmp/staging-jwt.pem" }, "")],
+      then: async (a) => {
+        const input = { command: "kubectl --context staging -n auth rollout restart deployment/auth-api", description: "Restart auth-api so it picks up the new signing key" };
+        a.log.append({ type: "chunk", node: a.nodeId, visit: a.visit, turn: 1, index: 90, kind: "tool_call", content: JSON.stringify(input), tool_id: "toolu_perm_0001", tool_name: "Bash" });
+        a.log.append({ type: "attention-raised", node: a.nodeId, visit: a.visit, reason: "Bash needs permission", ask: { kind: "can_use_tool", request_id: "req_01PERM", tool_name: "Bash", input, suggestions: [] } });
+        h.fire();
+        return never();
+      },
+    }),
+  }, h.p, [22, 18], "parked needs-input on a harness PERMISSION ask (runner gone)");
+  await ring(id);
+}
+{
+  const id = "research-mhv6el1c";
+  const h = hang();
+  const url = "https://chatgpt.com/connectors/linear/reconnect?state=9f2c1a77d0b4";
+  const message = "The Linear connector's access expired. Reconnect it to continue.";
+  await runUntilHang(id, {
+    graph: research, cwd: NOTES, name: "Which tickets mention the redirect loop?", inputs: { goal: "List every Linear ticket from the last quarter that mentions the SSO redirect loop, with its status" },
+    script: (node) => (node === "research.plan" ? {
+      harness: "codex",
+      steps: [text("I'll search Linear for the tickets first.")],
+      then: async (a) => {
+        a.log.append({ type: "chunk", node: a.nodeId, visit: a.visit, turn: 1, index: 90, kind: "tool_call", content: JSON.stringify({ server: "linear", tool: "search_issues", arguments: { query: "redirect loop", updatedAfter: "-P90D" } }), tool_id: "call_el_0001", tool_name: "mcp__linear__search_issues" });
+        a.log.append({ type: "attention-raised", node: a.nodeId, visit: a.visit, reason: `linear needs you: ${message} ${url}`, ask: { kind: "mcp-elicitation", request_id: "7", server: "linear", mode: "url", message, url } });
+        h.fire();
+        return never();
+      },
+    } : undefined),
+  }, h.p, [12, 9], "parked needs-input on an MCP elicitation (codex; runner gone)");
+  await ring(id);
+}
+
+// O3. a turn the operator stopped softly: requested → delivered → honored, then the park (HOW-48).
+// SEAM: the executor is scripted, so it appends the three events claude.ts appends and returns its result.
+await run("quick-task-mhv6ss0p", {
+  graph: quickTask, cwd: WEB, name: "Migrate date-fns to Temporal", inputs: { goal: "Replace date-fns with Temporal across acme-web" },
+  script: (_n, _v, a) => ({
+    steps: [text("Starting with the formatting helpers, since everything else calls them."), tool("Grep", { pattern: "from \"date-fns\"", path: "web/src" }, "web/src/lib/format.ts:1\nweb/src/pages/Invoices.tsx:3\n… 41 files"), tool("Edit", { file_path: "web/src/lib/format.ts", old_string: "format(d, \"PP\")", new_string: "d.toLocaleString(\"en\", { dateStyle: \"medium\" })" }, "The file web/src/lib/format.ts has been updated.")],
+    then: async () => {
+      const last = "Stopping here as asked. Done: web/src/lib/format.ts is on Temporal and its 12 tests pass. Not started: the 40 call sites under web/src/pages. Nothing is half-edited; the tree builds.";
+      a.log.append({ type: "soft-stop-requested", node: a.nodeId, visit: a.visit, by: "operator" });
+      a.log.append({ type: "soft-stop-delivered", node: a.nodeId, visit: a.visit });
+      a.log.append({ type: "chunk", node: a.nodeId, visit: a.visit, turn: 1, index: 80, kind: "text", content: last });
+      a.log.append({ type: "turn-finalized", node: a.nodeId, visit: a.visit, turn: 1, usage: { input_tokens: 2210, cache_read_input_tokens: 180_400, output_tokens: 1930, cost_usd: 0.31, cost_source: "reported" } });
+      a.log.append({ type: "soft-stop-honored", node: a.nodeId, visit: a.visit, last_message: last });
+      return { status: "failed", writes: {}, code: "paused-by-operator", reason: `paused by the operator at a tool boundary — the agent said: "${last}"` } as AttemptResult;
+    },
+  }),
+}, [31, 26], "parked paused-by-operator after a delivered soft stop", "paused-by-operator");
+
+// O4. queued, and failed-recoverable. SEAMS: a queued run is a run folder whose log has no run-started yet
+// (the instant between the launcher making it and the runner's first append); failed-recoverable is a
+// failed attempt with no park after it — what kill -9 between the two appends leaves, so the park line is cut.
+mkdirSync(join(RUNS, "quick-task-mhv7q0ue"), { recursive: true });
+writeFileSync(join(RUNS, "quick-task-mhv7q0ue", "run.jsonl"), "");
+note("quick-task-mhv7q0ue", "queued (a run folder with an empty log)");
+{
+  const id = "quick-task-mhv6fr2k";
+  await run(id, {
+    graph: quickTask, cwd: API, name: "Upgrade ktlint to 1.5", inputs: { goal: "Upgrade ktlint to 1.5 and fix the new findings" },
+    script: () => ({ steps: [tool("Bash", { command: "./gradlew ktlintCheck 2>&1 | tail -4" }, "> Task :api:ktlintMainSourceSetCheck FAILED\n214 findings", true)], fail: { reason: "the agent stopped with 214 findings left and no outputs line" } }),
+  }, [44, 40], "failed attempt (park cut below)", "parked");
+  const path = join(RUNS, id, "run.jsonl");
+  const lines = readFileSync(path, "utf8").split("\n").filter(Boolean);
+  const cut = lines.findLastIndex((l) => JSON.parse(l).type === "node-finished");
+  writeFileSync(path, lines.slice(0, cut + 1).join("\n") + "\n");
+  rmSync(join(ATTENTION, `${id}.json`), { force: true });
+  note(id, "failed-recoverable (the attempt failed and the runner died before it parked)");
+}
+
+// O5. UNVERIFIED: the pinned prompt was edited after the run, so the render no longer reconstructs to its hash
+{
+  const pinned = join(RUNS, "quick-task-mho1k3p1", "prompts", "quick-task.work.md");
+  if (existsSync(pinned)) { writeFileSync(pinned, readFileSync(pinned, "utf8") + "\nAlways run the linter before you finish.\n"); note("quick-task-mho1k3p1", "pinned prompt edited after the run → its render reads UNVERIFIED"); }
+}
+
+// O6. implement-slice past its approval: one run to the Drift pane, one stopped at the stale-base gate ----
+const sliceEngine = (id: string, name: string, o: { script?: ScriptFor; afterApproval?: () => void } = {}) => () => new Engine(implementSlice, {
+  dir: join(RUNS, id), cwd: API, folderKind: "repo", promptsDir: PROMPTS, name,
+  executors: {
+    worktree: worktreeExecutor({ reposDir: join(HOME, "repos"), repoName: () => "acme-api" } as any),
+    command: commandExecutor({ map: { workers: 0 } } as any),
+    agent: scriptedAgent((node, visit, a) => o.script?.(node, visit, a) ?? (node === "slice.propose" ? { steps: [text("Designing on the map: the route, its handler, and where app() mounts it.")], say: "Proposed design below.", writes: { "slice.ghosts": GHOSTS_V2 } } : undefined)),
+    approval: async (a) => { const r = await approvalExecutor(a); if (r.status === "succeeded") o.afterApproval?.(); return r; },
+    wait: async () => ok(),
+  },
+});
+try {
+  // approved, built (the scripted agent changes no code), and judged: the drift view shows what the code lacks
+  const id = "implement-slice-mhv1dr1f";
+  // the review stops on what drift found, so the run parks HERE with the Drift pane to read — a
+  // pass would go on to the shared delivery half, whose forge probes this demo cannot answer
+  const mk = sliceEngine(id, "Delete account (built; drift against the approved design)", {
+    script: (node) => node === "implementation.implement" ? { steps: [text("Adding the route next to getUser."), tool("Read", { file_path: "api/src/main/kotlin/com/example/api/App.kt" }, "     1\tpackage com.example.api\n     2\t…")], say: "Implemented the DELETE route and its handler.", writes: { implementation_summary: "Added `DELETE /api/users/{id}` and `deleteUser(Request)`; mounted in app()." } }
+      : node === "implementation.local_review" ? { steps: [text("Reading the drift report against the approved design before anything else.")], fail: { reason: "the reviewer stopped without a verdict: \"slice.drift says the designed route and its handler are missing from the code, but implementation_summary says they were added — the two disagree, and I cannot tell which is wrong from here. Did implementation.implement commit its work?\"" } } : undefined,
+  });
+  await mk().start({ goal: SLICE_GOAL, work: SLICE_WORK });
+  approve(join(RUNS, id));
+  const r = await mk().resume();
+  retime(join(RUNS, id), 11 * 60, 10 * 60);
+  if (r.state === "parked") await ring(id);
+  note(id, `implement-slice after approval → ${JSON.stringify({ state: r.state, code: (r as any).code, node: (r as any).node, outcome: (r as any).outcome })}`);
+} catch (e) { console.error("implement-slice (drift) failed:", e); note("implement-slice-drift", "FAILED to seed: " + String(e)); }
+try {
+  // approved, then the worktree changed under the approval: the pre-start gate re-checks the fingerprint
+  const id = "implement-slice-mhv2st4b";
+  const wt = join(HOME, "repos", "acme-api", "worktrees", id);
+  const mk = sliceEngine(id, "Delete account (code changed after approval)", {
+    // the edit lands between the approval step succeeding and the next step's `requires` gate
+    afterApproval: () => { if (existsSync(wt)) writeFileSync(join(wt, "api/src/main/kotlin/com/example/api/App.kt"), readFileSync(join(wt, "api/src/main/kotlin/com/example/api/App.kt"), "utf8") + "\n// a hand edit made after the design was approved\n"); },
+  });
+  await mk().start({ goal: SLICE_GOAL, work: SLICE_WORK });
+  approve(join(RUNS, id));
+  const r = await mk().resume();
+  retime(join(RUNS, id), 70, 58);
+  if (r.state === "parked") await ring(id);
+  note(id, `implement-slice with the tree edited after approval → ${JSON.stringify({ state: r.state, code: (r as any).code, node: (r as any).node })}`);
+} catch (e) { console.error("implement-slice (stale-base) failed:", e); note("implement-slice-stale", "FAILED to seed: " + String(e)); }
 
 // ---- 3. things that go through the viewer's own routes ------------------------------------------
 const server = createHowdahServer({ runsDir: RUNS, attentionDir: ATTENTION, port: 0, repoRoot: ROOT, resumeRun: () => {}, spawnReviser: () => {}, openTerminal: () => {} } as any);
@@ -563,6 +742,108 @@ try {
   note(id, `local-graph run → ${JSON.stringify(r)}`);
 } catch (e) { console.error("local graph run failed", e); }
 
+// HOW-68: two more local graphs, for states no built-in reaches — a `parallel` step (HOW-73) and an
+// opted-in acceptance GATE (HOW-72: `requiresAcceptance`, which is what makes the Waive controls show).
+const reviewChange = {
+  version: 1, name: "review-change", description: "Summarise a change, review it three ways at once, then give one verdict",
+  defaults: { permissionMode: "auto" }, entry: "review-change.summarise", inputs: ["goal"],
+  fields: [
+    { key: "goal", kind: "text", scope: "sticky" },
+    { key: "change_summary", kind: "text", scope: "sticky" },
+    { key: "security_notes", kind: "text", scope: "sticky" },
+    { key: "style_notes", kind: "text", scope: "sticky" },
+    { key: "test_notes", kind: "text", scope: "sticky" },
+    { key: "verdict", kind: "choice", scope: "cleared", choices: ["approve", "request-changes"] },
+  ],
+  nodes: [
+    { id: "review-change.summarise", kind: "agent", prompt: "review-change.summarise", reads: ["goal"], writes: ["change_summary"], readOnly: true, position: { x: 300, y: 40 } },
+    { id: "review-change.reviews", kind: "parallel", branches: ["review-change.security", "review-change.style", "review-change.tests"], join: "review-change.verdict", position: { x: 300, y: 180 } },
+    { id: "review-change.security", kind: "agent", prompt: "review-change.security", reads: ["goal", "change_summary"], writes: ["security_notes"], readOnly: true, position: { x: 20, y: 330 } },
+    { id: "review-change.style", kind: "agent", prompt: "review-change.style", reads: ["goal", "change_summary"], writes: ["style_notes"], readOnly: true, position: { x: 300, y: 330 } },
+    { id: "review-change.tests", kind: "agent", prompt: "review-change.tests", reads: ["goal", "change_summary"], writes: ["test_notes"], readOnly: true, position: { x: 580, y: 330 } },
+    { id: "review-change.verdict", kind: "agent", prompt: "review-change.verdict", reads: ["goal", "security_notes", "style_notes", "test_notes"], writes: ["verdict"], readOnly: true, position: { x: 300, y: 480 } },
+    { id: "reviewed", kind: "terminal", outcome: "success", position: { x: 300, y: 620 } },
+  ],
+  edges: [
+    { from: "review-change.summarise", to: "review-change.reviews" },
+    { from: "review-change.verdict", to: "reviewed" },
+  ],
+};
+const gatedPublish = {
+  version: 1, name: "gated-publish", description: "Do the work, and hold the announcement until every acceptance criterion is met or waived",
+  defaults: { permissionMode: "auto" }, entry: "gated-publish.criteria", inputs: ["goal"],
+  fields: [
+    { key: "goal", kind: "text", scope: "sticky" },
+    { key: "acceptance", kind: "json", scope: "sticky" },
+    { key: "work_summary", kind: "text", scope: "sticky" },
+    { key: "announcement", kind: "text", scope: "sticky" },
+  ],
+  nodes: [
+    { id: "gated-publish.criteria", kind: "agent", prompt: "gated-publish.criteria", reads: ["goal"], writes: ["acceptance"], readOnly: true, position: { x: 40, y: 60 } },
+    { id: "gated-publish.work", kind: "agent", prompt: "gated-publish.work", reads: ["goal"], writes: ["work_summary"], position: { x: 40, y: 200 } },
+    { id: "gated-publish.announce", kind: "agent", prompt: "gated-publish.announce", reads: ["goal", "work_summary", "acceptance"], writes: ["announcement"], requiresAcceptance: true, changesFiles: false, position: { x: 40, y: 340 } },
+    { id: "announced", kind: "terminal", outcome: "success", position: { x: 40, y: 480 } },
+  ],
+  edges: [
+    { from: "gated-publish.criteria", to: "gated-publish.work" },
+    { from: "gated-publish.work", to: "gated-publish.announce" },
+    { from: "gated-publish.announce", to: "announced" },
+  ],
+};
+const stepBody = (what: string, reads: string[]) => `${what}\n\n${reads.map((r) => `## ${r}\n{{ context.${r} }}`).join("\n\n")}\n`;
+const promptsFor = (spec: any, what: Record<string, string>) => Object.fromEntries(spec.nodes.filter((n: any) => n.kind === "agent").map((n: any) => [n.id, stepBody(what[n.id] ?? "Do this step.", n.reads)]));
+for (const [spec, what] of [
+  [reviewChange, { "review-change.summarise": "Summarise the change under review in five lines.", "review-change.security": "Review the change for security problems only.", "review-change.style": "Review the change against the repository's conventions only.", "review-change.tests": "Say what the change's tests cover and what they do not.", "review-change.verdict": "Give one verdict from the three reviews." }],
+  [gatedPublish, { "gated-publish.criteria": "Write the acceptance criteria for this goal. Every row starts failing.", "gated-publish.work": "Do the work.", "gated-publish.announce": "Write the announcement of what was done." }],
+] as Array<[any, Record<string, string>]>) {
+  const res = await send("PUT", `/api/graphs/${spec.name}/builder`, { intent: "create", spec, prompts: promptsFor(spec, what) });
+  note(`builder save ${spec.name}`, JSON.stringify(res).slice(0, 400));
+}
+try {
+  const { loadLocalGraph } = await import(join(ROOT, "graphs/local.ts"));
+  const localEngine = async (graph: string, id: string, name: string, cwd: string, script: ScriptFor) => {
+    const g = await loadLocalGraph(HOME, graph, ROOT);
+    return new Engine(g, { dir: join(RUNS, id), promptsDir: [join(HOME, "prompts"), PROMPTS], cwd, folderKind: "repo", name, executors: { agent: scriptedAgent(script) } });
+  };
+  const reviews: Record<string, NodeScript> = {
+    "review-change.summarise": { steps: [tool("Bash", { command: "git diff main...HEAD --stat | tail -4" }, " api/src/main/kotlin/com/example/api/auth/Callback.kt | 41 ++++--\n api/src/test/kotlin/com/example/api/auth/CallbackTest.kt | 88 +++++\n 2 files changed, 121 insertions(+), 8 deletions(-)")], say: "The change caps the SSO redirect loop.", writes: { change_summary: "Caps the SSO callback at two redirects and renders a failure page on the third; adds CallbackTest (6 cases)." } },
+    "review-change.security": { steps: [think("The counter rides in the state parameter. Is it signed?"), tool("Grep", { pattern: "rt=", path: "api/src" }, "api/src/main/kotlin/com/example/api/auth/Callback.kt:61")], say: "One finding.", writes: { security_notes: "The redirect counter `rt` is read from the unsigned state parameter: a hand-edited `rt=-1` buys an extra lap. Cap it server-side." } },
+    "review-change.style": { steps: [tool("Read", { file_path: "api/src/main/kotlin/com/example/api/auth/Callback.kt" }, "     1\tpackage com.example.api.auth\n…")], say: "Follows the conventions.", writes: { style_notes: "Matches the handler conventions; one magic number (2) should be the existing MAX_REDIRECTS constant." } },
+    "review-change.tests": { steps: [tool("Bash", { command: "./gradlew :api:test --tests '*CallbackTest*' 2>&1 | tail -3" }, "6 tests completed, 0 failed\nBUILD SUCCESSFUL in 18s")], say: "Covered, with one gap.", writes: { test_notes: "Six cases pass. Not covered: a state parameter with no `rt` at all (the pre-change clients)." } },
+    "review-change.verdict": { say: "Request changes: the unsigned counter is a real hole.", writes: { verdict: "request-changes" } },
+  };
+  {
+    const id = "review-change-mhv5pa7l";
+    const r = await (await localEngine("review-change", id, "Review: cap the SSO redirect loop", API, (node) => reviews[node])).start({ goal: "Review the change on howdah/implement-ticket-mhs8q2lf before it merges" });
+    retime(join(RUNS, id), 3 * 60, 3 * 60 - 14);
+    note(id, `parallel run, finished → ${JSON.stringify(r)}`);
+  }
+  {
+    // one branch fails: its siblings finish and keep what they published, then the run parks ONCE on it
+    const id = "review-change-mhv6pb2x";
+    const r = await (await localEngine("review-change", id, "Review: paginate /v2/invoices", API, (node) => node === "review-change.tests"
+      ? { steps: [tool("Bash", { command: "./gradlew :api:test --tests '*InvoicesPageTest*' 2>&1 | tail -3" }, "error: no tests matched the filter '*InvoicesPageTest*'", true)], fail: { reason: "the agent stopped without its notes: \"there is no InvoicesPageTest on this branch — which tests is this change meant to be covered by?\"" } }
+      : reviews[node])).start({ goal: "Review the pagination change on howdah/implement-ticket-mhv4d2e8" });
+    retime(join(RUNS, id), 52, 44);
+    if (r.state === "parked") await ring(id);
+    note(id, `parallel run, one branch failed → ${JSON.stringify({ state: r.state, code: (r as any).code, node: (r as any).node })}`);
+  }
+  {
+    const id = "gated-publish-mhv4ga9t";
+    const rows = [
+      { id: "ac-1", text: "The changelog entry names the breaking change to the pagination cursor", source: "goal", passes: false, evidence: null, check: "command" },
+      { id: "ac-2", text: "The migration note has been read by the two teams that call /v2/invoices", source: "goal", passes: false, evidence: null, check: "human" },
+      { id: "ac-3", text: "The 2.4.0 package is on the registry", source: "goal", passes: false, evidence: null, check: "after-publish" },
+    ];
+    const r = await (await localEngine("gated-publish", id, "Announce the invoices pagination change", API, (node) => node === "gated-publish.criteria"
+      ? { say: "Three criteria.", writes: { acceptance: rows } }
+      : node === "gated-publish.work" ? { steps: [tool("Edit", { file_path: "CHANGELOG.md", old_string: "## Unreleased", new_string: "## Unreleased\n\n- BREAKING: /v2/invoices is cursor-paginated" }, "The file CHANGELOG.md has been updated.")], say: "Changelog written.", writes: { work_summary: "Added the changelog entry and the migration note." } } : undefined)).start({ goal: "Announce the /v2/invoices pagination change to its two consumers" });
+    retime(join(RUNS, id), 2 * 60, 105);
+    if (r.state === "parked") await ring(id);
+    note(id, `gated acceptance park → ${JSON.stringify({ state: r.state, code: (r as any).code, node: (r as any).node })}`);
+  }
+} catch (e) { console.error("local graph states failed", e); note("local-graph-states", "FAILED to seed: " + String(e)); }
+
 // feedback on real turns (the Prompts screen's evidence; the Proposals screen already has the repo's own drafts)
 const detailA = await get(`/api/runs/${A}`);
 const renders: any[] = detailA.renders ?? [];
@@ -591,10 +872,33 @@ for (const [node, verdict, noteText] of [
   writeFileSync(join(dir, `${stem}.proposal.md`), `---\nid: delivery.publish\nbase_version: ${version}\nproposed_version: ${version + 1}\nstatus: pending\ncreated: ${new Date(Date.now() - 50 * 60_000).toISOString()}\neval_score: baseline 3/5 structure checks → proposed 5/5 (delivery-publish eval, 5 cases)\neval_verdict: better on structure; no regression on the Why/What/Notes sections\n---\n${body}`);
   writeFileSync(join(dir, `${stem}.reflection.md`), `The one rejection on record (HOW-412, delivery.publish@1) says the "Not proven by this run" list was buried under the testing notes. The template never says where that list goes — the suffix appends it and the model placed it last. One sentence fixes the placement; nothing else in the prompt is touched, so the accepted v2 structure (Why / What / Notes for testing) is preserved.\n`);
   writeFileSync(join(dir, `${stem}.diff`), `--- delivery.publish v${version}\n+++ delivery.publish v${version + 1}\n@@ end of template @@\n+\n+${added}\n`);
+  // HOW-68: a STALE proposal (drafted against a version the prompt has since left) and an ORPHANED
+  // one (its prompt no longer exists) — the two states where Accept must be refused and say why
+  writeFileSync(join(dir, "ticket.local_review.v3.proposal.md"), `---\nid: ticket.local_review\nbase_version: 2\nproposed_version: 3\nstatus: pending\ncreated: ${new Date(Date.now() - 6 * 24 * 3600_000).toISOString()}\n---\nReview the change against the ticket. Require a fix, or say nothing: never pass a change while listing a nit you could have required.\n`);
+  writeFileSync(join(dir, "ticket.local_review.v3.reflection.md"), "One rejection on record: the reviewer passed a change while leaving a nit it could have required. Drafted against v2; the prompt has moved on to v4 since.\n");
+  writeFileSync(join(dir, "ticket.local_review.v3.diff"), "--- ticket.local_review v2\n+++ ticket.local_review v3\n@@ end of template @@\n+Require a fix, or say nothing: never pass a change while listing a nit you could have required.\n");
+  writeFileSync(join(dir, "ticket.triage.v2.proposal.md"), `---\nid: ticket.triage\nbase_version: 1\nproposed_version: 2\nstatus: pending\ncreated: ${new Date(Date.now() - 20 * 24 * 3600_000).toISOString()}\n---\nDecide whether this ticket is ready to be worked on. If it is not, say exactly what is missing.\n`);
+  writeFileSync(join(dir, "ticket.triage.v2.reflection.md"), "Drafted when implement-ticket still had a triage step.\n");
+  writeFileSync(join(dir, "ticket.triage.v2.diff"), "--- ticket.triage v1\n+++ ticket.triage v2\n@@ end of template @@\n+If it is not, say exactly what is missing.\n");
   const ps = (await get("/api/proposals")) as any[];
-  note("pending proposal", JSON.stringify(ps.filter((x) => x.status === "pending").map((x) => x.file)));
+  note("pending proposals", JSON.stringify(ps.filter((x) => x.status === "pending").map((x) => [x.file, x.stale ? "stale" : "", x.stale_reason ?? ""])));
 }
 server.stop(true);
+
+// ---- 4. HOW-68: an EMPTY home, so every empty state can be shot ------------------------------------
+// `<scratch>/home-empty` has no runs, no workspaces and no local graphs; `<scratch>/repo-empty` is the
+// repo copy with no proposals and no feedback. serve.sh starts a second viewer over the pair on PORT+1.
+{
+  const EMPTY_HOME = join(SCRATCH, "home-empty");
+  const EMPTY_ROOT = join(SCRATCH, "repo-empty");
+  for (const d of [EMPTY_HOME, EMPTY_ROOT]) rmSync(d, { recursive: true, force: true });
+  mkdirSync(join(EMPTY_HOME, "runs"), { recursive: true });
+  mkdirSync(join(EMPTY_HOME, "attention"), { recursive: true });
+  saveConfig({ repos: {}, folders: {}, viewerBase: `http://localhost:${PORT + 1}` } as any, EMPTY_HOME);
+  cpSync(ROOT, EMPTY_ROOT, { recursive: true, filter: (src) => !/\/node_modules(\/|$)/.test(src) && !/web\/public\/app\.(js|css)$/.test(src) && !/\/reviser\/proposals\/.+/.test(src) && !/\/feedback\/.+/.test(src) });
+  symlinkSync(join(REPO, "node_modules"), join(EMPTY_ROOT, "node_modules"));
+  note("empty home", `${EMPTY_HOME} (viewer on :${PORT + 1})`);
+}
 
 writeFileSync(join(SCRATCH, "seed-report.txt"), report.join("\n") + "\n");
 console.log(`\nseeded ${report.length} items into ${HOME}${planOk ? "" : " (plan-feature had failures — see above)"}`);

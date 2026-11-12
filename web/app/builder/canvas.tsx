@@ -58,7 +58,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  Background, Panel, ReactFlow, useReactFlow, useStore,
+  Background, ConnectionMode, Panel, ReactFlow, useReactFlow, useStore,
   MarkerType, type Edge, type Node, type NodeChange, type OnConnect, type OnNodesChange,
 } from "@xyflow/react";
 import { Maximize, Minus, Plus } from "lucide-react";
@@ -68,6 +68,7 @@ import type { Draft, DraftAction, PaletteKind } from "@/lib/spec-draft";
 import { STEP_KINDS } from "@/lib/spec-draft";
 import { KIND_LABEL, StepNode, stepSummary, type StepNodeData } from "./node-card";
 import { ConditionEdge, type ConditionEdgeData } from "./edge";
+import { edgeSides, type Box, type Side } from "./routing";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Tooltip } from "@/components/ui/tooltip";
@@ -141,25 +142,28 @@ export function specToFlow(
         isEntry: spec.entry === n.id,
         problems: countOf(n.id),
         advice: adviceOf(n.id),
+        wired: [],
         onOpen: () => open({ kind: "step", id: n.id }),
       } satisfies StepNodeData,
     };
   });
-  const leaving = new Map<string, number>();
-  for (const e of laid.edges) leaving.set(e.from, (leaving.get(e.from) ?? 0) + 1);
-  const nth = new Map<string, number>();
+  // HOW-68: each route leaves and enters by the sides that face each other (routing.ts)
+  const routes = routeSides(laid.edges, new Map(laid.nodes.map((n) => [n.id, n.position ?? { x: 0, y: 0 }])));
+  for (const n of nodes) (n.data as StepNodeData).wired = [...(routes.wired.get(n.id) ?? [])];
   const edges: Edge[] = laid.edges.map((e, i) => ({
     id: `e${i}`,
     source: e.from,
     target: e.to,
+    sourceHandle: routes.sides[i]!.source,
+    targetHandle: routes.sides[i]!.target,
     type: "condition",
     markerEnd: { type: MarkerType.ArrowClosed },
     data: {
       index: i,
       // the SAME label the compiled graph's Condition carries, so picture and log agree
       label: e.when ? predicateLabel(e.when) : "",
-      nth: (() => { const at = nth.get(e.from) ?? 0; nth.set(e.from, at + 1); return at; })(),
-      siblings: leaving.get(e.from) ?? 1,
+      nth: routes.nth[i]!,
+      siblings: routes.siblings[i]!,
       flagged: blocking.some((p) => p.where === "branching" && p.node === e.from),
       onOpen: () => open({ kind: "edge", index: i }),
     } satisfies ConditionEdgeData,
@@ -178,6 +182,29 @@ export function specToFlow(
     style: { strokeDasharray: "4 3" },
   }));
   return { nodes, edges: [...edges, ...implied] };
+}
+
+/**
+ * The sides every route uses, in `spec.edges` order, for a set of card positions. One function
+ * for the draft's own positions (`specToFlow`) and for the frames of a drag (`GraphCanvas`), so
+ * a wire re-attaches as the card it belongs to is carried past its neighbour. `nth`/`siblings`
+ * count the routes leaving the SAME SIDE of the same step — the ones whose captions share a gap.
+ */
+export function routeSides(
+  edges: ReadonlyArray<{ from: string; to: string }>,
+  positions: ReadonlyMap<string, Point>,
+): { sides: Array<{ source: Side; target: Side }>; nth: number[]; siblings: number[]; wired: Map<string, Set<Side>> } {
+  const box = (id: string): Box => ({ ...(positions.get(id) ?? { x: 0, y: 0 }), width: NODE_WIDTH, height: NODE_HEIGHT });
+  const sides = edges.map((e) =>
+    edgeSides(box(e.from), box(e.to), { self: e.from === e.to, reverse: edges.some((o) => o.from === e.to && o.to === e.from) }));
+  const group = (i: number) => `${edges[i]!.from}\u0000${sides[i]!.source}`;
+  const count = new Map<string, number>();
+  const nth = edges.map((_, i) => { const at = count.get(group(i)) ?? 0; count.set(group(i), at + 1); return at; });
+  const siblings = edges.map((_, i) => count.get(group(i)) ?? 1);
+  const wired = new Map<string, Set<Side>>();
+  const mark = (id: string, side: Side) => { let set = wired.get(id); if (!set) wired.set(id, (set = new Set())); set.add(side); };
+  edges.forEach((e, i) => { mark(e.from, sides[i]!.source); mark(e.to, sides[i]!.target); });
+  return { sides, nth, siblings, wired };
 }
 
 /**
@@ -315,7 +342,21 @@ export function GraphCanvas({ draft, dispatch, problems, selection, onSelect, on
     selected: selection?.kind === "step" && selection.id === n.id,
     position: inFlight?.get(n.id) ?? n.position,
   }));
-  const selectedEdges = edges.map((e, i) => ({ ...e, selected: selection?.kind === "edge" && selection.index === i }));
+  // mid-drag the wires follow the card being carried: the sides are worked out again from the
+  // positions on screen, for the routes only (the implied fork/join wires have no handles)
+  const live = useMemo(() => {
+    if (!inFlight) return null;
+    const at = new Map(nodes.map((n) => [n.id, inFlight.get(n.id) ?? n.position]));
+    return routeSides(draft.spec.edges, at);
+  }, [inFlight, nodes, draft.spec.edges]);
+  const selectedEdges = edges.map((e, i) => {
+    const sides = live?.sides[i];
+    return {
+      ...e,
+      ...(sides && e.type === "condition" ? { sourceHandle: sides.source, targetHandle: sides.target } : {}),
+      selected: selection?.kind === "edge" && selection.index === i,
+    };
+  });
 
   const onConnect = useCallback<OnConnect>(
     (c) => {
@@ -327,9 +368,13 @@ export function GraphCanvas({ draft, dispatch, problems, selection, onSelect, on
     [dispatch, onSelect, draft.spec.edges.length],
   );
 
+  // while a wire is being drawn every card shows where it can land (howdah.css `.gb-handle`)
+  const [connecting, setConnecting] = useState(false);
+
   return (
     <div
       className="gb-canvas"
+      data-connecting={connecting || undefined}
       onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; }}
       onDrop={(e) => {
         const kind = e.dataTransfer.getData(STEP_KIND_MIME);
@@ -350,6 +395,12 @@ export function GraphCanvas({ draft, dispatch, problems, selection, onSelect, on
         onEdgeClick={(_, e) => onSelect({ kind: "edge", index: (e.data as ConditionEdgeData).index })}
         onPaneClick={() => onSelect(null)}
         onConnect={onConnect}
+        // every dot on a card is a `source` handle (node-card.tsx), so a wire may start at any
+        // side and end on any side of another card; `onConnect` still reads source → target as
+        // "the card the drag started on → the card it was dropped on"
+        connectionMode={ConnectionMode.Loose}
+        onConnectStart={() => setConnecting(true)}
+        onConnectEnd={() => setConnecting(false)}
         onNodesChange={onNodesChange}
         // the panel follows what you just took hold of, which is what a click already does —
         // and `moveSelectedNodes` only moves a SELECTED node, so without this "drag a card,

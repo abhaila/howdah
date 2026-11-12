@@ -30,6 +30,13 @@
  *   one exception WCAG 2.5.8 itself makes, a link inside a sentence.
  *   LOADING. `loading` disables the button, marks it `aria-busy` and shows the one looping
  *   animation DESIGN.md allows — a spinner on something that is actually waiting.
+ *   DISABLED IS READABLE, AND LOADING IS NOT DISABLED. Every variant used to dim with
+ *   `opacity-50`, which measured 2.3–2.8:1 in both themes — exempt from WCAG, and too faint to
+ *   read what the control WOULD do. A disabled button now loses its fill and takes
+ *   `--fg-disabled` (≥3:1 on every ground, proven in tokens.test.ts; under 4.5:1 so it still
+ *   reads as off). The dimming hangs on `data-off`, not on `:disabled`: a loading button is
+ *   disabled in the DOM so it cannot be pressed twice, but it keeps its own colours — the
+ *   spinner says it is busy, and its label is the thing being waited for.
  */
 import { forwardRef } from "react";
 import type { ButtonHTMLAttributes } from "react";
@@ -44,14 +51,14 @@ export const buttonVariants = cva(
     variants: {
       variant: {
         /** the primary action: indigo, one per view */
-        default: "bg-primary font-semibold text-primary-foreground hover:bg-[var(--primary-hover)] disabled:bg-muted disabled:text-faint",
-        outline: "border border-input bg-card text-foreground hover:bg-accent disabled:opacity-50",
+        default: "bg-primary font-semibold text-primary-foreground hover:bg-[var(--primary-hover)] data-[off]:bg-muted data-[off]:text-disabled",
+        outline: "border border-input bg-card text-foreground hover:bg-accent data-[off]:border-border data-[off]:bg-transparent data-[off]:text-disabled",
         /** hover is a wash of the ink, so it shows on --bg, --bg-raised AND --bg-inset */
-        ghost: "text-muted-foreground hover:bg-[color-mix(in_srgb,var(--fg)_9%,transparent)] hover:text-foreground disabled:opacity-50",
-        destructive: "bg-destructive font-semibold text-destructive-foreground hover:bg-[var(--status-failed-terminal)] disabled:opacity-50",
-        "destructive-outline": "border border-destructive bg-transparent text-destructive hover:bg-[color-mix(in_srgb,var(--status-failed-recoverable)_10%,transparent)] disabled:opacity-50",
+        ghost: "text-muted-foreground hover:bg-[color-mix(in_srgb,var(--fg)_9%,transparent)] hover:text-foreground data-[off]:text-disabled",
+        destructive: "bg-destructive font-semibold text-destructive-foreground hover:bg-[var(--status-failed-terminal)] data-[off]:bg-muted data-[off]:text-disabled",
+        "destructive-outline": "border border-destructive bg-transparent text-destructive hover:bg-[color-mix(in_srgb,var(--status-failed-recoverable)_10%,transparent)] data-[off]:border-border data-[off]:text-disabled",
         /** the inline disclosure that used to be a bare `.linkish` span with an onClick */
-        link: "h-auto p-0 font-normal text-muted-foreground underline underline-offset-2 hover:text-foreground disabled:text-faint disabled:no-underline",
+        link: "h-auto p-0 font-normal text-muted-foreground underline underline-offset-2 hover:text-foreground data-[off]:text-disabled data-[off]:no-underline",
       },
       size: {
         default: "h-8 px-3.5",
@@ -79,6 +86,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(({ className, v
     data-slot="button"
     aria-busy={loading || undefined}
     disabled={disabled || loading}
+    data-off={(disabled && !loading) || undefined}
     className={cn(buttonVariants({ variant, size }), className)}
     {...props}
   >

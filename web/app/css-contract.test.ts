@@ -357,6 +357,23 @@ describe("an ellipsis is written with Truncate, never by hand (HOW-68)", () => {
 });
 
 /**
+ * HOW-68: the theme is `light-dark()` pairs in tokens.css, switched by `color-scheme` on
+ * `:root[data-theme]`. Tailwind's `dark:` variant follows `prefers-color-scheme` instead, so a
+ * `dark:` utility answers the OS rather than the app's own toggle — a light page on a dark
+ * machine drew the vendored questionnaire with dark fills. A token is already both themes.
+ */
+describe("one theming mechanism: tokens, never Tailwind's `dark:` variant (HOW-68)", () => {
+  test("no component carries a `dark:` utility", () => {
+    const hits: string[] = [];
+    for (const f of SOURCES) {
+      const src = readFileSync(f, "utf8").replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+      for (const m of src.matchAll(/(?<![\w-])dark:[\w[\]/().:-]+/g)) hits.push(`${f.slice(APP.length + 1)}: ${m[0]}`);
+    }
+    expect(hits).toEqual([]);
+  });
+});
+
+/**
  * HOW-27 widened this from "no Radix" to what the rule was always protecting. `@base-ui/react`
  * is now a dependency (base-vega's primitives are built on it), so a test that only forbids the
  * string `@radix-ui/` would pass while the layer quietly grew a second primitives library. What

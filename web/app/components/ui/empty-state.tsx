@@ -12,7 +12,13 @@
  */
 import { cn } from "@/lib/utils";
 
-export function EmptyState({ children, className, mark, title, actions }: {
+export function EmptyState({ children, className, mark, title, actions, as: Heading = "h2" }: {
+  /**
+   * the title's heading level. `h2` by default: an empty state sits inside a screen whose
+   * header already holds the `h1`, and a second `h1` (or an `h1` in the middle of a pane) is a
+   * broken outline. A page that is NOTHING BUT the empty state — the 404 — passes `h1`.
+   */
+  as?: "h1" | "h2";
   children: React.ReactNode;
   className?: string;
   /** the Howdah mark, for the one empty state that is the whole screen */
@@ -25,7 +31,7 @@ export function EmptyState({ children, className, mark, title, actions }: {
   return (
     <div className={cn("empty", className)}>
       {mark}
-      {title !== undefined && <h1 className="m-0 mb-1 text-lg font-semibold text-foreground">{title}</h1>}
+      {title !== undefined && <Heading className="m-0 mb-1 text-lg font-semibold text-foreground">{title}</Heading>}
       <div>{children}</div>
       {actions !== undefined && <div className="mt-4 flex flex-wrap items-center justify-center gap-2">{actions}</div>}
     </div>

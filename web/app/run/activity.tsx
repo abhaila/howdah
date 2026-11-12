@@ -27,7 +27,7 @@
  * the content check is what decides, not the kind.
  */
 import { createContext, useContext, useMemo, useState } from "react";
-import { ChevronRight, Wrench, TriangleAlert, FileOutput, Sparkles, Activity } from "lucide-react";
+import { ChevronRight, Wrench, TriangleAlert, FileOutput, Sparkles, Activity, Info } from "lucide-react";
 import type { CoalescedTurn, TurnPart } from "../../../log/coalesce";
 import type { RunDetail, TurnState } from "../../derive";
 import { useNow } from "@/lib/hooks";
@@ -231,20 +231,85 @@ export function beatsOf(parts: readonly TurnPart[]): Beat[] {
 }
 
 /**
+ * The engine's own closing lines, lifted out of the agent's words (HOW-68).
+ *
+ * When an attempt fails the engine appends ONE more text chunk to the step's turn —
+ * `\n[failed: <reason>]`, `\n[attempt failed: <message>]`, an executor's
+ * `\n[output contract violation: <problem>]`, the allowance hop and the context continuation
+ * (engine/run.ts ENGINE_NOTE_INDEX / ENGINE_FAILURE_INDEX) — so the reason survives in the
+ * thread after the ask that carried it is resolved. `coalesce()` merges it into the agent's
+ * last paragraph, where it was drawn as agent prose: five lines of bracketed engine text
+ * directly above the ask card saying the same thing. The log is unchanged; this only tells the
+ * two voices apart again. Peeled from the END, one bracketed line at a time, and only for the
+ * prefixes the engine really writes, so an agent's own "[note]" stays prose.
+ */
+export interface EngineNote { kind: "failure" | "note"; text: string }
+const ENGINE_LINE = /\n\[(failed|attempt failed|output contract violation|succeeded|[a-z]+ allowance exhausted|context window filled)(: | — )/g;
+export function splitEngineNotes(text: string): { prose: string; notes: EngineNote[] } {
+  const notes: EngineNote[] = [];
+  let prose = text;
+  for (;;) {
+    const trimmed = prose.trimEnd();
+    if (!trimmed.endsWith("]")) break;
+    let last: RegExpExecArray | null = null;
+    ENGINE_LINE.lastIndex = 0;
+    for (let m = ENGINE_LINE.exec("\n" + trimmed); m; m = ENGINE_LINE.exec("\n" + trimmed)) last = m;
+    if (!last || last[1] === undefined) break;
+    // indices are into "\n" + trimmed: the match starts at the newline before the bracket
+    const body = trimmed.slice(last.index + 1, -1); // inside the brackets
+    const head = last[1];
+    const failure = head === "failed" || head === "attempt failed" || head === "output contract violation";
+    notes.unshift({ kind: failure ? "failure" : "note", text: head === "failed" || head === "attempt failed" || head === "succeeded" ? body.slice(head.length + 2) : body });
+    prose = trimmed.slice(0, Math.max(0, last.index - 1));
+  }
+  return { prose, notes };
+}
+
+/** a notice this short is simply shown; a longer one is one line that opens */
+const NOTICE_LINE = 110;
+
+/**
+ * One engine line, drawn as what it is: a quiet one-line notice, never agent prose. A long
+ * reason shows its opening and expands to the whole text, verbatim.
+ */
+export function EngineNotice({ note }: { note: EngineNote }) {
+  const flat = note.text.replace(/\s+/g, " ").trim();
+  const label = note.kind === "failure" ? "Failed: " : "";
+  const icon = note.kind === "failure" ? <TriangleAlert size={12} aria-hidden /> : <Info size={12} aria-hidden />;
+  if (flat.length <= NOTICE_LINE)
+    return <div className="act-notice" data-kind={note.kind}>{icon}<span>{label}{flat}</span></div>;
+  const cut = flat.slice(0, NOTICE_LINE).replace(/\s+\S*$/, "");
+  return (
+    <details className="act-notice" data-kind={note.kind}>
+      <summary>{icon}<span>{label}{cut}…</span></summary>
+      <div className="act-notice-full">{note.text.trim()}</div>
+    </details>
+  );
+}
+
+/**
  * One run of the agent's own words (HOW-29). Prose is markdown, so it is drawn as markdown; and
  * the `{"outputs": ...}` object the step closes with is lifted out of it and drawn as what it
  * published — a plan as a document, a verdict as a value — instead of one JSON line of `\n`
  * escapes. A contract still being streamed is named rather than printed half-written.
  * Exported for the Chat transcript: one prose renderer, not two.
+ *
+ * HOW-68: the engine's closing lines are notices, not prose (`splitEngineNotes`).
+ * `hideFailure` is set for the step whose park is STILL standing: the ask card at the foot of
+ * the conversation says why it failed, and its "Full message" holds the reason verbatim — the
+ * ask is said once (DESIGN.md).
  */
-export function AgentProse({ text }: { text: string }) {
-  const split = useMemo(() => splitOutputs(text.trim()), [text]);
+export function AgentProse({ text, hideFailure = false }: { text: string; hideFailure?: boolean }) {
+  const { prose, notes } = useMemo(() => splitEngineNotes(text), [text]);
+  const split = useMemo(() => splitOutputs(prose.trim()), [prose]);
+  const shown = hideFailure ? notes.filter((n) => n.kind !== "failure") : notes;
   return (
     <>
       {split.before.trim() && <Markdown className="act-text" text={split.before} />}
       {split.outputs && <OutputDocs outputs={split.outputs} />}
       {split.pending && <div className="act-note-quiet">writing outputs…</div>}
       {split.after.trim() && <Markdown className="act-text" text={split.after} />}
+      {shown.map((n, i) => <EngineNotice key={i} note={n} />)}
     </>
   );
 }

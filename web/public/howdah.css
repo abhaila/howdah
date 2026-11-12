@@ -155,8 +155,10 @@ main { position: relative; flex: 1; min-width: 0; min-height: 0; overflow: hidde
 .run-details { display: flex; flex-direction: column; gap: 20px; }
 .run-details-group { display: flex; flex-direction: column; gap: 8px; }
 .run-details-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; font-size: var(--type-sm); }
-.run-details-list li { display: flex; align-items: flex-start; gap: 8px; min-height: 24px; padding: 2px 0; line-height: 20px; }
-.run-details-list li > svg { margin-top: 4px; }
+/* each row is a button (it opens the step in Steps): 28px, bleeding 6px so its hover ground
+   has air around the glyph while the text stays on the drawer's left edge */
+.run-details-row { display: flex; align-items: flex-start; gap: 8px; width: calc(100% + 12px); min-height: 28px; margin-inline: -6px; padding: 4px 6px; border-radius: var(--radius-sm); line-height: 20px; text-align: left; }
+.run-details-row > svg { margin-top: 4px; }
 .run-details-step { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: var(--type-code); }
 .run-details-dur { flex: none; font-size: var(--type-xs); color: var(--fg-muted); }
 .run-details-note { margin: 0; font-size: var(--type-sm); color: var(--fg-muted); overflow-wrap: anywhere; }
@@ -192,12 +194,17 @@ main { position: relative; flex: 1; min-width: 0; min-height: 0; overflow: hidde
 .ask-item-body { display: flex; flex-direction: column; min-width: 0; overflow-wrap: anywhere; }
 .ask-item-why { font-size: var(--type-sm); color: var(--fg-muted); }
 .ask-context { white-space: pre-wrap; overflow-wrap: anywhere; }
+/* a permission ask: what the tool would do, as the thing itself — on the raised ground, like the reply box */
+.ask-permission { display: flex; flex-direction: column; gap: 6px; min-width: 0; font-size: var(--type-sm); color: var(--fg-muted); }
+.ask-permission .code-block { background: var(--bg-raised); color: var(--fg); border: 1px solid var(--attention-border); }
 .ask-reply { min-height: 52px; background: var(--bg-raised); }
 .ask-questions { min-width: 0; }
 .ask-card .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
 .ask-keys { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px; font-size: var(--type-xs); color: var(--fg-muted); }
 /* a refusal is shown whole and verbatim: it names the verb that will work */
 .ask-refusal, .no-reply-why { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--fg); }
+/* a second part of the record inside "Full message", under its own label */
+.ask-record-label { padding: 8px 0 0 14px; font-size: var(--type-xs); font-weight: 600; color: var(--fg-muted); }
 /* the engine's own message, one click away */
 .ask-full summary { width: fit-content; padding: 3px 0; cursor: pointer; font-size: var(--type-sm); line-height: 18px; color: var(--fg-muted); border-radius: var(--radius-xs); }
 .ask-full summary:hover { color: var(--fg); }
@@ -479,9 +486,14 @@ main { position: relative; flex: 1; min-width: 0; min-height: 0; overflow: hidde
   background: var(--bg-raised); border: 1px solid var(--border-strong); border-radius: var(--radius-xs);
   color: var(--fg); font-size: var(--type-xs); font-weight: 600; line-height: 1;
 }
-/* the dot a wire is drawn from: 10px to see, 26px to hit */
-.gb-handle { width: 10px; height: 10px; }
+/* the dot a wire is drawn from: 10px to see, 26px to hit. There is one on each side of a card
+   (routing.ts picks the pair a route uses); the ones a wire is attached to are always drawn,
+   the rest appear when the card is approached, focused or selected — four dots on every card
+   at rest would be chrome. Opacity only: the dot is still there to be found and dropped on. */
+.gb-handle { width: 10px; height: 10px; opacity: 0; transition: opacity var(--dur-fast) ease; }
 .gb-handle::after { content: ""; position: absolute; inset: -8px; border-radius: 50%; }
+.gb-handle[data-wired], .gb-node:hover .gb-handle, .gb-node.selected .gb-handle, .gb-node:focus-within .gb-handle,
+.gb-canvas :focus-visible > .gb-node .gb-handle, .gb-canvas[data-connecting] .gb-handle { opacity: 1; }
 
 /* a route. The caption is a real control, because a hairline is not a click target and a
    route has to be reachable without a mouse at all. */
@@ -694,6 +706,17 @@ main { position: relative; flex: 1; min-width: 0; min-height: 0; overflow: hidde
 .act-live { display: flex; align-items: center; gap: 6px; font-size: var(--type-xs); color: var(--status-running); }
 .act-live.quiet { color: var(--fg-muted); }
 .act-note-quiet { font-size: var(--type-xs); color: var(--fg-muted); font-style: italic; }
+/* the engine's own closing line on a turn (activity.tsx EngineNotice): one quiet line that is
+   plainly not the agent's prose, opening to the whole reason when it is long */
+.act-notice { font-size: var(--type-sm); line-height: 20px; color: var(--fg-muted); min-width: 0; }
+div.act-notice, .act-notice > summary { display: flex; align-items: flex-start; gap: 8px; }
+.act-notice > summary { cursor: pointer; border-radius: var(--radius-xs); list-style: none; }
+.act-notice > summary::-webkit-details-marker { display: none; }
+.act-notice > summary:hover { color: var(--fg); }
+.act-notice svg { flex: none; margin-top: 4px; }
+.act-notice span { min-width: 0; overflow-wrap: anywhere; }
+.act-notice[data-kind="failure"] svg { color: var(--status-failed-recoverable); }
+.act-notice-full { padding: 4px 0 4px 20px; white-space: pre-wrap; overflow-wrap: anywhere; }
 /* one line, opening to the whole thing */
 .act-tool { border-top: 1px solid var(--border); min-width: 0; }
 .act-tool-head {
@@ -723,6 +746,10 @@ main { position: relative; flex: 1; min-width: 0; min-height: 0; overflow: hidde
 .md { min-width: 0; font-size: var(--type-body); line-height: 1.5; color: var(--fg); overflow-wrap: anywhere; }
 .md > * { max-width: 75ch; }
 .md > pre, .md > .md-table { max-width: 100%; }
+/* ...except in the transcript, where the 720px column IS the measure: capped at 75ch (about
+   608px) the prose stopped short of the full-width tool rows above and below it and left a
+   ragged gutter. Plan and the document reader are standalone documents and keep 75ch. */
+.chat-log .md > *, .chat-log .act-thinking { max-width: 100%; }
 .md > :first-child { margin-top: 0; }
 .md > :last-child { margin-bottom: 0; }
 .md p { margin: 0 0 0.75em; text-wrap: pretty; }
@@ -813,34 +840,43 @@ main { position: relative; flex: 1; min-width: 0; min-height: 0; overflow: hidde
    its word beside it, so no colour or symbol carries meaning alone (D-8A). */
 .draft-card { display: flex; flex-direction: column; gap: 12px; padding: 16px; border-radius: var(--radius); }
 .draft-head { display: flex; flex-direction: column; gap: 2px; }
-.draft-head h2, .draft-head h1 { margin: 0; }
+.draft-head h2, .draft-head h1 { margin: 0; font-size: var(--type-lg); }
 .draft-card .actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .draft-basis { margin: 0; font-size: var(--type-sm); color: var(--fg-muted); }
 .draft-name { display: flex; flex-direction: column; gap: 4px; max-width: 360px; }
-.draft-sum { display: flex; flex-wrap: wrap; gap: 4px; margin: 0; font-size: var(--type-sm); color: var(--fg); }
-.draft-glyph { display: inline-block; min-width: 1ch; font-family: var(--font-mono); color: var(--fg-muted); }
-.draft-glyph.risk { color: var(--fg); font-weight: 600; }
+.draft-sum { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; margin: 0; font-size: var(--type-sm); color: var(--fg); }
+.draft-sum > span { display: inline-flex; align-items: center; gap: 6px; }
+/* a mark beside its word: an inline SVG on the text's own line */
+.draft-glyph { display: inline-flex; flex: none; align-self: center; color: var(--fg-muted); }
+.draft-glyph.risk { color: var(--fg); }
 .draft-glyph.ok { color: var(--status-running); }
 /* a fact about the draft, not an ask: a neutral well — amber is for a run waiting on you, and
    a coloured side stripe is never the way (DESIGN.md Chrome) */
 .draft-banner { margin: 0; padding: 8px 12px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--bg-inset); font-size: var(--type-sm); }
 .draft-note { margin: 0; font-size: var(--type-sm); color: var(--fg-muted); overflow-wrap: anywhere; }
-.draft-receipt { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px; margin: 0; font-size: var(--type-sm); }
+.draft-receipt { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; margin: 0; font-size: var(--type-sm); }
+.draft-receipt a { text-decoration: underline; text-underline-offset: 2px; overflow-wrap: anywhere; }
 .draft-list { display: flex; flex-direction: column; gap: 16px; }
 .draft-sec { display: flex; flex-direction: column; gap: 6px; }
-.draft-sec h3 { margin: 0; font-size: var(--type-xs); font-weight: 600; color: var(--fg-muted); }
 .draft-sec ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
-.draft-none { margin: 0; font-size: var(--type-sm); color: var(--fg-faint); }
-.draft-row { display: flex; flex-direction: column; gap: 4px; padding: 8px 10px; border-radius: var(--radius-sm); }
+.draft-none { margin: 0; font-size: var(--type-sm); color: var(--fg-muted); }
+.draft-disclosure { margin-left: -8px; }
+/* the quiet way out: a ghost button whose LABEL sits on the card's left edge */
+.draft-discard { margin-left: -14px; }
+/* rows, not boxes: a hairline between them, and the raised ground only under the pointer or focus */
+.draft-row { display: flex; flex-direction: column; gap: 4px; padding: 8px 10px; margin-inline: -10px; border-radius: var(--radius-sm); }
 .draft-row + .draft-row { border-top: 1px solid var(--border); }
-.draft-row:hover, .draft-row:focus-visible { background: var(--bg-raised); }
+.draft-row:hover, .draft-row:focus-visible { background: var(--bg-inset); }
 .draft-row.risk .draft-tag { color: var(--fg); font-weight: 600; }
 .draft-row[data-change="removed"] strong { text-decoration: line-through; color: var(--fg-muted); }
 .draft-row[data-change="removed"] .draft-glyph { color: var(--diff-del); }
 .draft-row[data-change="added"] .draft-glyph { color: var(--diff-add); }
-.draft-row-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; font-size: var(--type-sm); }
-.draft-tag, .draft-kind, .draft-id { font-family: var(--font-mono); font-size: var(--type-xs); color: var(--fg-muted); }
-.draft-kind { margin-left: auto; color: var(--fg-faint); }
+.draft-row-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 6px; font-size: var(--type-sm); }
+.draft-row-head strong { font-weight: 600; overflow-wrap: anywhere; }
+/* "added", "new", "agent" are words; only the step's id is machine text */
+.draft-tag, .draft-kind { font-size: var(--type-xs); color: var(--fg-muted); }
+.draft-id { font-family: var(--font-mono); font-size: var(--type-code); color: var(--fg-muted); overflow-wrap: anywhere; }
+.draft-kind { margin-left: auto; }
 .draft-sec .draft-facts { list-style: disc; padding-left: 18px; font-size: var(--type-sm); color: var(--fg-muted); }
 .draft-diff pre { margin: 0; padding: 6px 0; overflow-x: auto; font-family: var(--font-mono); font-size: var(--type-xs); line-height: 1.5; white-space: pre-wrap; }
 .draft-diff del, .draft-diff ins, .draft-diff span { display: block; padding: 0 8px; text-decoration: none; }

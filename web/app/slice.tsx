@@ -359,7 +359,13 @@ export function ApprovalCard({ runId, slice, onChanged }: { runId: string; slice
   const feedbackBlock = block ?? (roundComments.length === 0 ? "pin at least one comment on this round first" : null);
 
   return (
-    <div className={`approval-card${needsYou ? " needs-you" : ""}`} data-state={decision?.kind ?? "none"} id={decision?.kind === "awaiting" ? "needs-input" : undefined}>
+    <div className={`approval-card${needsYou ? " needs-you" : ""}`} data-state={decision?.kind ?? "none"}
+      // the ONE `#needs-input` on the page while this round awaits a decision (ask.tsx's
+      // ApprovalAsk wrapper deliberately carries none): the notification's deep link and the
+      // run's `A` key scroll here and FOCUS it, which a div only takes with a tabindex
+      id={decision?.kind === "awaiting" ? "needs-input" : undefined}
+      tabIndex={decision?.kind === "awaiting" ? -1 : undefined}
+    >
       <div className="ap-head">
         <h3>
           {decision?.kind === "awaiting" ? "Needs you — approve this design"

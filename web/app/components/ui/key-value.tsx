@@ -20,7 +20,7 @@
  * grid — a label column sized by `labelWidth`, the value taking the rest with `minmax(0,1fr)`
  * so a long value cannot widen the list.
  */
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { Check, Copy } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "./button";
@@ -34,6 +34,24 @@ export interface KeyValueItem {
   mono?: boolean;
   /** `true` copies a string `value`; a string copies that instead (when the value is a node) */
   copy?: boolean | string;
+}
+
+/**
+ * A path, broken where a path is read: after each `/` (HOW-68). `overflow-wrap: anywhere`
+ * alone let the browser break at every hyphen first, so a run folder wrapped into five ragged
+ * lines ending "-home-", "user-", "0f9-". Each segment is an inline-block, which the line
+ * breaks BETWEEN (the `<wbr>`), and which only breaks inside itself when one segment is
+ * longer than the whole line. The text is unchanged — selecting it copies the same characters.
+ */
+export function breakAtSlashes(value: string): React.ReactNode {
+  if (!value.includes("/")) return value;
+  const parts = value.split(/(?<=\/)/);
+  return parts.map((part, i) => (
+    <Fragment key={i}>
+      <span className="inline-block max-w-full [overflow-wrap:anywhere]">{part}</span>
+      {i < parts.length - 1 && <wbr />}
+    </Fragment>
+  ));
 }
 
 function CopyButton({ label, text }: { label: string; text: string }) {
@@ -80,7 +98,7 @@ export function KeyValue({ items, labelWidth = 88, empty = "—", className }: {
             <dt className="py-0.5 text-muted-foreground">{it.label}</dt>
             <dd className="m-0 flex min-w-0 items-start gap-1">
               <span className={cn("min-w-0 flex-1 py-0.5 [overflow-wrap:anywhere]", it.mono && !blank && "font-mono text-code", blank && "text-faint")}>
-                {blank ? empty : it.value}
+                {blank ? empty : it.mono && typeof it.value === "string" ? breakAtSlashes(it.value) : it.value}
               </span>
               {copyText !== null && !blank && <CopyButton label={it.label.toLowerCase()} text={copyText} />}
             </dd>

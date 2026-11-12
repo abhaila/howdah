@@ -108,6 +108,27 @@ describe("a park a reply cannot answer (HOW-69)", () => {
     expect(buttons(el)).toContain("retry");
   });
 
+  // HOW-68: heading → items → hint → primary action → disclosure. Where Retry is the answer,
+  // the refusal is the explanation, not the instruction, so it lives in the record under a label
+  test("with Retry on offer, the refusal sits inside Full message, after the action", () => {
+    const el = render(parked("delivery.probe_pr", "executor-threw", FORGE));
+    const card = el.querySelector("#needs-input")!;
+    const full = card.querySelector("details.ask-full")!;
+    const why = card.querySelector(".no-reply-why")!;
+    expect(full.contains(why)).toBe(true);
+    expect(full.querySelector(".ask-record-label")!.textContent).toBe("Why there is no reply box");
+    expect(why.textContent).toContain("reply refused (executor-threw)");
+    // the action comes before the disclosure in reading order
+    const retry = button(el, "Retry this step");
+    expect(retry.compareDocumentPosition(full) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  test("with no Retry, the refusal is the guidance and stays in the card's body", () => {
+    const el = render(parked("delivery.fix_ci", "no-edge", "no outgoing edge matched"));
+    const why = el.querySelector(".no-reply-why")!;
+    expect(why.closest("details")).toBeNull();
+  });
+
   test("an agent-node park still gets the reply box", () => {
     const el = render(parked("delivery.fix_ci", "attempt-failed", "attempt failed"));
     expect(replyBox(el)).not.toBeNull();

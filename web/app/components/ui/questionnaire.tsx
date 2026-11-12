@@ -1,6 +1,6 @@
 /**
  * Questionnaire — shadcn/ui `questionnaire`, vendored from the `base-vega` style (HOW-27).
- * Provenance: `npx shadcn@latest add questionnaire`, kept verbatim apart from the three
+ * Provenance: `npx shadcn@latest add questionnaire`, kept verbatim apart from the four
  * HOW-68 deviations listed at the end of this header. The `cn-*` class names and the `IconPlaceholder` import in the registry's GitHub
  * source are pre-substitution template artefacts; what `shadcn add` actually writes, and what
  * is below, is plain Tailwind against the standard colour contract that globals.css already
@@ -42,6 +42,15 @@
  *   - NO `shadow-xs` on the choice, its key cap or the field: only things that float cast a
  *     shadow, and a choice is a row in a card.
  *   - the key cap prints at 12px (`text-xs`), not 10px: nothing is under the 12px floor.
+ *   - NO `dark:` UTILITIES. The registry themes with Tailwind's `dark:` variant, which follows
+ *     `prefers-color-scheme` (or a `.dark` class) — and Howdah's theme is `light-dark()` pairs
+ *     in tokens.css, switched by `color-scheme` on `:root[data-theme]`. So under the explicit
+ *     toggle a `dark:` rule answered the OS, not the app: a light page on a dark machine drew
+ *     these controls with dark fills. A choice, its indicator and the free-text field are on
+ *     the raised ground (`bg-card`) in both themes — held objects on the amber card, as the
+ *     prose reply box is — and the selected choice is told by an accent border and its filled
+ *     indicator rather than by a grey fill; an invalid field is the destructive border alone.
+ *     `css-contract.test.ts` asserts no `dark:` utility exists anywhere in web/app.
  */
 import * as React from "react"
 import { Questionnaire as QuestionnairePrimitive } from "@shadcn/react/questionnaire"
@@ -149,7 +158,7 @@ function QuestionnaireChoice({
     <QuestionnairePrimitive.Choice
       data-slot="questionnaire-choice"
       className={cn(
-        "group/questionnaire-choice relative flex min-h-11 cursor-pointer items-start gap-3 rounded-md border border-input bg-transparent px-4 py-3.5 text-start text-sm transition-colors select-none hover:bg-muted/50 has-[>input:focus-visible]:outline-2 has-[>input:focus-visible]:outline-offset-2 has-[>input:focus-visible]:outline-[var(--ring)] data-invalid:border-destructive dark:bg-input/20 data-checked:border-primary/40 data-checked:bg-muted dark:data-checked:bg-muted",
+        "group/questionnaire-choice relative flex min-h-11 cursor-pointer items-start gap-3 rounded-md border border-input bg-card px-4 py-3.5 text-start text-sm transition-colors select-none hover:bg-accent has-[>input:focus-visible]:outline-2 has-[>input:focus-visible]:outline-offset-2 has-[>input:focus-visible]:outline-[var(--ring)] data-invalid:border-destructive data-checked:border-primary data-checked:bg-card data-checked:hover:bg-card",
         "data-disabled:pointer-events-none data-disabled:cursor-not-allowed data-disabled:opacity-50",
         className
       )}
@@ -162,7 +171,7 @@ function QuestionnaireChoice({
       <span
         aria-hidden="true"
         data-slot="questionnaire-choice-indicator"
-        className="pointer-events-none relative flex size-4 shrink-0 translate-y-[--spacing(0.45)] items-center justify-center rounded-[4px] border border-input group-has-data-[slot=questionnaire-choice-description]/questionnaire-choice:translate-y-0.5 group-data-[type=radio]/questionnaire-choice:rounded-full group-data-checked/questionnaire-choice:border-primary group-data-checked/questionnaire-choice:bg-primary group-data-checked/questionnaire-choice:text-primary-foreground dark:bg-input/30 dark:group-data-checked/questionnaire-choice:bg-primary"
+        className="pointer-events-none relative flex size-4 shrink-0 translate-y-[--spacing(0.45)] items-center justify-center rounded-[4px] border border-input group-has-data-[slot=questionnaire-choice-description]/questionnaire-choice:translate-y-0.5 group-data-[type=radio]/questionnaire-choice:rounded-full group-data-checked/questionnaire-choice:border-primary group-data-checked/questionnaire-choice:bg-primary group-data-checked/questionnaire-choice:text-primary-foreground"
       >
         <span
           data-slot="questionnaire-choice-indicator-dot"
@@ -209,8 +218,8 @@ function QuestionnaireInput({
       <QuestionnairePrimitive.Input
         data-slot="questionnaire-input"
         className={cn(
-          "h-9 min-h-11 w-full min-w-0 rounded-md border border-input bg-transparent px-2.5 py-1 text-base transition-[color,background-color] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--ring)] disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 sm:min-h-0 md:text-sm dark:bg-input/30 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40",
-          "selection:bg-primary selection:text-primary-foreground placeholder:text-muted-foreground",
+          "h-9 min-h-11 w-full min-w-0 rounded-md border border-input bg-card px-2.5 py-1 text-base transition-[color,background-color] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--ring)] disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50 aria-invalid:border-destructive sm:min-h-0 md:text-sm",
+          "selection:bg-primary selection:text-primary-foreground placeholder:text-faint",
           className
         )}
         {...props}

@@ -433,6 +433,18 @@ describe("KeyValue — values wrap, labels are not mono", () => {
     for (const dt of $$(el, "dt")) expect(dt.className).not.toContain("font-mono"); // a label is never mono
   });
 
+  // HOW-68: `overflow-wrap: anywhere` alone broke a path at its hyphens first — five ragged lines
+  test("a path breaks after its slashes, and its text is unchanged", () => {
+    const path = "/home/me/.howdah/runs/implement-ticket-mhv2k9qd/run.jsonl";
+    const el = render(<KeyValue items={[{ label: "Log", value: path, mono: true, copy: true }]} />);
+    const value = $(el, "dd > span")!;
+    expect(value.textContent).toBe(path); // what is selected and copied is the path itself
+    const segments = [...value.querySelectorAll(":scope > span")].map((s) => s.textContent);
+    expect(segments).toEqual(["/", "home/", "me/", ".howdah/", "runs/", "implement-ticket-mhv2k9qd/", "run.jsonl"]);
+    expect(value.querySelectorAll("wbr")).toHaveLength(segments.length - 1);
+    for (const s of value.querySelectorAll(":scope > span")) expect(s.className).toContain("inline-block");
+  });
+
   test("an absent value is printed as absent, never as a blank cell", () => {
     const el = render(<KeyValue items={[{ label: "PR", value: null, copy: true }]} />);
     expect($(el, "dd")!.textContent).toBe("—");

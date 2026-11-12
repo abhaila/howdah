@@ -71,8 +71,28 @@ export function StatusBadge({ status, className }: { status: RunStatus; classNam
  * started, so no row has it — without this fallback the needs-you row and its Ask pane would
  * be unreachable. One rule for the row glyph, the default selection and the detail panes.
  */
-export function askRowKey(timeline: ReadonlyArray<{ node: string; visit: number }>, ask: { node: string; visit: number } | null): string | null {
+export function askRowKey(timeline: ReadonlyArray<StepRef>, ask: { node: string; visit: number } | null): string | null {
   if (!ask) return null;
   const row = timeline.findLast((t) => t.node === ask.node && t.visit === ask.visit) ?? timeline.findLast((t) => t.node === ask.node);
-  return row ? `${row.node}@${row.visit}` : null;
+  return row ? stepKey(row) : null;
+}
+
+type StepRef = { node: string; visit: number; attempt?: number };
+/**
+ * A timeline row's IDENTITY in a list (HOW-68): `node@visit`, and `node@visit#2` for a second
+ * attempt of the same visit (derive.ts `TimelineRow.attempt`). An approval step that failed and
+ * was then decided is two rows of `approve@1`; keyed by `node@visit` alone they shared a React
+ * key and lit up together when either was selected. Stable: rows are only ever appended.
+ */
+export function stepKey(t: StepRef): string {
+  return `${t.node}@${t.visit}${t.attempt && t.attempt > 1 ? `#${t.attempt}` : ""}`;
+}
+/**
+ * The row a bare `node@visit` means — its LATEST attempt, which is the one the conversation
+ * draws. A key that already names a row (or names none) is returned unchanged.
+ */
+export function resolveStepKey(timeline: ReadonlyArray<StepRef>, key: string | null): string | null {
+  if (key === null) return null;
+  const row = timeline.findLast((t) => `${t.node}@${t.visit}` === key);
+  return row ? stepKey(row) : key;
 }

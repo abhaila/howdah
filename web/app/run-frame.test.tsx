@@ -208,7 +208,11 @@ describe("a park is one card, written for a person", () => {
     expect(labels).toContain("Approve");
     expect(labels).toContain("Send feedback");
     // one deep-link target, not two: the approval card carries the id while it awaits a decision
-    expect(el.querySelectorAll("#needs-input")).toHaveLength(1);
+    expect(el.querySelectorAll('[id="needs-input"]')).toHaveLength(1);
+    // ...and it can TAKE the focus the deep link and the `A` key give it
+    const target = el.querySelector("#needs-input") as HTMLElement;
+    target.focus();
+    expect(document.activeElement).toBe(target);
     expect(el.textContent).not.toContain("A reply can't move this run");
     expect(el.querySelector("details.ask-full .ask-message")!.textContent).toBe(deriveDetail("r1", log.events).ask!.reason);
   });

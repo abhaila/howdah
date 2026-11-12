@@ -10,9 +10,9 @@
  *
  * Two things the card is, rather than says:
  *
- *   A TERMINAL HAS NO SOURCE HANDLE. "Nothing can follow a Finish step" is a `Graph.validate()`
- *   refusal and a `specProblems` sentence; here it is a wire you cannot start, which is better
- *   than being told afterwards.
+ *   A WIRE CANNOT START AT A TERMINAL. "Nothing can follow a Finish step" is a
+ *   `Graph.validate()` refusal and a `specProblems` sentence; here its dots only receive
+ *   (`isConnectableStart={false}`), which is better than being told afterwards.
  *
  *   THE WAY IN IS A BUTTON. The card is dragged, and a drag target is not a control — so
  *   selecting a step for editing is a real `Button` with its own name, reachable by Tab and
@@ -47,6 +47,7 @@ import type { GraphSpec, NodeSpec } from "../../../core/graph-spec";
 import { STEP_KINDS, type StepKind } from "@/lib/spec-draft";
 import { Button } from "@/components/ui/button";
 import { Truncate } from "@/components/ui/truncate";
+import { SIDES, type Side } from "./routing";
 
 /** one glyph per kind of step — the palette, the card and the panel header all draw from here */
 export const KIND_ICON: Record<StepKind, LucideIcon> = {
@@ -93,11 +94,15 @@ export interface StepNodeData extends Record<string, unknown> {
   problems: number;
   /** what is merely worth a second look, counted quietly */
   advice: number;
+  /** the sides a route is attached to: their dots are always drawn, the others on approach */
+  wired: Side[];
   onOpen: () => void;
 }
 
+const HANDLE_AT: Record<Side, Position> = { top: Position.Top, right: Position.Right, bottom: Position.Bottom, left: Position.Left };
+
 export function StepNode({ data, selected }: NodeProps & { data: StepNodeData }) {
-  const { id, title, kind, summary, isEntry, problems, advice } = data;
+  const { id, title, kind, summary, isEntry, problems, advice, wired } = data;
   const Icon = KIND_ICON[kind];
   const named = title !== id;
   const counts = `${problems ? `, ${problems} to sort out` : ""}${advice ? `, ${advice} worth a second look` : ""}`;
@@ -107,8 +112,15 @@ export function StepNode({ data, selected }: NodeProps & { data: StepNodeData })
       data-testid="gb-node"
       data-kind={kind}
     >
-      {/* an entry step is still a target: a loop back to the start is an ordinary route */}
-      <Handle type="target" position={Position.Top} className="gb-handle" />
+      {/* HOW-68: a dot on EVERY side, so a wire can leave towards wherever the next card is
+          (routing.ts picks the pair per route). All four are `source` handles under the canvas's
+          loose connection mode, which is what lets a drag start from any of them and end on any
+          of another card's; the route still runs from the card the drag STARTED on. A Finish
+          step's dots only receive: nothing can follow it, so a wire cannot be started there.
+          An entry step is still a target: a loop back to the start is an ordinary route. */}
+      {SIDES.map((side) => (
+        <Handle key={side} id={side} type="source" position={HANDLE_AT[side]} className="gb-handle" isConnectableStart={kind !== "terminal"} data-wired={wired.includes(side) || undefined} />
+      ))}
       {isEntry && (
         <span className="gb-node-entry">
           <Play aria-hidden className="size-3 fill-current" />Start
@@ -137,7 +149,6 @@ export function StepNode({ data, selected }: NodeProps & { data: StepNodeData })
       </div>
       {named && <Truncate mono className="pl-[22px] text-xs text-faint">{id}</Truncate>}
       <Truncate className="pl-[22px] text-xs text-muted-foreground">{summary}</Truncate>
-      {kind !== "terminal" && <Handle type="source" position={Position.Bottom} className="gb-handle" />}
     </div>
   );
 }

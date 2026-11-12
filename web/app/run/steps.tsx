@@ -19,7 +19,7 @@
  */
 import { useState } from "react";
 import type { RunDetail } from "../../derive";
-import { StatusGlyph, askRowKey } from "../status";
+import { StatusGlyph, askRowKey, stepKey } from "../status";
 import { slicePanes, SlicePane, MapProgressLine, type SlicePaneId } from "../slice";
 import { fmtDur, liveDuration } from "@/lib/format";
 import { PanelTabs } from "@/components/ui/tabs";
@@ -68,7 +68,7 @@ export function RunSteps({ timeline, ask, selected, now, onSelect, mapping }: {
   mapping?: NonNullable<RunDetail["slice"]>["mapping"];
 }) {
   const split = useSplit();
-  const keys = useListKeys({ ids: timeline.map((t) => `${t.node}@${t.visit}`), selected, onSelect, name: "step" });
+  const keys = useListKeys({ ids: timeline.map(stepKey), selected, onSelect, name: "step" });
   if (timeline.length === 0)
     return <EmptyState title="No steps yet">Each step the run starts appears here as a row, with how long it took and how long it waited on you.</EmptyState>;
   const askKey = askRowKey(timeline, ask);
@@ -76,23 +76,25 @@ export function RunSteps({ timeline, ask, selected, now, onSelect, mapping }: {
   const liveSpan = Math.max(1, now - firstStartedAt);
   const row = (t: RunDetail["timeline"][number], i: number) => {
     const span = t.finished_at ? t.run_span_ms || 1 : Math.max(t.run_span_ms || 1, liveSpan);
-    const waiting = askKey === `${t.node}@${t.visit}`;
+    const waiting = askKey === stepKey(t);
     const status: StepStatus = waiting ? "needs-input" : t.status;
     const total = liveDuration(t, now);
     // the split that makes R3.3 visible: agent time, then the part that was me not looking
     const work = Math.max(0, total - t.waiting_ms);
     const pct = (ms: number) => (ms / span) * 100;
-    const key = `${t.node}@${t.visit}`;
+    // the row's identity: `node@visit`, or `node@visit#2` for a second attempt of the same visit
+    const key = stepKey(t);
+    const name = `${t.node}@${t.visit}`;
     const isMapping = mapping && mapping.node === t.node && mapping.visit === t.visit && t.status === "running";
     return (
       <Row
-        key={`${key}#${i}`}
+        key={key}
         className={`step-row ${status}${t.parallel ? " branch" : ""}`}
         data-status={status}
         selected={selected === key}
         needsInput={status === "needs-input"}
         onClick={() => { onSelect(key); split.open(); }}
-        aria-label={`${key} — ${STEP_WORD[status]}, ${fmtDur(total)}${t.waiting_ms > 0 ? `, waited ${fmtDur(t.waiting_ms)}` : ""}`}
+        aria-label={`${name} — ${STEP_WORD[status]}, ${fmtDur(total)}${t.waiting_ms > 0 ? `, waited ${fmtDur(t.waiting_ms)}` : ""}`}
       >
         <StepGlyph status={status} />
         <span className="flex min-w-0 items-baseline gap-1">
@@ -198,10 +200,16 @@ export function readDetailWidth(): number {
  * `SplitView` (components/ui/panel.tsx), shared with Logs and Context — which also adds the
  * narrow shape (the detail replaces the list under 1100px) and Esc.
  */
-export function StepsSplit({ list, detail }: { list: React.ReactNode; detail: React.ReactNode }) {
+export function StepsSplit({ list, detail, openRequest }: {
+  list: React.ReactNode;
+  detail: React.ReactNode;
+  /** bumped when a step is chosen from OUTSIDE the list (Build, the Details timeline): show its detail */
+  openRequest?: number;
+}) {
   return (
     <SplitView
       className="steps-split"
+      openRequest={openRequest}
       storageKey={DETAIL_KEY}
       min={DETAIL_MIN}
       def={DETAIL_DEFAULT}
@@ -249,7 +257,9 @@ export function StepDetail({ runId, row, detail, ask, now, onResolved }: {
     );
 
   const key = `${row.node}@${row.visit}`;
-  const isAsking = ask !== null && askRowKey(detail.timeline, ask) === key;
+  // the ask belongs to the LATEST attempt of its visit (an earlier, failed attempt of the same
+  // approval visit is history, and must not offer the decision a second time)
+  const isAsking = ask !== null && askRowKey(detail.timeline, ask) === stepKey(row);
   // system-map 1d: the slice panes (approval card, drift, map) live in THIS panel's slot.
   // Only an awaiting-approval ask IS the approval card (Ask is hidden then); any other park on
   // the step (attempt-failed, max-visits, …) is answered by a reply, so Ask stays and leads.

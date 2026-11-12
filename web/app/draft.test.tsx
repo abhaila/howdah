@@ -148,10 +148,13 @@ describe("the draft card in the run's Chat — D-4A", () => {
     const card = el.querySelector(".draft-card")!;
     expect(card).not.toBeNull();
     expect(card.querySelector(".draft-basis")?.textContent).toBe("based on quick-task · 3 steps");
-    expect(card.querySelector(".draft-sum")?.textContent).toBe("⚠ 1 step can change your code · ◐ 4 changed · ⓘ 0 worth a look");
+    // HOW-68: the marks are inline SVG now (DESIGN.md: never dingbats), so the line's TEXT is its words
+    expect(card.querySelector(".draft-sum")?.textContent).toBe("1 step can change your code · 4 changed · 0 worth a look");
+    expect(card.querySelectorAll(".draft-sum .draft-glyph svg")).toHaveLength(3);
     const headings = [...card.querySelectorAll(".draft-sec h3")].map((h) => h.textContent);
     // HOW-66: Ask for changes is its own labelled section, after Worth a look
-    expect(headings).toEqual(["Can change your code · 1", "What changed from quick-task · 4", "Unchanged (1)", "Worth a look · 0", "Ask for changes"]);
+    // HOW-68: a heading is a SectionLabel, whose count is its own quiet number rather than "· N" typed into the title
+    expect(headings).toEqual(["Can change your code1", "What changed from quick-task4", "Unchanged (1)", "Worth a look0", "Ask for changes"]);
   });
 
   test("empty: a draft from nothing says `New graph`, every row is added, empty sections say Nothing flagged", async () => {
@@ -193,7 +196,7 @@ describe("the draft card in the run's Chat — D-4A", () => {
     await click(buttonNamed(el, "Save")!);
     expect(calls.find((c) => c.method === "POST")).toMatchObject({ url: "/api/runs/r1/draft/save", body: { name: "my-look" } });
     const receipt = el.querySelector(".draft-receipt")!;
-    expect(receipt.textContent).toBe("✓ Saved as my-look · not edited · Open · Run it");
+    expect(receipt.textContent).toBe("Saved as my-look · not edited · Open · Run it"); // HOW-68: the tick is an SVG
     expect(linkNamed(el, "Open")?.getAttribute("href")).toBe("/graphs/my-look/build");
     expect(linkNamed(el, "Run it")?.getAttribute("href")).toBe("/new?graph=my-look");
     expect(buttonNamed(el, "Save")).toBeUndefined(); // a reload or a second tab never offers it twice
@@ -336,7 +339,7 @@ describe("Ask for changes and Discard (HOW-66)", () => {
     serve([ready({ redrafts: [{ run: "draft-graph-c1", at: "2026-10-21T10:00:00Z" }, { run: "draft-graph-c2", at: "2026-10-21T11:00:00Z" }] })]);
     const el = await mount(<DraftCard runId="r1" />);
     const receipts = [...el.querySelectorAll(".draft-receipt")].map((r) => r.textContent);
-    expect(receipts).toEqual(["↻ Redrafted → run draft-graph-c1", "↻ Redrafted → run draft-graph-c2"]);
+    expect(receipts).toEqual(["Redrafted → run draft-graph-c1", "Redrafted → run draft-graph-c2"]); // HOW-68: the mark is an SVG
     expect(el.querySelectorAll(".draft-receipt[role=status]")).toHaveLength(2);
     expect(linkNamed(el, "run draft-graph-c1")?.getAttribute("href")).toBe("/run/draft-graph-c1");
     expect(changeBox(el)).not.toBeNull();
@@ -349,7 +352,7 @@ describe("Ask for changes and Discard (HOW-66)", () => {
     await click(buttonNamed(el, "Discard")!);
     expect(calls.filter((c) => c.method === "POST").map((c) => c.url)).toEqual(["/api/runs/r1/draft/discard"]);
     const receipt = el.querySelector(".draft-receipt[role=status]")!;
-    expect(receipt.textContent).toBe("✕ Discarded · this draft will not be saved");
+    expect(receipt.textContent).toBe("Discarded · this draft will not be saved"); // HOW-68: the mark is an SVG
     for (const gone of ["Save", "Review and save", "Redraft", "Discard"]) expect(buttonNamed(el, gone)).toBeUndefined();
     expect(changeBox(el)).toBeNull();
     expect(nameBox(el)).toBeNull();
@@ -359,7 +362,7 @@ describe("Ask for changes and Discard (HOW-66)", () => {
   test("a discarded draft that was redrafted shows both receipts", async () => {
     serve([ready({ discarded: { at: "t" }, redrafts: [{ run: "c1", at: "t" }] })]);
     const el = await mount(<DraftCard runId="r1" />);
-    expect([...el.querySelectorAll(".draft-receipt")].map((r) => r.textContent)).toEqual(["✕ Discarded · this draft will not be saved", "↻ Redrafted → run c1"]);
+    expect([...el.querySelectorAll(".draft-receipt")].map((r) => r.textContent)).toEqual(["Discarded · this draft will not be saved", "Redrafted → run c1"]);
   });
 
   test("a refused discard is shown word for word", async () => {

@@ -381,7 +381,7 @@ describe("the run reads as one conversation", () => {
   test("a run with nothing in it says so rather than drawing an empty frame", () => {
     const log = new FakeLog();
     log.add({ type: "run-started", graph: "quick-task", inputs: { goal: "g" }, pinned_prompts: {} });
-    expect(render(log).textContent).toContain("nothing has happened in this run yet");
+    expect(render(log).textContent).toContain("Nothing has happened in this run yet") // HOW-68: a sentence starts with a capital;
   });
 });
 
@@ -651,5 +651,100 @@ describe("a stacked run in the conversation (HOW-57)", () => {
       text: `restacked howdah/p--fe-1 @ ${"a".repeat(12)} → main @ ${"b".repeat(12)} · https://github.com/acme/web/pull/2 retargeted`,
     });
     expect(render(log).querySelector(".cv-restacked")?.textContent).toContain("→ main @ bbbbbbbbbbbb");
+  });
+});
+
+// HOW-68: the engine closes a failed attempt's turn with `\n[failed: <reason>]` (engine/run.ts),
+// which coalesce() merges into the agent's last paragraph. It was drawn as agent prose, directly
+// above the ask card that says the same thing.
+describe("the engine's failure line is not the agent's prose (HOW-68)", () => {
+  const LONG = "the suite is red on CallbackTest and the revision did not touch it; ".repeat(4).trim();
+  function failedLog(resolved: boolean): FakeLog {
+    const log = new FakeLog();
+    log.add({ type: "run-started", graph: "quick-task", inputs: { goal: "g" }, pinned_prompts: { "doc.draft": 1 } });
+    log.add({ type: "node-started", node: "do", visit: 1, attempt_id: "do#1" });
+    log.add({ type: "chunk", node: "do", visit: 1, turn: 1, index: 0, kind: "text", content: "I ran the suite." });
+    log.add({ type: "chunk", node: "do", visit: 1, turn: 1, index: 9998, kind: "text", content: `\n[failed: ${LONG}]` });
+    log.add({ type: "turn-finalized", node: "do", visit: 1, turn: 1 });
+    log.add({ type: "node-finished", node: "do", visit: 1, status: "failed", writes: {} });
+    log.add({ type: "attention-raised", node: "do", visit: 1, reason: LONG, code: "attempt-failed" });
+    if (resolved) {
+      log.add({ type: "attention-resolved", node: "do", visit: 1, reply: "try again" });
+      log.add({ type: "node-started", node: "do", visit: 2, attempt_id: "do#2" });
+      log.add({ type: "chunk", node: "do", visit: 2, turn: 1, index: 0, kind: "text", content: "Second try." });
+    }
+    return log;
+  }
+
+  test("while the park stands, the transcript does not repeat what the card says", () => {
+    const el = render(failedLog(false));
+    const transcript = [...el.querySelectorAll(".cv-agent")].map((n) => n.textContent).join("\n");
+    expect(transcript).toContain("I ran the suite.");
+    expect(transcript).not.toContain("CallbackTest");
+    expect(el.querySelector(".act-notice")).toBeNull();
+    // the reason is still on screen once, verbatim, in the card's Full message
+    expect(el.querySelector("#needs-input .ask-message")!.textContent).toBe(LONG);
+  });
+
+  test("a past, resolved failure is one quiet notice that opens to the whole reason", () => {
+    const el = render(failedLog(true), true);
+    const notice = el.querySelector("details.act-notice[data-kind='failure']") as HTMLDetailsElement;
+    expect(notice).not.toBeNull();
+    expect(notice.open).toBe(false);
+    const summary = notice.querySelector("summary")!.textContent!;
+    expect(summary.startsWith("Failed: the suite is red")).toBe(true);
+    expect(summary.length).toBeLessThan(130);
+    expect(notice.querySelector(".act-notice-full")!.textContent).toBe(LONG);
+    // and it is not inside the markdown the agent's words are drawn in
+    expect(el.querySelector(".act-text")!.textContent).not.toContain("[failed");
+  });
+});
+
+// HOW-68: a harness permission ask said "Bash needs permission" and showed a bare reply box —
+// the command it was asking about was in the ask's payload and nowhere on the card.
+describe("a permission ask shows what it is about, and its two answers (HOW-68)", () => {
+  function permissionLog(): FakeLog {
+    const log = new FakeLog();
+    log.add({ type: "run-started", graph: "quick-task", inputs: { goal: "g" }, pinned_prompts: { "doc.draft": 1 } });
+    log.add({ type: "node-started", node: "do", visit: 1, attempt_id: "do#1" });
+    log.add({ type: "chunk", node: "do", visit: 1, turn: 1, index: 0, kind: "text", content: "Restarting needs a command outside the worktree." });
+    log.add({
+      type: "attention-raised", node: "do", visit: 1, reason: "Bash needs permission",
+      ask: { kind: "can_use_tool", request_id: "r1", tool_name: "Bash", input: { command: "kubectl rollout restart deployment/auth-api", description: "Restart auth-api" } },
+    });
+    return log;
+  }
+  const posted = () => {
+    const bodies: unknown[] = [];
+    globalThis.fetch = (async (_url: string, init?: RequestInit) => {
+      bodies.push(JSON.parse(String(init?.body ?? "{}")));
+      return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "content-type": "application/json" } });
+    }) as unknown as typeof fetch;
+    return bodies;
+  };
+
+  test("the card names the tool, shows the command, and offers Allow and Deny instead of Reply", () => {
+    const el = render(permissionLog());
+    const card = el.querySelector("#needs-input")!;
+    expect(card.querySelector("h3")!.textContent).toBe("The agent is asking to use Bash.");
+    expect(card.querySelector(".ask-permission .code-block")!.textContent).toBe("kubectl rollout restart deployment/auth-api");
+    expect(card.querySelector(".ask-permission")!.textContent).toContain("Restart auth-api");
+    expect(buttonsNamed(el, "Allow Bash")).toHaveLength(1);
+    expect(buttonsNamed(el, "Deny")).toHaveLength(1);
+    expect(buttonsNamed(el, "Reply")).toHaveLength(0);
+  });
+
+  test("Allow posts `allow`; Deny posts the typed reason as a refusal", async () => {
+    const bodies = posted();
+    let el = render(permissionLog());
+    await act(async () => { buttonsNamed(el, "Allow Bash")[0]!.click(); });
+    expect(bodies).toEqual([{ text: "allow" }]);
+
+    act(() => root!.unmount());
+    host?.remove();
+    el = render(permissionLog());
+    type(el.querySelector('#needs-input textarea') as HTMLTextAreaElement, "use the staging context");
+    await act(async () => { buttonsNamed(el, "Deny")[0]!.click(); });
+    expect(bodies[1]).toEqual({ text: "deny: use the staging context" });
   });
 });

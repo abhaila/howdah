@@ -95,6 +95,14 @@ export interface TimelineRow {
   profile: TrajectoryProfile | null;
   /** HOW-73: this row is a BRANCH of a parallel step's visit — its siblings run beside it */
   parallel?: { node: string; visit: number };
+  /**
+   * HOW-68: which ATTEMPT of this node@visit the row is, when it is not the first. The log can
+   * start one visit twice — an approval parks without consuming a visit and is re-attempted on
+   * the same one; so is a visit a killed runner left open — and the two rows then share
+   * `node@visit`. Nothing about the log changes: this only lets a view tell the rows apart
+   * (web/app/status.tsx `stepKey`). Absent = 1.
+   */
+  attempt?: number;
 }
 
 export interface RunDetail {
@@ -451,9 +459,11 @@ export function deriveTimeline(events: LoggedEvent[]): TimelineRow[] {
         open.delete(key);
       }
       const key = `${e.node}@${e.visit}`;
+      const attempt = rows.reduce((n, r) => (r.node === e.node && r.visit === e.visit ? n + 1 : n), 1);
       const row: TimelineRow = {
         node: e.node, visit: e.visit, started_at: e.ts, finished_at: null, status: "running", duration_ms: null, offset_ms: 0, run_span_ms: 0, waiting_ms: 0, usage: null, profile: null,
         ...(e.parallel ? { parallel: { ...e.parallel } } : {}),
+        ...(attempt > 1 ? { attempt } : {}),
       };
       rows.push(row);
       open.set(key, row);

@@ -149,7 +149,7 @@ export function Palette({ draft, name, onName, onAdd, compact = false }: {
       </div>
       <div className="field-hint">
         Drag one onto the canvas, or press it to drop it in the middle. Join two steps by
-        dragging from the dot under one to the dot above the next.
+        dragging from a dot on one card's edge to the next card.
       </div>
     </ScrollPane>
   );
