@@ -422,7 +422,8 @@ describe("/runs/:id/draft", () => {
     serve([ready()]);
     const el = await mount(<DraftReview runId="r1" />);
     expect(el.querySelector(".draft-list")).not.toBeNull();
-    const removed = el.querySelector(".dag-node.removed")!;
+    // HOW-68: the picture is a React Flow canvas of cards now (it was an SVG of `<g class="dag-node">`)
+    const removed = el.querySelector(".dag-card.removed")!;
     expect(removed.getAttribute("aria-label")).toContain("quick-task.work");
     expect(removed.getAttribute("aria-label")).toContain("removed");
     expect(buttonNamed(el, "Save")).toBeDefined(); // the page always offers Save (D-6A)
@@ -433,12 +434,12 @@ describe("/runs/:id/draft", () => {
   test("below 1280px the picture is under the list, behind `Show the draft`", async () => {
     serve([ready()]);
     const el = await mount(<DraftReview runId="r1" />);
-    expect(el.querySelector(".dag-node")).toBeNull();
+    expect(el.querySelector(".dag-card")).toBeNull();
     const show = buttonNamed(el, "Show the draft")!;
     expect(show.getAttribute("aria-expanded")).toBe("false");
     await click(show);
     // HOW-68: the reading column is `data-slot="draft-main"` (was `.draft-page-main`)
-    expect(el.querySelector('[data-slot="draft-main"] .dag-node.removed')).not.toBeNull();
+    expect(el.querySelector('[data-slot="draft-main"] .dag-card.removed')).not.toBeNull();
     expect(buttonNamed(el, "Hide the draft")?.getAttribute("aria-expanded")).toBe("true");
   });
 
@@ -448,11 +449,13 @@ describe("/runs/:id/draft", () => {
     const el = await mount(<DraftReview runId="r1" />);
     const row = el.querySelector<HTMLElement>('.draft-row[data-step="quick-review.review"]')!;
     await act(async () => { row.focus(); });
-    const lit = [...el.querySelectorAll(".dag-node.highlight")];
+    // HOW-68: the lit step wears the accent ring the selected card wears (`.selected`); the old
+    // `.highlight` outline was amber, which means a run is waiting on you and nothing else
+    const lit = [...el.querySelectorAll(".dag-card.selected")];
     expect(lit).toHaveLength(1);
     expect(lit[0]!.getAttribute("aria-label")).toContain("quick-review.review");
     await act(async () => { row.blur(); });
-    expect(el.querySelectorAll(".dag-node.highlight")).toHaveLength(0);
+    expect(el.querySelectorAll(".dag-card.selected")).toHaveLength(0);
   });
 
   test("draftShape: removed steps are drawn, and nothing routes into them", () => {

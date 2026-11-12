@@ -387,6 +387,16 @@ describe("Tooltip — hover AND focus AND tap, tied by aria-describedby (P1.4)",
     expect($(el, '[data-slot="tooltip-trigger"]')!.tagName).toBe("SPAN");
   });
 
+  // HOW-68 confirming review: J and K down the Runs list eased a tooltip in and out on every
+  // press (measured in Chromium: two running transitions per key). A FORCED tooltip is the
+  // keyboard's — the row's link has focus — so it does not animate.
+  test("a tooltip forced open by its row's focus is instant", () => {
+    renderPrimitive(<Tooltip content="the whole value" forceOpen><span>cut…</span></Tooltip>);
+    const forced = document.querySelector('[data-slot="tooltip"]')!;
+    expect(forced.textContent).toBe("the whole value");
+    expect(forced.className.split(" ")).toContain("transition-none");
+  });
+
   test("empty content renders the trigger alone — never an empty floating box", () => {
     const el = renderPrimitive(<Tooltip content=""><span>bare</span></Tooltip>);
     expect($(el, '[role="tooltip"]')).toBeNull();

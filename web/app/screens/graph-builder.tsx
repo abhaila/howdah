@@ -255,6 +255,24 @@ export function GraphBuilder({ name, fromRun }: { name?: string; fromRun?: strin
   }, []);
   /** From the CANVAS: selecting something opens the panel on it, and a click on empty canvas is
    *  "I am done with that" — which, when the panel is a drawer, also gives the canvas its width back. */
+  // HOW-68 confirming review: a selection that ENDS takes its form with it — "Remove this step",
+  // a removed route, Esc from a field in the panel — and the control that had focus is unmounted,
+  // so focus fell to <body> and the next Tab started from the top of the page. It goes to the
+  // canvas, where the graph that is left is. Only when focus was actually lost: a click on the
+  // canvas, or anything that focused something itself, is left alone.
+  const hadSelection = useRef(false);
+  useEffect(() => {
+    const had = hadSelection.current;
+    hadSelection.current = live !== null;
+    if (!had || live !== null) return;
+    const frame = requestAnimationFrame(() => {
+      const now = document.activeElement;
+      if (now && now !== document.body && now.isConnected) return;
+      focusFirst(canvasRef.current, ".react-flow__node");
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [live]);
+
   const onCanvasSelect = useCallback((sel: Selection) => {
     setSelection(sel);
     setPanelOpen(sel !== null);

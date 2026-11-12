@@ -240,6 +240,16 @@ describe("CommandPalette — filter, arrows, Enter", () => {
     expect(order).toEqual(["closed"]);
   });
 
+  // HOW-68 confirming review: in Chromium "Filter the runs" chosen from the palette left focus on
+  // <body> — the command ran while the modal dialog still made the page inert.
+  test("the dialog is already closed when the command runs, so a command can move focus", () => {
+    let openWhenRun: boolean | undefined;
+    const el = render(<CommandPalette open onClose={() => {}} commands={[{ id: "focus", scope: "Anywhere", label: "Focus the filter", run: () => { openWhenRun = ($(document.body, "dialog") as HTMLDialogElement).open; } }]} />);
+    expect(($(el, "dialog") as HTMLDialogElement).open).toBe(true);
+    key($(el, "input") as HTMLInputElement, "Enter");
+    expect(openWhenRun).toBe(false);
+  });
+
   test("Down and Up move the active option, wrapping at the ends; Enter runs where they stopped", () => {
     const { el, input } = open();
     const active = () => $$(el, '[role="option"]').findIndex((o) => o.getAttribute("aria-selected") === "true");

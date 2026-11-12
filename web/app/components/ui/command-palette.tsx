@@ -106,7 +106,12 @@ export function CommandPalette({ open, onClose, commands }: {
 
   const run = (sc: Shortcut | undefined) => {
     if (!sc) return;
-    onClose(); // first: a command may open another layer (the shortcut sheet)
+    // The native dialog is closed HERE, not in the effect that follows `onClose`: until it is,
+    // the page behind it is inert, and a command that moves focus ("Filter the runs", "Reply")
+    // focused nothing — the palette then handed focus back to <body>. Closing first also lets a
+    // command open another layer (the shortcut sheet).
+    ref.current?.close?.();
+    onClose();
     sc.run?.();
   };
 

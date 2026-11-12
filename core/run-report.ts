@@ -386,6 +386,17 @@ function findingsText(f: unknown): string | null {
   return JSON.stringify(f, null, 2);
 }
 
+/**
+ * Every link this page writes leaves it: a pull request, on the forge. Framed by the viewer the
+ * page is an `<iframe>`, and a plain link there loads GitHub INSIDE the frame — which GitHub
+ * refuses (`X-Frame-Options`), so the operator saw a broken pane where the PR should be (HOW-68
+ * feedback). So each one opens a new tab in the reader's own browser and hands the opened page
+ * neither this window (`noopener`) nor where it came from (`noreferrer`); `<base target="_blank">`
+ * in the head is the safety net for a link a later edit forgets to mark. The viewer's frame
+ * permits exactly that and nothing more (run/report.tsx `allow-popups…`).
+ */
+export const EXTERNAL_LINK = ' target="_blank" rel="noopener noreferrer"';
+
 /** "SequenceHQ/sequence-web/pull/92" → "sequence-web / #92" */
 export function prLabel(url: string): string {
   const m = url.match(/github\.com\/[^/]+\/([^/]+)\/pull\/(\d+)/);
@@ -443,7 +454,7 @@ export function renderRunReport(m: RunReportModel): string {
   const controls = hasFlow
     ? `<div class="controls"><button type="button" class="primary" data-act="play">Play flow</button><button type="button" data-act="step">Trace one step</button><button type="button" data-act="reset">Reset view</button></div>`
     : "";
-  const strip = `<header class="strip">${head.map((h) => `<div class="cell"><div class="eyebrow">${esc(h.k)}</div>${h.href ? `<a href="${esc(h.href)}">${esc(h.v)}</a>` : `<span>${esc(h.v)}</span>`}</div>`).join("")}${controls}</header>`;
+  const strip = `<header class="strip">${head.map((h) => `<div class="cell"><div class="eyebrow">${esc(h.k)}</div>${h.href ? `<a href="${esc(h.href)}"${EXTERNAL_LINK}>${esc(h.v)}</a>` : `<span>${esc(h.v)}</span>`}</div>`).join("")}${controls}</header>`;
 
   let stage: string;
   if (map && map.components.length) {
@@ -547,6 +558,7 @@ export function renderRunReport(m: RunReportModel): string {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="generator" content="howdah run report">
+<base target="_blank">
 <title>${esc(clip(title, 80))}</title>
 <script>${THEME_JS}</script>
 <style>${REPORT_CSS}</style>

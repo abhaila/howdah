@@ -1011,6 +1011,23 @@ describe("saving is the same PUT it always was (AC5), and it carries the arrange
     for (const n of body.spec.nodes) expect(n.position, n.id).toEqual({ x: expect.any(Number), y: expect.any(Number) } as never);
   });
 
+  // HOW-68 confirming review: in Chromium, confirming "Remove this step" left focus on <body> —
+  // the form that held it is gone with the step.
+  test("removing the selected step hands focus to the canvas, not to <body>", async () => {
+    serve();
+    const el = await mount();
+    nameNext(el, "Summarise the goal");
+    click(palette(el, "Ask an agent"));
+    click(byText(el, "Remove this step"));
+    const confirm = byText(el, "Remove the step and its instructions");
+    if (confirm) click(confirm);
+    // one frame: the hand-off waits for the commit that removed the form (no clock — the next frame)
+    await act(async () => { await new Promise((r) => requestAnimationFrame(() => r(null))); });
+    const at = document.activeElement as HTMLElement;
+    expect(at).not.toBe(document.body);
+    expect(at.closest(".react-flow__node")).not.toBeNull();
+  });
+
   test("a step added and then removed is not posted — and the save is not blocked by it", async () => {
     const calls = serve();
     const el = await mount();

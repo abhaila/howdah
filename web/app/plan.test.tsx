@@ -9,7 +9,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { deriveDetail, type RunDetail } from "../derive";
 import { FakeLog } from "../slice.fixtures";
 import { RunPlan, planInstruction, planRoute } from "./run/plan";
-import { RunReport, canMapChange } from "./run/report";
+import { REPORT_SANDBOX, RunReport, canMapChange } from "./run/report";
 import { ToastProvider } from "@/components/ui/toast";
 
 let root: Root | null = null;
@@ -92,8 +92,46 @@ test("the Report tab frames the derived page, sandboxed, with Open and Download"
   const el = render(<RunReport runId="r1" detail={planned()} />);
   const frame = el.querySelector("iframe")!;
   expect(frame.getAttribute("src")).toBe("/api/runs/r1/report");
-  expect(frame.getAttribute("sandbox")).toBe("allow-scripts");
-  expect([...el.querySelectorAll("a")].map((a) => a.getAttribute("href"))).toEqual(["/api/runs/r1/report", "/api/runs/r1/report?download=1"]);
+  // HOW-68 feedback: the page's PR link has to open in the operator's browser. `allow-scripts`
+  // alone BLOCKED a new tab, so the link loaded the forge inside the frame; the sandbox now
+  // permits a new tab that is an ordinary page — and still nothing that reaches this origin.
+  expect(frame.getAttribute("sandbox")).toBe("allow-scripts allow-popups allow-popups-to-escape-sandbox");
+  expect(REPORT_SANDBOX.split(" ").sort()).toEqual(["allow-popups", "allow-popups-to-escape-sandbox", "allow-scripts"]);
+  for (const never of ["allow-same-origin", "allow-top-navigation", "allow-forms", "allow-downloads", "allow-modals"]) expect(REPORT_SANDBOX).not.toContain(never);
+  const links = [...el.querySelectorAll("a")];
+  expect(links.map((a) => a.getAttribute("href"))).toEqual(["/api/runs/r1/report", "/api/runs/r1/report?download=1"]);
+  // Open is a new tab that is handed neither this window nor where it came from; Download is a download
+  expect(links[0]!.getAttribute("target")).toBe("_blank");
+  expect(links[0]!.getAttribute("rel")).toBe("noopener noreferrer");
+  expect(links[1]!.hasAttribute("download")).toBe(true);
+});
+
+describe("HOW-68 feedback: the plan uses the width its pane has", () => {
+  test("the plan and the answer are two regions of ONE scroller: the document, then the contract and the composer", () => {
+    const el = render(<RunPlan runId="r1" detail={planned()} onChanged={() => {}} />);
+    const pane = el.querySelector(".plan-pane")!;
+    const layout = pane.querySelector(".plan-layout")!;
+    expect([...layout.children].map((c) => (c as HTMLElement).dataset.slot)).toEqual(["plan-main", "plan-side"]);
+    expect(layout.querySelector('[data-slot="plan-main"] .plan-doc')).not.toBeNull();
+    expect(layout.querySelector('[data-slot="plan-side"] .plan-compose')).not.toBeNull();
+    // in reading order the plan comes before the box that answers it, whichever side it is drawn on
+    expect(layout.querySelector(".plan-doc")!.compareDocumentPosition(layout.querySelector(".plan-compose")!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  test("no 760px cap: one column to ~110 characters, and two once the PANE (not the window) has room", async () => {
+    const css = await Bun.file(new URL("../public/howdah.css", import.meta.url)).text();
+    const rule = (sel: string) => css.match(new RegExp(`${sel}\\s*\\{([^}]*)\\}`))?.[1] ?? "";
+    expect(css).not.toContain(".plan-column");
+    expect(rule("\\.plan-pane")).toContain("container-type: inline-size");
+    expect(rule("\\.plan-layout")).toContain("minmax(0, 880px)");
+    // the markdown primitive's 75ch measure is the transcript's; the plan's is its column
+    expect(css).toMatch(/\.md\.plan-doc > \* \{ max-width: none; \}/);
+    const wide = css.match(/@container \(min-width: 1160px\) \{([\s\S]*?)\n\}/)?.[1] ?? "";
+    expect(wide).toContain("minmax(0, 880px) minmax(340px, 460px)");
+    // beside the plan the contract stays in view — sticky in the SAME scroller, never a second one
+    expect(wide).toMatch(/\.plan-side \{ position: sticky;/);
+    expect(wide).not.toContain("overflow");
+  });
 });
 
 describe("Map this change (HOW-78)", () => {

@@ -119,6 +119,9 @@ main { position: relative; flex: 1; min-width: 0; min-height: 0; overflow: hidde
    overflow — each pane in `.run-body` owns its one scroller, and the column's job is only to
    give that pane a box that can shrink (`min-height: 0`) instead of pushing its foot off screen. */
 .runview { display: flex; flex: 1; min-height: 0; min-width: 0; }
+/* focus (F): the run view sets this on <html> and the sidebar stands down, so the open pane has
+   the window (run/view.tsx). The run's own header and the drawer are not rendered while it is on. */
+:root[data-run-focus] .sidebar { display: none; }
 /* a size container, so the header can drop its key hints when the COLUMN is narrow (the
    drawer open at 1024px), which a viewport media query cannot see */
 .thread-col { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; container-type: inline-size; }
@@ -160,6 +163,8 @@ main { position: relative; flex: 1; min-width: 0; min-height: 0; overflow: hidde
    has air around the glyph while the text stays on the drawer's left edge */
 .run-details-row { display: flex; align-items: flex-start; gap: 8px; width: calc(100% + 12px); min-height: 28px; margin-inline: -6px; padding: 4px 6px; border-radius: var(--radius-sm); line-height: 20px; text-align: left; }
 .run-details-row > svg { margin-top: 4px; }
+/* the visits a folded poll holds, shown under its row when it is opened */
+.run-details-folded { padding-left: 14px; }
 .run-details-step { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: var(--type-code); }
 .run-details-dur { flex: none; font-size: var(--type-xs); color: var(--fg-muted); }
 .run-details-note { margin: 0; font-size: var(--type-sm); color: var(--fg-muted); overflow-wrap: anywhere; }
@@ -366,48 +371,55 @@ main { position: relative; flex: 1; min-width: 0; min-height: 0; overflow: hidde
    `vertical-align` meant for it never applied to anything. */
 .field-advice svg { display: inline-block; vertical-align: -2px; margin-right: 4px; }
 
-/* graph DAG (T20; HOW-68). The canvas is a real scroller (flex child with min-height: 0) that
-   pans by drag and is a focus stop while it overflows. Every label is 12px or more; a node's
-   id is mono, its second line sans. NOTHING here animates: the picture used to draw itself in
-   each time its tab opened, and a tab switch is instant (DESIGN.md Motion). */
-.dag-view { display: flex; flex-direction: column; min-height: 0; flex: 1; gap: 8px; }
-.dag-scroll {
-  flex: 1; min-height: 0; overflow: auto;
-  border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-inset);
-  cursor: grab; touch-action: none; overscroll-behavior: contain;
+/* the read-only graph (graph-dag.tsx; on React Flow since HOW-68). It wears the BUILDER's canvas
+   theme (`.gb-canvas`) and card (`.gb-node`), so a graph is drawn one way; what is here is only
+   what a picture of a RUN adds to a card, and the wires, which this file's SVG draws from the
+   layout's own points. NOTHING here animates (DESIGN.md Motion). */
+.dag-view { display: flex; flex-direction: column; min-height: 0; min-width: 0; flex: 1; gap: 6px; }
+.dag-canvas { flex: 1; min-height: 0; border: 1px solid var(--border); border-radius: var(--radius); --xy-minimap-background-color: var(--bg); --xy-minimap-mask-background-color: color-mix(in srgb, var(--bg-inset) 70%, transparent); --xy-minimap-mask-stroke-color: var(--border-strong); --xy-minimap-mask-stroke-width: 1; }
+.dag-canvas:focus-visible { outline: 2px solid var(--ring); outline-offset: -2px; }
+.dag-hint { margin: 0; flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 4px; font-size: var(--type-xs); color: var(--fg-muted); }
+/* the card fills the box the layout measured for it; its text starts at the left. React Flow
+   switches a node's pointer events OFF when it can be neither dragged, selected nor wired — which
+   is every node here — so the card takes them back: it is hovered for its tooltip and pressed. */
+.gb-node.dag-card { pointer-events: auto; width: 100%; height: 100%; padding: 8px; gap: 0; align-items: stretch; justify-content: flex-start; text-align: left; font-weight: 400; white-space: normal; cursor: default; }
+.gb-node.dag-card.clickable { cursor: pointer; }
+.gb-node.dag-card.clickable:hover { border-color: var(--fg-muted); background: var(--bg); }
+.gb-node.dag-card:focus-visible { outline: 2px solid var(--ring); outline-offset: 3px; }
+.gb-node.dag-card.selected { border-color: var(--primary); background: var(--bg-raised); }
+/* the step the run is ON: its glyph says which (running / waiting on you); the outline seconds
+   it. A ring drawn with box-shadow, so it does not move the card's text by a pixel. */
+.gb-node.dag-card.current { border-color: var(--status-running); box-shadow: 0 0 0 1px var(--status-running); }
+.gb-node.dag-card.current.waiting { border-color: var(--attention); box-shadow: 0 0 0 1px var(--attention); }
+/* HOW-65: a step a draft removes — still drawn, dashed and struck through */
+.gb-node.dag-card.removed { border-style: dashed; background: transparent; }
+.gb-node.dag-card.removed .dag-name { text-decoration: line-through; color: var(--fg-muted); }
+.dag-name { line-height: 18px; font-weight: 500; color: var(--fg); }
+.dag-name-group { font-weight: 400; color: var(--fg-muted); }
+.dag-sub { line-height: 16px; }
+/* how many times a run has been through this step: a pill riding the card's top-right corner */
+.dag-visits {
+  position: absolute; top: -10px; right: 8px; height: 18px; min-width: 26px; padding: 0 6px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--bg-raised); border: 1px solid var(--border-strong); border-radius: 9px;
+  color: var(--fg); font-size: var(--type-xs); font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1;
 }
-.dag-scroll:focus-visible { outline: 2px solid var(--ring); outline-offset: -2px; }
-.dag-scroll[data-panning] { cursor: grabbing; }
-/* the node keeps its own pointer, or the whole canvas reads as undraggable furniture */
-.dag-scroll .dag-node.clickable { cursor: pointer; }
-/* Above the canvas, in flow. Floating these would park a button on the entry node. */
-.dag-controls { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; flex-shrink: 0; }
-.dag-zoom { min-width: 44px; text-align: center; font-size: var(--type-sm); font-variant-numeric: tabular-nums; color: var(--fg-muted); }
-.dag-hint { margin-left: auto; display: inline-flex; align-items: center; gap: 4px; font-size: var(--type-xs); color: var(--fg-muted); }
-.dag-edge { fill: none; }
-.dag-node rect { fill: var(--bg-raised); stroke: var(--border-strong); stroke-width: 1.2; }
-.dag-node.clickable:hover rect:first-of-type { stroke: var(--fg-muted); }
-.dag-node.selected rect:first-of-type { stroke: var(--primary); stroke-width: 2; }
-/* the step the run is ON: its glyph says which (running / waiting on you); the outline seconds it */
-.dag-node.current rect:first-of-type { stroke: var(--status-running); stroke-width: 2; }
-.dag-node.current.waiting rect:first-of-type { stroke: var(--attention); }
-/* `kind-${n.kind}` is composed at run time (css-contract.test.ts COMPOSED_PREFIXES): a terminal
-   node's dashed border */
-.dag-node.kind-terminal rect { stroke-dasharray: 3 3; }
-.dag-kind { color: var(--fg-muted); }
-.dag-title { fill: var(--fg); font-family: var(--font-mono); font-size: var(--type-sm); font-weight: 500; }
-.dag-title-group { fill: var(--fg-muted); font-weight: 400; }
-.dag-sub { fill: var(--fg-muted); font-family: var(--font-display); font-size: var(--type-xs); }
-/* a route's condition, with a halo of the canvas ground so a wire never strikes through it */
-.dag-edge-label {
-  fill: var(--fg-muted); font-family: var(--font-mono); font-size: var(--type-xs);
-  paint-order: stroke; stroke: var(--bg-inset); stroke-width: 5px; stroke-linejoin: round;
+/* the wires: one SVG in the viewport, under nothing that needs a pointer */
+.dag-wires { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; }
+.dag-wire { fill: none; stroke: var(--fg-faint); stroke-width: 1.5; }
+.dag-arrow { fill: var(--fg-faint); }
+/* a route this run has taken: heavier and in the ink, so the path it walked reads at a glance */
+.dag-wire.taken { stroke: var(--fg); stroke-width: 2; }
+.dag-arrow-on { fill: var(--fg); }
+/* a route's condition, in the box the layout kept for it. Machine text, so mono; the fallback
+   beside a condition is a word, so sans in a dashed box — told apart by face and outline. */
+.dag-caption {
+  position: absolute; left: 0; top: 0; display: flex; align-items: center; height: 22px; padding: 0 6px;
+  background: var(--bg-inset); border: 1px solid var(--border); border-radius: var(--radius-xs);
+  color: var(--fg-muted); font-size: var(--type-xs); line-height: 1;
 }
-.dag-node rect.dag-visits { fill: var(--bg-inset); stroke: var(--border-strong); stroke-width: 1; stroke-dasharray: none; }
-.dag-visits-text { fill: var(--fg); font-family: var(--font-display); font-size: var(--type-xs); font-weight: 600; }
-.dag-tuned { fill: var(--fg-muted); }
-/* a focus stop shows the ring every other one does */
-.dag-node:focus-visible { outline: 2px solid var(--ring); outline-offset: 3px; border-radius: 8px; }
+.dag-caption.otherwise { border-style: dashed; }
+.dag-minimap { border: 1px solid var(--border-strong); border-radius: var(--radius-sm); }
 .wrap-pre { white-space: pre-wrap; }
 /* P0 defect 1 was HERE: `.tab.active` was the only selected-tab rule in the app, and
    PanelTabs emitted `.tab.on`. Both `.tab` and `.tabs` are gone — a tab's appearance and its
@@ -871,9 +883,6 @@ div.act-notice, .act-notice > summary { display: flex; align-items: flex-start; 
 .draft-diff ins { color: var(--diff-add); background: color-mix(in srgb, var(--diff-add) 12%, transparent); }
 .draft-diff ins::before { content: "+ "; }
 .draft-diff span::before { content: "  "; white-space: pre; }
-.dag-node.removed rect:first-of-type { stroke-dasharray: 5 4; fill: transparent; }
-.dag-node.removed .dag-title { text-decoration: line-through; fill: var(--fg-faint); }
-.dag-node.highlight rect:first-of-type { stroke: var(--attention); stroke-width: 2.2; }
 /* one quiet line under the builder's bar: where this draft came from, or the other way in */
 .gb-from-run, .gb-draft-hint { margin: 0; padding: 2px 16px; flex-shrink: 0; border-bottom: 1px solid var(--border); font-size: var(--type-sm); color: var(--fg-muted); }
 /* a link in a strip of its own is a target, not a word in a sentence: 24px tall */
@@ -881,10 +890,19 @@ div.act-notice, .act-notice > summary { display: flex; align-items: flex-start; 
 
 /* HOW-78: the run's three homes — Plan (the plan, its criteria, and the operator's answer to it)
    and Report (a frame around the self-contained page /api/runs/:id/report renders).
-   HOW-68: the Plan pane is ONE scroller around a 720px reading column; the frame fills its pane. */
-.plan-pane { scroll-padding-block: 24px; }
-.plan-column { display: flex; flex-direction: column; gap: 24px; width: 100%; max-width: 760px; padding: 20px 20px 32px; }
+   HOW-68: the Plan pane is ONE scroller, and the plan uses the width the pane has: one column up
+   to a ~110-character measure, and — once the PANE (not the window: a container query) is wide
+   enough — the contract and the answer box beside it, sticky in that same scroller. */
+.plan-pane { scroll-padding-block: 24px; container-type: inline-size; }
+.plan-layout { display: grid; grid-template-columns: minmax(0, 880px); gap: 24px; justify-content: center; padding: 20px 24px 32px; }
+.plan-main, .plan-side { display: flex; flex-direction: column; gap: 24px; min-width: 0; }
+@container (min-width: 1160px) {
+  .plan-layout { grid-template-columns: minmax(0, 880px) minmax(340px, 460px); gap: 24px 48px; align-items: start; }
+  .plan-side { position: sticky; top: 20px; }
+}
+/* the document's measure is its column (880px, about 110 characters), not the transcript's 75ch */
 .plan-doc { min-width: 0; }
+.md.plan-doc > * { max-width: none; }
 .plan-compose { display: flex; flex-direction: column; gap: 10px; padding: 12px; border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--bg-raised); }
 .plan-route { line-height: 1.4; }
 .report-pane { flex: 1 1 0; min-height: 0; min-width: 0; display: flex; flex-direction: column; }

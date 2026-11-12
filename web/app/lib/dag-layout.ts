@@ -204,7 +204,7 @@ export function dagLayout(entry: string, nodes: readonly LayoutNode[], edges: re
  * A step routed to itself is the exception: dagre draws that as a small loop beside the card,
  * and it is passed through as the smooth curve (a uniform B-spline) dagre's own renderers use.
  */
-export function wirePath(edge: Pick<LaidEdge, "points" | "self">): string {
+export function wirePath(edge: Pick<LaidEdge, "points" | "self" | "back">): string {
   const r = (n: number) => Math.round(n * 10) / 10;
   const pts = edge.points;
   const first = pts[0];
@@ -227,7 +227,11 @@ export function wirePath(edge: Pick<LaidEdge, "points" | "self">): string {
   for (let i = 1; i < pts.length; i++) {
     const a = pts[i - 1]!, b = pts[i]!;
     if (Math.abs(a.x - b.x) < 0.5) { d += `L${r(b.x)},${r(b.y)}`; continue; }
-    const mid = (a.y + b.y) / 2;
+    // the sideways run sits at a different height in the gap for a loop back, a wire heading
+    // left and one heading right — so two wires that merely CROSS in a gap do not share a line
+    // and read as joined. (Wires fanning out of one card, or into one, still share a trunk.)
+    const at = edge.back ? 0.28 : b.x < a.x ? 0.5 : 0.72;
+    const mid = a.y + (b.y - a.y) * (edge.back ? 1 - at : at);
     d += `C${r(a.x)},${r(mid)} ${r(b.x)},${r(mid)} ${r(b.x)},${r(b.y)}`;
   }
   return d;

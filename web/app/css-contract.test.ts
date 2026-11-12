@@ -50,7 +50,7 @@ const SOURCES = walk(APP).sort();
  * is the only place a class may be exempt, and adding to it is a deliberate act.
  */
 const COMPOSED_PREFIXES: Array<{ prefix: string; fedBy: string }> = [
-  { prefix: "kind-", fedBy: "graph-dag.tsx `dag-node … kind-${n.kind}`, builder/node-card.tsx `gb-node kind-${kind}`" },
+  { prefix: "kind-", fedBy: "graph-dag.tsx `gb-node dag-card … kind-${n.kind}`, builder/node-card.tsx `gb-node kind-${kind}`" },
 ];
 
 /**
@@ -64,7 +64,6 @@ const COMPOSED_PREFIXES: Array<{ prefix: string; fedBy: string }> = [
  * listed rather than given empty rules, because an empty rule is a worse lie than a list.
  */
 const STRUCTURAL: string[] = [
-  "dag",            // the <svg> itself; every rule targets what is inside it
   "ap-traces", "ap-rounds", "ghost-item", "map-pane",  // slice.tsx grouping wrappers
   // slice.tsx cells whose appearance is utilities (HOW-68) and whose name is what a row is
   // found by — the id cell, a trace's steps, a pinned comment's key and text, drift's count

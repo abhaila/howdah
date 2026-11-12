@@ -46,7 +46,7 @@
  * tooltip. And the portal goes into the enclosing `<dialog>` when there is one
  * (`lib/layer.ts`): a tooltip portalled to the body sits UNDER a modal dialog's top layer.
  */
-import { useId, useState } from "react";
+import { useId, useRef, useState } from "react";
 import { Tooltip as TooltipPrimitive } from "@base-ui/react/tooltip";
 import { useLayerContainer } from "@/lib/layer";
 import { cn } from "@/lib/utils";
@@ -69,6 +69,14 @@ export function Tooltip({ content, children, className, disabled = false, forceO
   const [open, setOpen] = useState(false);
   const id = useId();
   const container = useLayerContainer();
+  // `forceOpen` is a caller saying "my link has focus" (Truncate inside a row), so it is the
+  // keyboard's doing — J/K, Tab — and DESIGN.md's rule is that nothing keyboard-triggered
+  // animates. Base UI's own `data-instant` only covers opens IT saw; a forced one eased in
+  // and out on every J and K down a list. Instant while forced, and for the close that follows.
+  const forced = useRef(false);
+  if (forceOpen) forced.current = true;
+  else if (open) forced.current = false;
+  // (above the early return: every hook runs on every render, whatever the content is)
   if (content === null || content === undefined || content === "") return <>{children}</>;
   const shown = (open || forceOpen) && !disabled;
   return (
@@ -90,6 +98,7 @@ export function Tooltip({ content, children, className, disabled = false, forceO
             className={cn(
               "w-max max-w-[min(320px,calc(100vw-16px))] rounded-[var(--radius-sm)] border border-[var(--border-strong)] bg-card px-2 py-1 text-sm leading-snug text-foreground shadow-float [overflow-wrap:anywhere]",
               POP_MOTION,
+              forced.current && !open && "transition-none",
             )}
           >
             {content}

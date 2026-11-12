@@ -53,8 +53,9 @@ Colour is the second channel. Never emoji or dingbats.
 - Three weights: 400, 500 for names and selected things, 600 for headings and the primary
   action. Hierarchy comes from weight and these steps, not from uppercase or letter-spacing:
   **no uppercase micro-labels.** A section label is 12px/600 in `--fg-muted`.
-- Prose measure 65–75ch (the transcript column is 720px). Line height 1.5 for prose, 1.4 in
-  rows.
+- Prose measure 65–75ch (the transcript column is 720px). A **plan** is a reference document
+  you scan — headings, lists, tables, code — so its column runs to about 110ch (880px) and
+  uses the width its pane has. Line height 1.5 for prose, 1.4 in rows.
 - Fonts are bundled in `web/public/fonts/`. Nothing is fetched from another origin.
 
 ## Layout and scrolling
@@ -66,9 +67,19 @@ Colour is the second channel. Never emoji or dingbats.
   corners, never for layout: a layout rule that hides overflow hides content.
 - Split views (list + detail) give each side its own scroller and a minimum width; below
   1100px the detail replaces the list instead of squeezing it.
-- **A run:** header (back, name, status, actions) · tabs · body. The transcript is the body
-  and gets all remaining height. **Details is a drawer** on the right (320px): closed by
-  default below 1280px, toggled with `⌘I`, closed with `Esc`, remembered.
+- **A run:** header (back, name, status, its pull request, actions) · tabs · body. The
+  transcript is the body and gets all remaining height. **Details is a drawer** on the right:
+  320px until the operator drags its edge (280px to half the room, by pointer or keyboard,
+  remembered), closed by default below 1280px, toggled with `⌘I`, closed with `Esc`,
+  remembered. It leads with what you leave the viewer for — the pull request.
+- **The Plan pane** is one scroller: the plan in one column, and — once the *pane* is 1160px
+  wide — the acceptance contract and the answer box beside it, sticky in that same scroller.
+- **Focus** (`F`) gives the open pane the window: the rail, the run's header and the drawer
+  stand down, and the tab strip carries the run's name, status and the way out. `F` or `Esc`
+  leaves. It is remembered for the session, not as a preference.
+- **A graph is drawn one way**, in the builder and read-only: the same canvas and the same
+  card. Read-only, it is laid out for you (layered, crossings minimised), opens at 100%, pans
+  by drag, and every card's tooltip carries what the card cannot print.
 - Secondary actions go behind one **More** menu. A header is one row at every supported width.
 - Supported: 1024×640 and up. Below 1100px the rail collapses to icons by itself.
 
@@ -127,9 +138,10 @@ One layer, on `@base-ui/react`, in `web/app/components/ui/`. Appearance lives in
 |---|---|
 | Anywhere | `⌘K` command palette · `?` shortcuts · `G` then `R` `N` `G` `P` `O` `S` go to a screen (`O` is Proposals) · `C` new run · `[` rail |
 | Lists | `J` `K` or arrows move · `Enter` open · `/` filter |
-| A run | `1`–`7` tabs · `⌘I` details · `R` reply · `A` jump to the ask (into a question's options, so its numbers pick one) · `/` ask about the run, or search on Logs · `E` expand tool calls · `O` open in IDE · `.` more actions |
+| A run | `1`–`7` tabs · `⌘I` details · `F` focus the pane · `R` reply · `A` jump to the ask (into a question's options, so its numbers pick one) · `/` ask about the run, or search on Logs · `E` expand tool calls · `O` open in IDE · `.` more actions |
+| A graph | on a step: arrows, `Home`, `End` move between steps · `Enter` selects · on the canvas: arrows pan (`Shift` for more) · `+` `−` zoom · `0` show all of it |
 | Forms | `⌘S` save (Settings, the graph builder) · `⌘↵` launch a run |
-| Layers | `Esc` closes the topmost: menu, dialog, detail panel, drawer |
+| Layers | `Esc` closes the topmost: menu, dialog, detail panel, drawer, then focus |
 
 Single-key shortcuts are ignored while a text field has focus and can be turned off in
 Settings (WCAG 2.1.4). `lib/shortcuts.ts` is the one registry; the `?` sheet and the palette

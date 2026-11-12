@@ -14,10 +14,20 @@
  * Which one a send will take is said beside the button before it is pressed, and a refusal from
  * either route ("runner is live — pause or abort first, then jump") is shown verbatim.
  *
- * HOW-68: the pane is ONE scroller holding a 720px reading column — the plan as a document on
- * the page's own ground (it was a card, with the criteria in a second card and the composer in
- * a third), then the acceptance list, then the answer box, which is the one held object here.
- * The Comment / Edit switch is a pair of toggle chips rather than two buttons trading variants.
+ * HOW-68: the pane is ONE scroller — the plan as a document on the page's own ground (it was a
+ * card, with the criteria in a second card and the composer in a third), then the acceptance
+ * list, then the answer box, which is the one held object here. The Comment / Edit switch is a
+ * pair of toggle chips rather than two buttons trading variants.
+ *
+ * IT USES THE WIDTH IT HAS (the operator's first hands-on feedback: "would like full screen for
+ * the plan" — on a 2000px window the plan sat in a 500px column beside 1200px of nothing). The
+ * column was capped at 760px. Now the document runs to a generous measure (about 110
+ * characters: a plan is a reference you scan — headings, lists, code — not a novel), and once
+ * the PANE is wide enough for two columns the acceptance contract and the answer box move
+ * beside it and stay in view while the plan scrolls (`position: sticky`, in the same scroller:
+ * a column taller than the window is carried up with the end of the plan, so nothing in it is
+ * ever unreachable). Narrower, it is the one column it was, without the cap. "The pane", not
+ * the window: a container query, so opening the Details drawer or leaving focus mode reflows it.
  */
 import { useState } from "react";
 import { MessageSquarePlus, PencilLine, Send } from "lucide-react";
@@ -112,19 +122,22 @@ export function RunPlan({ runId, detail, onChanged }: { runId: string; detail: R
 
   return (
     <ScrollPane label="Plan" className="plan-pane">
-      <div className="plan-column">
-        <header className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-          <h2 className="m-0 text-xl font-semibold text-foreground">The plan</h2>
-          {writer && (
-            <span className="text-xs text-muted-foreground">
-              written by <span className="font-mono">{writer.node}@{writer.visit}</span> · {fmtWhen(writer.at)}
-            </span>
-          )}
-        </header>
-        {plan
-          ? <Markdown className="plan-doc" text={plan} />
-          : <p className="m-0 text-body text-muted-foreground">{entry.veiled ? "The plan is being rewritten." : "The plan has not been written yet."} It appears here as soon as the planning step publishes it.</p>}
+      <div className="plan-layout">
+        <div className="plan-main" data-slot="plan-main">
+          <header className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+            <h2 className="m-0 text-xl font-semibold text-foreground">The plan</h2>
+            {writer && (
+              <span className="text-xs text-muted-foreground">
+                written by <span className="font-mono">{writer.node}@{writer.visit}</span> · {fmtWhen(writer.at)}
+              </span>
+            )}
+          </header>
+          {plan
+            ? <Markdown className="plan-doc" text={plan} />
+            : <p className="m-0 text-body text-muted-foreground">{entry.veiled ? "The plan is being rewritten." : "The plan has not been written yet."} It appears here as soon as the planning step publishes it.</p>}
+        </div>
 
+        <div className="plan-side" data-slot="plan-side">
         {detail.acceptance && <AcceptanceCard runId={runId} detail={detail} onChanged={onChanged} />}
 
         <section className="plan-compose" aria-label="answer the plan">
@@ -157,6 +170,7 @@ export function RunPlan({ runId, detail, onChanged }: { runId: string; detail: R
           </div>
           {error && <div className="field-error">{error}</div>}
         </section>
+        </div>
       </div>
     </ScrollPane>
   );

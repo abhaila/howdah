@@ -64,6 +64,8 @@ const R = {
   evidenceFailed: "implement-ticket-mhs2ev1d",
   stackedWaiting: "plan-feature-mhu7d3k2--audit-export",
   contextExhausted: "quick-task-mhu1x0d7",
+  // the confirming review's stress run (seed.ts section P): 600+ transcript items, a 6,000-character line, a large JSON result, a 300-character unbroken token
+  longTranscript: "quick-task-mhv7long",
 };
 /** the second viewer serve.sh starts over the EMPTY home: no runs, workspaces, local graphs or proposals */
 const EMPTY = process.env.HOWDAH_EMPTY_BASE ?? `http://localhost:${Number(process.env.HOWDAH_VISUAL_PORT ?? 4799) + 1}`;
@@ -446,6 +448,57 @@ async function fullPass(theme) {
     await step("proposal-stale", async () => { await go(`/proposals/${encodeURIComponent("ticket.local_review.v3.proposal.md")}`); await snap("proposals-stale-selected", { audit: true, wait: 900 }); });
     await step("proposal-orphaned", async () => { await go(`/proposals/${encodeURIComponent("ticket.triage.v2.proposal.md")}`); await snap("proposals-orphaned-selected", { audit: true, wait: 900 }); });
     await step("graphs-parallel", async () => { await go("/graphs"); await page.getByRole("button", { name: "the review-change graph" }).click(); await snap("graphs-local-parallel-selected", { wait: 900 }); });
+    // ---- HOW-68, the operator's first hands-on feedback (STEPS='feedback-') -------------------
+    // The read-only graph is a React Flow canvas over a layered layout: as opened (100%), whole,
+    // a step's tooltip (hover), the roving step focused from the keyboard, and after a real drag.
+    await step("feedback-graph", async () => {
+      await go(`/run/${R.done}`); await tab("Graph"); await page.waitForSelector(".dag-card");
+      await snap("feedback-run-graph-opened", { audit: true, wait: 600 });
+      const pane = await page.locator(".dag-canvas").boundingBox();
+      await page.mouse.move(pane.x + pane.width - 40, pane.y + 60); await page.mouse.down(); await page.mouse.move(pane.x + pane.width - 240, pane.y + 200, { steps: 8 }); await page.mouse.up();
+      await snap("feedback-run-graph-panned-by-mouse");
+      await page.locator(".dag-card.current").hover(); await snap("feedback-run-graph-step-tooltip", { wait: 600 });
+      await page.mouse.move(pane.x + 4, pane.y + 4);
+      await page.locator(".dag-card[tabindex='0']").focus(); await page.keyboard.press("Home"); await snap("feedback-run-graph-walked-to-start", { wait: 500 });
+      await page.locator(".dag-canvas").focus(); await page.keyboard.press("0"); await snap("feedback-run-graph-whole", { wait: 600 });
+    });
+    await step("feedback-graph-states", async () => {
+      await go(`/run/${R.maxvisits}`); await tab("Graph"); await page.waitForSelector(".dag-card"); await snap("feedback-run-graph-parked-waiting", { wait: 600 });
+      await page.locator(".dag-card.clickable").first().focus(); await page.keyboard.press("Enter"); await snap("feedback-run-graph-jump-card");
+      await go(`/run/${R.parallelDone}`); await tab("Graph"); await page.waitForSelector(".dag-card"); await snap("feedback-run-graph-parallel", { wait: 600 });
+      await go(`/runs/${R.draftReady}/draft`); await page.waitForSelector(".dag-card"); await snap("feedback-draft-review-picture", { audit: true, wait: 600 });
+    });
+    // every graph in the catalog on the Graphs screen, as opened and whole
+    await step("feedback-graphs-all", async () => {
+      const names = (await (await page.request.get(BASE + "/api/graphs")).json()).graphs.map((g) => g.name);
+      for (const name of names) {
+        await go("/graphs"); await page.getByRole("button", { name: `the ${name} graph` }).click(); await page.waitForSelector(".dag-card");
+        await snap(`feedback-graphs-${name}`, { wait: 500 });
+        await page.getByRole("button", { name: "Show the whole graph" }).click(); await snap(`feedback-graphs-${name}-whole`, { wait: 400 });
+      }
+    });
+    // The plan uses the width its pane has; focus (F) gives the pane the window.
+    await step("feedback-plan", async () => {
+      await go(`/run/${R.done}`); await tab("Plan"); await snap("feedback-plan", { audit: true });
+      await page.setViewportSize({ width: 2000, height: 950 }); await snap("feedback-plan-2000x950", { audit: true });
+      await page.keyboard.press("f"); await snap("feedback-plan-2000x950-focus");
+      await page.setViewportSize({ width: 1440, height: 900 }); await snap("feedback-plan-focus", { audit: true });
+      await tab("Build"); await snap("feedback-build-focus"); await tab("Report"); await snap("feedback-report-focus", { wait: 800 });
+      // focus is remembered for the SESSION: leave it, or every later step would be shot focused
+      await page.keyboard.press("Escape"); await snap("feedback-report-after-leaving-focus");
+    });
+    // Details: the pull request first, the poll folded, and the drawer resized by mouse and keys.
+    await step("feedback-details", async () => {
+      await go(`/run/${R.paused}`); await snap("feedback-details-pr-first-poll-folded", { audit: true });
+      await page.locator("[data-fold]").click(); await snap("feedback-details-poll-unfolded");
+      const sep = page.locator("[data-slot='drawer-resize']"); const box = await sep.boundingBox();
+      await page.mouse.move(box.x + 6, box.y + 300); await page.mouse.down(); await page.mouse.move(box.x - 194, box.y + 300, { steps: 8 }); await page.mouse.up();
+      await snap("feedback-details-dragged-wider", { audit: true });
+      await sep.focus(); await page.keyboard.press("End"); await snap("feedback-details-narrowest-separator-focused");
+      await page.keyboard.press("Home"); await snap("feedback-details-widest");
+      await page.keyboard.press("Enter");
+      await go(`/run/${R.repairStalled}`); await snap("feedback-details-pr-changes-requested");
+    });
 
     // ---- HOW-68: the empty home (the second viewer). Every screen with nothing in it.
     for (const [name, path] of [["runs-list", "/"], ["attention-inbox", "/attention"], ["new-run", "/new"], ["graphs-list", "/graphs"], ["prompts-list", "/prompts"], ["proposals", "/proposals"], ["settings", "/settings"]])
@@ -488,7 +541,8 @@ async function narrowPass() {
       for (const t of ["Plan", "Report", "Steps", "Context", "Logs", "Graph"]) await step(`${key}-${t}`, async () => { await tab(t); await snap(`${key}-${t.toLowerCase()}`, { ...aud, wait: 700 }); });
       await step(`${key}-steps-selected`, async () => { await go(`/run/${id}`); await tab("Steps"); await page.getByRole("button", { name: /^(implementation\.(implement|plan)|quick-task\.work)@1/ }).first().click({ force: true }); await snap(`${key}-steps-step-selected`, aud); });
     }
-    // HOW-68: the added states at the narrow width, and the two paths into a step's DETAIL from outside the list
+    // the long, hostile transcript with every tool call open, at the width where it has least room: nothing may clip or spill
+    await step("run-long-transcript", async () => { await go(`/run/${R.longTranscript}`); await page.locator("main h1").click(); await page.keyboard.press("e"); await snap("run-long-transcript-expanded", { ...aud, wait: 1200 }); await tab("Logs"); await snap("run-long-transcript-logs", { ...aud, wait: 900 }); });
     for (const [key, id] of [["run-parallel-done", R.parallelDone], ["run-needs-input-gated-acceptance", R.gated], ["run-needs-input-stale-base", R.staleBase], ["run-needs-input-permission", R.permission], ["run-needs-input-mcp-elicitation", R.elicitation], ["run-needs-input-repair-stalled", R.repairStalled], ["run-queued", R.queued], ["run-stacked-waiting", R.stackedWaiting]])
       await step(key, async () => { await go(`/run/${id}`); await snap(`${key}-build-chat`, { ...aud, wait: 900 }); if (await page.locator("#needs-input").count()) { await page.locator("#needs-input").scrollIntoViewIfNeeded(); await snap(`${key}-ask-in-view`, aud); } });
     await step("parallel-steps", async () => { await go(`/run/${R.parallelDone}`); await tab("Steps"); await snap("run-parallel-done-steps", aud); });
@@ -521,6 +575,15 @@ async function narrowPass() {
     await step("prompts-list", async () => { await go("/prompts"); await snap("prompts-list", aud); });
     await step("proposals-detail", async () => { await go("/proposals"); await page.locator("a[data-nav-row]").first().click(); await snap("proposals-detail", { ...aud, wait: 900 }); });
     await step("graphs-list", async () => { await go("/graphs"); await snap("graphs-list", aud); });
+    // HOW-68 feedback at the narrow width: the plan in one column, the graph, the drawer at half the room
+    await step("feedback-narrow", async () => {
+      await go(`/run/${R.done}`); await tab("Plan"); await snap("feedback-plan", aud);
+      await tab("Graph"); await page.waitForSelector(".dag-card"); await snap("feedback-run-graph-opened", { ...aud, wait: 600 });
+      await page.keyboard.press("Control+i").catch(() => {}); await page.waitForTimeout(200);
+      if (!(await page.locator("[data-slot='drawer']").count())) await page.getByRole("button", { name: "Show details" }).click();
+      await page.locator("[data-slot='drawer-resize']").focus(); await page.keyboard.press("Home"); await snap("feedback-details-widest-is-half-the-room", aud);
+      await page.keyboard.press("Enter");
+    });
     await step("new-run-advanced", async () => { await go("/new"); await page.locator("main select").first().selectOption("implement-ticket"); await page.getByRole("button", { name: "Advanced options" }).click(); await snap("new-run-advanced-options", aud); });
     await step("settings-bottom", async () => { await go("/settings"); await page.evaluate(() => { for (const e of document.querySelectorAll("*")) if (/(auto|scroll)/.test(getComputedStyle(e).overflowY) && e.scrollHeight > e.clientHeight + 4) e.scrollTop = e.scrollHeight; window.scrollTo(0, document.body.scrollHeight); }); await snap("settings-scrolled-bottom"); });
   });

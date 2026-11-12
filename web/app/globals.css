@@ -121,8 +121,8 @@
    each is restated in them. Focus rings and status glyphs need nothing: an outline and an SVG
    shape both survive. */
 @media (forced-colors: active) {
-  [data-slot="button"] { border: 1px solid ButtonText; }
-  [data-slot="button"]:disabled { border-color: GrayText; }
+  [data-slot="button"], [data-slot="menu-trigger"], [data-slot="questionnaire"] button { border: 1px solid ButtonText; }
+  [data-slot="button"]:disabled, [data-slot="questionnaire"] button:disabled { border-color: GrayText; }
   [role="tab"] { border-bottom-color: Canvas; }
   [role="tab"][aria-selected="true"] { border-bottom-color: Highlight; }
   .sidebar a.nav.active[aria-current="page"] { forced-color-adjust: none; background: Highlight; color: HighlightText; border-color: Highlight; }

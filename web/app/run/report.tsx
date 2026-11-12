@@ -4,8 +4,8 @@
  * It frames the page `GET /api/runs/:id/report` renders (core/run-report.ts): the change map an
  * agent wrote as data, and the evidence and history the log already holds. The same page is what
  * "Download" saves and `howdah report` prints, so what the operator reads here is exactly what a
- * colleague receives. It is sandboxed with scripts and nothing else: the page needs its one
- * script for the map, and no access to this origin.
+ * colleague receives. It is sandboxed: scripts for its map, a new tab for its links
+ * (`REPORT_SANDBOX`), and no access to this origin.
  *
  * A run whose graph has the report step but never ran it (one that started before HOW-78's step
  * existed, or that has not passed review yet) offers "Map this change": a jump to that step,
@@ -31,6 +31,17 @@ import { useToast } from "@/components/ui/toast";
 /** the step that writes the change map the report is drawn around (prompts/implementation.report.md) */
 export const REPORT_NODE = "implementation.report";
 export const CHANGE_MAP_KEY = "change_map";
+
+/**
+ * What the framed page may do. Scripts, for its map; and OPEN A LINK IN A NEW TAB that is an
+ * ordinary page (HOW-68 feedback: the report's PR link "tries to open it within howdah" — with
+ * `allow-scripts` alone a `target="_blank"` link is blocked outright and a plain one loads the
+ * forge inside the frame, which the forge refuses). `allow-popups` permits the new tab;
+ * `allow-popups-to-escape-sandbox` is what makes that tab a normal one — without it GitHub would
+ * open sandboxed, with no scripts and no session. Still NO same-origin, forms, top-navigation or
+ * downloads: the page cannot read this origin or move this window.
+ */
+export const REPORT_SANDBOX = "allow-scripts allow-popups allow-popups-to-escape-sandbox";
 
 export const reportUrl = (runId: string, download = false) => `/api/runs/${encodeURIComponent(runId)}/report${download ? "?download=1" : ""}`;
 
@@ -98,12 +109,12 @@ export function RunReport({ runId, detail, onChanged = () => {} }: { runId: stri
             </Button>
           )}
           <Button variant="ghost" size="sm" onClick={() => setBump((b) => b + 1)}><RefreshCw aria-hidden />Refresh</Button>
-          <a className={link} href={reportUrl(runId)} target="_blank" rel="noreferrer"><ExternalLink aria-hidden />Open</a>
+          <a className={link} href={reportUrl(runId)} target="_blank" rel="noopener noreferrer"><ExternalLink aria-hidden />Open</a>
           <a className={link} href={reportUrl(runId, true)} download><Download aria-hidden />Download HTML</a>
         </Toolbar>
       </div>
       {error && <div className="field-error px-4 py-1">{error}</div>}
-      <iframe key={key} className="report-frame" aria-label={`Run report for ${runId}`} src={`${reportUrl(runId)}${theme ? `?theme=${theme}` : ""}`} sandbox="allow-scripts" />
+      <iframe key={key} className="report-frame" aria-label={`Run report for ${runId}`} src={`${reportUrl(runId)}${theme ? `?theme=${theme}` : ""}`} sandbox={REPORT_SANDBOX} />
     </div>
   );
 }

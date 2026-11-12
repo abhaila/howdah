@@ -1,4 +1,15 @@
 /**
+ * The BUILDER's placement: a layered BFS that seeds positions the operator then owns (HOW-24).
+ *
+ * HOW-68: the read-only picture (graph-dag.tsx — the run's Graph tab, the Graphs screen, the
+ * draft review) no longer calls `layout()`. It is laid out by `lib/dag-layout.ts`, a real layered
+ * layout that minimises crossings and routes wires, because a picture nobody can rearrange has to
+ * be neat by itself. The builder keeps THIS one, unchanged: there a step's place is the
+ * operator's (`NodeSpec.position`) and this only fills the gaps — re-running a crossing
+ * minimiser over a hand-arranged canvas would move cards the operator put down. So the two
+ * surfaces share the CARD (howdah.css `.gb-node`) and the canvas, and no longer the placement;
+ * the history below is why this function is shaped the way it is.
+ *
  * ONE layered-BFS layout, for the two surfaces that draw the same graph (HOW-24).
  *
  * `layout()` was inside graph-dag.tsx, where it placed the boxes of the read-only picture the
@@ -33,7 +44,8 @@ export interface Pitch {
   origin: number;
 }
 
-/** the read-only picture's own numbers — its boxes are 180x52 and its captions sit beside the wire */
+/** the default pitch: the old read-only SVG's numbers (180x52 boxes). `layout()` with no pitch is
+ *  still called by tests and is the shape `nextFreePosition`'s origin comes from */
 const SVG_PITCH: Pitch = { x: 210, y: 92, stagger: 60, origin: 40 };
 /** the canvas: wider, taller cards (220px since HOW-68, so their text reads at 12-13px), and a
  *  condition printed IN the gap rather than beside it — two stacked 28px captions fit between

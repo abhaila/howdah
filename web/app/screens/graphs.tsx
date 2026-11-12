@@ -310,9 +310,11 @@ export function GraphTuner({ shape, onSaved }: { shape: GraphShapeDto; onSaved: 
   return (
     <div data-slot="tuner" className="flex flex-col gap-6">
       <Section title="Shape" description="Select an agent step, here or in the table below, to override what it runs on.">
-        {/* a real height: the DAG's own scroller needs something to scroll in */}
-        <div data-slot="graph-picture" className="flex h-[min(440px,58dvh)] min-h-[260px] flex-col">
-          <GraphDag key={`${shape.name}:${JSON.stringify(tuning)}`} shape={preview} onSelect={setSelectedNode} selected={selectedNode ?? undefined} />
+        {/* a real height: the canvas needs a box to pan in. Keyed on the graph alone — it used
+            to remount on every tuning edit, which now would throw away where the operator had
+            panned to. The page scrolls under the wheel here; ⌘/Ctrl + wheel zooms the picture. */}
+        <div data-slot="graph-picture" className="flex h-[min(560px,64dvh)] min-h-[300px] flex-col">
+          <GraphDag key={shape.name} shape={preview} onSelect={setSelectedNode} selected={selectedNode ?? undefined} wheel="page" />
         </div>
       </Section>
 

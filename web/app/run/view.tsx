@@ -35,19 +35,19 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Play, Pause, OctagonX, RotateCcw, ExternalLink, CornerDownRight, X, FolderOpen, Copy, Hand,
   ArrowLeft, Ellipsis, PanelRight,
-  RotateCw,
+  RotateCw, ChevronRight, GitPullRequest, Maximize2, Minimize2,
 } from "lucide-react";
 import type { RunDetail } from "../../derive";
 import { applyLiveEvent, type CoalescedTurn } from "../../../log/coalesce";
 import type { LoggedEvent } from "../../../log/events";
-import { GraphDag, useGraphShape } from "../graph-dag";
+import { GraphDag, takenKey, useGraphShape, type StepRunInfo } from "../graph-dag";
 import { StatusBadge, StatusGlyph, askRowKey, resolveStepKey, stepInterrupted, stepKey } from "../status";
 import { Row } from "@/components/ui/row";
 import { getJSON, HttpError } from "@/lib/net";
 import { fmtClock, fmtDur, fmtWait, liveDuration, runLabel } from "@/lib/format";
 import { useAttentionSurfaces, useNow } from "@/lib/hooks";
 import { submitOnEnter } from "@/lib/keys";
-import { useShortcuts } from "@/lib/shortcuts";
+import { useEscapeLayer, useShortcuts } from "@/lib/shortcuts";
 import { RUN_STATUS_ID, focusRunStatus, useDocumentTitle } from "@/lib/page";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -78,6 +78,9 @@ import { RunReport } from "./report";
 import { SOFT_STOP_ESCALATE_MS } from "../../../core/steer";
 import type { LiveGit } from "../../live-git";
 
+/** sessionStorage: focus is for this sitting, not a preference about the machine */
+const FOCUS_KEY = "howdah.run.focus";
+
 /** HOW-78: Plan → Build ("chat", the transcript) → Report lead; the rest are the instruments */
 type RunTab = "plan" | "chat" | "report" | "steps" | "context" | "logs" | "graph";
 /** in strip order: the number keys 1–7 are this list's indices */
@@ -90,6 +93,9 @@ const TABS: ReadonlyArray<{ value: RunTab; label: string }> = [
   { value: "logs", label: "Logs" },
   { value: "graph", label: "Graph" },
 ];
+/** a PR opens in the operator's browser, in a new tab — never inside the viewer */
+const EXTERNAL = { target: "_blank", rel: "noopener noreferrer" } as const;
+const PR_LINK = `${buttonVariants({ variant: "ghost", size: "sm" })} shrink-0 font-normal text-foreground`;
 /** links that read as buttons: going back to Runs is navigation, so each is an `<a>` */
 const BACK_LINK = `${buttonVariants({ variant: "ghost", size: "icon-sm" })} shrink-0`;
 const PRIMARY_LINK = buttonVariants({ variant: "default" });
@@ -301,6 +307,96 @@ export function AgentEnvironment({ env }: { env: RunDetail["agent_env"] }) {
 /** the Details drawer is 320px: the label column fits "Agent environment" on two lines at most */
 const LABEL_W = 96;
 
+/**
+ * HOW-68 feedback ("bring back link of PR"): the run's pull requests, wherever the log names them.
+ *
+ * The read model lists a PR only from a `reconciled` forge probe of the run's OWN branch
+ * (web/derive.ts), and the drawer printed that list UNDER the timeline — on a run that had
+ * polled its PR thirteen times that was thirty rows down. So the list leads the drawer now, and
+ * when no probe has reported one it is read from where the run itself says what it opened:
+ * `publication_summary`, the text `probe:pr` takes its PR refs from. A PR named there (the forge
+ * was unreachable, or the probe has not run yet) is still a link — with no state, because none
+ * has been observed and a guessed one would be a lie.
+ *
+ * `pr.state` is the routing fact the last `probe:pr` published. With ONE pull request it is
+ * that PR's; with a stack it belongs to whichever PR decided it, so it is not pinned on any.
+ */
+export interface RunPullRequest { url: string; label: string; state: "open" | "merged" | "closed" | "changes requested" | "CI failed" | "conflicts" | null }
+const PR_URL = /https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+/g;
+export function runPullRequests(detail: Pick<RunDetail, "pull_requests" | "context">): RunPullRequest[] {
+  const seen = new Map<string, string | null>(detail.pull_requests.map((pr) => [pr.url, pr.state]));
+  const value = (key: string) => { const c = detail.context.find((e) => e.key === key); return c?.written && !c.veiled ? c.value : undefined; };
+  const published = value("publication_summary");
+  const text = published === undefined ? "" : typeof published === "string" ? published : JSON.stringify(published) ?? "";
+  // only when no probe has reported one: a summary may also MENTION a PR it did not open (the
+  // one it is stacked on, a related change), and a probed PR is a fact where that is a reading
+  if (seen.size === 0) for (const url of text.match(PR_URL) ?? []) if (!seen.has(url)) seen.set(url, null);
+  const routing = seen.size === 1 ? value("pr.state") : undefined;
+  return [...seen].map(([url, raw]) => {
+    const m = url.match(/github\.com\/[^/]+\/([^/]+)\/pull\/(\d+)/);
+    // the forge's own word when it is final; else the routing fact, when it is this PR's
+    const state = prWord(raw === "MERGED" || raw === "CLOSED" ? raw : typeof routing === "string" && routing !== "OPEN" ? routing : raw);
+    return { url, label: m ? `${m[1]} #${m[2]}` : url.replace(/^https?:\/\//, ""), state };
+  });
+}
+const PR_WORD: Record<string, NonNullable<RunPullRequest["state"]>> = {
+  OPEN: "open", MERGED: "merged", CLOSED: "closed", CHANGES_REQUIRED: "changes requested", CHANGES_REQUESTED: "changes requested", CI_FAILED: "CI failed", CONFLICTS: "conflicts",
+};
+/** a state this viewer has no word for reads as "open": the PR exists, and that much is known */
+const prWord = (raw: string | null): RunPullRequest["state"] => (raw === null ? null : PR_WORD[raw] ?? "open");
+const PR_CHIP: Record<NonNullable<RunPullRequest["state"]>, "outline" | "success" | "destructive" | "default"> = {
+  open: "outline", merged: "success", closed: "destructive", "changes requested": "default", "CI failed": "destructive", conflicts: "destructive",
+};
+function PrState({ state }: { state: RunPullRequest["state"] }) {
+  return state === null ? <Badge variant="outline">not probed yet</Badge> : <Badge variant={PR_CHIP[state]}>{state}</Badge>;
+}
+
+/**
+ * The timeline, with a POLL folded into one row (HOW-68 feedback: the drawer was "dozens of
+ * repeated `delivery.probe_pr@N` / `delivery.wait@N` rows").
+ *
+ * The rule is generic — it knows nothing of delivery: three or more consecutive visits of ONE
+ * step, or four or more of the SAME TWO steps alternating, are the same thing happening again. All
+ * of it but the LATEST visit folds into one row that says what repeated, how many times and for
+ * how long; the latest stays a row of its own (it is where the run is), and the fold opens to
+ * show every visit. A visit that did not succeed ends a run: a failure is never folded away.
+ */
+export type TimelineItem<T> = { kind: "row"; row: T } | { kind: "fold"; key: string; rows: T[]; nodes: string[]; times: number; duration_ms: number };
+export function foldTimeline<T extends { node: string; visit: number; status: string; duration_ms: number | null }>(rows: readonly T[]): TimelineItem<T>[] {
+  const out: TimelineItem<T>[] = [];
+  let i = 0;
+  while (i < rows.length) {
+    const first = rows[i]!;
+    // how far the pattern of `period` steps starting here repeats, stopping after a visit that did not succeed
+    const extent = (period: 1 | 2) => {
+      const second = rows[i + 1];
+      if (period === 2 && (!second || second.node === first.node)) return 0;
+      let j = i;
+      while (j < rows.length && rows[j]!.node === rows[i + ((j - i) % period)]!.node) {
+        j++;
+        if (rows[j - 1]!.status !== "succeeded") break;
+      }
+      return j - i;
+    };
+    const one = extent(1), two = extent(2);
+    // three of one step; or four of a pair — "probe, wait, probe" is one poll and a half, and a
+    // fold that says ×1 hides two rows to tell the operator nothing repeated
+    const period = one >= 3 && one >= two ? 1 : 2;
+    const length = period === 1 ? one : two;
+    if (length < (period === 1 ? 3 : 4)) { out.push({ kind: "row", row: first }); i++; continue; }
+    const folded = rows.slice(i, i + length - 1);
+    out.push({
+      kind: "fold", key: `${first.node}@${first.visit}`, rows: folded,
+      nodes: period === 1 ? [first.node] : [first.node, rows[i + 1]!.node],
+      times: Math.ceil(folded.length / period),
+      duration_ms: folded.reduce((sum, r) => sum + (r.duration_ms ?? 0), 0),
+    });
+    out.push({ kind: "row", row: rows[i + length - 1]! });
+    i += length;
+  }
+  return out;
+}
+
 export function RunGraph({ runId, graph, timeline, status, onJumped }: { runId: string; graph: string; timeline: RunDetail["timeline"]; status: string; onJumped: () => void }) {
   const shape = useGraphShape(graph);
   const [jumpTo, setJumpTo] = useState<string | null>(null);
@@ -308,9 +404,27 @@ export function RunGraph({ runId, graph, timeline, status, onJumped }: { runId: 
   const [state, setState] = useState<"idle" | "jumping" | "sent" | "failed">("idle");
   const [error, setError] = useState<string | null>(null);
   const { toast } = useToast();
+  // what the run knows about each step, for the picture: how often it ran, how long the finished
+  // visits took and how the latest stands; and which routes it walked. Derived from the timeline,
+  // and memoised on it — the frame re-renders once a second and the picture must not.
+  const { visits, info, taken } = useMemo(() => {
+    const visits: Record<string, number> = {};
+    const spent: Record<string, number> = {};
+    const info: Record<string, StepRunInfo> = {};
+    const taken = new Set<string>();
+    timeline.forEach((t, i) => {
+      visits[t.node] = Math.max(visits[t.node] ?? 0, t.visit);
+      if (t.duration_ms != null) spent[t.node] = (spent[t.node] ?? 0) + t.duration_ms;
+      info[t.node] = { state: t.status === "succeeded" ? "done" : t.status };
+      const next = timeline[i + 1];
+      if (next) taken.add(takenKey(t.node, next.node));
+      // HOW-73: a branch was reached from its parallel step, and leaves for that step's join
+      if (t.parallel) taken.add(takenKey(t.parallel.node, t.node));
+    });
+    for (const [node, ms] of Object.entries(spent)) info[node] = { ...info[node], took: fmtDur(ms) };
+    return { visits, info, taken };
+  }, [timeline]);
   if (!shape) return <LoadingBlock label={`Loading the ${graph} graph`} rows={3} className="p-6" />;
-  const visits: Record<string, number> = {};
-  for (const t of timeline) visits[t.node] = Math.max(visits[t.node] ?? 0, t.visit);
   const running = timeline.findLast((t) => t.status === "running");
   const current = running?.node ?? timeline.at(-1)?.node;
   const jumpable = status !== "done" && status !== "failed-terminal" && status !== "running";
@@ -366,6 +480,8 @@ export function RunGraph({ runId, graph, timeline, status, onJumped }: { runId: 
         current={current}
         waiting={status === "needs-input"}
         visits={visits}
+        info={info}
+        taken={taken}
         onSelect={jumpable ? setJumpTo : undefined}
         selected={jumpTo ?? undefined}
         canSelect={(node) => node.kind !== "terminal"}
@@ -721,6 +837,27 @@ function RunFrame({ id, detail, tab, setTab, picked, setPicked, liveGit, now, re
   const { summary, ask } = detail;
   const { toast } = useToast();
   const drawer = useDrawer("howdah.run.details");
+  // FOCUS (HOW-68 feedback: "would like full screen for the plan"): the sidebar, the run's
+  // header and the Details drawer stand down and the open pane has the window. F or the control
+  // toggles it, Esc leaves, and it is remembered for the session — a way of reading, not a
+  // preference about this machine. The shell is not this component's, so it is told through one
+  // attribute on <html> that howdah.css reads; it is taken back when the run is left.
+  const [focus, setFocusState] = useState(() => { try { return sessionStorage.getItem(FOCUS_KEY) === "1"; } catch { return false; } });
+  const setFocus = useCallback((on: boolean) => {
+    setFocusState(on);
+    try { sessionStorage.setItem(FOCUS_KEY, on ? "1" : "0"); } catch { /* unremembered is fine */ }
+  }, []);
+  useEffect(() => {
+    if (!focus) return;
+    document.documentElement.dataset.runFocus = "1";
+    return () => { delete document.documentElement.dataset.runFocus; };
+  }, [focus]);
+  const leaveFocus = useCallback(() => setFocus(false), [setFocus]);
+  useEscapeLayer(leaveFocus, { active: focus, kind: "drawer" });
+  // ⌘I while focused means "I want the details": leave focus and show them
+  const toggleDetails = useCallback(() => {
+    if (focus) { setFocus(false); drawer.setOpen(true); } else drawer.toggle();
+  }, [focus, setFocus, drawer]);
   const detailsButton = useRef<HTMLButtonElement | null>(null);
   const moreButton = useRef<HTMLButtonElement | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -795,7 +932,8 @@ function RunFrame({ id, detail, tab, setTab, picked, setPicked, liveGit, now, re
 
   useShortcuts([
     ...TABS.map((t, i) => ({ id: `run.tab.${t.value}`, scope: "A run", label: `Show ${t.label}`, keys: String(i + 1), run: () => setTab(t.value) })),
-    { id: "run.details", scope: "A run", label: drawer.open ? "Hide details" : "Show details", keys: "mod+i", run: drawer.toggle },
+    { id: "run.details", scope: "A run", label: drawer.open && !focus ? "Hide details" : "Show details", keys: "mod+i", run: toggleDetails },
+    { id: "run.focus", scope: "A run", label: focus ? "Leave focus" : "Focus the pane (hide the sidebar and details)", keys: "f", keywords: "full screen fullscreen zen wide", run: () => setFocus(!focus) },
     { id: "run.reply", scope: "A run", label: ask ? "Reply to the run" : "Ask about this run", keys: "r", run: reply },
     { id: "run.ask", scope: "A run", label: "Go to what the run is asking", keys: "a", run: jumpToAsk, disabled: !ask },
     { id: "run.open-ide", scope: "A run", label: "Open in IDE", keys: "o", run: () => void openIde(), disabled: ide !== "ready" },
@@ -853,28 +991,47 @@ function RunFrame({ id, detail, tab, setTab, picked, setPicked, liveGit, now, re
     ...(resumeCommand ? [{ label: "Copy resume command", icon: <Copy />, onSelect: () => void copyResume() }] : []),
   ];
   const waited = parked && summary.waiting_since ? fmtWait(summary.waiting_since, now) : null;
+  const prs = useMemo(() => runPullRequests(detail), [detail.pull_requests, detail.context]); // eslint-disable-line react-hooks/exhaustive-deps
+  /* the status line is a focus TARGET (D20): where focus goes when an ask is answered.
+     tabIndex -1 keeps it out of the Tab order; the ring is the global :focus-visible */
+  const statusLine = (
+    <span id={RUN_STATUS_ID} data-slot="run-status" tabIndex={-1} className="inline-flex shrink-0 items-center rounded-[var(--radius-sm)]">
+      {parked ? (
+        // the alarm, said once in the frame: one line that takes you to the card (DESIGN.md)
+        <Button variant="ghost" size="sm" className="run-status-line" aria-label={`Waiting on you${waited ? ` for ${waited}` : ""} — go to what the run is asking`} onClick={jumpToAsk}>
+          <StatusGlyph status="needs-input" />Waiting on you{waited && <span className="tabular-nums"> · {waited}</span>}
+          <Kbd keys="a" decorative className="run-wide" />
+        </Button>
+      ) : (
+        resuming ? <StatusBadge status="queued" label="Resuming" /> : <StatusBadge status={summary.status} />
+      )}
+    </span>
+  );
+  // the run's pull request, beside its status: the newest one, and a count when there are more
+  // (all of them lead the Details drawer). It opens in the operator's browser.
+  const pr = prs.at(-1);
+  const prLink = pr && (
+    <Tooltip side="bottom" content={<span className="flex flex-col gap-0.5"><span>{prs.length > 1 ? `${prs.length} pull requests — the newest opens; all are in Details` : "Open the pull request in your browser"}</span><span className="font-mono text-code">{pr.url.replace(/^https:\/\//, "")}</span></span>}>
+      <a className={PR_LINK} href={pr.url} {...EXTERNAL} data-slot="run-pr" aria-label={`Pull request ${pr.label}${pr.state ? `, ${pr.state}` : ""} — opens in your browser`}>
+        <GitPullRequest aria-hidden />
+        <span className="tabular-nums">#{pr.url.match(/\/pull\/(\d+)/)?.[1] ?? "PR"}</span>
+        {pr.state && <span className="run-wide text-muted-foreground">{pr.state}</span>}
+        {prs.length > 1 && <span className="tabular-nums text-muted-foreground">+{prs.length - 1}</span>}
+      </a>
+    </Tooltip>
+  );
 
   return (
     <div className="runview">
       <div className="thread-col @container">
+        {!focus && (
         <header className="run-head">
           <Tooltip content="Back to runs" side="bottom">
             <a className={BACK_LINK} href="/" aria-label="back to runs"><ArrowLeft /></a>
           </Tooltip>
           <h1><Truncate>{runLabel({ ...summary, id })}</Truncate></h1>
-          {/* the status line is a focus TARGET (D20): where focus goes when an ask is answered.
-              tabIndex -1 keeps it out of the Tab order; the ring is the global :focus-visible */}
-          <span id={RUN_STATUS_ID} data-slot="run-status" tabIndex={-1} className="inline-flex shrink-0 items-center rounded-[var(--radius-sm)]">
-          {parked ? (
-            // the alarm, said once in the frame: one line that takes you to the card (DESIGN.md)
-            <Button variant="ghost" size="sm" className="run-status-line" aria-label={`Waiting on you${waited ? ` for ${waited}` : ""} — go to what the run is asking`} onClick={jumpToAsk}>
-              <StatusGlyph status="needs-input" />Waiting on you{waited && <span className="tabular-nums"> · {waited}</span>}
-              <Kbd keys="a" decorative className="run-wide" />
-            </Button>
-          ) : (
-            resuming ? <StatusBadge status="queued" label="Resuming" /> : <StatusBadge status={summary.status} />
-          )}
-          </span>
+          {statusLine}
+          {prLink}
           <Toolbar label="Run actions" className="ml-auto">
             <RunControls
               runId={id} summary={summary} onAction={reload} now={now}
@@ -887,6 +1044,11 @@ function RunFrame({ id, detail, tab, setTab, picked, setPicked, liveGit, now, re
                 <ExternalLink />Open in IDE<Kbd keys="o" decorative />
               </Button>
             )}
+            <Tooltip content={<span className="inline-flex items-center gap-2">Focus the pane: hide the sidebar and details <Kbd keys="f" /></span>} side="bottom" align="end">
+              <Button variant="ghost" size="sm" aria-pressed={false} aria-label="Focus the pane" onClick={() => setFocus(true)}>
+                <Maximize2 /><span className="run-wide">Focus</span><Kbd keys="f" decorative className="run-wide" />
+              </Button>
+            </Tooltip>
             <Button
               ref={detailsButton}
               variant="outline"
@@ -899,8 +1061,21 @@ function RunFrame({ id, detail, tab, setTab, picked, setPicked, liveGit, now, re
             </Button>
           </Toolbar>
         </header>
-        <div className="run-tabs">
+        )}
+        <div className="run-tabs flex items-center gap-3">
           <Tabs value={tab} onValueChange={(v) => setTab(v as RunTab)} items={TABS.map((t, i) => ({ ...t, hint: String(i + 1) }))} />
+          {/* focused: the header is gone, so the strip carries what it said — which run, how it
+              stands, its PR — and the way back out */}
+          {focus && (
+            <div className="ml-auto flex min-w-0 items-center gap-2" data-slot="run-focus-bar">
+              <Truncate className="text-sm text-muted-foreground">{runLabel({ ...summary, id })}</Truncate>
+              {statusLine}
+              {prLink}
+              <Button variant="outline" size="sm" aria-pressed aria-label="Leave focus" onClick={leaveFocus}>
+                <Minimize2 />Leave focus<Kbd keys="f" decorative />
+              </Button>
+            </div>
+          )}
         </div>
         {actionError && (
           <div className="run-notice" data-tone="failed" role="alert">
@@ -946,8 +1121,8 @@ function RunFrame({ id, detail, tab, setTab, picked, setPicked, liveGit, now, re
         </div>
       </div>
 
-      <Drawer open={drawer.open} onClose={drawer.close} label="Run details" title="Details" returnFocus={detailsButton}>
-        <RunDetails id={id} detail={detail} liveGit={liveGit} now={now} tab={tab} reload={reload} resumeCommand={resumeCommand} onCopyResume={copyResume} onPickStep={showStep} />
+      <Drawer open={drawer.open && !focus} onClose={drawer.close} label="Run details" title="Details" returnFocus={detailsButton} resizeKey="howdah.run.details">
+        <RunDetails prs={prs} id={id} detail={detail} liveGit={liveGit} now={now} tab={tab} reload={reload} resumeCommand={resumeCommand} onCopyResume={copyResume} onPickStep={showStep} />
       </Drawer>
     </div>
   );
@@ -973,7 +1148,8 @@ function Group({ title, children }: { title: string; children: React.ReactNode }
  * with the full `node@visit`; the proportional bars went, because Steps draws that picture at
  * a size where it can be read.
  */
-function RunDetails({ id, detail, liveGit, now, tab, reload, resumeCommand, onCopyResume, onPickStep }: {
+function RunDetails({ id, detail, liveGit, now, tab, reload, resumeCommand, onCopyResume, onPickStep, prs }: {
+  prs: readonly RunPullRequest[];
   /** open a step in Steps, on its detail */
   onPickStep: (key: string) => void;
   id: string;
@@ -997,8 +1173,39 @@ function RunDetails({ id, detail, liveGit, now, tab, reload, resumeCommand, onCo
     // parent's own log is the only thing that knows how the parent is doing.
     ...(summary.parent ? [{ label: "Planned by", value: <a href={`/run/${summary.parent}`} className="run-link m">{summary.parent}</a> }] : []),
   ];
+  const folded = useMemo(() => foldTimeline(detail.timeline), [detail.timeline]);
+  const [opened, setOpened] = useState<ReadonlySet<string>>(() => new Set());
+  const stepRow = (t: RunDetail["timeline"][number]) => {
+    // D26: a dead run's last step is not running — the cross and the word, clock stopped
+    const cut = stepInterrupted(detail, t);
+    const word = cut ? "interrupted" : t.status;
+    const took = fmtDur(liveDuration(t, cut && summary.last_event_at ? new Date(summary.last_event_at).getTime() : now));
+    return (
+      // a row is the way to its step: it opens Steps on that step's detail
+      <Row className="run-details-row" data-step-status={word} onClick={() => onPickStep(stepKey(t))} aria-label={`open ${t.node}@${t.visit} in Steps — ${word}, ${took}`}>
+        <StatusGlyph status={cut ? "harness-dead" : STEP_STATUS[t.status]} size={12} label={word} />
+        <span className="m run-details-step">{t.node}@{t.visit}</span>
+        <span className="run-details-dur">{took}</span>
+      </Row>
+    );
+  };
   return (
     <div className="run-details">
+      {/* FIRST: the one thing in this drawer the operator leaves the viewer for (see runPullRequests) */}
+      {prs.length > 0 && (
+        <Group title={prs.length === 1 ? "Pull request" : "Pull requests"}>
+          <ul className="run-details-list">
+            {prs.map((pr) => (
+              <li key={pr.url} className="flex items-center gap-2">
+                <a href={pr.url} {...EXTERNAL} className="run-link">
+                  <GitPullRequest aria-hidden className="mr-1.5 inline size-3.5 align-[-2px] text-muted-foreground" />{pr.label}
+                </a>
+                <PrState state={pr.state} />
+              </li>
+            ))}
+          </ul>
+        </Group>
+      )}
       {liveStep(detail) && (
         <Group title="Progress">
           <ProgressPanel detail={detail} liveGit={liveGit} variant="rail" runId={id} />
@@ -1010,19 +1217,23 @@ function RunDetails({ id, detail, liveGit, now, tab, reload, resumeCommand, onCo
       <Group title="Timeline">
         {detail.timeline.length === 0 ? <p className="run-details-note">No step has started yet.</p> : (
           <ol className="run-details-list">
-            {detail.timeline.map((t) => {
-              // D26: a dead run's last step is not running — the cross and the word, clock stopped
-              const cut = stepInterrupted(detail, t);
-              const word = cut ? "interrupted" : t.status;
-              const took = fmtDur(liveDuration(t, cut && summary.last_event_at ? new Date(summary.last_event_at).getTime() : now));
+            {folded.map((item) => {
+              if (item.kind === "row") return <li key={stepKey(item.row)}>{stepRow(item.row)}</li>;
+              const open = opened.has(item.key);
+              const what = item.nodes.join(" ↔ ");
+              const took = fmtDur(item.duration_ms);
               return (
-                <li key={stepKey(t)}>
-                  {/* a row is the way to its step: it opens Steps on that step's detail */}
-                  <Row className="run-details-row" data-step-status={word} onClick={() => onPickStep(stepKey(t))} aria-label={`open ${t.node}@${t.visit} in Steps — ${word}, ${took}`}>
-                    <StatusGlyph status={cut ? "harness-dead" : STEP_STATUS[t.status]} size={12} label={word} />
-                    <span className="m run-details-step">{t.node}@{t.visit}</span>
+                <li key={`fold:${item.key}`}>
+                  <Row
+                    className="run-details-row" data-fold={open ? "open" : "closed"} aria-expanded={open}
+                    aria-label={`${what}, ${item.times} times over ${took} — ${open ? "hide" : "show"} the ${item.rows.length} visits`}
+                    onClick={() => setOpened((was) => { const next = new Set(was); if (!next.delete(item.key)) next.add(item.key); return next; })}
+                  >
+                    <ChevronRight aria-hidden size={12} className={open ? "rotate-90" : ""} />
+                    <span className="m run-details-step">{what} <span className="font-sans tabular-nums text-muted-foreground">×{item.times}</span></span>
                     <span className="run-details-dur">{took}</span>
                   </Row>
+                  {open && <ol className="run-details-list run-details-folded">{item.rows.map((t) => <li key={stepKey(t)}>{stepRow(t)}</li>)}</ol>}
                 </li>
               );
             })}
@@ -1038,18 +1249,6 @@ function RunDetails({ id, detail, liveGit, now, tab, reload, resumeCommand, onCo
             labelWidth={LABEL_W}
             items={detail.children.map((c) => ({ label: c.ticket ?? c.slice_id, value: <a href={`/run/${c.run_id}`} className="run-link m">{c.run_id}</a> }))}
           />
-        </Group>
-      )}
-      {detail.pull_requests.length > 0 && (
-        <Group title="Pull requests">
-          <ul className="run-details-list">
-            {detail.pull_requests.map((pr) => (
-              <li key={pr.url}>
-                <a href={pr.url} target="_blank" rel="noreferrer" className="run-link m">{pr.url.replace(/^https:\/\/github\.com\//, "")}</a>
-                <Badge variant={pr.state === "MERGED" ? "success" : pr.state === "OPEN" ? "outline" : "destructive"}>{pr.state.toLowerCase()}</Badge>
-              </li>
-            ))}
-          </ul>
         </Group>
       )}
       {detail.identity.folder_kind === "repo" && (

@@ -99,6 +99,18 @@ describe("renderRunReport", () => {
     expect(html).toContain("28 · 00:01"); // a new UTC day says so
     expect(html).toContain("1/2 met");
     expect(html).toContain('href="https://github.com/o/r/pull/7"');
+    // HOW-68 feedback: framed by the viewer, a plain link loaded GitHub INSIDE the report. Every
+    // http(s) link the page writes opens a new tab and hands it neither this window nor a
+    // referrer; `<base target="_blank">` in the head covers a link a later edit forgets to mark.
+    const external = [...html.matchAll(/<a\b[^>]*href="https?:[^"]*"[^>]*>/g)].map((m) => m[0]);
+    expect(external.length).toBeGreaterThan(0);
+    for (const a of external) {
+      expect(a).toContain('target="_blank"');
+      expect(a).toContain('rel="noopener noreferrer"');
+    }
+    expect(html).toMatch(/<head>[\s\S]*<base target="_blank">[\s\S]*<\/head>/);
+    // ...and there is no in-page anchor for that base to send to a new tab by mistake
+    expect(html).not.toMatch(/<a\b[^>]*href="#/);
     // nothing is fetched: no external script, stylesheet or image
     expect(html).not.toMatch(/<(script|link|img)[^>]+(src|href)="https?:/);
   });

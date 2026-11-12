@@ -99,7 +99,7 @@ function ReadyReview({ runId, draft, onSaved }: { runId: string; draft: ReadyDra
   const open = !draft.saved && !draft.discarded;
   const picture = (
     <div data-slot="draft-picture" aria-label="the draft, pictured" className="flex h-[min(520px,62dvh)] min-h-[280px] w-full flex-col">
-      <GraphDag shape={shape} removed={removed} highlight={focused} />
+      <GraphDag shape={shape} removed={removed} highlight={focused} wheel="page" />
     </div>
   );
   return (

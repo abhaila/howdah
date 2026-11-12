@@ -136,7 +136,9 @@ export function App() {
   const collapsed = narrow || nav.collapsed;
   useEffect(() => {
     const onClick = (e: MouseEvent) => {
-      const a = (e.target as HTMLElement).closest("a[href^='/']");
+      // not a link that opens elsewhere: `target` (the report's Open, an evidence file) and
+      // `download` are the browser's to follow — routing them in-app showed a blank screen
+      const a = (e.target as HTMLElement).closest("a[href^='/']:not([target]):not([download])");
       if (a && !e.metaKey && !e.ctrlKey) {
         e.preventDefault();
         history.pushState(null, "", (a as HTMLAnchorElement).href);
