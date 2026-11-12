@@ -226,9 +226,10 @@ describe("AttentionInbox", () => {
     expect(cell("name")).toBe("HOW-431 Rate-limit headers"); // the NAME, not the 100-character id
     // D22: the step column is gone — it repeated what most sentences already say and cut the
     // sentence at 1024. Where the sentence does not name the step, the id follows it.
-    expect(cell("line")).toBe("Publish? Some acceptance criteria are not proven. · delivery.publish");
+    expect(cell("line")).toBe("Publish? Some acceptance criteria are not proven.·delivery.publish");
     expect(row.querySelector('[data-col="step"]')).toBeNull();
-    expect(row.querySelector('[data-col="line"] .font-mono')!.textContent).toBe("delivery.publish");
+    // in a slot of its own, so a long sentence cannot cut it off the row
+    expect(row.querySelector('[data-col="line"] [data-slot="inbox-step"] [data-slot="truncate"]')!.textContent).toBe("delivery.publish");
     expect(cell("waited")).toBe("2h 11m");
     expect(row.textContent).not.toContain(LONG);
     // every cell that can be long is a Truncate, so nothing wraps into the next row (audit 3.1.8)
@@ -237,17 +238,17 @@ describe("AttentionInbox", () => {
 
   test("D22: a sentence that already names the step does not get the id a second time", () => {
     const named = inboxLine({ ...ITEM, node: "implementation.plan", reason: "implementation.plan failed: exit 1" }, undefined, Date.now());
-    expect(named.line.parts.filter((p) => p.value.includes("implementation.plan"))).toHaveLength(1);
+    expect(named.stepAfter).toBeNull();
     const unnamed = inboxLine({ ...ITEM, node: "plan.approve", reason: "A proposal is waiting for your decision." }, undefined, Date.now());
-    expect(unnamed.line.parts.at(-1)).toEqual({ kind: "mono", value: "plan.approve" });
-    expect(inboxLine({ ...ITEM, node: "__harness__", reason: "run `howdah up`" }, undefined, Date.now()).line.parts.some((p) => p.kind === "mono")).toBe(false);
+    expect(unnamed.stepAfter).toBe("plan.approve");
+    expect(inboxLine({ ...ITEM, node: "__harness__", reason: "run `howdah up`" }, undefined, Date.now()).stepAfter).toBeNull();
   });
 
   test("inboxLine: a run the board does not know, or whose park is a different ask, falls back to the record's own first line", () => {
     const fallback = inboxLine({ ...ITEM, reason: "\nfirst line\nsecond" }, undefined, Date.now());
     expect(fallback).toMatchObject({ name: ITEM.run, named: false, body: "first line", step: "implementation.plan" });
-    // D22: the step id follows a sentence that does not name it (it used to be its own column)
-    expect(fallback.line.parts.map((p) => p.value)).toEqual(["Needs you.", "first line", "·", "implementation.plan"]);
+    expect(fallback.line.parts.map((p) => p.value)).toEqual(["Needs you.", "first line"]);
+    expect(fallback.stepAfter).toBe("implementation.plan"); // D22: printed after the sentence, not in a column
     expect(inboxLine(HARNESS_ITEM, undefined, Date.now()).step).toBeNull();
   });
 });

@@ -346,7 +346,8 @@ review's hand-off. Everything below was changed in code and has a test unless it
   blocking lands on that list (focused, scrolled to) with no banner and no toast, and only a
   refusal the browser could not predict adds a row to the list and one toast.
 - *Smaller (D22, D23, D26).* Needs you has no step column; the id follows a sentence that does
-  not already name it. Graph boxes print the part of an id that tells steps apart
+  not already name it, in a slot the sentence cannot push off the row (the first version of this
+  appended it to the sentence, and the gate caught a long sentence cutting it away: 4 unreachable). Graph boxes print the part of an id that tells steps apart
   (`impl….local_review`), the group dimmed. Approve and Send feedback confirm with the primary
   button, not red. A dead run's interrupted step is a cross and the word "interrupted" in
   Details and in Steps, with its clock stopped; the run says it died in the header and one
@@ -399,3 +400,8 @@ review's hand-off. Everything below was changed in code and has a test unless it
   only approximates; `main` is not itself focusable, so the skip link moves the reading
   position and not `document.activeElement` (as before); the hover/pressed sweep reads computed
   styles of one element per kind and does not judge how the states look.
+- *Gate at the end of the fix pass:* full re-seed and full capture — 584 PNGs, 281 audited
+  screens, 0 failed steps, **PASS**, every line 0 (the first full capture of this pass FAILED on
+  one line, the 4 unreachable inbox step ids above). `tsc --noEmit` clean. `bun test`: 3241
+  pass, 5 skip, 3 fail — the same three `chmod`-based tests, which cannot fail the way they
+  expect when the suite runs as root.

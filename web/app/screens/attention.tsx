@@ -74,14 +74,14 @@ import { Line } from "./runs";
  * failed."), so a fourth column printing the same id beside it cost the sentence a quarter of
  * the row and cut it at 1024. The step id is still on the row: where the sentence does not say
  * it ("Approve? A proposal is waiting for your decision."), it follows the sentence, in mono —
- * so it is read where there is room and is in the Truncate's tooltip where there is not.
+ * in a slot of its own that the sentence cannot push off the row (a first version appended it
+ * to the sentence, and a long sentence cut it away entirely).
  */
 const INBOX_ROW = "grid min-h-9 grid-cols-[16px_minmax(0,4fr)_minmax(0,9fr)_132px] items-center gap-x-3 border-b border-border px-2 py-1.5 text-sm leading-[1.4] no-underline";
 
-/** the sentence, followed by the step id unless the sentence already names it */
-function withStep(line: RunLine, step: string | null): RunLine {
-  if (step === null || line.parts.some((p) => p.value.includes(step))) return line;
-  return { ...line, parts: [...line.parts, { kind: "text", value: "·" }, { kind: "mono", value: step }] };
+/** the step id to print after the sentence: null when there is none, or the sentence already names it */
+function stepAfter(line: RunLine, step: string | null): string | null {
+  return step === null || line.parts.some((p) => p.value.includes(step)) ? null : step;
 }
 
 const firstLine = (s: string) => (s.split("\n").find((l) => l.trim() !== "") ?? "").trim();
@@ -90,20 +90,22 @@ const firstLine = (s: string) => (s.split("\n").find((l) => l.trim() !== "") ?? 
  * What one inbox row says, joined from the board when the board knows the run and its park is
  * THIS ask. Pure, for the test. A harness-level record (`__harness__`) has no step to name.
  */
-export function inboxLine(item: InboxItem, row: RunBoardRow | undefined, now: number): { name: string; named: boolean; line: RunLine; body: string; step: string | null } {
+export function inboxLine(item: InboxItem, row: RunBoardRow | undefined, now: number): { name: string; named: boolean; line: RunLine; body: string; step: string | null; /** the id to print after the sentence, when the sentence does not name it */ stepAfter: string | null } {
   const same = row !== undefined && row.status === "needs-input" && (row.park === null || row.park.node === item.node);
   const step = item.node.startsWith("__") ? null : item.node;
   if (row !== undefined && same) {
     const line = runLine(row, now);
-    return { name: runLabel(row), named: !!(row.name || row.goal), line: withStep(line, step), body: parkSummary(row.park ?? { node: item.node }).title, step };
+    return { name: runLabel(row), named: !!(row.name || row.goal), line, body: parkSummary(row.park ?? { node: item.node }).title, step, stepAfter: stepAfter(line, step) };
   }
   const said = firstLine(item.reason);
+  const fallback: RunLine = { parts: [{ kind: "strong", value: "Needs you." }, { kind: "text", value: said }], quiet: false };
   return {
     name: row ? runLabel(row) : item.run,
     named: !!(row && (row.name || row.goal)),
-    line: withStep({ parts: [{ kind: "strong", value: "Needs you." }, { kind: "text", value: said }], quiet: false }, step),
+    line: fallback,
     body: said,
     step,
+    stepAfter: stepAfter(fallback, step),
   };
 }
 
@@ -154,7 +156,7 @@ export function AttentionInbox() {
           ) : (
             <section aria-label="Waiting on you" className="flex flex-col">
               <SectionLabel as="h2" count={items.length} className="border-b border-border px-2 pb-1.5">Waiting on you</SectionLabel>
-              {rows.map(({ item, name, named, line }) => (
+              {rows.map(({ item, name, named, line, stepAfter: after }) => (
                 // href ?? undefined, never a guessed path: the harness record's "run" is the literal
                 // string "howdah", and /run/howdah is a page that says the run failed to start. The
                 // server decides what each row can link at (engine/attention-inbox.ts `href`); a row
@@ -166,7 +168,10 @@ export function AttentionInbox() {
                       ? <Truncate className="text-body font-medium text-foreground">{name}</Truncate>
                       : <Truncate mono middle={12} className="text-code text-foreground">{name}</Truncate>}
                   </span>
-                  <span data-col="line" className="flex min-w-0"><Line line={line} /></span>
+                  <span data-col="line" className="flex min-w-0 items-baseline gap-1.5">
+                    <Line line={line} />
+                    {after !== null && <span data-slot="inbox-step" className="flex min-w-0 max-w-[45%] shrink-0 items-baseline gap-1.5 text-muted-foreground"><span aria-hidden>·</span><Truncate mono middle={14} className="text-code">{after}</Truncate></span>}
+                  </span>
                   {/* the wait, written the way the Runs list writes it ("19h 06m"): under a heading that
                       already says "Waiting on you", the server's "waiting …" said the word 21 times */}
                   {/* the CELL is right-aligned and the tooltip sits inside it, as on the Runs list: with the

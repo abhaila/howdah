@@ -410,6 +410,11 @@ Break one of these and the design stops working, so check them before changing t
 - **Attention is durable before it is delivered.** `engine/attention.ts` writes the record,
   then notifies; `watchdog/check.ts` runs outside the process (launchd, 60s) so `kill -9`
   with an ask pending still rings, and a stale heartbeat is itself an attention event.
+  HOW-68: an open viewer that may post browser notifications beats `viewer.json`
+  (`engine/viewer-presence.ts`; liveness, like `heartbeat.json`, not run state), and the OS
+  banner is skipped while that beat is fresh — the browser's notification is the native one.
+  A skipped banner records `notified_via: "viewer"`; the watchdog rings through the OS once
+  the viewer is gone, so `kill -9` on the browser cannot swallow an ask.
 - **Human gates read decision events, never `attention-resolved`.** `resume()` auto-resolves
   every standing park, so an approval that trusted `attention-resolved` would let any resume
   through. `engine/slice-decision.ts` is the only place that answers "what is the current
