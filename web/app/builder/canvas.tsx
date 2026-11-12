@@ -255,6 +255,22 @@ export function useCanvasCentre(): () => Point | undefined {
 }
 
 /**
+ * How far from that middle a card can be placed and still be wholly on screen, in flow space —
+ * what `freeSpotNear` needs to keep a clicked step where the operator is looking when the
+ * middle itself is taken. `undefined` on an unmeasured pane, for the reason above.
+ */
+export function useCanvasReach(): () => Point | undefined {
+  const domNode = useStore((s) => s.domNode);
+  const zoom = useStore((s) => s.transform[2]);
+  return useCallback(() => {
+    if (!domNode) return undefined;
+    const r = domNode.getBoundingClientRect();
+    if (!r.width || !r.height || !zoom) return undefined;
+    return { x: Math.max(0, r.width / 2 / zoom - NODE_WIDTH / 2), y: Math.max(0, r.height / 2 / zoom - NODE_HEIGHT / 2) };
+  }, [domNode, zoom]);
+}
+
+/**
  * One batch of React Flow node changes, split into "still under the pointer" and "settled".
  *
  * Returns the in-flight positions this batch carries, or `null` when it carries none — so a

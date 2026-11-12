@@ -2744,5 +2744,9 @@ describe("HOW-68 sign-off: what the builder says and where a clicked step lands"
     }
     // and a spot that is already clear is left exactly where it was asked for
     expect(freeSpotNear(nodes, { x: 900, y: 900 })).toEqual({ x: 900, y: 900 });
+    // told how far the view reaches, it takes a clear spot the operator can SEE over a nearer
+    // one past the edge of a narrow pane: the canvas does not move when one step is added
+    const tall = freeSpotNear(nodes, { x: 70, y: 120 }, { x: 100, y: 400 })!;
+    expect(Math.abs(tall.x - 70) <= 100 && Math.abs(tall.y - 120) <= 400, JSON.stringify(tall)).toBe(true);
   });
 });

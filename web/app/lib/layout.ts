@@ -100,6 +100,10 @@ const ROOM: Point = { x: CARD.x + 24, y: CARD.y + 64 };
  *  end on a free spot rather than merely end. */
 const ASIDE: Point = { x: ROOM.x + 4, y: ROOM.y + 4 };
 
+/** The small step of the last resort below: a whole card down, so one placed step can rule out
+ *  at most one candidate. */
+const NUDGE: Point = { x: 48, y: 80 };
+
 /**
  * `at`, unless a step is already sitting there or close enough to share a wire's caption —
  * then the nearest clear spot around it.
@@ -110,28 +114,36 @@ const ASIDE: Point = { x: ROOM.x + 4, y: ROOM.y + 4 };
  * NOT used by the DROP path: a drop is where the operator put it, and moving it is a lie about
  * a direct-manipulation gesture.
  *
- * `undefined` in, `undefined` out — there is no spot near nowhere.
+ * `undefined` in, `undefined` out — there is no spot near nowhere. Each direction's row of
+ * candidates is spaced just past the room a card needs, so one placed step can rule out at
+ * most one of them and `placed.length + 1` steps out always holds a free one.
  */
-export function freeSpotNear(nodes: NodeSpec[], at: Point | undefined): Point | undefined {
+export function freeSpotNear(nodes: NodeSpec[], at: Point | undefined, reach?: Point): Point | undefined {
   if (!at) return undefined;
   const placed = nodes.map((n) => n.position).filter((p): p is Point => !!p);
   const clear = (p: Point) => !placed.some((q) => Math.abs(q.x - p.x) < ROOM.x && Math.abs(q.y - p.y) < ROOM.y);
   if (clear(at)) return at;
-  // The nearest clear spot, one step out at a time: below first (a graph reads downwards), then
-  // either side, then above. `at` is the middle of what is on screen, so the first ring is in
-  // view on any pane a builder is usable in — "one more step to the right" alone put the
-  // second and third steps under the panel beside the canvas.
+  // Every spot one, two, … steps out in the four directions, nearest first; a tie goes below,
+  // then above (a graph reads downwards), then to either side.
+  const around: Point[] = [];
   for (let i = 1; i <= placed.length + 1; i++) {
-    const ring: Point[] = [
-      { x: at.x, y: at.y + i * ASIDE.y },
-      { x: at.x + i * ASIDE.x, y: at.y },
-      { x: at.x - i * ASIDE.x, y: at.y },
-      { x: at.x, y: at.y - i * ASIDE.y },
-    ];
-    const free = ring.find(clear);
-    if (free) return free;
+    around.push({ x: at.x, y: at.y + i * ASIDE.y }, { x: at.x, y: at.y - i * ASIDE.y }, { x: at.x + i * ASIDE.x, y: at.y }, { x: at.x - i * ASIDE.x, y: at.y });
   }
-  return { x: at.x, y: at.y + (placed.length + 1) * ASIDE.y };
+  const far = (p: Point) => Math.hypot(p.x - at.x, p.y - at.y);
+  const free = around.map((p, order) => ({ p, order })).sort((a, b) => far(a.p) - far(b.p) || a.order - b.order).map((c) => c.p).filter(clear);
+  // `reach` is how far from `at` a card can sit and still be on screen. A clear spot IN VIEW
+  // wins over a nearer one that is not: the canvas does not move when one step is added, so a
+  // step placed past the edge of the pane is a step the operator cannot see they made.
+  if (!reach) return free[0] ?? { x: at.x, y: at.y + (placed.length + 1) * ASIDE.y };
+  const seen = free.find((p) => Math.abs(p.x - at.x) <= reach.x && Math.abs(p.y - at.y) <= reach.y);
+  if (seen) return seen;
+  // Nothing clear is on screen (a small pane, or a crowded one). Seen-but-close beats
+  // tidy-but-invisible, so step aside by less than a card until at least the two cards'
+  // titles are apart — the rule this function had before it knew about captions.
+  let spot = at;
+  const apart = (p: Point) => !placed.some((q) => Math.abs(q.x - p.x) < CARD.x / 2 && Math.abs(q.y - p.y) < CARD.y / 2);
+  for (let i = 1; i <= placed.length && !apart(spot); i++) spot = { x: at.x + i * NUDGE.x, y: at.y + i * NUDGE.y };
+  return spot;
 }
 
 /** Where a step with no position of its own goes — below everything, so nothing is covered. */

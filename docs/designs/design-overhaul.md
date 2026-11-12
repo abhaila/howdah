@@ -278,4 +278,33 @@ director.
 - *Consistency (measured on 25 views × 2 themes):* 0 views with more than one primary button,
   0 with amber where nothing waits, 0 uppercase; one section-label style (12px/600 muted);
   screen headers 48px.
-- *Final capture:* FINAL
+- *Final capture:* 584 PNGs, 281 audited screens, 0 failed steps. **PASS**, every line 0.
+
+**Sign-off pass — the app used, not only captured.** One reviewer walked seven journeys with
+their own scripts (answer every kind of ask by mouse and by keyboard, read a finished run,
+start a run, build a graph, prompts and proposals, settings and empty states) at 1440, 1280
+and 1024 wide in both themes. The gate passed before and after; none of what follows is
+something the gate measures.
+- *Found and fixed:* `A` then a number on a question card switched TAB instead of picking the
+  option (the questionnaire hears numbers on its form; `A` focused the card around it) — `A`
+  now lands on the active question's first choice and the hint says so; a refused save in the
+  builder printed `**title**` and `` `key` `` raw in its banner and toast; `/` did nothing on
+  Logs; the `?` sheet opened with its ring on the "Single-key shortcuts" checkbox, one Space
+  from switching them off (`showModal()` focuses the first control and React's `autoFocus`
+  cannot overrule it — dialogs now honour `data-autofocus`); the waive reason field opened
+  unfocused with no Enter or Esc; Runs said "Needs you 24" under a rail badge of 21 (the group
+  also holds dead and retryable runs — it now reads "24 · 21 waiting on you, 3 to resume or
+  retry"); steps added from the palette by click or key landed 8px apart under each other's
+  captions (`freeSpotNear` now leaves room for a caption and stays in view); the inbox's wait
+  column hung 40px short of the row's edge; a PR chip read "PR changes_required"; a live row
+  read "active 0s ago"; a dozen toasts and one transcript notice started in lower case;
+  `decideRing` was pinned by a test and not called by the code; the scaffold's "TODO: one line…"
+  description was printed on Graphs and New run.
+- *Left, with a recommendation each:* see the hand-off report of this pass (HOW-68) — the OS
+  notification still posts through `osascript` when `terminal-notifier` is absent; the sound
+  file is the old one; a third step added from the palette in a small pane can still land on a
+  wire; focus falls to `<body>` after an ask is answered; core's problem sentences say "in
+  Branching" where the panel's section is titled "Goes to".
+- *Gate at the end:* 584 PNGs, 281 audited screens, 0 failed steps, **PASS**, every line 0.
+  `bun test`: 3192 pass, 5 skip, 3 fail — the three are `chmod`-based tests that cannot fail
+  the way they expect when the suite runs as root, and fail the same way without this pass.
