@@ -2731,6 +2731,9 @@ describe("below 1100px the panel is a drawer, so the canvas keeps its width (HOW
 
 describe("D24/D25: one verdict, said once, in words that match the panel", () => {
   const toasts = () => [...document.querySelectorAll("[data-tone]")].map((t) => ({ tone: (t as HTMLElement).dataset.tone, text: t.textContent }));
+  /** wait FOR a condition (to 3s) instead of sleeping past it: the save is async and the focus lands on a later frame */
+  const until = async (ok: () => boolean) => { for (let i = 0; i < 150 && !ok(); i++) await act(async () => { await Bun.sleep(20); }); };
+  const onList = (el: HTMLElement) => document.activeElement === el.querySelector("[data-slot='builder-problems']");
 
   test("D24: the section core's sentences send you to is titled Branching", async () => {
     serve();
@@ -2750,12 +2753,14 @@ describe("D24/D25: one verdict, said once, in words that match the panel", () =>
   });
 
   test("D25: Save with a problem standing lands on the panel's list — no banner, no toast, no second copy", async () => {
-    // the server refuses exactly as it would: 422 with one of the sentences already listed
-    const calls = serve({ status: 422, body: { error: "Give the graph a name." } });
+    // the server refuses exactly as it would: one of the sentences the browser already lists
+    const calls = serve({ status: 409, body: { error: "There is already a graph called taken-name." } }, ["taken-name"]);
     const el = await mount();
+    type(nameBox(el), "taken-name");
+    expect(labelled(el, "1 problem to fix before saving")).toBeDefined();
     const before = [...el.querySelectorAll(".field-error")].length;
     await act(async () => { byText(el, "Save and add to the catalog")!.click(); });
-    await act(async () => { await Bun.sleep(40); });
+    await until(() => onList(el));
     expect(calls.some((c) => c.method === "PUT")).toBe(true); // still the same PUT: the server is the authority
     expect(toasts()).toEqual([]); // the browser already said it: nothing is announced a second time
     expect(el.querySelector("[data-slot='save-refusal']")).toBeNull();
@@ -2765,13 +2770,33 @@ describe("D24/D25: one verdict, said once, in words that match the panel", () =>
     expect(document.activeElement).toBe(list); // Save explained itself by taking you there
   });
 
+  test("an unnamed draft is never sent, and never announced as saved", async () => {
+    // `/api/graphs//builder` matches no route: the real server answers it with the app's own
+    // page and a 200, and the builder said " saved — it is in the catalog and ready to launch"
+    const calls = serve({ status: 200, body: "<!doctype html>" });
+    const el = await mount();
+    await act(async () => { byText(el, "Save and add to the catalog")!.click(); });
+    await until(() => onList(el));
+    expect(calls.filter((c) => c.method === "PUT")).toEqual([]);
+    expect(toasts()).toEqual([]);
+    expect(document.activeElement).toBe(el.querySelector("[data-slot='builder-problems']"));
+    expect(location.pathname).not.toContain("//");
+    // ...and a 2xx that is not the builder route's own answer is not a save either
+    type(nameBox(el), "my-review");
+    await act(async () => { byText(el, "Save and add to the catalog")!.click(); });
+    await until(() => toasts().length > 0);
+    expect(toasts().map((t) => t.tone)).toEqual(["error"]);
+    expect(el.querySelector("[data-slot='save-refusal']")!.textContent).toContain("did not reach the server");
+    expect(byText(el, "Save and add to the catalog")).toBeDefined(); // still an unsaved draft
+  });
+
   test("D25: a refusal the browser could not predict is kept in the list and announced by ONE toast", async () => {
     serve({ status: 422, body: { error: "**Do the work** is filed under `demo.work`, which is one of Howdah's own prompts." } });
     const el = await mount();
     type(nameBox(el), "my-review");
     expect(labelled(el, "nothing outstanding")).toBeDefined();
     await act(async () => { byText(el, "Save and add to the catalog")!.click(); });
-    await act(async () => { await Bun.sleep(40); });
+    await until(() => el.querySelector("[data-slot='save-refusal']") !== null && toasts().length > 0);
     const refusal = el.querySelector("[data-slot='save-refusal']") as HTMLElement;
     expect(refusal.textContent).toBe("Do the work is filed under demo.work, which is one of Howdah's own prompts.");
     expect(refusal.querySelector("strong")!.textContent).toBe("Do the work"); // markers drawn, not printed

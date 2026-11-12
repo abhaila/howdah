@@ -66,6 +66,7 @@ code, pre, .m {
 /* hover is a wash of the ink, so it shows on the inset ground; no transition — the rail is
    swept and switched all day, and where you ARE is instant (DESIGN.md Motion) */
 .sidebar a.nav:hover { background: color-mix(in srgb, var(--fg) 7%, transparent); color: var(--fg); }
+.sidebar a.nav:active { background: color-mix(in srgb, var(--fg) 12%, transparent); }
 /* where you are: a held object on the raised ground with a hairline — never a side stripe */
 .sidebar a.nav.active { background: var(--bg-raised); border-color: var(--border); color: var(--fg); font-weight: 500; }
 .sidebar .spacer { flex: 1; min-height: 8px; }

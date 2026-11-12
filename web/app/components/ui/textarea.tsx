@@ -24,7 +24,7 @@ export const Textarea = forwardRef<HTMLTextAreaElement, TextareaProps>(({ classN
     ref={ref}
     data-slot="textarea"
     className={cn(
-      "min-h-16 w-full resize-y rounded-[var(--radius-sm)] border border-input bg-card p-2.5 text-base font-normal leading-normal text-foreground placeholder:text-faint focus-visible:outline-2 focus-visible:outline-[var(--ring)] focus-visible:outline-offset-2 disabled:opacity-50",
+      "min-h-16 w-full resize-y rounded-[var(--radius-sm)] border border-input bg-card p-2.5 text-base font-normal leading-normal text-foreground placeholder:text-faint focus-visible:outline-2 focus-visible:outline-[var(--ring)] focus-visible:outline-offset-2 hover:border-[var(--fg-faint)] disabled:cursor-default disabled:border-border disabled:bg-transparent disabled:text-disabled",
       mono && "font-mono",
       className,
     )}

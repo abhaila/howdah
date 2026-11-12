@@ -32,7 +32,8 @@ import { cn } from "@/lib/utils";
 
 const STATES =
   "w-full text-left focus-visible:outline-2 focus-visible:outline-[var(--ring)] focus-visible:-outline-offset-2";
-const CLICKABLE = "cursor-pointer hover:bg-card";
+/** hover lifts the row to the card ground; a press goes one step further, so the click is felt (it moves nothing) */
+const CLICKABLE = "cursor-pointer hover:bg-card active:bg-accent";
 /** an outline all the way round, drawn inside the box so the row's height does not change */
 const SELECTED = "rounded-[var(--radius-sm)] bg-card shadow-[inset_0_0_0_1px_var(--border-strong)]";
 

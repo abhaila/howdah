@@ -163,7 +163,7 @@ Status: ☐ not started · ◐ in progress · ☑ passes (the gate, and looked a
 | ☑ | Existing primitives: targets ≥24px, focus ring everywhere, states complete. `questionnaire` lost its `dark:` utilities (they followed the OS, not the toggle); `message-scroller`'s pin no longer animates; Button's disabled state is a readable token and loading keeps its colours |
 | ☑ | Shell: rail, palette, shortcuts (`lib/shortcuts.ts`), `?` sheet, 404, skip link |
 | ☑ | Scroll contract — 0 clipped, unreachable or document-scrolling screens in the final capture, 1024×640 included |
-| ◐ | Native notifications — the viewer path (`lib/notify.ts`) is built and unit-tested; headless Chromium blocks the permission, so only Settings' "blocked" state was captured and a real notification was never seen on screen. The OS path was not exercised in this pass |
+| ◐ | Native notifications — ONE notification per ask: an open viewer whose browser permission is granted beats `POST /api/viewer/presence` every 20s, the server writes `$HOWDAH_HOME/viewer.json`, and the engine's OS notifier stands down while that is under 45s old; the shell (not only Runs / Needs you / a run) observes asks, so a viewer left on any screen announces them. **Verified:** the ring/skip decision, the presence file, the watchdog ringing through the OS when the viewer never beat again, the deep link's port, the route and its guards, and the beat itself — by unit and route tests (`engine/attention.test.ts`, `web/web.test.ts`, `web/app/focus.test.tsx`, `web/app/notify.test.ts`); that a notification's deep link (`/run/:id#needs-input`) lands focus on the control — in Chromium, for all five card kinds. **Not verified:** a real browser notification on screen (headless Chromium blocks the permission; the posting half runs against a fake `Notification`); the OS banner itself, through either `terminal-notifier` or `osascript` — this sandbox is Linux and has neither, so only the argv and the decision to spawn are tested; the new sound was measured from its bytes and never heard |
 | ☑ | Component gallery route (`/dev/components`; harness step `components-gallery`) |
 
 ### Surfaces
@@ -243,7 +243,7 @@ director.
   above the card that says the same thing; the no-reply card reads heading → items → hint →
   action → disclosure; builder wires leave and enter by the sides that face each other and a
   caption never sits on a card; a step chosen in Build or in the Details timeline lands on its
-  detail at narrow widths; exactly one `#needs-input`, and it takes focus; two attempts of one
+  detail at narrow widths; exactly one `#needs-input` (that it "takes focus" was claimed here and was FALSE in a browser — see the fix pass below); two attempts of one
   visit are two rows with their own identity; the draft card's dingbats are inline SVG and its
   headings `SectionLabel`; transcript prose uses the 720px column; disabled buttons are
   readable and loading ones keep their colours; a path breaks at its slashes; the seeded home
@@ -308,3 +308,94 @@ something the gate measures.
 - *Gate at the end:* 584 PNGs, 281 audited screens, 0 failed steps, **PASS**, every line 0.
   `bun test`: 3192 pass, 5 skip, 3 fail — the three are `chmod`-based tests that cannot fail
   the way they expect when the suite runs as root, and fail the same way without this pass.
+
+**Fix pass — what the sign-off review left open (D18–D26).** One agent, working from the
+review's hand-off. Everything below was changed in code and has a test unless it says otherwise;
+"in Chromium" means driven with Playwright against the seeded viewer, not captured by the gate.
+
+- *Notifications (D18).* One ask used to be announced twice — the engine's OS banner and the
+  open viewer's browser notification — and with no `terminal-notifier` the OS one was the
+  "Script Editor" banner. Now the viewer says it is there (`lib/presence.ts` →
+  `POST /api/viewer/presence` → `$HOWDAH_HOME/viewer.json`, liveness beside `heartbeat.json`),
+  and `osNotifier` skips its banner while a notifying viewer was seen in the last 45s
+  (`engine/viewer-presence.ts`). A skipped banner still stamps `notified_at` — the browser's
+  notification is the delivery — and records `notified_via: "viewer"`; the watchdog re-opens it
+  as soon as the viewer is shown never to have beaten again after the ask, so the OS path rings
+  within a tick or two instead of 30 minutes later. Deliberate and documented: a viewer that is
+  visible and focused posts nothing and the OS banner is skipped too; and while a notifying
+  viewer stays open the 30-minute re-ring is left to it (its standing notification, the count
+  and the favicon) — the OS re-ring resumes when the viewer goes. The shell now observes asks
+  on every screen (it was Runs, Needs you and a run's own page only). `howdah doctor` and
+  Settings both say whether the OS banner is clickable, with `brew install terminal-notifier`
+  and a copy button. Deep links from the CLI, the watchdog and the executors follow
+  `HOWDAH_PORT`, else the port a viewer last reported, instead of always `:4711`.
+- *Sound (D19).* `web/public/chime.wav` is one 160ms 660 Hz tone at −18 dBFS, written by
+  `tools/chime.ts` (`--check` compares the committed bytes) and pinned by `web/chime.test.ts`.
+  The OS path plays "Tink" instead of "Glass", still only when the setting is on.
+- *Focus (D20).* A change of SCREEN moves focus to the new screen's `<h1>` and titles the tab
+  ("Runs · Howdah", "<run name> · Howdah"); a selection inside a screen does not. An answered
+  ask hands focus to the run header's status line; the outcome is announced by the existing
+  polite toast region, reworded ("Reply sent. The run is resuming."). In Chromium: the heading
+  shows the ring after `g r` and not after a mouse click on the rail (it follows
+  `:focus-visible`, nothing forces it), Tab from the heading goes to the screen's first control,
+  and the skip link still targets `#main`.
+- *Builder (D21, D24, D25).* A palette-added step is placed clear of every card AND every wire
+  and its caption, and the canvas pans — never zooms — by the least that shows it. The panel
+  section core's sentences call "Branching" is titled "Branching". The verdict is said once:
+  the bar and the panel both read "N problems to fix before saving", Save with something
+  blocking lands on that list (focused, scrolled to) with no banner and no toast, and only a
+  refusal the browser could not predict adds a row to the list and one toast.
+- *Smaller (D22, D23, D26).* Needs you has no step column; the id follows a sentence that does
+  not already name it. Graph boxes print the part of an id that tells steps apart
+  (`impl….local_review`), the group dimmed. Approve and Send feedback confirm with the primary
+  button, not red. A dead run's interrupted step is a cross and the word "interrupted" in
+  Details and in Steps, with its clock stopped; the run says it died in the header and one
+  notice. `scopeVariant` is removed and `problemsByPane` is used. The transcript has no edge
+  fade.
+- *Found by using it, not in the review's list — each was wrong in a browser and passed the
+  test DOM:*
+  - **A notification's deep link never focused anything.** `#needs-input` was stripped from
+    the URL on the first render, before the run had loaded; and where it survived, the card's
+    `focus()` ran while the transcript was still `visibility: hidden`, which a browser ignores.
+    Iteration 3's "exactly one `#needs-input`, and it takes focus" was therefore false. The hash
+    is now dropped only once the run is seen to have no ask, and every card kind takes focus
+    through `focusWhenVisible` (three of the five never tried).
+  - **Save on an unnamed draft said " saved — it is in the catalog and ready to launch".**
+    `PUT /api/graphs//builder` matches no route and the server answers it with the app's page
+    and a 200. An unnamed draft is no longer sent, and a 2xx that is not the route's own answer
+    is not a save. (The server still answers unknown `/api/…` writes with the page; not changed
+    here.)
+  - **Every answer flashed "Runner died".** A parked run has no runner, so between the answer
+    and the resumed runner taking its lock the read model says `harness-dead`; the header and a
+    red notice said so to the operator who had just answered. For 4s after a run's last event
+    the frame says "Resuming".
+  - **"Choose an answer to continue." under an accepted answer**, for the whole collapse of the
+    question card (the choices are disabled while sending, and a disabled choice does not
+    satisfy `required`).
+  - Focus fell to `<body>` after pinning a comment, after a waiver, after cancelling the waive
+    field, and after accepting a proposal. Each returns to the control that opened it, or to
+    what the screen now says (Reject and Re-draft share the code path and were not driven).
+  - A screen that loads in two renders replaced the heading that had just been focused; focus
+    is kept on the heading while the screen settles.
+  - Text fields, selects and checkboxes had no hover state and a different disabled look
+    (50% opacity) from buttons and chips (the `--fg-disabled` token); rows, chips, segment tabs
+    and rail items had no pressed state. Fields now hover, press states exist, and disabled is
+    one look. Swept in both themes: 90 distinct controls and row types, rest / hover / pressed.
+  - `executor threw: EPIPE` instead of "not logged in" when a CLI dies before its prompt is
+    written (`engine/executors/claude.ts`); it failed CI once as a lost race. The first write
+    is guarded and a deterministic test pins it.
+- *Exercised in Chromium, with the engine's executors stubbed (`HOWDAH_STUB=1`):* permission
+  Deny, a prose reply by Enter, a two-question ask by keyboard (A, 2, Enter, 1, 3, Enter), an
+  effect verdict each way, a single waiver and the "every unprovable" one, a pinned comment
+  then Send feedback, Redesign, and proposal Accept. Every request succeeded (200/201/202); the
+  cards went idle → sending → collapsing; focus ended on the run's status line (on the notice,
+  for the proposal; on the next waivable control, after a single waiver). None of them produced
+  a refusal, so "refused verbatim" was NOT seen in a browser in this pass — it is covered by
+  the component tests only.
+- *Not done, or not verified:* a real desktop notification and the OS banner (see the
+  checklist row); the new sound was never heard; the builder's pan was checked at 1024×700
+  only, with three added steps on the blank preset, not on a large or zoomed-out graph; the wire test
+  in `freeSpotNear` treats a wire as the straight line between two cards, which the drawn curve
+  only approximates; `main` is not itself focusable, so the skip link moves the reading
+  position and not `document.activeElement` (as before); the hover/pressed sweep reads computed
+  styles of one element per kind and does not judge how the states look.

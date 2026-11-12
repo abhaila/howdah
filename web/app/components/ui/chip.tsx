@@ -24,7 +24,7 @@ export const chipVariants = cva(
       /** `on` is the SELECTED state; it must never be only a colour, so it also fills */
       on: {
         true: "border-[var(--border-strong)] bg-card text-foreground",
-        false: "border-border bg-transparent text-muted-foreground hover:border-[var(--border-strong)] hover:text-foreground",
+        false: "border-border bg-transparent text-muted-foreground hover:border-[var(--border-strong)] hover:text-foreground active:bg-accent",
       },
       /** the one chip allowed the alarm colour: the Logs `attention` filter, when on */
       tone: {

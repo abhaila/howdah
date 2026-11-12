@@ -431,7 +431,9 @@ describe("D20: an answered ask hands focus to the run's status line, and the tab
     const live = document.querySelector('[role="status"][aria-live="polite"]')!;
     expect(live.textContent).toContain("Reply sent. The run is resuming.");
 
-    await settle(700); // the collapse plays (420ms), then the reload takes the card away
+    // the collapse plays (420ms), then the reload takes the card away — waited for, not slept past
+    for (let i = 0; i < 60 && el.querySelector("#needs-input") !== null; i++) await settle(50);
+    await settle(50);
     expect(el.querySelector("#needs-input")).toBeNull();
     expect(document.activeElement).not.toBe(document.body);
     expect((document.activeElement as HTMLElement).id).toBe("run-status");
@@ -482,7 +484,8 @@ describe("D20: an answered ask hands focus to the run's status line, and the tab
     log.add({ type: "attention-resolved", node: "implementation.plan", visit: 1, reply: "carry on" });
     log.add({ type: "node-started", node: "implementation.plan", visit: 2, attempt_id: "implementation.plan#2" });
     body = deriveDetail("r1", log.events, {}, { graphs: GRAPHS });
-    await settle(5600); // the page's own 5s refresh
+    // the page's own 5s refresh — waited FOR rather than slept past
+    for (let i = 0; i < 90 && el.querySelector("#needs-input") !== null; i++) await settle(100);
     expect(el.querySelector("#needs-input")).toBeNull();
     expect(document.activeElement).toBe(elsewhere);
   }, 15_000);

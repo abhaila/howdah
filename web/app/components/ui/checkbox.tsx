@@ -48,10 +48,10 @@ export const Checkbox = forwardRef<HTMLInputElement, CheckboxProps>(({ className
         />
         <span
           aria-hidden
-          className="pointer-events-none size-4 rounded-[var(--radius-xs)] border border-input bg-card peer-checked:border-[var(--primary)] peer-checked:bg-primary peer-indeterminate:border-[var(--primary)] peer-indeterminate:bg-primary peer-focus-visible:outline-2 peer-focus-visible:outline-[var(--ring)] peer-focus-visible:outline-offset-2 peer-disabled:opacity-50"
+          className="pointer-events-none size-4 rounded-[var(--radius-xs)] border border-input bg-card peer-checked:border-[var(--primary)] peer-checked:bg-primary peer-indeterminate:border-[var(--primary)] peer-indeterminate:bg-primary peer-focus-visible:outline-2 peer-focus-visible:outline-[var(--ring)] peer-focus-visible:outline-offset-2 peer-hover:border-[var(--fg-faint)] peer-checked:peer-hover:border-[var(--primary)] peer-indeterminate:peer-hover:border-[var(--primary)] peer-disabled:border-border peer-disabled:bg-transparent peer-disabled:peer-checked:bg-muted peer-disabled:peer-indeterminate:bg-muted"
         />
-        <Check aria-hidden className="pointer-events-none absolute size-3 text-primary-foreground opacity-0 peer-checked:opacity-100" />
-        <Minus aria-hidden className="pointer-events-none absolute size-3 text-primary-foreground opacity-0 peer-indeterminate:opacity-100" />
+        <Check aria-hidden className="pointer-events-none absolute size-3 text-primary-foreground opacity-0 peer-checked:opacity-100 peer-disabled:text-disabled" />
+        <Minus aria-hidden className="pointer-events-none absolute size-3 text-primary-foreground opacity-0 peer-indeterminate:opacity-100 peer-disabled:text-disabled" />
       </span>
       <label htmlFor={inputId} className="cursor-pointer text-base text-foreground">{label}</label>
     </span>

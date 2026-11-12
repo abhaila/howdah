@@ -70,7 +70,7 @@ export function Tabs({ value, onValueChange, items, className }: {
               TAB_FOCUS,
               value === it.value
                 ? "border-b-[var(--primary)] font-medium text-foreground"
-                : "border-b-transparent text-muted-foreground hover:text-foreground",
+                : "border-b-transparent text-muted-foreground hover:text-foreground active:border-b-[var(--border-strong)]",
             )}
           >
             {it.icon}
@@ -99,11 +99,11 @@ const panelTabVariants = cva(
     compoundVariants: [
       // selected is never ONLY a colour: underline adds a rule and weight, chip adds a fill
       { look: "underline", on: true, className: "border-b-[var(--primary)] font-medium text-foreground" },
-      { look: "underline", on: false, className: "border-b-transparent text-muted-foreground hover:text-foreground" },
+      { look: "underline", on: false, className: "border-b-transparent text-muted-foreground hover:text-foreground active:border-b-[var(--border-strong)]" },
       { look: "chip", on: true, className: "border-[var(--border-strong)] bg-card text-foreground" },
-      { look: "chip", on: false, className: "border-border text-muted-foreground hover:border-[var(--border-strong)] hover:text-foreground" },
+      { look: "chip", on: false, className: "border-border text-muted-foreground hover:border-[var(--border-strong)] hover:text-foreground active:bg-accent" },
       { look: "segment", on: true, className: "bg-card font-medium text-foreground shadow-[inset_0_0_0_1px_var(--border-strong)]" },
-      { look: "segment", on: false, className: "text-muted-foreground hover:text-foreground" },
+      { look: "segment", on: false, className: "text-muted-foreground hover:text-foreground active:bg-accent" },
     ],
     defaultVariants: { look: "underline", on: false },
   },

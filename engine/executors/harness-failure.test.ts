@@ -199,6 +199,40 @@ describe("end to end, against a CLI that is not logged in", () => {
   }, 20_000);
 });
 
+describe("a CLI that is gone before the prompt is written", () => {
+  /**
+   * The race the test above lost on a slow CI runner ("executor threw: EPIPE: broken pipe,
+   * send"), made deterministic: the binary closes its stdin and exits before reading a byte,
+   * and the prompt is far larger than a pipe buffer, so the write CANNOT complete.
+   */
+  test("the broken pipe is not the reason: the exit is still classified as not logged in", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "howdah-epipe-"));
+    const prompts = mkdtempSync(join(tmpdir(), "howdah-p-"));
+    writeFileSync(join(prompts, "doc.draft.md"), `---\nid: doc.draft\nversion: 1\n---\nDraft toward {{ context.goal }}.\n${"lorem ipsum dolor sit amet ".repeat(40_000)}\n`);
+    const bin = join(dir, "gone-claude");
+    writeFileSync(bin, "#!/bin/sh\nexec 0<&-\necho 'Invalid API key · Please run /login' >&2\nexit 1\n");
+    chmodSync(bin, 0o755);
+    const graph = defineGraph<{ goal: string; doc_summary: string }>({
+      name: "mini-epipe",
+      entry: "draft",
+      inputs: ["goal"],
+      nodes: {
+        draft: { kind: "agent", prompt: "doc.draft", reads: ["goal"], writes: { doc_summary: { scope: "sticky" } } },
+        done: { kind: "terminal", outcome: "success" },
+      },
+      edges: [{ from: "draft", to: "done" }],
+    });
+    const engine = new Engine(graph, {
+      dir,
+      promptsDir: prompts,
+      executors: { agent: claudeExecutor({ attentionDir: join(dir, "attn"), binary: bin, askPollMs: 30, notifiers: [] }) },
+    });
+    const result = await engine.start({ goal: "anything" });
+    expect(result).toMatchObject({ state: "parked", node: "draft", code: "harness-unauthenticated" });
+    expect((result as { reason: string }).reason).not.toContain("EPIPE");
+  }, 20_000);
+});
+
 // HOW-14: the engine's allowance fallback reads a failed attempt's text with RATE_LIMIT_TEXT.
 // Every word written for a full context window is checked against THAT regex, not a copy.
 describe("context exhaustion wording (HOW-14)", () => {

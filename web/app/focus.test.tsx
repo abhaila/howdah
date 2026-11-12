@@ -22,7 +22,7 @@ import { ToastProvider } from "./components/ui/toast";
 import { Button } from "./components/ui/button";
 import { Checkbox } from "./components/ui/checkbox";
 import { installShortcuts, resetShortcutsForTest } from "./lib/shortcuts";
-import { focusRunStatus, focusScreenHeading, pageTitle, screenKey } from "./lib/page";
+import { focusIfLost, focusRunStatus, focusScreenHeading, focusWhenVisible, pageTitle, screenKey } from "./lib/page";
 import { beatPresence } from "./lib/presence";
 import { navigate } from "./lib/nav";
 
@@ -147,6 +147,55 @@ describe("D20: the pure rules", () => {
     status.remove();
     other.remove();
     expect(focusRunStatus()).toBe(false); // no run on this page: nothing to focus
+  });
+});
+
+describe("focus that has to wait, and focus that was lost", () => {
+  test("focusWhenVisible keeps trying until the element can take focus (the transcript is hidden at first)", async () => {
+    const box = document.createElement("textarea");
+    document.body.appendChild(box);
+    // what `visibility: hidden` does in a browser: focus() is silently refused
+    const real = box.focus.bind(box);
+    let visible = false;
+    box.focus = () => { if (visible) real(); };
+    focusWhenVisible(() => box);
+    expect(document.activeElement).not.toBe(box);
+    await new Promise((r) => setTimeout(r, 40));
+    expect(document.activeElement).not.toBe(box);
+    visible = true; // the first scroll position is set and the viewport is shown
+    await new Promise((r) => setTimeout(r, 60));
+    expect(document.activeElement).toBe(box);
+    box.remove();
+  });
+
+  test("focusWhenVisible gives up the moment the operator focuses something else", async () => {
+    const box = document.createElement("textarea");
+    const other = document.createElement("button");
+    document.body.append(box, other);
+    const real = box.focus.bind(box);
+    let visible = false;
+    box.focus = () => { if (visible) real(); };
+    focusWhenVisible(() => box);
+    other.focus();
+    visible = true;
+    await new Promise((r) => setTimeout(r, 60));
+    expect(document.activeElement).toBe(other);
+    box.remove();
+    other.remove();
+  });
+
+  test("focusIfLost: onto the target only from <body> or a removed element", () => {
+    const target = document.createElement("div");
+    const other = document.createElement("button");
+    document.body.append(target, other);
+    other.focus();
+    expect(focusIfLost(target)).toBe(false);
+    other.remove(); // the control that was pressed is gone
+    expect(focusIfLost(target)).toBe(true);
+    expect(document.activeElement).toBe(target);
+    expect(target.getAttribute("tabindex")).toBe("-1");
+    expect(focusIfLost(null)).toBe(false);
+    target.remove();
   });
 });
 
@@ -369,7 +418,9 @@ describe("D18: the viewer's presence beat", () => {
       await settle(60); // first sight: nothing waiting, and nothing announced
       expect(shown).toEqual([]);
       waiting = [{ id: "r9:plan:1", run: "r9", href: "/run/r9#needs-input", graph: "g", node: "plan", visit: 1, reason: "needs your reply", raised_at: new Date().toISOString(), waited: "just now" }];
-      await settle(5200); // the rail's own 5s poll
+      // the rail's own 5s poll — waited FOR, not slept past: a fixed sleep a little over the
+      // interval is a race on a slow runner
+      for (let i = 0; i < 90 && shown.length === 0; i++) await settle(100);
       expect(shown).toEqual([{ title: "r9", body: "needs your reply", tag: "r9" }]);
       await settle(5200); // still waiting: not news a second time
       expect(shown).toHaveLength(1);

@@ -291,5 +291,7 @@ describe("doctor: clickable notifications (HOW-68 D18)", () => {
     const { base } = home();
     const r = await cli(base, "doctor");
     expect(r.stdout).toMatch(/clickable notifications\s+terminal-notifier/);
-  });
+    // doctor probes whatever CLIs this machine has; give a slow runner room (the row itself
+    // names terminal-notifier whether or not it is installed, so PATH does not decide the test)
+  }, 30_000);
 });

@@ -30,7 +30,7 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(({ className, mono
     ref={ref}
     data-slot="input"
     className={cn(
-      "h-8 w-full rounded-[var(--radius-sm)] border border-input bg-card px-2.5 text-base font-normal text-foreground placeholder:text-faint focus-visible:outline-2 focus-visible:outline-[var(--ring)] focus-visible:outline-offset-2 disabled:opacity-50",
+      "h-8 w-full rounded-[var(--radius-sm)] border border-input bg-card px-2.5 text-base font-normal text-foreground placeholder:text-faint focus-visible:outline-2 focus-visible:outline-[var(--ring)] focus-visible:outline-offset-2 hover:border-[var(--fg-faint)] disabled:cursor-default disabled:border-border disabled:bg-transparent disabled:text-disabled",
       mono && "font-mono",
       className,
     )}
