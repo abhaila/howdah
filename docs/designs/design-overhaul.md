@@ -171,7 +171,9 @@ Status: ☐ not started · ◐ in progress · ☑ passes (the gate, and looked a
 ### Surfaces
 Every row below was judged on the final capture of iteration 3 (584 captures, 281 audited
 screens, gate PASS) and looked at in dark and light at 1440×900 and in dark at 1024×700 (the
-run view also at 1024×640).
+run view also at 1024×640). The rows the operator-feedback work and the final pass changed were
+judged again on the final pass's capture (718 captures, 327 audited screens, gate PASS) — see
+the "Final pass" entry for which screens were looked at and which were only measured.
 
 | | Surface | What was cleared (audit §), and what was looked at |
 |---|---|---|
@@ -534,3 +536,149 @@ each line says how. "In Chromium" means headless Chromium driven by Playwright.
   Graph, Plan, the Details drawer, the Report and the notification code in the same tree while
   this ran: the capture was taken part-way through their work and the test run after it, so
   neither number is a verdict on those changes, and none of the checks above was repeated on them.
+
+**Operator feedback — the first hands-on verdict, and the work it started.** Recorded here
+because the entries around it refer to it; this pass did not do that work and re-verified it
+only as the Final pass says. Three sentences from the operator — "the graphs are not so neat,
+not possible to see the full text of the node on hover, and cannot use mouse to move the
+canvas" — plus "would like full screen for the plan" and that the pull request was hard to find.
+What landed: the read-only graph on React Flow, laid out by `@dagrejs/dagre`
+(`graph-dag.tsx`, `lib/dag-layout.ts`); the Plan pane at 880px with a side column; focus on `F`;
+a resizable Details drawer that leads with the pull request, and a PR chip in the header; a
+poll folded to one row in the Details timeline; the report's and every external link opening a
+new tab. Separately the coordinator changed notifications: the viewer claims delivery — and
+so silences the OS banner — only after the operator answers "Yes, I saw it" to a test
+notification in Settings.
+
+**The fix pass's numbered items (D18–D26).** D1–D17 are NOT recorded: the sign-off review
+numbered its findings in a hand-off report that is not in the repository, and its "Found and
+fixed" list above is not numbered, so matching one to the other would be a guess. (`D2`, `D5`,
+`D7`, `D8`, `D9`, `D15`, `D17` in source comments are HOW-24's and `shaping.md`'s decisions, a
+different series.) D18–D26 are as the fix pass and the source comments give them:
+
+| | What | Where it is held |
+|---|---|---|
+| D18 | One ask, one notification: a notifying viewer beats `viewer.json` and the OS banner stands down; the shell observes asks on every screen; deep links follow the viewer's port | `engine/viewer-presence.ts`, `lib/presence.ts`, `lib/notify.ts`, `engine/attention.test.ts` |
+| D19 | The sound is one short soft tone; the OS path plays "Tink", only when the setting is on | `tools/chime.ts`, `web/chime.test.ts` |
+| D20 | A change of screen focuses the new `h1` and titles the tab; an answered ask hands focus to the run's status line | `lib/page.ts`, `main.tsx`, `run-frame.test.tsx` |
+| D21 | A palette-added step is placed clear of every card and wire; the canvas pans, never zooms, to show it | `lib/layout.ts` `freeSpotNear`, `builder/canvas.tsx` `revealShift` |
+| D22 | Needs you has no step column; the id follows a sentence that does not already name it | `screens/attention.tsx` |
+| D23 | A graph card prints the part of an id that tells steps apart, the shared group dimmed or dropped | `graph-dag.tsx` `nameOf` |
+| D24 | The panel section core's sentences call "Branching" is titled "Branching" | `builder/properties.tsx` |
+| D25 | The verdict is said once: bar and panel in the same words, Save lands on the list, one toast only for what the browser could not predict | `builder/properties.tsx`, `graph-builder.test.tsx` |
+| D26 | A dead run's interrupted step is a cross and "interrupted" in Details and Steps, clock stopped; the run says it died once | `status.tsx` `stepInterrupted`, `run-frame.test.tsx` |
+
+**Final pass — the open defects closed, then one capture and one browser pass on a settled
+tree.** One agent, alone in the tree. "In Chromium" means headless Chromium driven by Playwright
+against the seeded viewer; the mutating checks ran against a viewer started with `HOWDAH_STUB=1`.
+Scripts and screenshots are kept with the capture, not in the repo. Only what was checked is
+claimed.
+
+- *Closed, each with a test:*
+  - **A tool call is "failed" on the harness's word.** The log has carried `chunk.is_error`
+    since HOW-38 and `log/coalesce.ts` dropped it; the transcript then guessed from the output's
+    words. It is carried through (absent stays absent) and `toolOutcome` decides: `true` → the
+    red badge; `false` → nothing, whatever the text says; absent → a narrow line-start pattern
+    shown as a neutral "may have failed", never red, never counted, never opened for you. On the
+    600-item run 7 of 100 groups say "failed" (the ones the harness failed); before, every
+    "0 failed — BUILD SUCCESSFUL" group did.
+  - **A builder wire goes round a card.** `routing.ts` picks each route's sides with every
+    other card in view and falls back to a LANE (out and back by the same side, beside whatever
+    stands between); a loop back up a column is a lane too (it was a line up the cards' own
+    edges); captions are placed for the whole canvas at once; a palette-added step never lands
+    under a Finish step. In Chromium, a five-step graph built only from the palette and the panel
+    with every step wired (8 routes), at 1440, 1280 and 1024 wide in both themes, fitted and at
+    100%: 0 wires through a card, 0 captions on a card, 0 captions on a caption, 0 cards on a card.
+  - Runs and Needs you are real lists with ONE tab stop (roving, `Home`/`End`); every tab strip
+    is named and a pane-switching strip's pane is its `tabpanel`; "Latest" sits in the
+    transcript's toolbar; a step parked mid-turn on a question reads "waiting on you" in the
+    Details timeline; a refused approval and Settings' "Register a local path" no longer drop
+    focus to `<body>`; `Esc`, `F`, `?` and `1`–`7` typed inside the Report's frame reach the app
+    (the page posts exactly those keys; the pane accepts them only from its own frame), and the
+    pane says every other shortcut needs Tab out first.
+  - The Steps list folds a poll by the Details timeline's rule (`lib/timeline.ts`); the fold is
+    a row J/K walk over. A parallel group is never folded into.
+  - The read-only layout gives every sideways run in a gap a lane of its own and opens a gap
+    that has more lanes than room; wires are drawn square with rounded corners. A geometry test
+    over every built-in graph (`dag-layout.test.ts`) counts cards on cards, captions on cards or
+    captions, wires through cards, and two unrelated wires sharing 30px or more: 0, where the
+    same count before the change was 4 shared runs (implement-slice, implement-stacked ×2,
+    improve-codebase). The cost: the big graphs are 19–29% taller.
+  - A finished run's graph opens on the whole graph when that fits at 70% or more, else on its
+    last step at 100% with `Home` back to the start — and that last step is no longer drawn as
+    the step the run is ON (it carried the running half-disc on a run that had ended).
+  - A drag or an arrow on the Details drawer starts from the width on screen when a remembered
+    width is clamped on a narrow window (it ignored the first pixels, then jumped).
+- *Found by driving it in this pass, and fixed:* the control that toggles focus mode is
+  unmounted by the toggle, so pressing it left focus on `<body>` (its counterpart takes it —
+  only when the control itself was pressed: the first fix moved focus on every `F`, which raised
+  a tooltip over the tab strip); Settings' "Yes / No" answer left focus on `<body>`; `A` then a
+  number typed at once could send the number to the tab strip (the jump waited a task even when
+  Build was already showing); a graph card's hover colour faded when a keyboard pan carried it
+  under a resting pointer — motion on a key; the builder's "Show the whole graph" cut the lanes
+  and their captions off (it fitted the cards only); the read-only "show all of it" put the zoom
+  controls on the lowest card; and under forced colours a graph's wires kept the theme's own
+  stroke, so in the dark theme the routes a run TOOK were near-white on the system's white canvas
+  (wires are restated in `CanvasText` / `GrayText`); and at 1024 wide with the drawer open the
+  header's PR chip ran under the "More" button (the tooltip's wrapper shrank under a link that
+  would not) — found by looking at the final capture, which the gate had passed.
+- *Performance, measured (1280×800, three loads each, the 600-item run):* switching to Logs was
+  780–810ms with one 620–640ms task; the list is windowed (fixed 28px rows) and it is 345–410ms
+  with a 170–205ms task. First paint of the run is 570–680ms with a 230–290ms task before AND
+  after: the transcript is one step of 600 beats inside `MessageScroller`, and windowing it was
+  not attempted. `content-visibility: auto` on the tool rows was tried and measured WORSE (first
+  paint 680–810ms; expanding all 300 tool calls 410ms → 590–650ms) and was removed. The
+  confirming review's "~1.0s / 500ms" was a different measurement and was not reproduced here.
+- *The browser pass (98 checks; table in the hand-off report, log and screenshots with the
+  capture):* at 1440×900, 1280×800 and 1024×640 in both themes — focus mode by key, by button
+  and by Esc; the drawer resized by keyboard and by mouse, its width after a reload; the PR
+  first in Details and in the header, each opening a new page; a PR known only from the summary
+  and a two-PR run; the report's links and the keys typed inside its frame; the graph panned by
+  drag, wheel and keys, a tooltip on hover and on focus, a step activated, the minimap, a
+  finished run's opening view; all 14 graphs at 100% (nothing on anything); list, tablist,
+  tabpanel and separator semantics; the fold; the tool verdicts; the Plan pane. Once per theme:
+  the Plan at 2000×950, 200% zoom on Build, Plan, Graph and Steps, forced colours on the graph
+  and the drawer, reduced motion on. Once, at 1280 dark: the Settings notification flow (the
+  presence beat's body is `{"notify":false}` until "Yes, I saw it", then `{"notify":true}`); a
+  stale reply and a stale approval refused verbatim; the question, effect, permission, prose,
+  no-reply, waiver and approval cards answered; a keyboard-only walk. All 98 hold on the
+  settled tree (92 in the verifying run and 6 after a correction to the check itself — see
+  "Gate"). Checks failed on the way: some were this pass's own scripts (a selector, an
+  assertion too narrow, a stale-tab hold on the wrong route), the rest were the defects listed
+  above. One defect was found by LOOKING at a screenshot of a check that had passed (the
+  forced-colours wires): the check asked whether a wire was drawn, not whether it could be seen.
+- *Not checked, or not done:* a real desktop notification, the OS banner and the sound (as
+  before — the notification flow ran against a stand-in `Notification`); the MCP-elicitation
+  and soft-stop cards were not answered in this pass (the elicitation run was used for the stale
+  reply); the ask journeys ran at 1280 dark only; the builder was driven on one five-step graph,
+  not on a large or zoomed-out one, and a lane is only as clear as its two straight legs — a
+  canvas crowded on all four sides can still leave a wire no clear lane (it takes the one that
+  crosses fewest); the transcript is not windowed; the Logs list's rows outside the window are
+  not found by the browser's find-in-page (its own search finds them); a step title is still
+  cut with an ellipsis after three lines on a read-only card (the tooltip has the rest);
+  keys other than `Esc`, `F`, `?` and `1`–`7` do not leave the Report's frame; axe-core was not
+  run; codex, cursor and opencode transcripts are not seeded, and for codex and cursor a tool
+  that did not fail carries no verdict, so their failure-shaped outputs read "may have failed".
+- *Looked at, as opposed to measured (about twenty captures, by eye):* the Steps fold closed and
+  open, the tool verdicts, the two-PR and summary-only headers and drawers, a finished run's
+  graph opened and "show all", the long step title, the builder with a route selected and
+  whole, the five-step builder graph wired, forced colours on the graph, the header at 1024,
+  "Latest" in the toolbar — in dark and light at 1280 or 1440, in dark at 1024. implement-ticket
+  and implement-stacked were looked at whole at 100% after the lane change; the other twelve
+  graphs were MEASURED in a browser at 100% (nothing on anything, at three sizes in both
+  themes) and by the geometry test, not each looked at. The other ~700 captures were judged by
+  the gate only.
+- *Gate, on the settled tree (one script, in this order, nothing edited between: `tsc`, the full
+  suite, the browser pass, a fresh seed, the full capture, the gate):* `tsc --noEmit` clean.
+  `bun test`: 3353 pass, 5 skip, 3 fail — the same three `chmod`-based tests, which cannot fail
+  the way they expect when the suite runs as root (`graphs/implement-slice.test.ts` "an
+  unfingerprintable worktree…", `graphs/builder.test.ts` "a prompt that cannot be created…",
+  the map executor's "an unreadable untracked file…"). Capture: 718 PNGs, 327 audited screens,
+  0 failed steps, **PASS**, every line 0. In that same run the browser pass read 92 of 98: the
+  six were ONE check at six sizes, a header-overlap assertion added an hour earlier that measured
+  a truncated heading by its unclipped text; corrected (the heading's box) and re-run on the same
+  tree, 6 of 6. The loop-log and checklist text you are reading were written after that run and
+  are the only difference from the tree it judged. Two earlier full captures of this pass are
+  not the verdict: the first FAILED on one line (2 failed steps — a capture step that hovered
+  "the current step" of a finished run, which this pass had just stopped drawing), and the
+  second passed but two app fixes followed it (the forced-colours wires, the PR chip).
