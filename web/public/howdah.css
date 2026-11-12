@@ -4,16 +4,18 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--fg);
-  font-family: var(--font-display); /* the UI speaks Instrument Sans… */
+  font-family: var(--font-display); /* DM Sans: everything that is READ */
   font-size: var(--type-body);
-  line-height: 1.55;
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums; /* durations, costs and counts line up without a mono face */
 }
-/* Instrument Sans has real weights — hierarchy is weight-led, not size-led (DESIGN.md Type) */
 h1, h2, h3 { font-weight: 600; letter-spacing: 0; }
 a { color: inherit; }
-/* …and JetBrains Mono is reserved for DATA: ids, costs, durations, code, tool output */
-code, pre, .run-meta, .wait-timer, .timer, .kv, .tl-row,
-.prompt-context, .pr-link, .gh-meta, .mono-note, .m {
+/* DM Mono is for what you would PASTE: ids, paths, commands, code (DESIGN.md Type). It used
+   to be the face of every label, timer and key/value row as well — 13.6k mono elements to
+   7.6k sans, alternating inside almost every row (HOW-68). A label, a duration and a cost are
+   read, so they are sans now; only `code`, `pre` and the explicit `.m` are machine text. */
+code, pre, .prompt-context, .mono-note, .m {
   font-family: var(--font-mono);
 }
 /* `.m` is the per-element form of that rule — "this value is machine text". It was emitted

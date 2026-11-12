@@ -30,7 +30,7 @@
   --color-accent-foreground: var(--fg);
   --font-sans: var(--font-display);
   /* literal stack: mapping var(--font-mono) here would be self-referential and void the token */
-  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", monospace;
+  --font-mono: "DM Mono", ui-monospace, "SF Mono", Menlo, monospace;
   --radius-md: var(--radius-sm);
   --radius-lg: var(--radius);
 
