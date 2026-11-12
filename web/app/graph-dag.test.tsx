@@ -361,6 +361,19 @@ describe("a half-built shape is drawn, not crashed on", () => {
     expect(laid.nodes.size).toBe(2);
   });
 
+  test("a step nothing is wired to is set down UNDER the graph, not beside it off the edge of the pane", () => {
+    // HOW-65: a draft's removed step has no routes, and must still be seen in a 420px picture
+    const flow = dagFlow({ ...SHAPE, nodes: [...SHAPE.nodes, { id: "old.step", kind: "agent" }] }, { removed: new Set(["old.step"]) });
+    const box = (id: string) => flow.cards.find((c) => c.node.id === id)!.box;
+    const lowest = Math.max(...SHAPE.nodes.map((n) => box(n.id).y + box(n.id).height));
+    expect(box("old.step").y).toBeGreaterThan(lowest);
+    expect(box("old.step").x).toBeLessThanOrEqual(box("start").x); // within the graph's own width
+    expect(flow.layout.height).toBeGreaterThanOrEqual(box("old.step").y + box("old.step").height);
+    // steps with no routes at all are still an arrangement, not a pile
+    const unwired = dagFlow({ ...SHAPE, edges: [] });
+    expect(new Set(unwired.cards.map((c) => `${c.box.x},${c.box.y}`)).size).toBe(SHAPE.nodes.length);
+  });
+
   test("a shape with no steps at all still renders, and so does one whose entry does not exist", () => {
     expect(dagFlow({ ...SHAPE, nodes: [], edges: [] })).toMatchObject({ cards: [], wires: [] });
     const el = draw({ ...SHAPE, nodes: [], edges: [] });

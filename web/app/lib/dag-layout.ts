@@ -112,7 +112,17 @@ export function dagLayout(entry: string, nodes: readonly LayoutNode[], edges: re
   const g = new dagre.graphlib.Graph({ multigraph: true });
   g.setGraph({ rankdir: "TB", nodesep: SPACING.nodesep, edgesep: SPACING.edgesep, ranksep: SPACING.ranksep, marginx: SPACING.margin, marginy: SPACING.margin });
   g.setDefaultEdgeLabel(() => ({}));
-  for (const id of reachOrder(entry, nodes.map((n) => n.id), edges)) {
+  // A step nothing leads to or from (a draft's REMOVED step, a step not wired up yet) is not part
+  // of the flow, and dagre would stand it beside the entry — off the edge of a narrow pane, which
+  // is exactly where a removed step must not be. Those are set down in a row UNDER the graph.
+  const wired = new Set<string>([entry]);
+  for (const e of edges) if (size.has(e.from) && size.has(e.to)) { wired.add(e.from); wired.add(e.to); }
+  const loose = nodes.filter((n) => !wired.has(n.id));
+  // ...unless nothing is wired at all: then there is no graph to put them under
+  const flowing = loose.length === nodes.length ? nodes : nodes.filter((n) => wired.has(n.id));
+  const apart = loose.length === nodes.length ? [] : loose;
+  const inFlow = new Set(flowing.map((n) => n.id));
+  for (const id of reachOrder(entry, flowing.map((n) => n.id), edges)) {
     const n = size.get(id);
     if (n) g.setNode(id, { width: n.width, height: n.height });
   }
@@ -124,6 +134,7 @@ export function dagLayout(entry: string, nodes: readonly LayoutNode[], edges: re
   dagre.layout(g);
 
   for (const n of nodes) {
+    if (!inFlow.has(n.id)) continue;
     const at = g.node(n.id) as { x?: number; y?: number } | undefined;
     if (!at || !Number.isFinite(at.x) || !Number.isFinite(at.y)) continue;
     // dagre answers centres; a card is positioned by its corner
@@ -193,6 +204,16 @@ export function dagLayout(entry: string, nodes: readonly LayoutNode[], edges: re
   const graph = g.graph() as { width?: number; height?: number };
   out.width = Number.isFinite(graph.width) ? graph.width! : 0;
   out.height = Number.isFinite(graph.height) ? graph.height! : 0;
+  // the loose steps: left to right under the graph, wrapping at its width
+  let x = SPACING.margin, y = out.height - SPACING.margin + SPACING.ranksep, row = 0;
+  for (const n of apart) {
+    if (x > SPACING.margin && x + n.width > Math.max(out.width - SPACING.margin, SPACING.margin + n.width)) { x = SPACING.margin; y += row + SPACING.nodesep; row = 0; }
+    out.nodes.set(n.id, { x, y, width: n.width, height: n.height });
+    x += n.width + SPACING.nodesep;
+    row = Math.max(row, n.height);
+    out.width = Math.max(out.width, x - SPACING.nodesep + SPACING.margin);
+    out.height = Math.max(out.height, y + n.height + SPACING.margin);
+  }
   return out;
 }
 

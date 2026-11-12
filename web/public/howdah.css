@@ -378,7 +378,7 @@ main { position: relative; flex: 1; min-width: 0; min-height: 0; overflow: hidde
 .dag-view { display: flex; flex-direction: column; min-height: 0; min-width: 0; flex: 1; gap: 6px; }
 .dag-canvas { flex: 1; min-height: 0; border: 1px solid var(--border); border-radius: var(--radius); --xy-minimap-background-color: var(--bg); --xy-minimap-mask-background-color: color-mix(in srgb, var(--bg-inset) 70%, transparent); --xy-minimap-mask-stroke-color: var(--border-strong); --xy-minimap-mask-stroke-width: 1; }
 .dag-canvas:focus-visible { outline: 2px solid var(--ring); outline-offset: -2px; }
-.dag-hint { margin: 0; flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 4px; font-size: var(--type-xs); color: var(--fg-muted); }
+.dag-hint { margin: 0; flex: none; font-size: var(--type-xs); line-height: 20px; color: var(--fg-muted); }
 /* the card fills the box the layout measured for it; its text starts at the left. React Flow
    switches a node's pointer events OFF when it can be neither dragged, selected nor wired — which
    is every node here — so the card takes them back: it is hovered for its tooltip and pressed. */

@@ -405,3 +405,123 @@ review's hand-off. Everything below was changed in code and has a test unless it
   one line, the 4 unreachable inbox step ids above). `tsc --noEmit` clean. `bun test`: 3241
   pass, 5 skip, 3 fail — the same three `chmod`-based tests, which cannot fail the way they
   expect when the suite runs as root.
+
+**Confirming review — a second, independent pass over the fix pass's claims.** One reviewer with
+their own Playwright scripts against a seeded viewer run with `HOWDAH_STUB=1` (probes and
+screenshots are kept with the capture, not in the repo). Only what was checked is claimed, and
+each line says how. "In Chromium" means headless Chromium driven by Playwright.
+
+- *Re-verified in Chromium, each with one check (1280×800, dark, unless a size is named):* `A`
+  then `2` picks the second option and stays on Build; `/` on Logs lands in the search field; the
+  `?` sheet opens on "Done", not on the checkbox, and Esc returns focus to the control it was
+  opened from (Runs, Settings, the builder, a run); Runs reads "24 · 21 waiting on you, 3 to
+  resume or retry" against a rail badge and an API count of 21; no "PR changes_required",
+  "active 0s ago" or scaffold TODO on Runs, Needs you, Graphs, New run; the inbox's wait column
+  ends 8px from the edge on all 21 rows and no row names its step twice; `g r` focuses the new
+  `h1` with a ring and titles the tab, a rail click focuses it without one, Tab then reaches the
+  screen's first control; a `#needs-input` deep link lands focus inside the card for ten runs
+  covering every card kind, with exactly one `#needs-input`; the Graph tab prints
+  `impl….local_review`; Approve confirms with the primary button; the builder's section is
+  "Branching" and a blocked Save lands on the problem list with no toast; a field has a hover
+  state and a row a pressed one; answering by keyboard, an effect verdict, Deny, a prose reply,
+  Retry, a waiver, a pinned comment then Send feedback, proposal Reject / Re-draft / Accept and a
+  draft Save all returned 2xx, none flashed "Runner died" or "Choose an answer to continue", and
+  the polite live region said "Answer sent. The agent is carrying on." The answer journeys were
+  repeated at 1440 and 1024 wide in light and at 1024 in dark; three of that script's own checks
+  (the two refusals and the keyboard question) were only proven at 1280 dark.
+- *A refusal, seen verbatim in a browser (the fix pass had not seen one):* a reply to a run that
+  had stopped waiting → 409, "nothing awaiting a reply" in the card's alert and the toast; Send
+  feedback on a round approved elsewhere (the tab held stale by cutting its reads) → 409, the
+  server's whole sentence printed word for word; a create-save onto a name taken behind the
+  page's back → 409, "There is already a graph called zz-race-2. Pick another name." in the
+  problem list and one toast; a waiver with an empty reason cannot be sent (the button is
+  disabled, Enter sends nothing, Esc returns focus to "Waive…").
+- *Claims in this log that were wrong or incomplete, as found:*
+  - "One `h1` per screen" was false on any run whose transcript holds a document: an agent's
+    "# Plan" was a second `h1` (seven run views in the sweep). Markdown headings are drawn one
+    level down; the look is unchanged.
+  - "A focus-triggered tooltip does not animate" was false for the tooltip a row shows while its
+    link has focus: `J` and `K` down the Runs list ran two transitions per key. A forced tooltip
+    is instant now.
+  - "A caption never sits on a card" and "a palette-added step is placed clear of every wire"
+    hold only at the moment of placement. A step added from the palette lands under the Finish
+    step, and wiring the first step to it from the panel draws that wire THROUGH the Finish card
+    with two captions on it. Not fixed (see "Left").
+  - "Empty, loading and error states for everything": the error half was not there on four
+    screens (below).
+- *Found by driving it, and fixed (each with a test unless it says otherwise):*
+  - **A 250–390ms main-thread task every second on a long run, for as long as the tab was open.**
+    The frame re-renders on its one-second clock and took the whole transcript with it: measured
+    idle, on a FINISHED run with 600 transcript items, 0 DOM mutations per task; 53–85ms per
+    second on an ordinary run. Scrolling hitched five times in four seconds. The panes that do
+    not read the clock are memoised; idle long tasks are now none and a 120-notch wheel scroll
+    through the 63,000px transcript has no frame over 50ms (p95 16.8ms) at all three sizes.
+  - Needs you stayed on its skeleton for ever when the server failed; New run opened with an
+    empty graph list and "Still needed: a graph"; a run whose read failed with a 500 (or no
+    server) ended on "There is no run <id>"; a draft whose read failed with a 500 said "No draft
+    to review yet". Each now says it could not load, with a retry, and none claims the thing
+    does not exist. Forced with `page.route` (every `/api` GET answering 500, then aborted);
+    Runs, Graphs, Prompts, Proposals and Settings already had the state.
+  - Focus fell to `<body>` after a draft's Save (the receipt takes it) and after "Remove this
+    step" in the builder (the canvas takes it).
+  - "Filter the runs" chosen from the palette focused nothing: the command ran while the modal
+    dialog still made the page inert. The dialog is closed before a command runs.
+  - At 200% browser zoom on a 1280px window the builder's bar pushed Save and More past `main`'s
+    edge, where nothing scrolls (WCAG 1.4.4). Under 800px the bar wraps.
+  - Forced colours (Windows High Contrast): a filled button had no edge, every tab showed the
+    same rule and the rail's current item was indistinguishable. Restated in system colours
+    (`globals.css`); no unit test — checked in Chromium's forced-colours emulation in both themes.
+  - `components/scroll-shell.tsx` was imported by nothing and kept three rules alive in
+    `howdah.css`, one of them an `overflow: hidden`. Deleted.
+- *Checked and found sound (how):* 39 screens (every route, seven tabs of a finished run, eight
+  empty-home screens) × 1440×900, 1280×800, 1024×640 × both themes — no scrolling document, no
+  clipped box, no unnamed control, no positive `tabindex`, one `main`, one named `nav`, one
+  selected and one tabbable tab per strip, only the six sizes and two faces, `?` opens and closes
+  on every screen. Text-spacing override (line-height 1.5, letter-spacing .12em, word-spacing
+  .16em) on the same 39 in both themes at 1280: no clipped box; looked at Runs and a question card.
+  200% zoom (a 640×400 viewport at 2×, the same 39 in both themes): no clipped box after the builder fix, the
+  reading column scrolls one way. The Report page measured INSIDE its iframe at all three sizes
+  and both themes: sizes 12/13/14/16/20, DM Sans and DM Mono, 0 contrast failures, 0 targets
+  under 24px, 23 focus stops all ringed, no external request, follows the theme. The long run
+  (seed section P: a 6,000-character line, a 220-tenant JSON result, a 300-character unbroken
+  token): everything wraps inside the 720px column, nothing spills or clips at any size. A
+  continuous resize 1440 → 1024 in 16px steps on a parked run, the builder and Runs: header 48px
+  throughout, nothing clipped. With single-key shortcuts off: `g s` and `?` do nothing, `Ctrl K`
+  opens and lists "Keyboard shortcuts", all 37 focus stops of a question run are reachable by Tab
+  and the question is answerable with Tab, Space and the arrows. Motion with reduced motion off:
+  nothing runs on `1`–`7`, `Ctrl I`, `Ctrl K`, `?`, `.`, `J`/`K` or `g n`; no loop at rest on a
+  live run; a mouse-opened menu animates opacity and scale only. With it on: nothing runs.
+  Every palette command (39, on Runs and on a run) ran without a page error. Settings: every
+  field, both checkboxes, both copy buttons, `Ctrl S`, and the values after a reload.
+- *Code:* `overflow: hidden` is left on `.shell` (the viewport frame, which never scrolls) and on
+  `main` (the containing block that stops a visually-hidden label scrolling the document);
+  `css-contract.test.ts` still enforces primitives-only controls, class ↔ rule both ways, no hex
+  or `font-size: Npx` outside tokens, an EMPTY raw-ellipsis allowlist, no `dark:` utility and no
+  `title=` tooltip. axe-core was NOT run: it is not installed and no dependency was added.
+- *Left, with a recommendation each:*
+  - A tool call is badged "failed" in red when its OUTPUT matches `/\berror\b|\bfailed\b|…/`:
+    "14 tests completed, 0 failed — BUILD SUCCESSFUL" reads as a failure, and a group says
+    "3 failed". The log carries the harness's own `is_error`; `log/coalesce.ts` drops it. This
+    predates the redesign and changing it changes what old logs show, so it was not touched:
+    carry `is_error` through and keep the regex only as "may have failed" when the harness said
+    nothing.
+  - The builder draws a wire through a card (above). Place a palette-added step beside the
+    column it would otherwise extend, or route around cards.
+  - The ask card's entrance (`data-arriving`) was never seen in a browser: it only plays for an
+    ask seconds old, which the stubbed home cannot produce. Covered by the component test only.
+  - The Runs list is 44 links, each its own tab stop, in no list element (`J`/`K` and the skip
+    link are the fast paths); a tab strip has no accessible name and no `tabpanel`; the "Latest"
+    pill floats over the last visible line of the transcript; focus falls to `<body>` after a
+    REFUSED approval and after "Register a local path" opens its form; keys do not reach the app
+    while focus is inside the Report's sandboxed frame (Tab leaves it); first paint of the
+    600-item run takes ~1.0s with a 500ms task, and switching to its Logs tab a 600–760ms one.
+  - Not driven here: a real notification, the sound, a live ask arriving, the builder journey
+    at 1024 (the compact palette has no name field, so the script that names a step could not
+    run; the gate's captures cover that width).
+- *Gate at the end:* full re-seed and full capture — 586 PNGs, 283 audited screens (two more than
+  before: the long run, expanded and on Logs, at 1024×700), 0 failed steps, **PASS**, every line
+  0. `tsc --noEmit` clean. `bun test`: 3306 pass, 5 skip, 3 fail — the same three `chmod`-based
+  tests that cannot fail the way they expect as root. Two other agents were editing the run
+  Graph, Plan, the Details drawer, the Report and the notification code in the same tree while
+  this ran: the capture was taken part-way through their work and the test run after it, so
+  neither number is a verdict on those changes, and none of the checks above was repeated on them.

@@ -33,8 +33,8 @@
  * than 280px or wider than half the room it shares (so the pane it describes is never the
  * smaller half), and a width remembered from a wide window is clamped again on a narrow one.
  * Only the drawer's width changes while it is dragged; nothing animates and nothing reflows
- * but the two panes. The handle is a 24px-wide strip inside the drawer's own left padding — it
- * never lies over the neighbouring pane's scrollbar — and shows the 2px ring when focused.
+ * but the two panes. The handle's hit area is 24px wide, inside the drawer's own left padding — it
+ * never lies over the neighbouring pane's scrollbar — and it shows the 2px ring when focused.
  *
  * `useDrawer(key)` is the remembered open/closed state, stored with the same wrapped
  * localStorage access as every pane preference (`lib/panel.ts`): a preference that cannot be
@@ -150,9 +150,10 @@ export function Drawer({ open, onClose, label, title, actions, children, width =
           aria-valuemax={widest}
           tabIndex={0}
           data-slot="drawer-resize"
-          // 24px to grab, all of it inside the drawer's own padding; the 1px rule it thickens
-          // on hover and focus is the drawer's border. Colour and width only: nothing moves.
-          className="group/resize absolute inset-y-0 left-0 z-10 w-6 cursor-col-resize touch-none focus-visible:outline-2 focus-visible:outline-[var(--ring)] focus-visible:-outline-offset-2"
+          // 24px to grab (the `before:` box), all of it inside the drawer's own padding; the
+          // element itself is an 8px lane, so its focus ring is a slim bar on the edge rather
+          // than a 24px frame over the content. Hover thickens the border: colour only.
+          className="group/resize absolute inset-y-0 left-0 z-10 w-2 cursor-col-resize touch-none before:absolute before:inset-y-0 before:left-0 before:w-6 focus-visible:outline-2 focus-visible:outline-[var(--ring)] focus-visible:-outline-offset-2"
           onPointerDown={panel.onPointerDown}
           onDoubleClick={panel.onDoubleClick}
           onKeyDown={(e) => {

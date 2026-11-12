@@ -348,8 +348,8 @@ describe("the Details drawer can be resized", () => {
     expect(s.getAttribute("aria-valuenow")).toBe("320");
     expect(s.getAttribute("aria-valuemin")).toBe(String(DRAWER_MIN));
     expect(width(el)).toBe("320px");
-    // 24px to grab (Tailwind's w-6), with the 2px ring every focus stop shows
-    expect(s.className).toContain("w-6");
+    // 24px to grab (Tailwind's w-6, on the box that extends the 8px lane), with the 2px ring every focus stop shows
+    expect(s.className).toContain("before:w-6");
     expect(s.className).toContain("focus-visible:outline-2");
   });
 
