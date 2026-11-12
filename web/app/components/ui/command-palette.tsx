@@ -30,7 +30,7 @@
  */
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { Search } from "lucide-react";
-import { LayerContainer } from "@/lib/layer";
+import { LayerContainer, useReturnFocus } from "@/lib/layer";
 import { groupByScope, primaryKeys, strokeOf, useRegisteredShortcuts, type Shortcut } from "@/lib/shortcuts";
 import { cn } from "@/lib/utils";
 import { Input } from "./input";
@@ -83,6 +83,10 @@ export function CommandPalette({ open, onClose, commands }: {
   const groups = useMemo(() => (query.trim() === "" ? groupByScope(shown) : [{ scope: "", items: shown }]), [shown, query]);
   const flat = useMemo(() => groups.flatMap((g) => g.items), [groups]);
   const at = Math.min(active, Math.max(0, flat.length - 1));
+
+  // focus goes back to where ⌘K was pressed from (lib/layer.ts) — declared before the effect
+  // that opens the dialog, so it reads what had focus while it still has it
+  useReturnFocus(open);
 
   useEffect(() => {
     const el = ref.current;

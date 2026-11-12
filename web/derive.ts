@@ -893,6 +893,12 @@ export interface ContextEntry {
   read_by: string[];
   /** a cleared key whose writer is mid-attempt is veiled: the old value must not be shown */
   veiled: boolean;
+  /**
+   * HOW-68: the key was GIVEN AT LAUNCH (`run-started.inputs`) — the engine seeds the context
+   * with it, so it has a value and no step wrote it. Without this the table said "Not written
+   * yet" beside `goal` on a run that had been reading its goal for an hour.
+   */
+  input?: true;
 }
 
 export type Declarations = Record<string, { scope: Scope; writer: string[] }>;
@@ -912,7 +918,15 @@ export function deriveContextTable(events: LoggedEvent[], declarations: Declarat
 
   const openAttempts = new Set<string>();
   for (const e of events) {
-    if (e.type === "node-started") openAttempts.add(e.node);
+    if (e.type === "run-started") {
+      // what the operator typed at launch is in the context from the first step on
+      for (const [key, value] of Object.entries((e.inputs ?? {}) as Record<string, unknown>)) {
+        const c = entry(key);
+        c.value = value;
+        c.written = true;
+        c.input = true;
+      }
+    } else if (e.type === "node-started") openAttempts.add(e.node);
     else if (e.type === "node-finished") {
       openAttempts.delete(e.node);
       for (const [key, value] of Object.entries(e.writes)) {

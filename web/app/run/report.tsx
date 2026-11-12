@@ -72,7 +72,7 @@ export function RunReport({ runId, detail, onChanged = () => {} }: { runId: stri
     try {
       const r = await fetch(`/api/runs/${runId}/jump`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ node: REPORT_NODE }) });
       if (!r.ok) throw new Error(((await r.json().catch(() => null)) as { error?: string } | null)?.error ?? "jump failed");
-      toast(`sent — ${REPORT_NODE} maps the change, then the run carries on to publish`);
+      toast(`Sent — ${REPORT_NODE} maps the change, then the run carries on to publish`);
       setTimeout(onChanged, 300);
     } catch (e) {
       const why = e instanceof Error ? e.message : String(e);

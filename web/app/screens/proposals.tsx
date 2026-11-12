@@ -92,15 +92,15 @@ export function ProposalsScreen({ selected }: { selected: string | null }) {
     }
     if (verb === "accept") {
       setNotice(`accepted — the prompt is now v${payload.version}. New runs pin it; runs in flight keep what they started with.`);
-      toast(`accepted — now v${payload.version}, for new runs only`);
+      toast(`Accepted — now v${payload.version}, for new runs only`);
     }
     if (verb === "redraft") {
       setNotice(`re-drafting ${payload.drafting} — the reviser is running${payload.stubbed ? " (stubbed)" : ""}. Reload in a minute.`);
-      toast(`re-drafting ${payload.drafting}${payload.stubbed ? " (stubbed)" : ""}`);
+      toast(`Re-drafting ${payload.drafting}${payload.stubbed ? " (stubbed)" : ""}`);
     }
     if (verb === "reject") {
       setReason("");
-      toast("rejected — the reviser reads your reason as feedback");
+      toast("Rejected — the reviser reads your reason as feedback");
     }
     load();
     window.dispatchEvent(new Event(PROPOSALS_CHANGED));

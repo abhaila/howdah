@@ -38,9 +38,25 @@
  *   A TALL BODY SCROLLS INSIDE IT (`max-h` + one scroller) instead of running off the screen.
  */
 import { useCallback, useEffect, useId, useRef, useState } from "react";
-import { LayerContainer } from "@/lib/layer";
+import { LayerContainer, useReturnFocus } from "@/lib/layer";
 import { cn } from "@/lib/utils";
 import { Button } from "./button";
+
+/**
+ * How the operator last acted: a key, or the pointer. DESIGN.md Motion — "nothing
+ * keyboard-triggered animates" — is a rule about the INPUT, and a dialog cannot tell from its
+ * props whether `?`, Enter on a focused button or a click opened it. So the two listeners
+ * below remember, and a dialog opened from the keyboard is simply there (the shortcut sheet
+ * on `?`, a confirmation reached by Tab and Enter), while one opened with the pointer keeps
+ * the 180ms entrance. Capture phase, so it is recorded before the handler that opens anything.
+ */
+let lastInput: "key" | "pointer" = "pointer";
+if (typeof document !== "undefined") {
+  document.addEventListener("keydown", () => { lastInput = "key"; }, true);
+  document.addEventListener("pointerdown", () => { lastInput = "pointer"; }, true);
+}
+/** exported for the tests */
+export const openedByKeyboard = (): boolean => lastInput === "key";
 
 export function Dialog({ open, onClose, title, description, children, alert = false, className }: {
   open: boolean;
@@ -60,6 +76,15 @@ export function Dialog({ open, onClose, title, description, children, alert = fa
   const attach = useCallback((el: HTMLDialogElement | null) => { ref.current = el; setLayer(el); }, []);
   const titleId = useId();
   const descId = useId();
+  // before the effect that calls showModal(): what had focus is read while it still has it
+  useReturnFocus(open);
+  // decided once per opening, at the moment it opens
+  const [instant, setInstant] = useState(false);
+  const wasOpen = useRef(false);
+  if (open !== wasOpen.current) {
+    wasOpen.current = open;
+    if (open) { const now = openedByKeyboard(); if (now !== instant) setInstant(now); }
+  }
 
   useEffect(() => {
     const el = ref.current;
@@ -81,9 +106,10 @@ export function Dialog({ open, onClose, title, description, children, alert = fa
       aria-describedby={description ? descId : undefined}
       className={cn(
         "m-auto max-h-[min(86dvh,720px)] w-[min(92vw,460px)] overflow-visible rounded-[var(--radius)] border border-[var(--border-strong)] bg-card p-0 text-foreground shadow-float backdrop:bg-[var(--scrim)]",
-        "transition-[opacity,translate] duration-[var(--dur-base)] ease-[var(--ease-out-strong)] starting:translate-y-1.5 starting:opacity-0",
+        !instant && "transition-[opacity,translate] duration-[var(--dur-base)] ease-[var(--ease-out-strong)] starting:translate-y-1.5 starting:opacity-0",
         className,
       )}
+      data-instant={instant || undefined}
       onCancel={(e) => { e.preventDefault(); close(); }}
       onClick={(e) => { if (e.target === ref.current) close(); }}
     >

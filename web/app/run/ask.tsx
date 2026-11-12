@@ -31,10 +31,10 @@
  * session; anything else is simply there.
  */
 import { useCallback, useEffect, useId, useRef, useState } from "react";
-import { Ban, Check, RotateCcw, Route, Send } from "lucide-react";
+import { Ban, Check, ExternalLink, RotateCcw, Route, Send } from "lucide-react";
 import type { RunDetail } from "../../derive";
 import { parkSummary } from "../../../core/park-summary";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/kbd";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -68,7 +68,19 @@ type Ask = NonNullable<RunDetail["ask"]>;
 const SHORT_REASON = 180;
 /** an ask raised longer ago than this was already standing when the page opened — it does not "arrive" */
 const ARRIVAL_WINDOW_MS = 5000;
-const ARRIVED = new Set<string>();
+/**
+ * The asks already drawn in this session. In sessionStorage as well as in memory, so a RELOAD
+ * (or a hard navigation back to the run) within those few seconds does not play the entrance a
+ * second time — "it plays once per ask". Storage that throws (a private window) costs only that.
+ */
+const ARRIVED_KEY = "howdah.asks-arrived";
+const ARRIVED = new Set<string>((() => {
+  try { return JSON.parse(sessionStorage.getItem(ARRIVED_KEY) ?? "[]") as string[]; } catch { return []; }
+})());
+function markArrived(key: string): void {
+  ARRIVED.add(key);
+  try { sessionStorage.setItem(ARRIVED_KEY, JSON.stringify([...ARRIVED].slice(-200))); } catch { /* remembered for this page only */ }
+}
 
 /**
  * Whether THIS mount is the ask arriving (DESIGN.md Motion: "it plays once per ask, never on
@@ -78,7 +90,7 @@ function useArriving(runId: string, ask: Ask): boolean {
   const [arriving] = useState(() => {
     const key = `${runId}#${ask.node}@${ask.visit}#${ask.seq}`;
     if (ARRIVED.has(key)) return false;
-    ARRIVED.add(key);
+    markArrived(key);
     const age = Date.now() - new Date(ask.ts).getTime();
     return Number.isFinite(age) && age >= 0 && age < ARRIVAL_WINDOW_MS;
   });
@@ -285,11 +297,11 @@ export function AskCard({ runId, ask, detail, onResolved }: { runId: string; ask
       }
       if (!r.ok) throw new Error(await r.text());
       setState("delivered");
-      toast(`reply delivered to ${ask.node}@${ask.visit}`);
+      toast(`Reply delivered to ${ask.node}@${ask.visit}`);
       setTimeout(onResolved, 420); // the collapse plays, then the thread takes over — the motion moment
     } catch {
       setState("failed");
-      toast("the reply did not reach the runner", "error");
+      toast("The reply did not reach the runner", "error");
     }
   }, [runId, text, onResolved, toast, ask.node, ask.visit]);
 
@@ -299,9 +311,17 @@ export function AskCard({ runId, ask, detail, onResolved }: { runId: string; ask
     <AskShell runId={runId} ask={ask} title={summary.title} hint={summary.hint} collapsing={state === "delivered"}>
       <AskItems ask={ask} detail={detail} />
       {elicitation && (
-        <div className="field-hint">
-          {elicitation.url && <><a className="pr-link" href={elicitation.url} target="_blank" rel="noreferrer">Open {elicitation.server}'s link</a>, do what it asks, then </>}
-          send an empty reply or "done" to let the agent continue. Reply "decline" to refuse — the tool call fails and the agent carries on without it.
+        <div className="ask-elicitation">
+          {/* the way out is a control with a 28px target and an "opens elsewhere" glyph — it was
+              a 17px underlined phrase inside a sentence, capped at 210px by a hand-written ellipsis */}
+          {elicitation.url && (
+            <a className={buttonVariants({ variant: "outline", size: "sm" })} href={elicitation.url} target="_blank" rel="noreferrer">
+              <ExternalLink aria-hidden />Open {elicitation.server}'s link
+            </a>
+          )}
+          <span className="field-hint">
+            {elicitation.url ? "Do what it asks there, then send" : "Send"} an empty reply or "done" to let the agent continue. Reply "decline" to refuse — the tool call fails and the agent carries on without it.
+          </span>
         </div>
       )}
       {permission && (
@@ -440,11 +460,11 @@ export function AskQuestionCard({ runId, ask, questions, onResolved }: {
       }
       if (!r.ok) throw new Error(await r.text());
       setState("delivered");
-      toast(`answer delivered to ${ask.node}@${ask.visit}`);
+      toast(`Answer delivered to ${ask.node}@${ask.visit}`);
       setTimeout(onResolved, 420); // the collapse plays, then the thread takes over
     } catch {
       setState("failed");
-      toast("the answer did not reach the runner", "error");
+      toast("The answer did not reach the runner", "error");
     }
   }, [runId, answers, onResolved, toast, ask.node, ask.visit]);
 
@@ -471,8 +491,11 @@ export function AskQuestionCard({ runId, ask, questions, onResolved }: {
         {questions.length > 1 && <QuestionnaireProgress />}
         {questions.map((q) => (
           <QuestionnaireItem key={q.id} name={q.id} required multiple={q.multiSelect} className="gap-2.5">
+            {/* the short header ("Approach") is a label OVER the question. A fieldset draws its
+                legend first whatever the source order says, so the header used to land under it;
+                a floated legend is not the "rendered legend" and takes its place in the column */}
             <div className="auq-header">{q.header}</div>
-            <QuestionnaireTitle className="text-md [&:not(:has(~[data-slot=questionnaire-description]))]:mb-0">{q.question}</QuestionnaireTitle>
+            <QuestionnaireTitle className="float-left w-full text-md [&:not(:has(~[data-slot=questionnaire-description]))]:mb-0">{q.question}</QuestionnaireTitle>
             {q.options.length > 0 && (
               <QuestionnaireChoices className="gap-1.5">
                 {q.options.map((o) => (
@@ -578,7 +601,7 @@ export function EffectCard({
         setTimeout(onResolved, 420);
       } catch {
         setState("failed");
-        toast("the verdict did not reach the run", "error");
+        toast("The verdict did not reach the run", "error");
       }
     },
     [runId, onResolved, toast],
@@ -663,12 +686,12 @@ export function NoReplyCard({ runId, ask, detail, refusal, retry, onResolved }: 
         return;
       }
       setState("delivered");
-      toast(`retrying ${ask.node}@${ask.visit}`);
+      toast(`Retrying ${ask.node}@${ask.visit}`);
       setTimeout(onResolved, 420); // the collapse plays, then the thread takes over — the motion moment
     } catch {
       setError("the retry did not reach the runner");
       setState("failed");
-      toast("the retry did not reach the runner", "error");
+      toast("The retry did not reach the runner", "error");
     }
   }, [runId, onResolved, toast, ask.node, ask.visit]);
 
@@ -682,7 +705,12 @@ export function NoReplyCard({ runId, ask, detail, refusal, retry, onResolved }: 
   const jumps = !retry && (ask.code === "max-visits" || ask.code === "no-edge");
   return (
     <AskShell
-      runId={runId} ask={ask} title={summary.title} hint={summary.hint} collapsing={state === "delivered"}
+      runId={runId} ask={ask} title={summary.title}
+      // a GATED acceptance park (an opted-in `requiresAcceptance` step) is not answered by a
+      // retry — it would park again. The way on is the Waive control on the Acceptance list
+      // drawn beside this card, so the hint says that rather than the ungated park's advice.
+      hint={ask.code === "acceptance-unmet" && detail.acceptance?.waivable ? "Waive the ones you accept without evidence, on the Acceptance list above, or go back and prove them." : summary.hint}
+      collapsing={state === "delivered"}
       // HOW-68: where Retry is the answer, the card reads heading → items → hint → action, and
       // WHY there is no reply box (the route's refusal, verbatim) is part of the record below it
       record={retry ? (

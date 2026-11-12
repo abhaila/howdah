@@ -325,9 +325,8 @@ describe("tokens.css is the single source of colour and type (P3.12)", () => {
 describe("an ellipsis is written with Truncate, never by hand (HOW-68)", () => {
   const HAND_WRITTEN = SHEETS.filter((f) => !f.endsWith("tokens.css"));
   /** `file-basename | selector` for every rule that sets `text-overflow: ellipsis` */
-  const RAW_ELLIPSIS_ALLOWLIST: string[] = [
-    "howdah.css | .pr-link",
-  ];
+  // empty since HOW-68's polish pass: `.pr-link`, the last hand-written ellipsis, became a Button-styled link
+  const RAW_ELLIPSIS_ALLOWLIST: string[] = [];
 
   function rawEllipsis(): string[] {
     const found: string[] = [];

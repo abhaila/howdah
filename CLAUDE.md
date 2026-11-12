@@ -655,6 +655,7 @@ Break one of these and the design stops working, so check them before changing t
 | `web/` | Bun server (read model + reply/launch/control writes, SSE), `derive.ts` read model, `draft.ts` (HOW-65: a draft-graph run's draft, its Save, and the builder's provenance rule), React app in `app/`: `main.tsx` is the shell/nav/router only, screens in `app/screens/` (HOW-65 adds `draft-review.tsx`, `/runs/:id/draft`), run-detail panes in `app/run/` (`draft.tsx` is the draft card and the list the review page shares; Chat is the default: `run/chat.tsx` folds the run into one conversation and carries the standing ask inline, HOW-25; HOW-27 made it ONE scrolling transcript with the composer permanently at its foot — the Transcript/Ask tab split is gone, not moved, and the composer asks the read-only route and never replies to the agent, because one box that silently changes target on whether the run is parked is a box that sends the wrong one), builder in `app/builder/` (HOW-24: `canvas.tsx` + `node-card.tsx` + `edge.tsx` + `palette.tsx` + `properties.tsx`, with `step-form.tsx`/`branching.tsx`/`fields.tsx` as the panel bodies), primitives in `app/components/ui/`, helpers in `app/lib/` |
 | `reviser/` | GEPA-method revision script, eval case, generated proposals |
 | `watchdog/` | out-of-process heartbeat/attention checker + launchd plist |
+| `tools/` | `tools/visual/` — the viewer's capture harness (HOW-68): `seed.ts`/`lib.ts`/`content.ts` build a demo home by driving the real engine with scripted executors, `live.ts` holds genuinely live runs, `serve.sh` serves it (and an empty home on the next port), `shoot.mjs` captures and measures every screen, `analyze.py` is the standards gate. Outside `tsconfig.json`'s `include` on purpose |
 | `research/` | Orbital spec, feedback doc, DOT exports, UI captures — the inputs this design was built from |
 
 ### Node kinds and executors
@@ -711,59 +712,120 @@ React app is bundled by `buildApp()` at server start into `web/public/app.{js,cs
 (gitignored); static responses are deliberately `no-cache`, since a stale cached bundle once
 served an entire old UI.
 
-UI conventions worth preserving: one canonical `RunStatus` enum with one renderer, and
+UI conventions worth preserving: one canonical `RunStatus` enum with one renderer
+(`app/status.tsx` — an inline-SVG glyph whose SHAPE is the state, colour second), and
 **needs-input outranks failed** — a parked run waiting on a human is never shown as merely
 failed. Which card a park gets is decided by the ask's OWN kind where the cards are drawn
 (`run/ask.tsx` StandingAsk): a question gets `AskQuestionCard`, an ambiguous effect gets
-`EffectCard`, a park the reply route would REFUSE gets `NoReplyCard` (HOW-69: no composer, the
-route's refusal verbatim, and "Retry this step" — the run's resume — where that is the remedy),
-and everything else is answered in prose by `AskCard`. Whether a reply would be refused is
-`RunDetail.ask_reply`, computed on the server by `replyVerdict` (engine/control.ts) — the same
-function `decideReply` runs, over the same graph registry the route uses — never re-derived in
-the browser. All four keep the same
-contract — the sending → delivered → collapsing motion moment, a refusal shown VERBATIM rather
-than collapsed into "failed", and `id="needs-input"` so a notification's deep link lands on the
-control. Design tokens (palette, type scale, motion) live in `web/public/tokens.css` +
-`app/globals.css` and are decided in `DESIGN.md` (which wins over tokens.css when they
-disagree; it supersedes `shaping.md`'s Design section, see T25); tokens.css is the ONLY
-place a hex or a `font-size: Npx` may appear. The components are shadcn patterns vendored and
-rewritten onto those tokens — one file each under `app/components/ui/`, wired to `shadcn add`
-by the root `components.json` (style `base-vega`) and the `@/*` path in `tsconfig.json`.
+`EffectCard`, an approval gets the approval card itself (`slice.tsx` ApprovalCard, so Approve is
+in the conversation), a park the reply route would REFUSE gets `NoReplyCard` (HOW-69: no
+composer, "Retry this step" — the run's resume — where that is the remedy, and a way to the
+Graph tab where the answer is a jump), and everything else is answered in prose by `AskCard`
+(a harness permission ask shows the command and offers Allow / Deny). Whether a reply would be
+refused is `RunDetail.ask_reply`, computed on the server by `replyVerdict` (engine/control.ts) —
+the same function `decideReply` runs, over the same graph registry the route uses — never
+re-derived in the browser. Every card keeps the same contract — the sending → delivered →
+collapsing moment, a refusal shown VERBATIM rather than collapsed into "failed", and
+`id="needs-input"` on exactly ONE element, so a notification's deep link and the `A` key land on
+the control.
 
-**ONE primitives library, and three controls that stay on the platform** (HOW-27). The layer
-used to be hand-written under a `No Radix, ever` rule. It now sits on `@base-ui/react`, which
-is what base-vega's components are built on — `button`, `badge`, `input`, `separator`, `tabs`
-and `tooltip` moved, and `tabs` gained the roving tabindex it never had by hand. Radix is still
+**`DESIGN.md` is the authority for how the viewer looks and behaves (HOW-68); `PRODUCT.md` says
+who it is for.** It wins over `tokens.css` when they disagree and supersedes `shaping.md`'s
+Design section. Its five rules are each held by something that fails:
+
+- **The alarm is said once.** Amber (`--attention*`) means a run is waiting on you and nothing
+  else: the status glyph, the nav count, and the one ask card at the foot of the Build
+  transcript. The card is written for a person — `core/park-summary.ts` `parkSummary()` derives
+  a label, a one-sentence title and a hint from the park's CODE (never by parsing the reason),
+  and the same summary feeds the Runs list, the inbox and the notification; the engine's own
+  message is one click away under "Full message". The engine's `[failed: …]` line on a turn is
+  a quiet notice, hidden while that step's park is the standing card (`run/activity.tsx`
+  `splitEngineNotes`).
+- **One scroller per pane.** The shell is `100dvh` and never scrolls. A screen is
+  `screens/frame.tsx` `Screen`/`SplitScreen` (header fixed → body scrolls); the element that
+  scrolls is `components/ui/scroll-pane.tsx` `ScrollPane`, which is a named focus stop only
+  while it overflows. `overflow: hidden` is for corners, never layout. List + detail is ONE
+  split (`components/ui/panel.tsx` `SplitView`, with `DetailPanel` and `useListKeys`): each side
+  its own scroller, Esc closes the detail, and under 1100px of pane the detail REPLACES the
+  list — a selection made outside the list (a step picked in Build) asks for the detail through
+  `openRequest`. Details is a `Drawer`: non-modal, in the layout, `⌘I`, remembered.
+- **One voice.** DM Sans for everything read, DM Mono only for what you would paste; six sizes
+  (12/13/14/16/20/28), nothing under 12px, no uppercase labels. `web/public/tokens.css` is the
+  single token source — every colour one `light-dark()` pair, the ONLY place a hex or a
+  `font-size: Npx` may appear, fonts bundled under `web/public/fonts/` — and `app/globals.css`
+  re-exports it to Tailwind. `app/tokens.test.ts` proves each text token is 4.5:1 on each
+  ground in both themes, that `--fg-disabled` is readable (≥3:1) yet still reads as off, and
+  that the scale is those six sizes. The theme is `color-scheme` on `:root[data-theme]`, so
+  Tailwind's `dark:` variant is refused (it follows the OS, not the toggle).
+- **Keyboard first.** `app/lib/shortcuts.ts` is the ONE registry: a screen registers with
+  `useShortcuts`, and the `?` sheet and the ⌘K palette are rendered from it, so a shortcut
+  cannot exist unlisted. Single keys are ignored in a text field and can be turned off.
+  `useEscapeLayer` gives Esc to the topmost of menu, dialog, detail panel, drawer; `Kbd` prints
+  a key from the same string it was registered with. Lists move with J/K (`lib/list-nav.ts`).
+- **Nothing is cut without a way to read it.** `Truncate` is the only way to ellipsize — it
+  knows when it is cut and shows the full value on hover AND focus; raw `text-overflow` in a
+  stylesheet is a test failure. Values wrap where there is room (`KeyValue` breaks a path at
+  its slashes).
+
+Motion is DESIGN.md's and mostly absence: nothing keyboard-triggered or high-frequency
+animates (tabs, selection, palette, drawer), nothing loops but a spinner on something loading,
+and the one authored moment is the ask card arriving — played by `data-arriving`, which
+`ask.tsx` sets only for an ask that is seconds old and not yet drawn, never on a tab switch.
+A run that newly starts waiting posts a real browser `Notification` (`lib/notify.ts`;
+permission is asked from Settings, never on load); sound is off unless `config.chime` is true,
+and both fire only for NEWS (`lib/attention-sound.ts` `decideNews`), never on navigation.
+
+**ONE primitives library, and three controls that stay on the platform** (HOW-27). The layer —
+one file each under `app/components/ui/`, wired to `shadcn add` by the root `components.json`
+(style `base-vega`) and the `@/*` path in `tsconfig.json` — sits on `@base-ui/react`: `button`,
+`badge`, `input`, `separator`, `tabs`, `tooltip`, and HOW-68's `menu` and `popover`. Radix is
 refused, and so is a SECOND primitives library: `css-contract.test.ts` asserts that no
-`@radix-ui/`, `@headlessui/` or `@ariakit/` package is installed.
+`@radix-ui/`, `@headlessui/` or `@ariakit/` package is installed. HOW-68 added the rest of what
+DESIGN.md names — `Drawer`, `CommandPalette`, `ShortcutSheet`, `Kbd`, `Truncate`, `Toolbar`
+(one row that never wraps; what does not fit goes behind a `Menu`), `KeyValue`, `ScrollPane`,
+`SectionLabel` (12px/600, the one section-label style) — and `/dev/components`
+(`screens/gallery.tsx`) renders every primitive in every state. Every control has hover,
+focus-visible (a 2px `--ring` outline), active, disabled and, where it can wait, `loading`; a
+target is at least 24px. `Button`'s disabled look hangs on `data-off`, not `:disabled`, because
+a loading button is disabled in the DOM and must keep its colours.
 
 `Select`, `Dialog` and `Checkbox` deliberately did NOT move, and the same test asserts each one
 still says why in its own header. The original reason ("no Radix") expired when Base UI
 arrived; the reason they stay is the one that never depended on it — the platform's version is
 better. A native `<select>` is keyboard-, screen-reader- and touch-correct on every platform
 in 28 lines where base-vega's listbox is 198; `showModal()` gets the focus trap, the inert
-background, `::backdrop` and Esc in the top layer with no portal or z-index; and a real
+background, `::backdrop` and Esc in the top layer with no portal or z-index (so a tooltip or
+menu opened INSIDE a dialog portals into it, `lib/layer.ts`); and a real
 `<input type="checkbox">` keeps Space, form participation and `indeterminate` and does not
 change `onChange(e)` into `onCheckedChange(checked)` at every call site. `Tooltip` is the
-instructive middle: it took Base UI's collision-aware POSITIONING (the hand-written popup was
-`left: 0; top: 100%` and overflowed in the inspector rail, which is exactly where it is used)
-but kept its own `role="tooltip"`, id and `aria-describedby`, because the primitive ships none
-of the three and HOW-16 P1.4 existed to gain them.
+instructive middle: it took Base UI's collision-aware POSITIONING but kept its own
+`role="tooltip"`, id and `aria-describedby`, because the primitive ships none of the three.
 
-The APIs are Howdah's, not base-vega's: `PanelTabs items={[…]}`, `Tooltip content=`,
-`Checkbox label=`, `Dialog open/onClose`. Adopting the registry's compositional spellings would
-have rewritten ~73 call sites to say the same thing in three components each. Every interactive element goes through a primitive — a raw `<button>`, `<input>`,
-`<select>`, `<textarea>` or `<label>` outside `components/ui/` is a test failure, and so is a
-class emitted with no rule, a rule with no consumer, or a `title=` used as a tooltip
-(`app/css-contract.test.ts`, `app/components/components.test.tsx`). Those two files exist
-because the seam between the component layer and hand-CSS shipped two invisible defects
-(`.tab.on` matching nothing, `.chip` with modifiers but no base rule) that nothing else could
-see: TypeScript does not read CSS, and a missing rule renders as plain text. A class may be
-exempt from "every emitted class has a rule" in exactly three lists, each of which has to say
-what feeds it: `COMPOSED_PREFIXES`/`COMPOSED_NAMES` (a name built at run time from data, so the
-scan cannot see the value) and `BEHAVIOURAL` (HOW-24 — a name a LIBRARY reads in JavaScript:
-React Flow's `nodrag`/`nopan` are its interaction opt-outs and its own sheet deliberately gives
-them no rules, so listing them is honest where an empty rule would be a lie).
+The APIs are Howdah's, not base-vega's: `Tabs items={[…]}` (with a `hint` per tab for its
+key), `Menu items=`, `Tooltip content=`, `Checkbox label=`, `Dialog open/onClose`. Appearance
+lives in the primitives and in utilities; `web/public/howdah.css` holds layout only, and it is
+UNLAYERED, so a rule there beats every Tailwind utility whatever its specificity. Every
+interactive element goes through a primitive — a raw `<button>`, `<input>`, `<select>`,
+`<textarea>` or `<label>` outside `components/ui/` is a test failure, and so is a class emitted
+with no rule, a rule with no consumer, a `title=` used as a tooltip, a hand-written ellipsis or
+a `dark:` utility (`app/css-contract.test.ts`, `app/components/components.test.tsx`). Those
+files exist because the seam between the component layer and hand-CSS shipped two invisible
+defects (`.tab.on` matching nothing, `.chip` with modifiers but no base rule) that nothing else
+could see: TypeScript does not read CSS, and a missing rule renders as plain text. A class may
+be exempt from "every emitted class has a rule" in exactly three lists, each of which has to
+say what feeds it: `COMPOSED_PREFIXES`/`COMPOSED_NAMES` (a name built at run time from data, so
+the scan cannot see the value) and `BEHAVIOURAL` (HOW-24 — a name a LIBRARY reads in
+JavaScript: React Flow's `nodrag`/`nopan` are its interaction opt-outs and its own sheet
+deliberately gives them no rules, so listing them is honest where an empty rule would be a lie).
+
+What the tests cannot see is looked at: `tools/visual/` seeds a demo home with the REAL engine
+(every status and park kind, plus an empty home), serves the viewer from a private copy of the
+repo, captures every screen in both themes and at 1024px, and measures each one in the page.
+`analyze.py` ends with a `STANDARDS: PASS/FAIL` block and exits non-zero on any size off the
+scale, foreign face, unreadable ellipsis, target under 24px, focus stop with no ring, clipped
+or unreachable content, live-text contrast failure, or failed capture step. A UI change is not
+done until that block passes and the captures have been looked at
+(`docs/designs/design-overhaul.md` is the checklist and the loop's log).
 
 ## Conventions
 

@@ -19,6 +19,7 @@
  * 150ms from `scale(0.97)` at the trigger, none when the keyboard opened it. The popup carries
  * `data-layer`, which is how the Escape layering knows to leave this Escape to the popover.
  */
+import { useRef } from "react";
 import { Popover as PopoverPrimitive } from "@base-ui/react/popover";
 import { useLayerContainer } from "@/lib/layer";
 import { cn } from "@/lib/utils";
@@ -37,12 +38,21 @@ export function Popover({ trigger, children, title, open, onOpenChange, side = "
   className?: string;
 }) {
   const container = useLayerContainer();
+  // Focus lands on the PANEL when it opens, not on the first control inside it. The primitive's
+  // default is the first focusable — and where that is a button with a tooltip (the copy
+  // button in "About this home"), the tooltip opened with it and took the first Escape: Esc
+  // closed a tooltip nobody asked for and the popover stayed. From the panel, Tab reaches the
+  // first control as before, and one Escape closes what was opened.
+  const popup = useRef<HTMLDivElement | null>(null);
   return (
     <PopoverPrimitive.Root open={open} onOpenChange={onOpenChange === undefined ? undefined : (o) => onOpenChange(o)}>
       <PopoverPrimitive.Trigger render={trigger} data-slot="popover-trigger" />
       <PopoverPrimitive.Portal container={container}>
         <PopoverPrimitive.Positioner side={side} align={align} sideOffset={6} collisionPadding={8} className="z-40">
           <PopoverPrimitive.Popup
+            ref={popup}
+            initialFocus={popup}
+            tabIndex={-1}
             data-slot="popover"
             data-layer="popover"
             className={cn(

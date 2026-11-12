@@ -1312,6 +1312,23 @@ describe("deriveContextTable", () => {
     expect(clean.scope).toBe("per-visit");
   });
 
+  // HOW-68: the Context tab said "Not written yet" beside `goal` on a run that had read it all along
+  test("what was given at launch has its value, is marked an input, and has no step's write", () => {
+    const dir = mkdtempSync(join(tmpdir(), "howdah-ctx-"));
+    const log = new EventLog(join(dir, "r", "run.jsonl"), fixedClock());
+    log.append({ type: "run-started", graph: "g", inputs: { goal: "stop the redirect loop" }, pinned_prompts: {} });
+    log.append({ type: "node-started", node: "plan", visit: 1, attempt_id: "plan#1" });
+    const table = deriveContextTable(log.read(), DECL);
+    const goal = table.find((c) => c.key === "goal")!;
+    expect(goal).toMatchObject({ written: true, value: "stop the redirect loop", input: true, writes: [] });
+    // a key no one gave and no one wrote is still unwritten, and is not an input
+    const plan = table.find((c) => c.key === "implementation_plan")!;
+    expect(plan.written).toBe(false);
+    expect(plan.input).toBeUndefined();
+    // and the digest an agent is given now carries the goal instead of "— not written yet"
+    expect(runDigest("r", log.read(), DECL)).toContain("goal (sticky) = stop the redirect loop");
+  });
+
   test("the latest published value wins and the earlier write is marked replaced", () => {
     const dir = mkdtempSync(join(tmpdir(), "howdah-ctx-"));
     const log = run(dir);

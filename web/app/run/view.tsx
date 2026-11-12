@@ -307,7 +307,7 @@ export function RunGraph({ runId, graph, timeline, status, onJumped }: { runId: 
       });
       if (!r.ok) throw new Error(((await r.json()) as any).error);
       setState("sent");
-      toast(`jumping to ${jumpTo}`);
+      toast(`Jumping to ${jumpTo}`);
       setTimeout(onJumped, 300);
       setTimeout(() => {
         setJumpTo(null);
@@ -682,7 +682,7 @@ function RunFrame({ id, detail, tab, setTab, picked, setPicked, liveGit, now, re
   const copyResume = useCallback(async () => {
     if (!resumeCommand) return;
     await navigator.clipboard?.writeText(resumeCommand).catch(() => {});
-    toast("copied to the clipboard");
+    toast("Copied to the clipboard");
   }, [resumeCommand, toast]);
 
   /** the Build pane is where the ask and both composers live; a tab switch needs a frame to land */

@@ -27,9 +27,12 @@
  *   - the root no longer sets `overflow-hidden`. It existed only to clip the inactive scroll
  *     pin, which the registry parks one button-height below the box; "overflow: hidden is for
  *     clipping corners, never for layout", and the viewport is this pane's ONE scroller.
- *   - so the inactive pin no longer travels out of the box: it fades and scales in place.
- *     Only `scale` and `opacity` animate, on the token durations (150ms in on the strong
- *     ease-out, 120ms out on plain `ease`) — the registry's exit was 400ms on an ease-IN curve.
+ *   - so the inactive pin no longer travels out of the box, and it does not animate at all:
+ *     it is there or it is not. It first faded and scaled in place over 150ms, and that
+ *     entrance played every time the Build tab was switched to with a number key and every
+ *     time `⌘I` resized the pane — "nothing keyboard-triggered animates", and a control that
+ *     comes and goes with every scroll is the high-frequency case DESIGN.md names besides.
+ *     (The registry's own exit was 400ms on an ease-IN curve.)
  *   - the viewport does not set `scrollbar-width` / `scrollbar-color`; tokens.css themes every
  *     scrollbar once.
  */
@@ -152,7 +155,7 @@ function MessageScrollerButton({
       data-size={size}
       direction={direction}
       className={cn(
-        "absolute start-1/2 -translate-x-1/2 border-border bg-background text-foreground transition-[scale,opacity] duration-[var(--dur-pop)] hover:bg-muted hover:text-foreground data-[active=false]:pointer-events-none data-[active=false]:scale-95 data-[active=false]:opacity-0 data-[active=false]:duration-[var(--dur-fast)] data-[active=false]:ease-[ease] data-[active=true]:scale-100 data-[active=true]:opacity-100 data-[active=true]:ease-[var(--ease-out-strong)] data-[direction=end]:bottom-3 data-[direction=start]:top-3 rtl:translate-x-1/2 data-[direction=start]:[&_svg]:rotate-180",
+        "absolute start-1/2 -translate-x-1/2 border-border bg-background text-foreground hover:bg-muted hover:text-foreground data-[active=false]:pointer-events-none data-[active=false]:opacity-0 data-[active=true]:opacity-100 data-[direction=end]:bottom-3 data-[direction=start]:top-3 rtl:translate-x-1/2 data-[direction=start]:[&_svg]:rotate-180",
         className
       )}
       render={render ?? <Button variant={variant} size={size} />}

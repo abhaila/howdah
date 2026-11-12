@@ -194,6 +194,8 @@ main { position: relative; flex: 1; min-width: 0; min-height: 0; overflow: hidde
 .ask-item-body { display: flex; flex-direction: column; min-width: 0; overflow-wrap: anywhere; }
 .ask-item-why { font-size: var(--type-sm); color: var(--fg-muted); }
 .ask-context { white-space: pre-wrap; overflow-wrap: anywhere; }
+/* an MCP server asking to be connected: the link as a control, then what a reply does */
+.ask-elicitation { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
 /* a permission ask: what the tool would do, as the thing itself — on the raised ground, like the reply box */
 .ask-permission { display: flex; flex-direction: column; gap: 6px; min-width: 0; font-size: var(--type-sm); color: var(--fg-muted); }
 .ask-permission .code-block { background: var(--bg-raised); color: var(--fg); border: 1px solid var(--attention-border); }
@@ -220,7 +222,7 @@ main { position: relative; flex: 1; min-width: 0; min-height: 0; overflow: hidde
 .effect-verdicts { display: flex; flex-wrap: wrap; gap: 8px 24px; }
 .effect-verdict { display: flex; align-items: center; gap: 8px; }
 /* HOW-25: `AskUserQuestion`'s short header ("Approach"), a label over the question */
-.auq-header { font-size: var(--type-xs); font-weight: 600; color: var(--fg-muted); }
+.auq-header { margin-bottom: -6px; font-size: var(--type-xs); font-weight: 600; color: var(--fg-muted); }
 
 /* ---- Build: the run as one conversation (run/chat.tsx). The transcript is the body: the
    toolbar above it and the composer below it are one line each, and the scroller between them
@@ -379,7 +381,6 @@ main { position: relative; flex: 1; min-width: 0; min-height: 0; overflow: hidde
    block }`, so the lightbulb took a line of its own above every sentence and the
    `vertical-align` meant for it never applied to anything. */
 .field-advice svg { display: inline-block; vertical-align: -2px; margin-right: 4px; }
-.pr-link { text-decoration: underline; text-underline-offset: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 210px; }
 
 /* graph DAG (T20; HOW-68). The canvas is a real scroller (flex child with min-height: 0) that
    pans by drag and is a focus stop while it overflows. Every label is 12px or more; a node's
@@ -710,7 +711,7 @@ main { position: relative; flex: 1; min-width: 0; min-height: 0; overflow: hidde
    plainly not the agent's prose, opening to the whole reason when it is long */
 .act-notice { font-size: var(--type-sm); line-height: 20px; color: var(--fg-muted); min-width: 0; }
 div.act-notice, .act-notice > summary { display: flex; align-items: flex-start; gap: 8px; }
-.act-notice > summary { cursor: pointer; border-radius: var(--radius-xs); list-style: none; }
+.act-notice > summary { min-height: var(--target-min); padding: 2px 0; cursor: pointer; border-radius: var(--radius-xs); list-style: none; }
 .act-notice > summary::-webkit-details-marker { display: none; }
 .act-notice > summary:hover { color: var(--fg); }
 .act-notice svg { flex: none; margin-top: 4px; }

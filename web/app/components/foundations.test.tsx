@@ -531,3 +531,63 @@ describe("Menu — a trigger that opens a list of actions", () => {
     expect(picked).toEqual(["ide"]);
   });
 });
+
+// HOW-68 (DESIGN.md Motion): "nothing keyboard-triggered animates" is a rule about the INPUT, so
+// a dialog opened by a key is simply there, and one opened with the pointer keeps its entrance.
+describe("Dialog and Button states added in the polish pass", () => {
+  test("a dialog opened from the keyboard carries no entrance; one opened by the pointer does", async () => {
+    const { Dialog } = await import("./ui/dialog");
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "?", bubbles: true }));
+    let el = render(<Dialog open onClose={() => {}} title="Keyboard shortcuts" />);
+    let dialog = el.querySelector("dialog")!;
+    expect(dialog.hasAttribute("data-instant")).toBe(true);
+    expect(dialog.className).not.toContain("transition-[opacity,translate]");
+
+    // the first dialog is unmounted before the second is drawn: a leaked open <dialog> would
+    // follow the rest of the suite around (bun runs every file in one process)
+    act(() => root!.unmount());
+    host?.remove();
+    document.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+    el = render(<Dialog open onClose={() => {}} title="Abort the run?" />);
+    dialog = el.querySelector("dialog")!;
+    expect(dialog.hasAttribute("data-instant")).toBe(false);
+    expect(dialog.className).toContain("transition-[opacity,translate]");
+  });
+
+  test("a disabled button is marked off; a loading one is disabled but keeps its own colours", () => {
+    const el = render(<><Button disabled>Off</Button><Button loading>Saving</Button></>);
+    const [off, busy] = [...el.querySelectorAll("button")];
+    expect(off!.disabled).toBe(true);
+    expect(off!.hasAttribute("data-off")).toBe(true);
+    expect(busy!.disabled).toBe(true); // it cannot be pressed twice
+    expect(busy!.hasAttribute("data-off")).toBe(false); // ...but it is not dimmed
+    expect(busy!.getAttribute("aria-busy")).toBe("true");
+    // the dimming is one token, readable in both themes (tokens.test.ts), never an opacity
+    for (const b of [off!, busy!]) expect(b.className).not.toContain("opacity-50");
+    expect(off!.className).toContain("data-[off]:text-disabled");
+  });
+
+  // the dialog unmounts when it closes, so the platform never gets to restore focus: it fell to <body>
+  test("closing a dialog puts focus back on what opened it", async () => {
+    const { Dialog } = await import("./ui/dialog");
+    function Harness() {
+      const [open, setOpen] = useState(false);
+      return (
+        <>
+          <Button onClick={() => setOpen(true)}>Abort…</Button>
+          <Dialog open={open} onClose={() => setOpen(false)} title="Abort the run?"><Button onClick={() => setOpen(false)}>Keep it</Button></Dialog>
+        </>
+      );
+    }
+    const el = render(<Harness />);
+    const trigger = el.querySelector("button")!;
+    trigger.focus();
+    act(() => trigger.click());
+    const inside = [...el.querySelectorAll("dialog button")].find((b) => b.textContent === "Keep it") as HTMLButtonElement;
+    inside.focus();
+    act(() => inside.click());
+    expect(el.querySelector("dialog")).toBeNull();
+    await act(async () => { await new Promise((r) => setTimeout(r, 5)); });
+    expect(document.activeElement).toBe(trigger);
+  });
+});

@@ -112,7 +112,7 @@ export function FeedbackForm({ promptId, runId, node, visit, renderedHash, onDon
       return;
     }
     setState("saved");
-    toast(`feedback recorded against ${promptId}`);
+    toast(`Feedback recorded against ${promptId}`);
   };
 
   if (state === "saved")

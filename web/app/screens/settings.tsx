@@ -273,11 +273,11 @@ export function Settings() {
   const enableNotifications = async () => {
     const next = await requestNotifyPermission(); // the ONLY call site: a click, never a page load
     setPermission(next);
-    if (next === "granted") toast("desktop notifications are on");
-    else if (next === "denied") toast("the browser blocked notifications for this site", "error");
+    if (next === "granted") toast("Desktop notifications are on");
+    else if (next === "denied") toast("The browser blocked notifications for this site", "error");
   };
   const testNotification = () => {
-    if (!sendTestNotification()) toast("the browser would not show a notification", "error");
+    if (!sendTestNotification()) toast("The browser would not show a notification", "error");
   };
   const workspaces = ws ? [...ws.repos.map((w) => ({ ...w, kind: "repo" as const })), ...ws.folders.map((w) => ({ ...w, kind: "plain" as const }))] : null;
 

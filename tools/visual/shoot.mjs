@@ -5,8 +5,10 @@
  *   node shoot.mjs                 # everything
  *   node shoot.mjs dark-run-done   # only shots whose name contains the argument
  *
- * Needs the viewer on :4799 over <scratch>/home (see README.md). Writes shots/*.png,
- * shots/audit.json (per-screen measurements) and shots/dialogs.json (Escape behaviour).
+ * Needs the viewer on :4799 over <scratch>/home and the empty-home viewer on the next port
+ * (see README.md). Writes shots/*.png, shots/audit.json (per-screen measurements),
+ * shots/dialogs.json (Escape behaviour) and shots/failures.json (steps that threw) — which
+ * analyze.py turns into the STANDARDS gate.
  */
 import { createRequire } from "node:module";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -155,6 +157,10 @@ const AUDIT = () => {
     if (!vis(e) || !inView(e)) continue;
     const r = e.getBoundingClientRect();
     if (e.tagName === "INPUT" && (e.type === "hidden")) continue;
+    // a canvas the operator zoomed OUT ("Show the whole graph") shrinks its controls with it, as
+    // browser zoom would: the target rule is judged at 100%, where every card and caption is ≥24px
+    const flow = e.closest(".react-flow__viewport");
+    if (flow && new DOMMatrixReadOnly(getComputedStyle(flow).transform).a < 0.999) continue;
     if (r.width < 24 || r.height < 24) small.push({ el: path(e), w: Math.round(r.width), h: Math.round(r.height), text: txt(e).slice(0, 40) });
   }
 

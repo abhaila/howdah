@@ -77,6 +77,8 @@ function ContextList({ entries, selected, onPick }: { entries: RunDetail["contex
           {entries.map((e) => {
             const last = e.writes.at(-1);
             const value = preview(e);
+            // an input no step has written since is the operator's: said in words, not as a step id
+            const given = !last && e.input === true;
             const writer = last ? `${last.node}@${last.visit}` : e.declared_writers.join(", ");
             return (
               <Row
@@ -90,7 +92,8 @@ function ContextList({ entries, selected, onPick }: { entries: RunDetail["contex
                 <Truncate className={value.quiet ? "text-sm text-faint" : "text-sm text-muted-foreground"}>{value.text}</Truncate>
                 <span className="ctx-scope text-xs text-muted-foreground">{e.scope ?? ""}</span>
                 <span className="ctx-writer flex min-w-0">
-                  {writer ? <Truncate mono middle={8} className="text-xs text-muted-foreground">{writer}</Truncate> : <span className="text-xs text-faint">—</span>}
+                  {given ? <span className="text-xs text-muted-foreground">you, at launch</span>
+                    : writer ? <Truncate mono middle={8} className="text-xs text-muted-foreground">{writer}</Truncate> : <span className="text-xs text-faint">—</span>}
                 </span>
               </Row>
             );
@@ -103,7 +106,8 @@ function ContextList({ entries, selected, onPick }: { entries: RunDetail["contex
 
 /** Story 10: one key — its value, who wrote it in what order, and which prompts read it. */
 export function ContextDetail({ entry }: { entry: Entry }) {
-  const writes = entry.written ? `${entry.writes.length} write${entry.writes.length === 1 ? "" : "s"}` : "not written";
+  const given = entry.input === true && entry.writes.length === 0;
+  const writes = given ? "given at launch" : entry.written ? `${entry.writes.length} write${entry.writes.length === 1 ? "" : "s"}` : "not written";
   return (
     <DetailPanel
       label={`Context key ${entry.key}`}
@@ -133,7 +137,7 @@ export function ContextDetail({ entry }: { entry: Entry }) {
 
       <SectionLabel as="h3" className="mt-2">Write history</SectionLabel>
       {entry.writes.length === 0
-        ? <p className={NOTE}>No writes yet.</p>
+        ? <p className={NOTE}>{given ? "You gave this when the run was launched. No step has written it since." : "No writes yet."}</p>
         : (
           <ul className="m-0 flex list-none flex-col p-0">
             {entry.writes.map((w, i) => (
