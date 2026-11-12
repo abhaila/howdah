@@ -195,6 +195,25 @@ describe("claude executor over the fake wire", () => {
     expect(draft.writes).toEqual({ doc_summary: "fake doc_summary" });
   }, 20000);
 
+  // Live failure (implement-ticket-deep-review-mwc18kso): the repair turn answered with valid
+  // outputs, then claude sent a second, empty result, and the empty text replaced the outputs.
+  test("an empty result after the repaired one does not erase its outputs", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "howdah-repair-empty-"));
+    const engine = engineWith(
+      { FAKE_CLAUDE_ASK: "0", FAKE_CLAUDE_DROP_OUTPUTS: "1", FAKE_CLAUDE_TRAILING_EMPTY_RESULT: "1", FAKE_CLAUDE_VERDICT: "pass" },
+      join(dir, "attn"),
+      dir,
+    );
+    const result = await engine.start({ goal: "repair me" }).finally(() => {
+      delete process.env.FAKE_CLAUDE_DROP_OUTPUTS;
+      delete process.env.FAKE_CLAUDE_TRAILING_EMPTY_RESULT;
+    });
+    expect(result).toEqual({ state: "finished", outcome: "success" });
+    const draft: any = engine.log.read().find((e: any) => e.type === "node-finished" && e.node === "draft");
+    expect(draft.status).toBe("succeeded");
+    expect(draft.writes).toEqual({ doc_summary: "fake doc_summary" });
+  }, 20000);
+
   test("the repair is asked once per attempt, not looped", () => {
     expect(buildRepairInstruction(["a", "b"])).toContain('{"outputs": {"a": <value>, "b": <value>}}');
     expect(buildRepairInstruction(["a"])).toContain("Do not redo any work");

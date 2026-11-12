@@ -473,7 +473,9 @@ export function claudeExecutor(opts: ClaudeExecutorOpts): Executor {
                 : ev.usage;
               if (typeof ev.usage?.cost_usd === "number") costSoFar = ev.usage.cost_usd;
               log.append({ type: "turn-finalized", node: nodeId, visit, turn, usage });
-              resultText = ev.result_text ?? accumulated;
+              // a result with no text never replaces one that had some: claude can send a second,
+              // empty result straight after the real one, and it wiped a valid outputs contract
+              resultText = ev.result_text?.trim() ? ev.result_text : (resultText ?? accumulated);
               turnError = ev.error;
               if (ev.context_exceeded) contextExceeded = true;
               turnEnded = true;

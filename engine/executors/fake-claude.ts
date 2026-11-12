@@ -406,6 +406,9 @@ if (process.env.FAKE_CLAUDE_DROP_OUTPUTS === "1" && keys.length) {
   if (process.env.FAKE_CAPTURE) appendFileSync(process.env.FAKE_CAPTURE, JSON.stringify(repairText) + "\n");
   const repaired = Object.fromEntries(demandedKeys(repairText).map((k) => [k, k in outputs ? outputs[k] : fakeValue(k)]));
   emitResult(`All done.\n{"outputs": ${JSON.stringify(repaired)}}`);
+  // FAKE_CLAUDE_TRAILING_EMPTY_RESULT=1: a second, empty result straight after the repaired one,
+  // as claude 2.1.322 sent on a live repair turn (implement-ticket-deep-review-mwc18kso)
+  if (process.env.FAKE_CLAUDE_TRAILING_EMPTY_RESULT === "1") emitResult("");
 } else {
   emitResult(`All done.\n{"outputs": ${JSON.stringify(outputs)}}`);
   /**
