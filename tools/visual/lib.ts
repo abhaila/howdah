@@ -19,7 +19,7 @@ export const ROOT = join(SCRATCH, "repo"); // a private copy of the repo: the se
 export const WORK = join(SCRATCH, "work"); // the demo workspaces (git repos)
 export const RUNS = join(HOME, "runs");
 export const ATTENTION = join(HOME, "attention");
-export const PORT = 4799;
+export const PORT = Number(process.env.HOWDAH_VISUAL_PORT ?? 4799);
 
 export type Step =
   | { t: "text"; s: string }

@@ -18,7 +18,7 @@ import { tmpdir } from "node:os";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const OUT = join(process.env.HOWDAH_VISUAL_OUT ?? join(tmpdir(), "howdah-visual"), "shots");
 mkdirSync(OUT, { recursive: true });
-const BASE = process.env.HOWDAH_BASE ?? "http://localhost:4799";
+const BASE = process.env.HOWDAH_BASE ?? `http://localhost:${process.env.HOWDAH_VISUAL_PORT ?? 4799}`;
 const only = process.argv[2];
 /** STEPS=<regex>: run only the steps whose name matches (each such step must start with its own `go`) */
 const stepRe = process.env.STEPS ? new RegExp(process.env.STEPS) : null;
