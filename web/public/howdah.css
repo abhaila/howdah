@@ -867,5 +867,3 @@ main { position: relative; flex: 1; min-width: 0; min-height: 0; overflow: hidde
 .plan-route { line-height: 1.4; }
 .report-pane { flex: 1 1 0; min-height: 0; min-width: 0; display: flex; flex-direction: column; }
 .report-frame { flex: 1 1 0; min-height: 0; width: 100%; border: 0; background: var(--bg); }
-/* focus inside the frame is focus the viewer cannot draw: the frame itself wears the ring */
-.report-frame:focus { outline: 2px solid var(--ring); outline-offset: -2px; }
