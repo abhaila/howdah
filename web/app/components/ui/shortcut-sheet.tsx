@@ -75,7 +75,7 @@ export function ShortcutSheet({ open, onClose }: { open: boolean; onClose: () =>
             label="Single-key shortcuts"
           />
           {/* takes the opening focus, so the sheet does not open with a ring on its one setting */}
-          <Button variant="outline" size="sm" autoFocus onClick={onClose}>Done</Button>
+          <Button variant="outline" size="sm" data-autofocus onClick={onClose}>Done</Button>
         </div>
         <p className="m-0 mt-1 text-sm text-muted-foreground">
           Keys that work without ⌘ or Ctrl, like <Kbd>C</Kbd> and <Kbd>G</Kbd> <Kbd>R</Kbd>. They never fire while you are typing. Turn them off if

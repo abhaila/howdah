@@ -25,7 +25,9 @@ import type { LogRow } from "../../derive";
 import type { LoggedEvent } from "../../../log/events";
 import { getJSON } from "@/lib/net";
 import { useBottomPinnedScroll } from "@/lib/hooks";
+import { useShortcuts } from "@/lib/shortcuts";
 import { Input } from "@/components/ui/input";
+import { Kbd } from "@/components/ui/kbd";
 import { Chip } from "@/components/ui/chip";
 import { Row } from "@/components/ui/row";
 import { Badge } from "@/components/ui/badge";
@@ -132,10 +134,26 @@ function LogList({ rows, shown, total, load, selected, kind, onKind, q, onQ, onP
   const follow = useBottomPinnedScroll(`${shown.length}:${shown.at(-1)?.seq ?? "empty"}:${kind}:${q}`);
   const keys = useListKeys({ ids: shown.map((r) => r.seq), selected, onSelect: onPick, name: "event" });
   const clear = useCallback(() => { onQ(""); onKind("all"); }, [onQ, onKind]);
+  // DESIGN.md Keyboard: "/" is the filter of whatever list is on screen. The Build tab's own
+  // "/" (its composer) is unmounted while this pane is up, so the key did nothing here.
+  const search = useRef<HTMLInputElement | null>(null);
+  useShortcuts([{ id: "run.logs.search", scope: "A run", label: "Search the events", keys: "/", run: () => { search.current?.focus(); search.current?.select(); } }]);
   return (
     <>
       <div className="flex shrink-0 flex-wrap items-center gap-1.5 border-b border-border px-2 py-2">
-        <Input className="h-7 min-w-[140px] max-w-[260px] flex-1" aria-label="Search events" placeholder="Search events…" value={q} onChange={(e) => onQ(e.target.value)} />
+        <span className="relative flex min-w-[140px] max-w-[260px] flex-1">
+          <Input
+            ref={search}
+            className="h-7 w-full pr-8"
+            aria-label="Search events"
+            placeholder="Search events…"
+            value={q}
+            onChange={(e) => onQ(e.target.value)}
+            // Esc clears what was typed first, then lets go of the field — the Runs filter's rule
+            onKeyDown={(e) => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); if (q) onQ(""); else e.currentTarget.blur(); } }}
+          />
+          {q === "" && <Kbd keys="/" decorative className="pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2" />}
+        </span>
         <div className="flex flex-wrap items-center gap-1" role="group" aria-label="Filter by kind">
           {KINDS.map((k) => <Chip key={k} on={kind === k} onClick={() => onKind(k)}>{KIND_LABEL[k]}</Chip>)}
         </div>

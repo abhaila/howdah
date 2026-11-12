@@ -91,8 +91,15 @@ export function Dialog({ open, onClose, title, description, children, alert = fa
     if (!el) return;
     // happy-dom (and any browser predating <dialog>) has no showModal; the element still
     // renders, so a test sees the content and a human sees a non-modal panel — never nothing
-    if (open) el.showModal?.();
-    else el.close?.();
+    if (open) {
+      el.showModal?.();
+      // showModal() focuses the FIRST focusable thing inside, and React's `autoFocus` cannot
+      // overrule it: React focuses at mount, while the dialog is still closed and nothing in
+      // it can take focus. So the control a dialog wants focused says so with
+      // `data-autofocus`, and is focused here, after the platform has made its own choice —
+      // or the shortcut sheet opens with its ring on a setting, one Space from switching it off.
+      el.querySelector<HTMLElement>("[data-autofocus]")?.focus();
+    } else el.close?.();
   }, [open]);
 
   const close = useCallback(() => onClose(), [onClose]);
@@ -126,7 +133,7 @@ export function Dialog({ open, onClose, title, description, children, alert = fa
 
 /**
  * The destructive-confirmation shape, so no call site hand-rolls the button pair. Cancel
- * carries `autoFocus`: the default answer to "really?" is no.
+ * carries `data-autofocus`: the default answer to "really?" is no.
  */
 export function AlertDialog({ open, onClose, onConfirm, title, description, confirmLabel, cancelLabel = "Cancel", busy = false }: {
   open: boolean;
@@ -141,7 +148,7 @@ export function AlertDialog({ open, onClose, onConfirm, title, description, conf
   return (
     <Dialog alert open={open} onClose={onClose} title={title} description={description}>
       <div className="flex justify-end gap-2">
-        <Button variant="outline" size="sm" autoFocus disabled={busy} onClick={onClose}>{cancelLabel}</Button>
+        <Button variant="outline" size="sm" data-autofocus disabled={busy} onClick={onClose}>{cancelLabel}</Button>
         <Button variant="destructive" size="sm" disabled={busy} onClick={onConfirm}>{confirmLabel}</Button>
       </div>
     </Dialog>

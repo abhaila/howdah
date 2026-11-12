@@ -81,10 +81,13 @@ Each has a check that fails the build or the loop, so it cannot regress quietly.
 
 | Scope | Keys |
 |---|---|
-| Anywhere | ⌘K palette · `?` shortcuts · `G` then `R` `N` `G` `P` `S` go to a screen · `C` new run · `[` sidebar |
+| Anywhere | ⌘K palette · `?` shortcuts · `G` then `R` `N` `G` `P` `O` `S` go to a screen · `C` new run · `[` sidebar |
 | Lists | `J` `K` or arrows · Enter open · `/` filter |
-| A run | `1`–`7` tabs · ⌘I details · `R` reply · `A` jump to the ask · `E` expand tool calls · `O` open in IDE |
+| A run | `1`–`7` tabs · ⌘I details · `R` reply · `A` jump to the ask · `/` ask about the run, or search on Logs · `E` expand tool calls · `O` open in IDE · `.` more |
+| Forms | ⌘S save · ⌘↵ launch |
 | Layers | Esc closes the topmost |
+
+`DESIGN.md` holds the authoritative table; this one is the plan's copy of it.
 
 Single-key shortcuts are ignored while a text field has focus and can be turned off in
 Settings (WCAG 2.1.4).
@@ -209,9 +212,11 @@ Still not produced, so not judged: a real desktop notification (headless Chromiu
 permission); a codex `request_user_input` question and any cursor or opencode transcript; the
 `tools-unsupported`, `max-steps` and `approval-missing` parks; a harness fallback hop
 mid-run; a parallel step with a branch waiting on a question while its siblings stream; the
-Settings GitHub picker with `gh` logged in. The quick-task graph's own description reads
-"TODO: one line on what this graph does" — it is in `graphs/quick-task.ts`, outside this
-pass, and shows on the Graphs list and New run.
+Settings GitHub picker with `gh` logged in. The quick-task graph's own description is still
+the scaffold's "TODO: one line on what this graph does" in `graphs/quick-task.ts`: the string
+is part of the shape pinned in `graphs/fixtures/pre-spec-shapes.json`, so it was left alone.
+The viewer no longer prints a scaffold placeholder (`graphDescription`, `lib/format.ts`): the
+Graphs list says "No description yet." and New run says nothing.
 
 ## Loop log
 

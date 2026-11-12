@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import type { RunBoardRow } from "../board";
-import { RunsList, groupRuns, waitingNotes } from "./screens/runs";
+import { RunsList, groupCount, groupRuns, waitingNotes } from "./screens/runs";
 import { matchesFilter, prChip, runAge, runLine } from "./lib/board";
 import { installShortcuts, resetShortcutsForTest } from "./lib/shortcuts";
 
@@ -210,6 +210,8 @@ describe("the row's words (lib/board.ts)", () => {
     expect(prChip(row({ id: "a", status: "running", pr: { url: "u", state: "OPEN" } }))).toBe("PR open");
     expect(prChip(row({ id: "a", status: "failed-terminal", pr: { url: "u", state: "CLOSED" } }))).toBe("PR closed");
     expect(prChip(row({ id: "a", status: "done" }))).toBeNull();
+    // the forge's enum is not a word: the chip read "PR changes_required"
+    expect(prChip(row({ id: "a", status: "needs-input", pr: { url: "u", state: "CHANGES_REQUIRED" as never } }))).toBe("PR changes required");
   });
 
   test("the age column means waiting, running or finished — and says which", () => {
@@ -294,5 +296,25 @@ describe("the list's keyboard (HOW-68: J/K move, Enter opens, / filters)", () =>
     });
     await act(async () => { await new Promise((r) => setTimeout(r, 30)); });
     expect(JSON.parse(sessionStorage.getItem("howdah-asks-seen") ?? "[]")).toContain("asking");
+  });
+});
+
+describe("HOW-68 sign-off: the group count and the rail's badge cannot read as a contradiction", () => {
+  const rows = (...statuses: RunBoardRow["status"][]) => statuses.map((status, i) => row({ id: `r${i}`, status }));
+  test("only waiting runs: the bare number, which is the rail's number", () => {
+    expect(groupCount("needs-you", rows("needs-input", "needs-input"))).toBe(2);
+  });
+  test("waiting runs beside stopped ones: the count says which is which", () => {
+    expect(groupCount("needs-you", rows("needs-input", "needs-input", "harness-dead", "failed-recoverable")))
+      .toBe("4 · 2 waiting on you, 2 to resume or retry");
+  });
+  test("only stopped runs, and every other group: the bare number", () => {
+    expect(groupCount("needs-you", rows("harness-dead"))).toBe(1);
+    expect(groupCount("running", rows("running", "waiting"))).toBe(2);
+  });
+  test("a run that produced output this second is active NOW, not \"0s ago\"", () => {
+    const now = Date.parse("2026-11-12T12:00:00Z");
+    const live = row({ id: "a", status: "running", last_activity_at: "2026-11-12T11:59:59Z" });
+    expect(runLine(live, now).parts.map((p) => p.value).join(" ")).toContain("active now");
   });
 });

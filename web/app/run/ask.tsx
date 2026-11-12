@@ -535,7 +535,7 @@ export function AskQuestionCard({ runId, ask, questions, onResolved }: {
         </QuestionnaireActions>
       </Questionnaire>
       {answers.length === 0 && state === "idle" && (
-        <span className="send-state">Pick an option with its number, or type an answer. <Kbd keys="enter" /> moves on.</span>
+        <span className="send-state"><Kbd keys="a" /> brings you here. Then pick an option with its number, or type an answer. <Kbd keys="enter" /> moves on.</span>
       )}
       {state === "failed" && (
         <span className="send-state" role="alert">

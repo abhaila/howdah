@@ -40,7 +40,7 @@ import { STEP_KIND_MIME, applyNodeChangesToDraft, frameOf, specToFlow } from "./
 import { installShortcuts, allShortcuts, isMac, resetShortcutsForTest } from "./lib/shortcuts";
 import { StepFields, choiceSentence, sayChoices } from "./builder/step-form";
 import { StepRoutes } from "./builder/branching";
-import { ProblemText } from "./builder/problem";
+import { ProblemText, plainProblem } from "./builder/problem";
 import { FieldsPane } from "./builder/fields";
 import { freeSpotNear } from "./lib/layout";
 import { ToastProvider } from "./components/ui/toast";
@@ -2723,5 +2723,26 @@ describe("below 1100px the panel is a drawer, so the canvas keeps its width (HOW
     const el = await mount();
     expect(panel(el)).not.toBeNull();
     expect(el.textContent).not.toContain("Give an agent instructions");
+  });
+});
+
+describe("HOW-68 sign-off: what the builder says and where a clicked step lands", () => {
+  test("a refusal in a toast carries no markdown markers", () => {
+    // the 422 after a refused save printed `**Reproduce it** compares \`goal\` with nothing.`
+    expect(plainProblem("**Reproduce it** compares `goal` with nothing. Type a value."))
+      .toBe("Reproduce it compares goal with nothing. Type a value.");
+    expect(plainProblem("an unmatched ** stays as typed")).toBe("an unmatched ** stays as typed");
+  });
+
+  test("a clicked step never lands close enough to wear a neighbour's caption", () => {
+    // two cards one pitch apart, as the Blank preset lays them out, and a click aimed between them
+    const nodes = [{ position: { x: 40, y: 40 } }, { position: { x: 100, y: 208 } }] as unknown as NodeSpec[];
+    const spot = freeSpotNear(nodes, { x: 70, y: 120 })!;
+    for (const n of nodes) {
+      const q = n.position!;
+      expect(Math.abs(q.x - spot.x) >= 244 || Math.abs(q.y - spot.y) >= 136, JSON.stringify({ spot, q })).toBe(true);
+    }
+    // and a spot that is already clear is left exactly where it was asked for
+    expect(freeSpotNear(nodes, { x: 900, y: 900 })).toEqual({ x: 900, y: 900 });
   });
 });

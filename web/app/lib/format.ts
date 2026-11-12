@@ -74,3 +74,13 @@ export function fmtValue(v: unknown): string {
 export function liveDuration(row: Pick<RunDetail["timeline"][number], "duration_ms" | "started_at">, now: number): number {
   return row.duration_ms ?? Math.max(0, now - new Date(row.started_at).getTime());
 }
+
+/**
+ * A graph's one-line description, or null when it has none worth printing. `new-graph` scaffolds
+ * every graph with a placeholder ("TODO: one line on what this graph does") that nobody is made
+ * to replace, and a list that prints it is showing the operator a note to the author.
+ */
+export function graphDescription(description: string | null | undefined): string | null {
+  const d = (description ?? "").trim();
+  return d === "" || /^TODO\b/i.test(d) ? null : d;
+}

@@ -90,29 +90,48 @@ export function autoLayout(spec: GraphSpec): GraphSpec {
  *  The width is the canvas card's (builder/canvas.tsx NODE_WIDTH); the height is a rough one,
  *  because a titled step has an id line and React Flow measures what it renders. */
 const CARD: Point = { x: 220, y: 72 };
-/** How far a crowded-out step steps aside. The y is a whole card, so one already-placed step
- *  can rule out at most ONE candidate — which is what makes the search below terminate with a
- *  free spot rather than merely terminate. */
-const CASCADE: Point = { x: 48, y: 80 };
+/** The room two cards need between them: beside each other, a gutter; one above the other, a
+ *  wire with its caption ("Otherwise", `goal is set`) — a caption is drawn IN that gap, so a
+ *  card dropped closer than this ends up wearing its neighbour's caption. Both stay under the
+ *  canvas pitch, so cards laid out by `autoLayout` never count as crowding each other. */
+const ROOM: Point = { x: CARD.x + 24, y: CARD.y + 64 };
+/** How far a crowded-out step steps aside: just past the room, so one already-placed step can
+ *  rule out at most ONE candidate in a row or a column — which is what makes the search below
+ *  end on a free spot rather than merely end. */
+const ASIDE: Point = { x: ROOM.x + 4, y: ROOM.y + 4 };
 
 /**
- * `at`, unless a step is already sitting there — then the next clear spot down-and-right.
+ * `at`, unless a step is already sitting there or close enough to share a wire's caption —
+ * then the nearest clear spot around it.
  *
  * Two palette clicks in a row must not stack two cards on the same pixel, which is the failure
- * mode "always the centre" has. Deliberately NOT used by the DROP path: a drop is where the
- * operator put it, and moving it is a lie about a direct-manipulation gesture.
+ * mode "always the centre" has; and "half a card away" was not enough either: three steps added
+ * from the keyboard landed 8px apart, each under the caption of the wire above it. Deliberately
+ * NOT used by the DROP path: a drop is where the operator put it, and moving it is a lie about
+ * a direct-manipulation gesture.
  *
  * `undefined` in, `undefined` out — there is no spot near nowhere.
  */
 export function freeSpotNear(nodes: NodeSpec[], at: Point | undefined): Point | undefined {
   if (!at) return undefined;
   const placed = nodes.map((n) => n.position).filter((p): p is Point => !!p);
-  const clear = (p: Point) =>
-    !placed.some((q) => Math.abs(q.x - p.x) < CARD.x / 2 && Math.abs(q.y - p.y) < CARD.y / 2);
-  let spot = at;
-  for (let i = 1; i <= placed.length && !clear(spot); i++)
-    spot = { x: at.x + i * CASCADE.x, y: at.y + i * CASCADE.y };
-  return spot;
+  const clear = (p: Point) => !placed.some((q) => Math.abs(q.x - p.x) < ROOM.x && Math.abs(q.y - p.y) < ROOM.y);
+  if (clear(at)) return at;
+  // The nearest clear spot, one step out at a time: below first (a graph reads downwards), then
+  // either side, then above. `at` is the middle of what is on screen, so the first ring is in
+  // view on any pane a builder is usable in — "one more step to the right" alone put the
+  // second and third steps under the panel beside the canvas.
+  for (let i = 1; i <= placed.length + 1; i++) {
+    const ring: Point[] = [
+      { x: at.x, y: at.y + i * ASIDE.y },
+      { x: at.x + i * ASIDE.x, y: at.y },
+      { x: at.x - i * ASIDE.x, y: at.y },
+      { x: at.x, y: at.y - i * ASIDE.y },
+    ];
+    const free = ring.find(clear);
+    if (free) return free;
+  }
+  return { x: at.x, y: at.y + (placed.length + 1) * ASIDE.y };
 }
 
 /** Where a step with no position of its own goes — below everything, so nothing is covered. */

@@ -42,6 +42,7 @@ import { navigate } from "@/lib/nav";
 import { useTypedText } from "@/lib/hooks";
 import { useListNav } from "@/lib/list-nav";
 import { getJSON } from "@/lib/net";
+import { graphDescription } from "@/lib/format";
 import { GraphDag, useGraphShape, type GraphShapeDto, type AgentConfigDto } from "../graph-dag";
 import { modelFitsHarness } from "../../../core/graph";
 import { DRAFT_GRAPH } from "../../../core/catalog";
@@ -300,7 +301,7 @@ export function GraphTuner({ shape, onSaved }: { shape: GraphShapeDto; onSaved: 
       setTimeout(() => setState("idle"), 1500);
     } catch (e) {
       setState("failed");
-      toast(e instanceof Error ? e.message : "could not save the tuning", "error");
+      toast(e instanceof Error ? e.message : "Could not save the tuning", "error");
     }
   };
 
@@ -448,7 +449,7 @@ export function GraphSource({ name, onSaved }: { name: string; onSaved: () => vo
         body: JSON.stringify({ source }),
       });
       const body = (await r.json().catch(() => ({}))) as { error?: string };
-      if (!r.ok) { setError(body.error ?? "save refused"); setState("idle"); toast(body.error ?? "save refused", "error"); return; }
+      if (!r.ok) { setError(body.error ?? "The save was refused."); setState("idle"); toast(body.error ?? "The save was refused.", "error"); return; }
       setDirty(false); setState("saved");
       toast(`${name}.ts saved and validated`);
       onSaved();
@@ -523,7 +524,7 @@ function GraphRow({ g, selected, onSelect }: { g: GraphInfo; selected: boolean; 
         <Badge variant="outline">{g.kind === "repo" ? <GitBranch aria-hidden /> : <FolderGit2 aria-hidden />}{g.kind}</Badge>
       </span>
       <span className="flex min-w-0 items-baseline gap-2 text-xs text-muted-foreground">
-        <Truncate className="flex-1">{g.description || "No description."}</Truncate>
+        <Truncate className="flex-1">{graphDescription(g.description) ?? "No description yet."}</Truncate>
         {g.steps !== undefined && <span className="shrink-0 tabular-nums">{g.steps} step{g.steps === 1 ? "" : "s"}</span>}
       </span>
     </Row>
@@ -591,7 +592,7 @@ export function GraphsList() {
           {current && <Badge variant="outline">{current.source === "local" ? (current.builder ? "built here" : "local") : "built in"}</Badge>}
           {current && <Badge variant="outline">{current.kind === "repo" ? <GitBranch aria-hidden /> : <FolderGit2 aria-hidden />}{current.kind}</Badge>}
         </div>
-        {shape.description && <p data-slot="graph-description" className="m-0 max-w-[72ch] text-body leading-normal text-muted-foreground">{shape.description}</p>}
+        {graphDescription(shape.description) && <p data-slot="graph-description" className="m-0 max-w-[72ch] text-body leading-normal text-muted-foreground">{graphDescription(shape.description)}</p>}
         {current?.launched_by && (
           <Hint>
             Started by <code className={CODE}>{current.launched_by}</code>, not from New run: it launches this graph for each approved

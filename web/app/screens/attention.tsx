@@ -156,9 +156,12 @@ export function AttentionInbox() {
                   <span data-col="step" className="flex min-w-0">{step !== null && <Truncate mono middle={14} className="text-code text-muted-foreground">{step}</Truncate>}</span>
                   {/* the wait, written the way the Runs list writes it ("19h 06m"): under a heading that
                       already says "Waiting on you", the server's "waiting …" said the word 21 times */}
-                  <Tooltip side="left" content={`Waiting on you since ${fmtWhen(item.raised_at)}`}>
-                    <span data-col="waited" className="whitespace-nowrap text-right tabular-nums text-muted-foreground">{waitedColumn(item.waited)}</span>
-                  </Tooltip>
+                  {/* the CELL is right-aligned and the tooltip sits inside it, as on the Runs list: with the
+                      tooltip outside, its wrapper was the grid cell and the number hung at the cell's left,
+                      40px short of the row's edge and of the "finished … ago" column below it */}
+                  <span data-col="waited" className="whitespace-nowrap text-right tabular-nums text-muted-foreground">
+                    <Tooltip side="left" content={`Waiting on you since ${fmtWhen(item.raised_at)}`}><span>{waitedColumn(item.waited)}</span></Tooltip>
+                  </span>
                 </Row>
               ))}
             </section>

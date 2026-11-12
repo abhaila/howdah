@@ -43,6 +43,11 @@ export function problemProse(message: string): ReactNode[] {
   return out;
 }
 
+/** The same sentence where nothing can be drawn — a toast, an `aria-label` — with the markers taken out. */
+export function plainProblem(message: string): string {
+  return message.replace(/\*\*([^*]+)\*\*|`([^`]+)`/g, (_m, bold: string | undefined, code: string | undefined) => bold ?? code ?? "");
+}
+
 /** The message of one problem, in the class its severity earns. */
 export function ProblemText({ message }: { message: string }) {
   return <>{problemProse(message)}</>;

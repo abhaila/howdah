@@ -86,12 +86,19 @@ export function AcceptanceCard({ runId, detail, onChanged }: { runId: string; de
     }).catch(() => null);
     const body = (await res?.json().catch(() => null)) as { error?: string; resumed?: boolean; waived?: string[] } | null;
     setBusy(false);
-    if (!res?.ok) { setError(body?.error ?? "could not waive"); return; }
+    if (!res?.ok) { setError(body?.error ?? "Could not waive it."); return; }
     const what = all ? `${body?.waived?.length ?? 0} unprovable criteria` : `"${id}"`;
-    toast(body?.resumed ? `waived ${what} — every criterion is settled, resuming` : `waived ${what}`);
+    toast(body?.resumed ? `Waived ${what} — every criterion is settled, resuming` : `Waived ${what}`);
     setWaiving(null);
     setReason("");
     onChanged();
+  };
+
+  // the reason field is a one-line form: it takes focus when it opens, Enter sends it and Esc
+  // puts it away — it used to open unfocused, with a button as the only way to do either
+  const reasonKeys = (id: string) => (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter" && reason.trim() && !busy) { e.preventDefault(); void waive(id); }
+    if (e.key === "Escape") { e.preventDefault(); setWaiving(null); setError(null); }
   };
 
   return (
@@ -119,7 +126,7 @@ export function AcceptanceCard({ runId, detail, onChanged }: { runId: string; de
           <span>{acc.unprovable} of the unmet criteria can never be proved in this run — say why once to settle them all.</span>
           {waiving === ALL ? (
             <span className="ac-waive">
-              <Input aria-label="why the unprovable criteria are accepted without evidence" placeholder="Why these are accepted without evidence" value={reason} onChange={(e) => setReason(e.target.value)} />
+              <Input autoFocus aria-label="why the unprovable criteria are accepted without evidence" placeholder="Why these are accepted without evidence" value={reason} onChange={(e) => setReason(e.target.value)} onKeyDown={reasonKeys(ALL)} />
               <Button size="sm" variant="destructive-outline" disabled={busy || !reason.trim()} onClick={() => waive(ALL)}>Waive {acc.unprovable}</Button>
               <Button size="sm" variant="ghost" disabled={busy} onClick={() => { setWaiving(null); setError(null); }}>Cancel</Button>
             </span>
@@ -149,7 +156,7 @@ export function AcceptanceCard({ runId, detail, onChanged }: { runId: string; de
                 {/* HOW-72: only a run parked at a gate has one to open — anywhere else a waiver changes nothing */}
                 {state === "fail" && acc.waivable && (waiving === r.id ? (
                   <span className="ac-waive">
-                    <Input aria-label={`why ${r.id} is accepted without evidence`} placeholder="Why this is accepted without evidence" value={reason} onChange={(e) => setReason(e.target.value)} />
+                    <Input autoFocus aria-label={`why ${r.id} is accepted without evidence`} placeholder="Why this is accepted without evidence" value={reason} onChange={(e) => setReason(e.target.value)} onKeyDown={reasonKeys(r.id)} />
                     <Button size="sm" variant="destructive-outline" disabled={busy || !reason.trim()} onClick={() => waive(r.id)}>Waive</Button>
                     <Button size="sm" variant="ghost" disabled={busy} onClick={() => { setWaiving(null); setError(null); }}>Cancel</Button>
                   </span>

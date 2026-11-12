@@ -91,7 +91,7 @@ export function RunPlan({ runId, detail, onChanged }: { runId: string; detail: R
           body: JSON.stringify({ node: PLAN_NODE, message: planInstruction(mode, body) }),
         });
       if (!r.ok) throw new Error(((await r.json().catch(() => null)) as { error?: string } | null)?.error ?? "send failed");
-      toast(route.kind === "steer" ? `sent — ${route.node} reads it at its next tool call` : "sent — the plan is being revised, then the build continues from it");
+      toast(route.kind === "steer" ? `Sent — ${route.node} reads it at its next tool call` : "Sent — the plan is being revised, then the build continues from it");
       setText("");
       setMode("comment");
       setTimeout(onChanged, 300);

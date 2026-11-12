@@ -87,8 +87,9 @@ if (typeof window !== "undefined") window.addEventListener(SETTINGS_CHANGED, () 
  */
 export async function observeAsks(o: Observation): Promise<void> {
   const on = await chimeEnabled();
-  const news = decideNews(readSeen(), o);
+  const seen = readSeen();
+  const news = decideNews(seen, o);
   try { sessionStorage.setItem(SEEN_KEY, JSON.stringify(news.seen)); } catch { /* private window: nothing to remember */ }
-  if (on && news.fresh.length > 0) void new Audio("/chime.wav").play().catch(() => {});
+  if (decideRing(seen, o, on).ring) void new Audio("/chime.wav").play().catch(() => {});
   notifyRuns(news.fresh, o.info ?? {});
 }

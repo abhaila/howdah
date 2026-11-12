@@ -261,7 +261,8 @@ describe("aborting a run", () => {
     await act(async () => confirmButton(el)!.click());
     expect(el.querySelectorAll("dialog").length).toBe(0);
     expect(el.querySelectorAll(".field-error").length).toBe(0);
-    expect(el.querySelector('[aria-live="polite"]')!.textContent).toContain("abort accepted");
+    // HOW-68 sign-off: a toast is a sentence and starts with a capital
+    expect(el.querySelector('[aria-live="polite"]')!.textContent).toContain("Abort accepted");
   });
 });
 

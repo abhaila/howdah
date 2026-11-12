@@ -4,7 +4,7 @@
  * dated "11/12/2026, 10:11:37 AM" beside a history row dated "11/12/2026".
  */
 import { describe, expect, test } from "bun:test";
-import { fmtClock, fmtDay, fmtDur, fmtWait, fmtWhen } from "./format";
+import { fmtClock, fmtDay, fmtDur, fmtWait, fmtWhen, graphDescription } from "./format";
 
 describe("fmtDur", () => {
   test("never prints sixty seconds", () => {
@@ -39,4 +39,14 @@ describe("a moment is written one way", () => {
     expect(fmtDay(iso)).not.toMatch(/:/);
     expect(fmtClock(iso)).not.toMatch(/2026/);
   });
+});
+
+test("graphDescription never prints the scaffold's note to the author", () => {
+  // `new-graph` writes this line into every graph; the Graphs list and New run printed it
+  expect(graphDescription("TODO: one line on what this graph does")).toBeNull();
+  expect(graphDescription("  ")).toBeNull();
+  expect(graphDescription(undefined)).toBeNull();
+  expect(graphDescription("Deliver one ticket through a merged PR")).toBe("Deliver one ticket through a merged PR");
+  // a description that merely mentions a to-do is a description
+  expect(graphDescription("Sort the TODOs in a file")).toBe("Sort the TODOs in a file");
 });

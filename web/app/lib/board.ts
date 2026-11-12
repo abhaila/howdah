@@ -76,7 +76,8 @@ export function runLine(r: LineRow, now: number): RunLine {
     const { ageMs, quiet } = liveness(r.last_activity_at, now);
     const said = [
       r.current ? `${fmtAgo(now - new Date(r.current.since).getTime())} on this step` : "",
-      ageMs === null ? "" : quiet ? `no output for ${fmtAgo(ageMs)}` : `active ${fmtAgo(ageMs)} ago`,
+      // under five seconds is "now": "active 0s ago" is a number nobody needed
+      ageMs === null ? "" : quiet ? `no output for ${fmtAgo(ageMs)}` : ageMs < 5000 ? "active now" : `active ${fmtAgo(ageMs)} ago`,
       commits.replace(/^ · /, ""),
     ].filter(Boolean).join(" · ");
     return { parts: node ? [mono(node), ...(said ? [text(`· ${said}`)] : [])] : [text(said || "Starting")], quiet };
@@ -95,7 +96,8 @@ export function runLine(r: LineRow, now: number): RunLine {
 /** the PR chip's words — the state, unless the row's own text already said "Merged" */
 export function prChip(r: Pick<RunBoardRow, "status" | "pr">): string | null {
   if (!r.pr) return null;
-  return r.status === "done" && r.pr.state === "MERGED" ? "PR" : `PR ${r.pr.state.toLowerCase()}`;
+  // the forge's enum is `CHANGES_REQUIRED`; a chip is read, so it says "changes required"
+  return r.status === "done" && r.pr.state === "MERGED" ? "PR" : `PR ${r.pr.state.toLowerCase().replace(/_/g, " ")}`;
 }
 
 /**

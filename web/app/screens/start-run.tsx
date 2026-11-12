@@ -36,6 +36,7 @@ import { useEffect, useState } from "react";
 import { Check, ChevronDown, ChevronRight, Copy, Play } from "lucide-react";
 import type { GraphCatalog, GraphInfo, Workspaces } from "@/lib/types";
 import { getJSON } from "@/lib/net";
+import { graphDescription } from "@/lib/format";
 import { useShortcuts } from "@/lib/shortcuts";
 import { DRAFT_GRAPH } from "../../../core/catalog";
 import { draftLaunchRequest } from "../../../core/draft-launch";
@@ -124,7 +125,7 @@ export function StartRun() {
       });
       if (!r.ok) throw new Error((await r.json() as any).error ?? "launch failed");
       const { id } = (await r.json()) as { id: string };
-      toast(name.trim() ? `launched "${name.trim()}" as ${id}` : `launched ${graph} as ${id}`);
+      toast(name.trim() ? `Launched "${name.trim()}" as ${id}` : `Launched ${graph} as ${id}`);
       location.assign(`/run/${id}`);
     } catch (e) {
       const why = e instanceof Error ? e.message : String(e);
@@ -166,7 +167,7 @@ export function StartRun() {
             {graphs.map((g) => <option key={g.name} value={g.name}>{g.name}</option>)}
           </Select>
         </Label>
-        {selected ? <Hint>{selected.description}</Hint> : <Hint>A graph is the shape of the work: its steps, and what each hands to the next. <a className={LINK} href="/graphs">See what each one does</a>.</Hint>}
+        {selected ? graphDescription(selected.description) && <Hint>{graphDescription(selected.description)}</Hint> : <Hint>A graph is the shape of the work: its steps, and what each hands to the next. <a className={LINK} href="/graphs">See what each one does</a>.</Hint>}
         {selected && (
           <Label>
             Run name (optional)

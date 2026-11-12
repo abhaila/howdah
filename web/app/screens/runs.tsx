@@ -73,6 +73,21 @@ export function groupRuns(runs: RunBoardRow[], now: number): Array<{ key: BoardG
   return GROUPS.map((g) => ({ ...g, rows: runs.filter((r) => boardGroup(r, now) === g.key) })).filter((g) => g.rows.length > 0);
 }
 
+/**
+ * The number beside a group's label. "Needs you" holds two kinds of run: the ones WAITING ON
+ * YOU (amber; what the rail's badge and the Needs you screen count) and the ones that stopped
+ * and can be resumed or retried (a dead runner, a recoverable failure). A bare "24" under a
+ * rail that says "21" reads as one of the two being wrong, so when the group holds both the
+ * count says which is which. Neither number changes.
+ */
+export function groupCount(key: BoardGroup, rows: readonly Pick<RunBoardRow, "status">[]): string | number {
+  if (key !== "needs-you") return rows.length;
+  const waiting = rows.filter((r) => r.status === "needs-input").length;
+  const stopped = rows.length - waiting;
+  if (stopped === 0 || waiting === 0) return rows.length;
+  return `${rows.length} · ${waiting} waiting on you, ${stopped} to resume or retry`;
+}
+
 const money = (n: number) => (n >= 10 ? `$${n.toFixed(1)}` : `$${n.toFixed(2)}`);
 
 /**
@@ -239,7 +254,7 @@ export function RunsList() {
         <div ref={nav.ref} {...nav.containerProps} className="flex flex-col gap-5">
           {groups.map((g) => (
             <section key={g.key} data-group={g.key} aria-label={g.label} className="flex flex-col">
-              <SectionLabel as="h2" count={g.rows.length} className="border-b border-border px-2 pb-1.5">{g.label}</SectionLabel>
+              <SectionLabel as="h2" count={groupCount(g.key, g.rows)} className="border-b border-border px-2 pb-1.5">{g.label}</SectionLabel>
               {g.rows.map((r) => <RunRow key={r.id} r={r} now={now} selected={nav.selected === r.id} />)}
             </section>
           ))}

@@ -144,7 +144,7 @@ export function DocReader({ open, onClose, name, text }: { open: boolean; onClos
           {copied ? <Check aria-hidden /> : <Copy aria-hidden />}
           {copied ? "Copied" : "Copy markdown"}
         </Button>
-        <Button size="sm" autoFocus onClick={onClose}>Close</Button>
+        <Button size="sm" data-autofocus onClick={onClose}>Close</Button>
       </div>
       <Markdown className="doc-reader" text={text} />
     </Dialog>

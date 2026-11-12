@@ -250,7 +250,7 @@ export function Settings() {
   const removeWs = async (name: string) => {
     const r = await fetch("/api/workspaces", { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ name }) }).catch(() => null);
     setRemoving(null);
-    toast(r?.ok ? `${name} is no longer registered — its files are untouched` : `could not remove ${name}`, r?.ok ? "default" : "error");
+    toast(r?.ok ? `${name} is no longer registered — its files are untouched` : `Could not remove ${name}`, r?.ok ? "default" : "error");
     loadWs();
   };
   const [failed, setFailed] = useState(false);
@@ -265,7 +265,7 @@ export function Settings() {
     if (r?.ok) await getJSON<SettingsDto>("/api/settings").then(setS).catch(() => {});
     if (r?.ok) window.dispatchEvent(new Event(SETTINGS_CHANGED)); // the sound setting applies at once
     setSaving(false);
-    toast(r?.ok ? "settings saved" : "could not save settings", r?.ok ? "default" : "error");
+    toast(r?.ok ? "Settings saved" : "Could not save the settings", r?.ok ? "default" : "error");
   };
   useShortcuts([{ id: "settings.save", scope: "Settings", label: "Save settings", keys: "mod+s", disabled: !s, run: () => void save() }]);
   if (!s) return failed ? <Screen name="settings" title="Settings" width="form"><LoadError what="your settings" onRetry={() => void loadSettings()} /></Screen> : <ScreenLoading name="settings" title="Settings" label="Loading settings" rows={5} />;

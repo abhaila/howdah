@@ -125,9 +125,10 @@ One layer, on `@base-ui/react`, in `web/app/components/ui/`. Appearance lives in
 
 | Scope | Keys |
 |---|---|
-| Anywhere | `⌘K` command palette · `?` shortcuts · `G` then `R` `N` `G` `P` `S` go to a screen · `C` new run · `[` rail |
+| Anywhere | `⌘K` command palette · `?` shortcuts · `G` then `R` `N` `G` `P` `O` `S` go to a screen (`O` is Proposals) · `C` new run · `[` rail |
 | Lists | `J` `K` or arrows move · `Enter` open · `/` filter |
-| A run | `1`–`7` tabs · `⌘I` details · `R` reply · `A` jump to the ask · `E` expand tool calls · `O` open in IDE |
+| A run | `1`–`7` tabs · `⌘I` details · `R` reply · `A` jump to the ask (into a question's options, so its numbers pick one) · `/` ask about the run, or search on Logs · `E` expand tool calls · `O` open in IDE · `.` more actions |
+| Forms | `⌘S` save (Settings, the graph builder) · `⌘↵` launch a run |
 | Layers | `Esc` closes the topmost: menu, dialog, detail panel, drawer |
 
 Single-key shortcuts are ignored while a text field has focus and can be turned off in

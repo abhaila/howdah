@@ -153,7 +153,7 @@ export function RunControls({ runId, summary, onAction, softStoppable = false, s
         ? { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ node: softStopNode }) }
         : { method: "POST" });
       if (!r.ok) throw new Error(((await r.json().catch(() => null)) as any)?.error ?? `${verb} failed`);
-      toast(verb === "soft-stop" ? "stop sent — the agent stops at its next tool call" : `${verb} accepted — the runner is acting on it`);
+      toast(verb === "soft-stop" ? "Stop sent — the agent stops at its next tool call" : `${verb.charAt(0).toUpperCase()}${verb.slice(1)} accepted — the runner is acting on it`);
       setTimeout(onAction, 300);
     } catch (e) {
       const why = e instanceof Error ? e.message : String(e);
@@ -672,11 +672,11 @@ function RunFrame({ id, detail, tab, setTab, picked, setPicked, liveGit, now, re
 
   const openIde = useCallback(async () => {
     const r = await fetch(`/api/runs/${id}/open-ide`, { method: "POST" }).catch(() => null);
-    toast(r?.ok ? "opening the run's folder in your editor" : "could not open the editor", r?.ok ? "default" : "error");
+    toast(r?.ok ? "Opening the run's folder in your editor" : "Could not open the editor", r?.ok ? "default" : "error");
   }, [id, toast]);
   const openFolder = useCallback(async () => {
     const r = await fetch(`/api/runs/${id}/open-run-folder`, { method: "POST" }).catch(() => null);
-    toast(r?.ok ? "opening the run folder" : "could not open the run folder", r?.ok ? "default" : "error");
+    toast(r?.ok ? "Opening the run folder" : "Could not open the run folder", r?.ok ? "default" : "error");
   }, [id, toast]);
   const resumeCommand = detail.persistence ? `HOWDAH_HOME=${detail.persistence.home} bun cli/main.ts resume ${id}` : null;
   const copyResume = useCallback(async () => {
@@ -690,10 +690,19 @@ function RunFrame({ id, detail, tab, setTab, picked, setPicked, liveGit, now, re
     setTab("chat");
     setTimeout(then, 0);
   }, [setTab]);
+  // A QUESTION is answered with its number keys, and those are handled by the questionnaire's
+  // own form — so `A` has to land INSIDE it. Focus on the card around the form left `1`…`7`
+  // to the tab shortcuts: "A, then 2" switched to another tab instead of picking option 2.
+  // Focusing a choice does not choose it; the card is still what scrolls into view.
   const jumpToAsk = useCallback(() => inBuild(() => {
     const card = document.getElementById("needs-input");
-    card?.scrollIntoView({ block: "nearest" });
-    card?.focus({ preventScroll: true });
+    const choice = card?.querySelector<HTMLElement>("fieldset[data-active] input:not(:disabled)");
+    // a question taller than half the window is brought in from its TOP, so its text is what
+    // you see — "nearest" leaves a box taller than the view where it is, cut at the top
+    const question = choice?.closest<HTMLElement>("fieldset") ?? null;
+    if (question && question.getBoundingClientRect().height > window.innerHeight / 2) question.scrollIntoView({ block: "start" });
+    else card?.scrollIntoView({ block: "nearest" });
+    (choice ?? card)?.focus({ preventScroll: true });
   }), [inBuild]);
   const reply = useCallback(() => inBuild(() => {
     const field = document.querySelector<HTMLElement>("#needs-input textarea, #needs-input input[type='text']")

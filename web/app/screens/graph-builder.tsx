@@ -84,6 +84,7 @@ import {
 import { GraphCanvas, type Selection } from "../builder/canvas";
 import { Palette } from "../builder/palette";
 import { Properties, panelTitle } from "../builder/properties";
+import { plainProblem, problemProse } from "../builder/problem";
 import { Button } from "@/components/ui/button";
 import { Drawer } from "@/components/ui/drawer";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -296,8 +297,10 @@ export function GraphBuilder({ name, fromRun }: { name?: string; fromRun?: strin
       });
       const body = (await r.json().catch(() => ({}))) as { error?: string };
       if (!r.ok) {
-        setError(body.error ?? "the save was refused");
-        toast(body.error ?? "the save was refused", "error");
+        // the refusal is one of core's problem sentences, with its `**title**` and `` `key` ``
+        // markers: the banner draws them (problemProse); a toast is plain text, so they come out
+        setError(body.error ?? "The save was refused.");
+        toast(plainProblem(body.error ?? "The save was refused."), "error");
         return;
       }
       toast(`${draft.spec.name} saved — it is in the catalog and ready to launch`);
@@ -310,7 +313,7 @@ export function GraphBuilder({ name, fromRun }: { name?: string; fromRun?: strin
     } catch (e) {
       const why = e instanceof Error ? e.message : String(e);
       setError(why);
-      toast(why, "error");
+      toast(plainProblem(why), "error");
     } finally {
       setSaving(false);
     }
@@ -455,7 +458,7 @@ export function GraphBuilder({ name, fromRun }: { name?: string; fromRun?: strin
           Rather describe it? <a href={`/new?${new URLSearchParams({ graph: DRAFT_GRAPH })}`}>Draft a graph</a>
         </p>
       )}
-      {error && <div role="alert" className="field-error wrap-pre shrink-0 border-b border-border px-4 py-2">{error}</div>}
+      {error && <div role="alert" className="field-error wrap-pre shrink-0 border-b border-border px-4 py-2">{problemProse(error)}</div>}
 
       <ReactFlowProvider>
         <div className="flex min-h-0 flex-1">

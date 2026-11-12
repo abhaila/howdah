@@ -263,6 +263,21 @@ describe("answering posts exactly what the park can accept", () => {
   });
 });
 
+describe("HOW-68 sign-off: `A` lands inside the question, where its number keys are heard", () => {
+  test("the active question exposes a choice to focus — the selector the run view's `A` uses", () => {
+    // The questionnaire hears 1…9 on its own FORM. `A` used to focus the card around it, so
+    // "A, then 2" reached the run's tab shortcuts and switched tab instead of picking option 2.
+    // run/view.tsx `jumpToAsk` focuses this element; if the primitive stops marking its active
+    // item this fails here rather than silently falling back to the card.
+    const el = render(askingLog(ONE_QUESTION));
+    const choice = el.querySelector<HTMLInputElement>("#needs-input fieldset[data-active] input:not(:disabled)");
+    expect(choice).not.toBeNull();
+    expect(choice!.closest("form")).not.toBeNull();
+    expect(choice!.checked).toBe(false); // focusing it must not answer for the operator
+    expect(el.querySelector("#needs-input")!.textContent).toContain("brings you here");
+  });
+});
+
 describe("a payload the harness malformed falls back rather than crashing", () => {
   test("an unreadable question set draws the ordinary reply card", () => {
     // no `question` text: core/ask.ts refuses it, so ask_questions is null
@@ -319,7 +334,8 @@ describe("the run reads as one conversation", () => {
     const beats = msgs.find((m) => m.kind === "beats") as Extract<typeof msgs[number], { kind: "beats" }>;
     expect(beats.state).toBe("died");
     const el = render(streamingLog(), false);
-    expect(el.querySelector(".cv-unfinished")!.textContent).toContain("the process died inside this turn");
+    // HOW-68 sign-off: the notice is a sentence, so it starts with a capital like every other one
+    expect(el.querySelector(".cv-unfinished")!.textContent).toContain("The process died inside this turn");
   });
 
   test("HOW-46: the turn streaming on a live runner is working, not dead", () => {

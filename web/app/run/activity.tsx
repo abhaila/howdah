@@ -329,7 +329,7 @@ export function TurnNote({ state, lastActivityAt, className }: { state: TurnStat
     return (
       <div className={`act-note ${className ?? ""}`.trim()}>
         <TriangleAlert size={12} aria-hidden />
-        the process died inside this turn — what you see is what it had said
+        The process died inside this turn. What you see is what it had said.
       </div>
     );
   if (state === "live") return <LiveNote lastActivityAt={lastActivityAt} className={className} />;
