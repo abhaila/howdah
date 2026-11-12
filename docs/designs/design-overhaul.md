@@ -1,8 +1,7 @@
 # Design overhaul (HOW-68): the plan and the loop
 
-Status: **proposal, waiting on three decisions** (see "Open decisions"). Nothing in `DESIGN.md`
-or `tokens.css` changes until they are answered; `DESIGN.md` is then rewritten from this file
-and wins over it.
+Status: **agreed 2026-11-12; the loop is running.** `DESIGN.md` is now the authority and wins
+over this file; this file is the plan, the checklist and the log of the loop.
 
 - Vision and mockups: https://claude.ai/artifact/NktPftzTLnWvLQ7i5nxZ1m
 - Audit, with evidence for every claim below: `docs/designs/design-overhaul-audit.md`
@@ -41,8 +40,8 @@ gives its summary column 0px so rows run 900px tall; several controls are under 
 - **Type scale:** six sizes, 12 / 13 / 14 / 16 / 20 / 28. Nothing below 12px. No uppercase
   micro-labels.
 - **Fonts are bundled** (woff2 under `web/public/fonts/`), not fetched from Google.
-- **Colour:** neutral ground, amber for waiting-on-you only, one red for failure, one quiet
-  teal for running and focus. Light and dark are equals. Every text token clears 4.5:1.
+- **Colour:** amber for waiting-on-you only, one red for failure, one accent for what you
+  press and where you are. Light and dark are equals. Every text token clears 4.5:1.
 - **Status is a shape first**, as today.
 - **Motion** (animations.dev lessons): nothing keyboard-triggered or high-frequency animates;
   press scale 0.97; menus and tooltips open from their trigger in 150ms on
@@ -54,12 +53,13 @@ gives its summary column 0px so rows run 900px tall; several controls are under 
   KeyValue, ScrollPane. A gallery route (`/dev/components`) renders every primitive in every
   state and is what the harness shoots.
 
-## Open decisions
+## Decisions made by the operator
 
-1. **Typeface:** Atkinson Hyperlegible Next + Mono (recommended) or IBM Plex Sans + Mono.
-2. **Details as a drawer** (recommended): closed below 1280px, toggled with ⌘I, closed with Esc.
-3. **Asks rewritten for people** (recommended): a short summary per park kind, the engine's
-   message one click away. Touches copy for about twenty park kinds.
+1. **Typeface:** DM Sans + DM Mono, bundled.
+2. **Colour:** the Indigo scheme (blue-tinted neutrals, indigo accent, amber alarm).
+3. **Details is a drawer:** closed below 1280px, toggled with ⌘I, closed with Esc.
+4. **Asks are rewritten for people:** a short summary per park kind, the engine's message
+   one click away.
 
 ## Minimum standards
 
@@ -93,7 +93,7 @@ Settings (WCAG 2.1.4).
 
 **0. Audit** — done. 351 captures, inventory, defect list.
 
-**1. Agree the vision** — the artifact above. Blocked on the three open decisions.
+**1. Agree the vision** — done.
 
 **2. Foundations**, in this order, each its own commit:
 1. `PRODUCT.md` and the rewritten `DESIGN.md`.
@@ -138,8 +138,8 @@ Status: ☐ not started · ◐ in progress · ☑ passes.
 | | Item |
 |---|---|
 | ☑ | Sound: off by default, setting honoured, only for news (viewer and OS) |
-| ☐ | `PRODUCT.md`, `DESIGN.md` |
-| ☐ | Tokens, type scale, bundled fonts, contrast test |
+| ☑ | `PRODUCT.md`, `DESIGN.md` |
+| ☑ | Tokens, type scale, bundled fonts, contrast test (`web/app/tokens.test.ts`) |
 | ☐ | Primitives: Menu, Popover, CommandPalette, Drawer, Kbd, Truncate, Toolbar, KeyValue, ScrollPane |
 | ☐ | Existing primitives: targets ≥24px, focus ring everywhere, states complete |
 | ☐ | Shell: rail, palette, shortcuts, `?` sheet, 404 |
