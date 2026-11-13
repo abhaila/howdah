@@ -1,0 +1,23 @@
+cli/main.ts
+  s_205ba363533c4e::t_717d47b3613d85 42,524,526,643,657
+web/graphs.test.ts
+  s_205ba363533c4e::t_cc3d7011949bf6 15,363-374
+web/server.ts
+  s_205ba363533c4e::t_6d313709c7a638 1040,1080,1141,1276-1277,1282,1317-1318,1328
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "fa7c7afc83cd5e471d32b30f512616d1640c62b6",
+  "prompts": {},
+  "sessions": {
+    "s_205ba363533c4e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f655be41-237e-4491-84b0-061d37c59257",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "areeb.bhaila <areeb.bhaila@gmail.com>"
+    }
+  }
+}
