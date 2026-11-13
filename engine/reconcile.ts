@@ -301,9 +301,10 @@ export class Reconciler {
  * HOW-54: the git tree id of what is in the worktree right now — tracked edits and untracked,
  * non-ignored files included — or null when `cwd` is not a git work tree (or git fails).
  *
- * It compares the TREE, not HEAD, on purpose: a repair that only commits work already on disk,
- * makes an empty commit or rewords a message changes no file, and must not count as progress.
- * `fingerprint()` cannot answer that — it keys on HEAD, so a commit moves it.
+ * It compares the TREE, not HEAD, on purpose: an empty commit or a reworded message changes no
+ * file, and must not count as progress. `fingerprint()` cannot answer that — it keys on HEAD, so
+ * a commit moves it. Committing work already on disk IS progress (a review can ask for exactly
+ * that): `headTree` below tells it apart, because the committed tree moves while this one does not.
  *
  * Built with a THROWAWAY index (GIT_INDEX_FILE in a temp dir): `git add -A` + `git write-tree`
  * against it never touches the worktree's own index or takes its `index.lock`. The blobs it
@@ -324,4 +325,11 @@ export function worktreeTree(cwd: string | undefined): string | null {
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+}
+
+/** HOW-54: the tree HEAD commits (what is committed, not what is on disk), or null with no commit */
+export function headTree(cwd: string | undefined): string | null {
+  if (!cwd) return null;
+  const r = spawnSync("git", ["rev-parse", "--verify", "-q", "HEAD^{tree}"], { cwd, encoding: "utf8" });
+  return r.status === 0 && /^[0-9a-f]{40,64}$/.test(r.stdout.trim()) ? r.stdout.trim() : null;
 }

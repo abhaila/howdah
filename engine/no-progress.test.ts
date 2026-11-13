@@ -92,12 +92,26 @@ describe("a repair that changes nothing", () => {
     expect(visits(path, "repair")).toEqual([1, 2, 3]);
   });
 
-  test("a repair that only COMMITS work already on disk changed nothing — the tree, not HEAD, is compared", async () => {
-    const { engine } = setup((visit, cwd) => {
+  test("a repair that only COMMITS work already on disk made progress — a review can ask for exactly that", async () => {
+    const { engine, path } = setup((visit, cwd) => {
       if (visit === 1) writeFileSync(join(cwd, "feature.ts"), "export const g = 1;\n"); // real change, left uncommitted
       else { git(cwd, "add", "-A"); git(cwd, "commit", "-q", "-m", "commit what is there"); } // no file changes
     }, ["reject"]);
-    expect(await engine().start({ goal: "g" })).toMatchObject({ code: "no-progress", node: "repair" });
+    // visit 2 commits and goes on; visit 3 has nothing left to commit, and that parks
+    const res = await engine().start({ goal: "g" });
+    expect(res).toMatchObject({ code: "no-progress", node: "repair" });
+    expect((res as { reason: string }).reason).toStartWith("repair@3 changed nothing in the worktree since visit 2");
+    expect(visits(path, "repair")).toEqual([1, 2, 3]);
+  });
+
+  test("an EMPTY commit is still no progress — the committed tree did not move", async () => {
+    const { engine } = setup((visit, cwd) => {
+      if (visit === 1) { writeFileSync(join(cwd, "feature.ts"), "export const g = 1;\n"); git(cwd, "add", "-A"); git(cwd, "commit", "-q", "-m", "fix"); }
+      else git(cwd, "commit", "-q", "--allow-empty", "-m", "still working on it");
+    }, ["reject"]);
+    const res = await engine().start({ goal: "g" });
+    expect(res).toMatchObject({ code: "no-progress", node: "repair" });
+    expect((res as { reason: string }).reason).toStartWith("repair@2 changed nothing");
   });
 
   test("a first visit is never a no-change, even when it changes nothing", async () => {

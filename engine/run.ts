@@ -79,11 +79,11 @@ import { ACCEPTANCE_KEY, asAcceptance, disclosesAcceptance, evidenceSources, not
 import { waivedCriteria } from "./acceptance-decision";
 import { repairScope } from "./repair-scope";
 import { softStopState, stopResumeFor, undeliveredSteers } from "./steer-state";
-import { previousTree } from "./no-progress";
+import { previousTree, sameTrees } from "./no-progress";
 import { replayState, effectKey, parallelProgress } from "./replay";
 import type { PromptId } from "../core/prompt-ids";
 import { proposalHash } from "../core/proposal";
-import { describeFingerprintChange, fingerprint, worktreeTree, type Fingerprint } from "./reconcile";
+import { describeFingerprintChange, fingerprint, headTree, worktreeTree, type Fingerprint } from "./reconcile";
 import { effectiveCwd } from "./executors/worktree-record";
 import { pinnableText, promptReader } from "../prompts/pin";
 import { currentProposal, findDecision, isApproved, nextSeq, pendingRedesigns, readBase } from "./slice-decision";
@@ -713,13 +713,15 @@ export class Engine {
     for (const round of rounds) this.openRound(current, round);
     // HOW-54: what the worktree holds now, for the steps whose visits must make progress
     const tree = this.progressChecked.has(current) ? worktreeTree(this.workCwd()) ?? undefined : undefined;
+    const committed = tree !== undefined ? headTree(this.workCwd()) ?? undefined : undefined;
     this.log.append({
       type: "node-finished", node: current, visit, status: result.status, writes: result.writes,
       ...(result.refused !== undefined ? { refused: result.refused } : {}),
       ...(tree !== undefined ? { tree } : {}),
+      ...(committed !== undefined ? { head_tree: committed } : {}),
     });
     if (result.status === "succeeded" && tree !== undefined) {
-      const stalled = this.noProgress(current, visit, tree);
+      const stalled = this.noProgress(current, visit, tree, committed);
       if (stalled) return park(current, visit, "no-progress", stalled);
     }
 
@@ -1063,9 +1065,9 @@ export class Engine {
    * Out of scope, by construction: changes outside this worktree (another repo, a tracker, a PR
    * comment) are invisible to a tree id — a repair that only did those reads as no progress.
    */
-  private noProgress(node: string, visit: number, tree: string): string | null {
+  private noProgress(node: string, visit: number, tree: string, committed: string | undefined): string | null {
     const previous = previousTree(this.log.read(), node, visit);
-    if (!previous || previous.tree !== tree) return null;
+    if (!previous || !sameTrees(previous, tree, committed)) return null;
     let findings = "";
     try {
       if (this.ctx.has("review_findings")) {

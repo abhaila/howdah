@@ -393,6 +393,12 @@ export type RunEvent =
        * reaches the same decision. Absent: not checked, or not a git work tree.
        */
       tree?: string;
+      /**
+       * HOW-54: the tree HEAD commits (engine/reconcile.ts headTree), recorded beside `tree`. A
+       * visit that only commits work already on disk leaves `tree` alone and moves this, and
+       * that is progress. Absent on logs written before it existed, or with no commit yet.
+       */
+      head_tree?: string;
     }
   | {
       /** written BEFORE a side-effecting step (OV-1) — intent without a matching done
