@@ -242,7 +242,6 @@ export function createHowdahServer(opts: ServerOpts) {
   const home = dirname(opts.runsDir);
   ensureHowdahHome(home);
   const promptStore = new PromptStore(join(root, "prompts"));
-  const graphs = opts.graphs ?? GRAPHS;
   /**
    * Built-ins plus the operator's own from `$HOWDAH_HOME`, re-read per request: local graphs
    * are created and edited while the viewer is open, so a cached registry would show a stale
@@ -1038,7 +1037,7 @@ export function createHowdahServer(opts: ServerOpts) {
         if (answers !== undefined && !Array.isArray(answers))
           return json({ error: "answers must be an array" }, 400);
         // system-map 0.2: one shared rule set with `howdah reply`; refusals name the next step
-        const result = resolveReply(join(opts.runsDir, id), { text, answers }, { graphs });
+        const result = resolveReply(join(opts.runsDir, id), { text, answers }, { graphs: (await registry()).graphs });
         // a body that does not fit the questions is the caller's error; everything else a
         // reply can be refused for is a fact about the park, which is a 409 naming the next step
         if (!result.ok) return json({ error: result.message, code: result.code }, result.malformed ? 400 : 409);
@@ -1078,7 +1077,7 @@ export function createHowdahServer(opts: ServerOpts) {
         const { message } = body;
         if (typeof message !== "string" || message.trim() === "") return json({ error: "message must be a non-empty string" }, 400);
         const runDir = join(opts.runsDir, id);
-        const result = redesign(runDir, message, { graphs });
+        const result = redesign(runDir, message, { graphs: (await registry()).graphs });
         if (!result.ok) return json({ error: result.message, code: result.code }, 409);
         clearAsks(opts.attentionDir, runDir, result.asks);
         clearControl(runDir); // like jump: the operator now owns where the run goes
@@ -1139,7 +1138,7 @@ export function createHowdahServer(opts: ServerOpts) {
         if (!body.node) return json({ error: "node required" }, 400);
         // refuse in-process (the same precheck `howdah jump` runs) — the jump itself is spawned
         // detached, so a refusal from it would never reach the operator
-        const check = jumpRefusal(join(opts.runsDir, id), body.node, graphs, body.message);
+        const check = jumpRefusal(join(opts.runsDir, id), body.node, (await registry()).graphs, body.message);
         if (!check.ok) return json({ error: check.message }, 400);
         const cli = join(import.meta.dir, "..", "cli", "main.ts");
         const args = ["bun", cli, "jump", id, body.node, ...(body.message ? [body.message] : [])];
@@ -1274,12 +1273,13 @@ export function createHowdahServer(opts: ServerOpts) {
         if (hit && sameShell && hit.lastSeq === view.lastSeq && hit.lastAt === view.lastAt) return detailResponse(hit.body);
         const base = hit && sameShell ? hit.detail : await (async () => {
           const started = view.shellEvents.find((e) => e.type === "run-started");
-          const graph = started?.type === "run-started" ? (await registry()).graphs[started.graph] : undefined;
+          const reg = await registry();
+          const graph = started?.type === "run-started" ? reg.graphs[started.graph] : undefined;
           let declarations = {};
           try { declarations = graph ? graph.declarations() : {}; } catch { /* the rest of the view still renders */ }
           const derived = deriveDetail(id, view.shellEvents, declarations, {
             turns: view.turns, omitTurns: true, skipLogRows: true, snapshot: baseIndex(runDir, view.shellEvents), runnerAlive: alive,
-            graphs, // HOW-69: the reply route's registry, so the card and the route agree
+            graphs: reg.graphs, // HOW-69: the reply route's registry, so the card and the route agree
           });
           derived.log_rows = view.notices;
           derived.summary = withRunnerLiveness(derived.summary, view.shellEvents, runDir);
@@ -1314,7 +1314,8 @@ export function createHowdahServer(opts: ServerOpts) {
       // scopes and declared writers come from the graph, not the log: that is what lets the
       // Context tab list a key no step has reached yet instead of hiding it (CUR5)
       const started = events.find((e) => e.type === "run-started");
-      const graph = started?.type === "run-started" ? (await registry()).graphs[started.graph] : undefined;
+      const reg = await registry();
+      const graph = started?.type === "run-started" ? reg.graphs[started.graph] : undefined;
       let declarations = {};
       try {
         declarations = graph ? graph.declarations() : {};
@@ -1324,7 +1325,7 @@ export function createHowdahServer(opts: ServerOpts) {
       const runDir = join(opts.runsDir, id);
       // probed ONCE: the rail's "runner alive" and the turn states (HOW-46) must read the same answer
       const alive = runnerAlive(runDir);
-      const detail = deriveDetail(id, events, declarations, { snapshot: baseIndex(runDir, events), runnerAlive: alive, graphs });
+      const detail = deriveDetail(id, events, declarations, { snapshot: baseIndex(runDir, events), runnerAlive: alive, graphs: reg.graphs });
       detail.summary = withRunnerLiveness(detail.summary, events, runDir);
       const target = effectiveCwd(path, detail.identity.cwd ?? undefined);
       const wt = readWorktreeRecord(runDir);

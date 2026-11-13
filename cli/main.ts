@@ -39,7 +39,7 @@ import { Reconciler, readsForgeFacts } from "../engine/reconcile";
 import { effectiveCwd, readWorktreeRecord } from "../engine/executors/worktree";
 import { probeAuth } from "../engine/executors/harness-failure";
 import { harnessNames, harnessSpec, isHarness } from "../core/harnesses";
-import { GRAPHS, graphCatalog } from "../graphs/index";
+import { graphCatalog } from "../graphs/index";
 import { loadRegistry, catalogOf } from "../graphs/registry";
 import { materialiseBodies } from "../graphs/builder";
 import { promptSearchPath } from "../graphs/local";
@@ -521,9 +521,9 @@ export function setupCommand(): void {
  * system-map 0.2: the reply rules live in engine/control.ts resolveReply (shared with the
  * web route). A refusal names the verb that can move the run and exits non-zero.
  */
-export function replyCommand(runId: string, text: string): void {
+export async function replyCommand(runId: string, text: string): Promise<void> {
   const runDir = join(runsDir, runId);
-  const result = resolveReply(runDir, text, { graphs: GRAPHS });
+  const result = resolveReply(runDir, text, { graphs: (await loadRegistry(base, ROOT)).graphs });
   if (!result.ok) throw new Error(result.message);
   new AttentionCenter(join(base, "attention"), []).resolve(`${runId}:${result.node}:${result.visit}`);
   // if the runner died while parked, kick a resume so the answer takes effect
@@ -640,7 +640,7 @@ export function commentCommand(runId: string, entityId: string, text: string, pr
 /** like jump: refused while a runner is live; resumes in-process once the jump is logged */
 export async function redesignCommand(runId: string, message: string): Promise<void> {
   const runDir = join(runsDir, runId);
-  const r = decided(redesign(runDir, message, { graphs: GRAPHS }));
+  const r = decided(redesign(runDir, message, { graphs: (await loadRegistry(base, ROOT)).graphs }));
   clearAsks(join(base, "attention"), runDir, r.asks);
   clearControl(runDir);
   console.log(`redesign requested — re-running from ${r.jumped_to}`);
@@ -654,7 +654,7 @@ if (import.meta.main) {
     else if (verb === "runs") {
       const ids = existsSync(runsDir) ? readdirSync(runsDir).filter((d) => existsSync(join(runsDir, d, "run.jsonl"))) : [];
       console.log(JSON.stringify(ids));
-    } else if (verb === "reply") replyCommand(rest[0] ?? "", rest.slice(1).join(" "));
+    } else if (verb === "reply") await replyCommand(rest[0] ?? "", rest.slice(1).join(" "));
     else if (verb === "resolve-effect") {
       const { value: node, rest: args } = takeFlag(rest, "--node");
       resolveEffectCommand(args[0] ?? "", args[1] ?? "", args[2] ?? "", node);
