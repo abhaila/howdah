@@ -1,0 +1,29 @@
+engine/no-progress.test.ts
+  s_205ba363533c4e::t_e0ed6ce2f35bca 95-96,100-114
+log/events.ts
+  s_205ba363533c4e::t_d30760718a1e1b 396-401
+engine/reconcile.ts
+  s_205ba363533c4e::t_ddcbf6fd21945b 329-334
+  s_205ba363533c4e::t_215b26d2fe5a02 304-307
+  s_205ba363533c4e::t_9864f8a4b8b938 335
+engine/no-progress.ts
+  s_205ba363533c4e::t_dee87e6cceb0d6 6-9,13-18,20,22-29,32,36
+engine/run.ts
+  s_205ba363533c4e::t_3785d535334736 82,86,716,721,724,1068,1070
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "649e3eb88ce1a78d415fcf2f7dfdd690d07af376",
+  "prompts": {},
+  "sessions": {
+    "s_205ba363533c4e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f655be41-237e-4491-84b0-061d37c59257",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "areeb.bhaila <areeb.bhaila@gmail.com>"
+    }
+  }
+}
