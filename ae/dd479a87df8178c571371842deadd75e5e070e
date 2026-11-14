@@ -1,0 +1,19 @@
+prompts/delivery.address_reviews.md
+  s_bbbeed836018ba::t_bb75896a8fbc29 3,35-43
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "aedd479a87df8178c571371842deadd75e5e070e",
+  "prompts": {},
+  "sessions": {
+    "s_bbbeed836018ba": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6af0df0e-dbf2-4bb9-b06a-e8be567249c5",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "areeb.bhaila <areeb.bhaila@gmail.com>"
+    }
+  }
+}
