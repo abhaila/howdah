@@ -1,6 +1,6 @@
 ---
 id: delivery.address_reviews
-version: 3
+version: 4
 tags: [implement-ticket]
 provenance: ported from Orbital implement-ticket
 ---
@@ -31,6 +31,15 @@ New review activity since the last pass (reviews, PR comments and unresolved inl
 {{ context.pr.review_activity | dump }}
 
 Address every item of new review activity: each one is a reviewer, usually the operator, asking for something. Treat a comment as feedback even when it is phrased as a question.
+
+An automated reviewer (for example cubic, or any author whose login ends `[bot]`) can be wrong. Do not change code only because it asked. For each of its findings:
+
+- Read the code it names and decide if the finding is real in this change.
+- If the finding is real and in scope, fix it, then reply with the evidence.
+- If the finding is not real, reply with the reason and the evidence (the code, a test or a check), then resolve the thread. Do not change code.
+- If the finding is real but outside the work scope, reply with that reason and leave the thread unresolved.
+
+Record each automated finding and its disposition in `repair_summary`.
 
 Inspect the current PR, its published head, review decisions and unresolved threads. Read the affected code and applicable repository instructions.
 
