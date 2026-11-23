@@ -21,7 +21,10 @@
  *   3. BOTS NEVER COUNT: an author whose `__typename` is `Bot`, or whose login ends `[bot]`
  *      (github-actions, dependabot, CI reporters). A bot's verdict reaches delivery through the
  *      checks (CI_FAILED), not through prose, and prose from a bot re-posted on every push would
- *      be a repair loop by construction.
+ *      be a repair loop by construction. The one exception is a REVIEW BOT (`REVIEW_BOTS`): its
+ *      unresolved inline threads count like a human's, because a finding on a line is the only
+ *      place its verdict lands. Its summary reviews and PR comments still never count. Rule 4
+ *      keeps it loop-safe: once address_reviews replies, the thread waits on the bot.
  *   4. A THREAD WE ANSWERED WAITS ON THE REVIEWER (HOW-75): an unresolved thread whose latest
  *      human comment is OURS — it carries the marker, or its author is the PR's author or the gh
  *      identity the probe runs as — after some comment by somebody else, is not activity at all,
@@ -118,7 +121,10 @@ export const REVIEW_ACTIVITY_QUERY = `query($owner: String!, $name: String!, $nu
   viewer { login }
 }`;
 
+/** bots whose unresolved inline threads count as review activity (rule 3), by login without `[bot]` */
+export const REVIEW_BOTS: readonly string[] = ["cubic-dev-ai"];
 export const isBotAuthor = (a: Author): boolean => a?.__typename === "Bot" || (a?.login ?? "").endsWith("[bot]");
+const botLogin = (a: Author): string => (a?.login ?? "").toLowerCase().replace(/\[bot\]$/, "");
 const isHowdahReply = (body: string | null | undefined): boolean => (body ?? "").includes(REVIEW_REPLY_MARKER);
 const newer = (at: string | null | undefined, since: string | null): at is string =>
   typeof at === "string" && at !== "" && (since === null || Date.parse(at) > Date.parse(since));
@@ -139,17 +145,22 @@ export interface ReviewActivity {
  * The review activity on one PR created after `since`, oldest first, and what was skipped.
  * `ours` (HOW-75) names the logins whose comments are ours; absent, only the marker says so.
  */
-export function newReviewActivity(raw: RawReviewActivity | null | undefined, pr: string, since: string | null, ours?: OurIdentity): ReviewActivity {
+export function newReviewActivity(
+  raw: RawReviewActivity | null | undefined, pr: string, since: string | null, ours?: OurIdentity, reviewBots: readonly string[] = REVIEW_BOTS,
+): ReviewActivity {
   const items: ReviewItem[] = [];
   const skipped: ReviewSkips = { bot: 0, howdah: 0 };
   const awaiting: AwaitingThread[] = [];
   const mine = new Set((ours?.logins ?? []).filter((l) => l !== "").map((l) => l.toLowerCase()));
   const isOurs = (author: Author, body: string | null | undefined): boolean =>
     isHowdahReply(body) || (typeof author?.login === "string" && mine.has(author.login.toLowerCase()));
-  /** after the cutoff and by a human reviewer — counting why the rest were left out */
-  const counts = (author: Author, body: string | null | undefined, at: string | null | undefined): at is string => {
+  const reviewBot = new Set(reviewBots.map((l) => l.toLowerCase()));
+  /** a reviewer on an inline thread: a human, or a bot named in `reviewBots` */
+  const threadReviewer = (a: Author): boolean => !isBotAuthor(a) || reviewBot.has(botLogin(a));
+  /** after the cutoff and by a reviewer — counting why the rest were left out */
+  const counts = (author: Author, body: string | null | undefined, at: string | null | undefined, inThread = false): at is string => {
     if (!newer(at, since)) return false;
-    if (isBotAuthor(author)) { skipped.bot++; return false; }
+    if (inThread ? !threadReviewer(author) : isBotAuthor(author)) { skipped.bot++; return false; }
     if (isHowdahReply(body)) { skipped.howdah++; return false; }
     return true;
   };
@@ -168,7 +179,7 @@ export function newReviewActivity(raw: RawReviewActivity | null | undefined, pr:
     if (t.isResolved) continue;
     const where = { ...(t.path ? { path: t.path } : {}), ...(typeof t.line === "number" ? { line: t.line } : {}) };
     // HOW-75: answered by us last, after somebody else spoke — the reviewer's turn, whatever its age
-    const human = nodes(t.comments).filter((c) => !isBotAuthor(c.author));
+    const human = nodes(t.comments).filter((c) => threadReviewer(c.author));
     const last = human.at(-1);
     const reviewer = human.findLast((c) => !isOurs(c.author, c.body));
     if (last !== undefined && reviewer !== undefined && isOurs(last.author, last.body)) {
@@ -177,7 +188,7 @@ export function newReviewActivity(raw: RawReviewActivity | null | undefined, pr:
       continue;
     }
     // the thread is new when its newest human comment is; that comment is what is handed over
-    const fresh = nodes(t.comments).filter((c) => counts(c.author, c.body, c.createdAt));
+    const fresh = nodes(t.comments).filter((c) => counts(c.author, c.body, c.createdAt, true));
     const latest = fresh.at(-1);
     if (latest === undefined) continue;
     items.push({ pr, kind: "thread", author: login(latest.author), at: latest.createdAt as string, url: latest.url ?? pr, body: clip(latest.body ?? ""), ...where });

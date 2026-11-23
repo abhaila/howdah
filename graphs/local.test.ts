@@ -247,3 +247,41 @@ describe("typechecking a local graph", () => {
     expect(await saveLocalSource(h, "loose", src, ROOT)).toEqual({ ok: true });
   }, 30_000);
 });
+
+// runs:launch's `child_graph`: a local graph shaped like implement-ticket also runs stacked
+describe("the stacked form of a local graph", () => {
+  const ticketShaped = (name: string) => `import { buildGraph } from ${JSON.stringify(join(ROOT, "core", "graph-spec"))};
+import { spec as base } from ${JSON.stringify(join(ROOT, "graphs", "implement-ticket"))};
+export const spec = { ...base, name: ${JSON.stringify(name)} };
+export const g = buildGraph(spec);
+`;
+
+  test("is registered beside it, launched only by plan-feature, with no builder file", async () => {
+    const h = home();
+    ensureLocalDirs(h);
+    writeFileSync(localGraphPath(h, "deep"), ticketShaped("deep"));
+
+    const reg = await loadRegistry(h, ROOT);
+    expect(reg.problems).toEqual([]);
+    const stacked = reg.graphs["deep-stacked"]!;
+    expect(stacked.def.name).toBe("deep-stacked");
+    expect(stacked.def.entry).toBe("deps.await");
+    expect(stacked.def.inputs).toEqual(["goal", "work", "deps"]);
+    // every step of the graph it stacks is still there
+    for (const id of Object.keys(reg.graphs["deep"]!.def.nodes)) expect(stacked.def.nodes[id]).toBeDefined();
+    expect(reg.stackedOf).toEqual({ "deep-stacked": "deep" });
+
+    const entry = catalogOf(reg).find((c) => c.name === "deep-stacked")!;
+    expect(entry.launched_by).toBe("plan-feature");
+    expect(entry.builder).toBe(false);
+  });
+
+  test("a graph that cannot be stacked gets no stacked form, and that is not a problem", async () => {
+    const h = home();
+    withPrompt(h, "mine.work");
+    writeFileSync(localGraphPath(h, "mine"), graphSource("mine"));
+    const reg = await loadRegistry(h, ROOT);
+    expect(reg.graphs["mine-stacked"]).toBeUndefined();
+    expect(reg.problems).toEqual([]);
+  });
+});

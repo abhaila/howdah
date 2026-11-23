@@ -133,6 +133,8 @@ export function liveExecutors(deps: LiveExecutorDeps): EngineOpts["executors"] {
       launch: {
         runsDir: deps.runsDir ?? join(deps.attentionDir, "..", "runs"),
         ...(deps.workspaces ? { workspaces: deps.workspaces } : {}),
+        // the same registry graphs:catalog reads: a parent's `child_graph` is checked against it
+        ...(deps.catalog?.registry ? { registry: deps.catalog.registry } : {}),
       },
       ...(deps.verifyCommandFor ? { verify: { commandFor: deps.verifyCommandFor } } : {}),
       ...(deps.previewFor ? { evidence: { previewFor: deps.previewFor } } : {}),

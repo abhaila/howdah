@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHowdahServer } from "./server";
 import { localGraphPath } from "../graphs/local";
+import { EventLog } from "../log/write";
 
 const ROOT = join(import.meta.dir, "..");
 const base = mkdtempSync(join(tmpdir(), "howdah-gapi-"));
@@ -357,5 +358,17 @@ describe("saving a graph built in the viewer", () => {
     expect(shape.builder).toBe(false);
     expect(shape.spec).toBeNull();
     expect((await fetch(url("/api/graphs/hand-written/source"))).status).toBe(200);
+  });
+});
+
+describe("run controls on a local graph", () => {
+  test("a jump on a run of a local graph finds the graph", async () => {
+    expect((await post("/api/graphs", { name: "jump-local", kind: "custom" })).status).toBe(201);
+    new EventLog(join(base, "runs", "jl1", "run.jsonl")).append({ type: "run-started", graph: "jump-local", inputs: {}, pinned_prompts: {} });
+    const r = await post("/api/runs/jl1/jump", { node: "no-such-step" });
+    const { error } = (await r.json()) as { error: string };
+    expect(r.status).toBe(400);
+    expect(error).not.toContain("unknown graph");
+    expect(error).toContain('unknown node "no-such-step"');
   });
 });

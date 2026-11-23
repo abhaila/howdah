@@ -19,6 +19,18 @@
 export const STACKED_GRAPH = "implement-stacked";
 export const STACKED_GRAPH_LAUNCHED_BY = "plan-feature";
 
+/**
+ * A parent run's optional input: the operator's own implement-ticket-shaped graph that
+ * `runs:launch` starts instead of implement-ticket. A slice with dependencies runs its stacked
+ * form, which the registry derives for every local graph that can be stacked.
+ */
+export const CHILD_GRAPH_INPUT = "child_graph";
+
+/** The stacked form of a local graph, as the registry registers it. */
+export function stackedGraphName(base: string): string {
+  return `${base}-stacked`;
+}
+
 /** How far a dependency must get before the dependent slice starts (decision 2A + G10). */
 export type DepUntil = "published" | "merged" | "package";
 export const DEP_UNTIL: readonly DepUntil[] = ["published", "merged", "package"];

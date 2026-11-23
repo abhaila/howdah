@@ -11,9 +11,10 @@
  * Async because local graphs are dynamically imported. Callers that only need built-ins
  * (prompt library, proposals) keep using GRAPHS directly and stay synchronous.
  */
-import { specOf } from "../core/graph-spec";
-import { STACKED_GRAPH, STACKED_GRAPH_LAUNCHED_BY } from "../core/stack";
+import { buildGraph, specOf } from "../core/graph-spec";
+import { STACKED_GRAPH, STACKED_GRAPH_LAUNCHED_BY, stackedGraphName } from "../core/stack";
 import type { Graph } from "../core/graph";
+import { stackedFrom } from "./implement-stacked";
 import { GRAPHS } from "./index";
 import { loadLocalGraphs, type LocalGraphProblem } from "./local";
 
@@ -44,6 +45,8 @@ export interface Registry {
   source: Record<string, GraphSource>;
   /** local graphs that do not load, with why — surfaced, never silently missing */
   problems: LocalGraphProblem[];
+  /** a derived stacked graph → the local graph it stacks (`runs:launch`'s `child_graph`) */
+  stackedOf?: Record<string, string>;
 }
 
 export async function loadRegistry(home: string, repoRoot: string): Promise<Registry> {
@@ -59,7 +62,30 @@ export async function loadRegistry(home: string, repoRoot: string): Promise<Regi
     graphs[name] = g;
     source[name] = "local";
   }
-  return { graphs, source, problems };
+
+  // every local graph shaped like implement-ticket also runs stacked, as implement-stacked
+  // does for implement-ticket; one that cannot be stacked is not a problem, it is just not
+  // a child graph (stackedFrom throws on a missing step)
+  const stackedOf: Record<string, string> = {};
+  for (const [name, g] of Object.entries(local)) {
+    const spec = source[name] === "local" ? specOf(g) : null;
+    if (!spec) continue;
+    let stacked: Graph<any>;
+    try {
+      stacked = buildGraph({ ...stackedFrom(spec), name: stackedGraphName(name), description: `${spec.description ?? name}, stacked on the slices it depends on` });
+    } catch {
+      continue;
+    }
+    const stackedName = stackedGraphName(name);
+    if (stackedName in graphs) {
+      problems.push({ name: stackedName, error: `"${name}" can run stacked, but a graph is already called "${stackedName}" — rename one` });
+      continue;
+    }
+    graphs[stackedName] = stacked;
+    source[stackedName] = "local";
+    stackedOf[stackedName] = name;
+  }
+  return { graphs, source, problems, stackedOf };
 }
 
 export function catalogOf(reg: Registry): CatalogEntry[] {
@@ -70,10 +96,12 @@ export function catalogOf(reg: Registry): CatalogEntry[] {
       inputs: [...g.def.inputs],
       kind: Object.values(g.def.nodes).some((n) => n.kind === "worktree") ? ("repo" as const) : ("plain" as const),
       source: reg.source[g.def.name] ?? ("builtin" as const),
-      builder: reg.source[g.def.name] === "local" && specOf(g) !== null,
+      // a derived stacked graph has no file of its own for the builder to re-open
+      builder: reg.source[g.def.name] === "local" && !(g.def.name in (reg.stackedOf ?? {})) && specOf(g) !== null,
       steps: Object.keys(g.def.nodes).length,
       // a BUILT-IN only: a local graph that happens to share the name never gets here (registry)
-      ...(g.def.name === STACKED_GRAPH && reg.source[g.def.name] === "builtin" ? { launched_by: STACKED_GRAPH_LAUNCHED_BY } : {}),
+      ...((g.def.name === STACKED_GRAPH && reg.source[g.def.name] === "builtin") || g.def.name in (reg.stackedOf ?? {})
+        ? { launched_by: STACKED_GRAPH_LAUNCHED_BY } : {}),
     }))
     .sort((a, b) => (a.source === b.source ? a.name.localeCompare(b.name) : a.source === "builtin" ? -1 : 1));
 }
