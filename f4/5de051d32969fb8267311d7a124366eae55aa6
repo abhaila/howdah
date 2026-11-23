@@ -1,0 +1,21 @@
+core/review-activity.test.ts
+  s_46ac2a719fdeab::t_2fe735c8a71922 189-233
+core/review-activity.ts
+  s_46ac2a719fdeab::t_09d4f2dc207bee 24-27,124-125,127,148-150,157-161,163,182,191
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f45de051d32969fb8267311d7a124366eae55aa6",
+  "prompts": {},
+  "sessions": {
+    "s_46ac2a719fdeab": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8b3356b0-93c3-4fa4-b486-ce8fdda2ff3b",
+        "model": "unknown"
+      },
+      "human_author": "areeb.bhaila <areeb.bhaila@gmail.com>"
+    }
+  }
+}
