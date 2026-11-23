@@ -186,3 +186,48 @@ describe("HOW-75: a thread we answered waits on the reviewer", () => {
     expect(r.lastReviewAt).toBe(AFTER);
   });
 });
+
+describe("a review bot's inline threads count; its other prose does not", () => {
+  const cubic = { __typename: "Bot", login: "cubic-dev-ai" };
+  const operator = { __typename: "User", login: "areeb" };
+  const ours = { logins: ["areeb"] };
+  const finding = { author: cubic, body: "P1: the claim ignores the date", createdAt: AFTER, url: "c1" };
+  const thread = (comments: Array<{ author: typeof cubic; body: string; createdAt: string; url: string }>, isResolved = false) =>
+    ({ isResolved, path: "src/x.kt", line: 82, comments: { nodes: comments } });
+
+  test("an unresolved finding after the cutoff is handed over as a thread", () => {
+    const r = newReviewActivity({ reviewThreads: { nodes: [thread([finding])] } }, PR, T0, ours);
+    expect(r.items).toEqual([{ pr: PR, kind: "thread", author: "cubic-dev-ai", at: AFTER, url: "c1", body: finding.body, path: "src/x.kt", line: 82 }]);
+  });
+
+  test("a [bot] login matches the same name", () => {
+    const r = newReviewActivity({ reviewThreads: { nodes: [thread([{ ...finding, author: { __typename: "User", login: "cubic-dev-ai[bot]" } }])] } }, PR, T0, ours);
+    expect(r.items.map((i) => i.url)).toEqual(["c1"]);
+  });
+
+  test("its summary review and PR comment never count", () => {
+    const r = newReviewActivity({
+      reviews: { nodes: [{ author: cubic, state: "COMMENTED", body: "**3 issues found**", submittedAt: AFTER, url: "sum" }] },
+      comments: { nodes: [{ author: cubic, body: "cubic analysis", createdAt: AFTER, url: "pc" }] },
+    }, PR, T0, ours);
+    expect(r.items).toEqual([]);
+    expect(r.skipped.bot).toBe(2);
+  });
+
+  test("before the cutoff, resolved, or answered by us, a finding is not activity", () => {
+    expect(newReviewActivity({ reviewThreads: { nodes: [thread([finding])] } }, PR, LATER, ours).items).toEqual([]);
+    expect(newReviewActivity({ reviewThreads: { nodes: [thread([finding], true)] } }, PR, T0, ours).items).toEqual([]);
+    const answered = newReviewActivity({ reviewThreads: { nodes: [thread([
+      finding,
+      { author: operator, body: `not real: the date is compared at line 90 ${REVIEW_REPLY_MARKER}`, createdAt: LATER, url: "a" },
+    ])] } }, PR, T0, ours);
+    expect(answered.items).toEqual([]);
+    expect(answered.awaiting).toEqual([{ pr: PR, url: "a", path: "src/x.kt", line: 82, reviewer: "cubic-dev-ai" }]);
+  });
+
+  test("a bot that is not named stays a bot, and an empty list turns the rule off", () => {
+    const other = { author: { __typename: "Bot", login: "linter" }, body: "beep", createdAt: AFTER, url: "l1" };
+    expect(newReviewActivity({ reviewThreads: { nodes: [thread([other])] } }, PR, T0, ours).items).toEqual([]);
+    expect(newReviewActivity({ reviewThreads: { nodes: [thread([finding])] } }, PR, T0, ours, []).items).toEqual([]);
+  });
+});
