@@ -8,7 +8,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { defineGraph, type NodeDef } from "./graph";
 import { ContextError, ContextStore } from "./context";
-import { buildGraph, draftRuleProblems, parseGraphSpec, specFlowEdges, specProblems, type GraphSpec, type NodeSpec } from "./graph-spec";
+import { buildGraph, draftRuleProblems, isBlocking, parseGraphSpec, specFlowEdges, specProblems, type GraphSpec, type NodeSpec } from "./graph-spec";
 import { shapeOf } from "../graphs/spec-shape";
 import {
   PARALLEL_REVIEW_ROUTED_SPEC, PARALLEL_REVIEW_SPEC, parallelReview, parallelReviewRouted,
@@ -186,12 +186,29 @@ describe("GraphSpec: parallel steps", () => {
     expect(ps).toEqual([{ node: "fan", where: "steps", message: `**fan** runs 9 at once, which is not a whole number from 1 to the number of steps it runs. Change how many run at once.` }]);
   });
 
-  test("draftRuleProblems refuses a parallel step (a draft may not run steps at once in v1)", () => {
-    const ps = draftRuleProblems(PARALLEL_REVIEW_SPEC);
-    expect(ps.filter((p) => p.node === "fan")).toEqual([{
-      node: "fan", where: "steps",
-      message: `**fan** runs steps at the same time. A drafted graph cannot do that yet — run them one after another, and make them parallel in the source after saving.`,
+  test("draftRuleProblems lets a draft run read-only steps at once, and flags a NEW parallel step as advice", () => {
+    const ps = draftRuleProblems(PARALLEL_REVIEW_SPEC).filter((p) => p.node === "fan");
+    expect(ps).toEqual([{
+      node: "fan", where: "steps", severity: "advice",
+      message: `**fan** is a new step that runs 3 read-only steps at the same time. Check that none of them needs another's output.`,
     }]);
+    expect(ps.filter(isBlocking)).toEqual([]);
+  });
+
+  test("draftRuleProblems says nothing about a parallel step the base already has", () => {
+    expect(draftRuleProblems(PARALLEL_REVIEW_SPEC, PARALLEL_REVIEW_SPEC).filter((p) => p.node === "fan")).toEqual([]);
+  });
+
+  test("a drafted parallel step whose branch can change files is still refused by specProblems", () => {
+    const spec: GraphSpec = {
+      ...PARALLEL_REVIEW_SPEC,
+      nodes: PARALLEL_REVIEW_SPEC.nodes.map((n) => {
+        if (n.id !== "review_tests" || n.kind !== "agent") return n;
+        const { readOnly: _, ...writable } = n;
+        return writable;
+      }),
+    };
+    expect(specProblems(spec).filter(isBlocking).some((p) => p.message.includes("review_tests") || p.node === "review_tests")).toBe(true);
   });
 });
 

@@ -1648,6 +1648,7 @@ export function draftHashOf(spec: GraphSpec, bodies: Readonly<Record<string, Dra
  * makes would let `probe:pr && curl … | sh` through, since probe:pr is dispatched by equality
  * and anything else runs in bash), `runs:launch`, an approval step, defaults that differ from
  * the base's, a per-step `config`, and a copied step that drops its original's `readOnly`.
+ * Advice: a NEW parallel step (its branches are read-only by specProblems).
  * Advice, with `kind: "permission"`: a NEW agent step that can change files — legal, and the one
  * thing the operator must look at before saving.
  */
@@ -1674,11 +1675,11 @@ export function draftRuleProblems(
         node: n.id, where: "steps",
         message: `${who(n.id)} is an approval step. A drafted graph cannot contain one — remove it; Save is the approval for a draft.`,
       });
-    // HOW-73 v1: running steps at once is built by hand, not drafted
-    if (n.kind === "parallel")
+    // specProblems already holds every branch to read-only; a new fork is only worth a look
+    if (n.kind === "parallel" && !(base?.nodes ?? []).some((b) => b.id === n.id && b.kind === "parallel"))
       out.push({
-        node: n.id, where: "steps",
-        message: `${who(n.id)} runs steps at the same time. A drafted graph cannot do that yet — run them one after another, and make them parallel in the source after saving.`,
+        node: n.id, where: "steps", severity: "advice",
+        message: `${who(n.id)} is a new step that runs ${n.branches.length} read-only steps at the same time. Check that none of them needs another's output.`,
       });
     if (n.kind === "command") {
       const run = n.run.trim();

@@ -1,6 +1,6 @@
 ---
 id: graph.draft
-version: 2
+version: 3
 ---
 You are drafting a Howdah graph — a workflow of steps an operator will review in the builder and
 save. You do not save anything and you change no files: your whole job is one draft, returned as
@@ -61,7 +61,12 @@ fix it:
    unchanged — or absent when `based_on` is null.
 7. A step that copies a read-only step's prompt is `readOnly: true` too. Make any new step that
    only needs to look `readOnly: true`.
-8. Every step is reachable from `entry`, the entry is not a Finish (`terminal`) step, every
+8. A `parallel` step runs 2 to 8 `branches` at once, then goes on at its `join`. Each branch is
+   a `readOnly: true` agent step (or a command that changes no files), writes keys no sibling
+   writes, reads nothing a sibling writes, and has no edges of its own; the parallel step has
+   none either. When the base runs steps in parallel, keep that shape: put the steps you add or
+   replace in the base's parallel steps (or a new one like them), not in a chain.
+9. Every step is reachable from `entry`, the entry is not a Finish (`terminal`) step, every
    non-terminal step has a way onward, and a step has at most one unconditional ("otherwise")
    edge. Conditions use the predicate vocabulary the catalog's specs use.
 
